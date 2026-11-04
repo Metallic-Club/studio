@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use metallic_engine::graphics::save_graphics_settings;
 use metallic_engine::metallic_core::{DataModel, DmError};
 use metallic_engine::metallic_platform::{
     AppHandler, ButtonState, DeviceEvent, EventLoopContext, GamepadEvent, KeyCode, Platform, PlatformError,
@@ -53,6 +54,21 @@ fn animate(stress: Option<&StressScene>, dm: &mut DataModel, frame: u64) {
     }
 }
 
+/// Keeps a calibration the Auto preset just finished in `config`'s graphics settings, and saves them to
+/// [`PlayerConfig::graphics_file`] when there is one, so the next run starts calibrated.
+fn save_calibration(renderer: &RefCell<SceneRenderer>, config: &mut PlayerConfig) {
+    let Some(calibration) = renderer.borrow_mut().take_calibration() else {
+        return;
+    };
+    config.graphics.calibration = Some(calibration);
+    if let Some(path) = config.graphics_file.as_deref() {
+        match save_graphics_settings(path, &config.graphics) {
+            Ok(()) => log::info!("graphics: saved the calibration to {}", path.display()),
+            Err(error) => log::warn!("graphics: could not save {}: {error}", path.display()),
+        }
+    }
+}
+
 /// A game running in the engine: the embeddable Player.
 ///
 /// [`Player::new`] makes the engine (a standalone [`RunContext::Local`] game, windowed), loads the scene, installs
@@ -80,17 +96,27 @@ impl<O: OutputSink> Player<O> {
             .with_sources(config.scene.sources());
         let mut engine = Engine::with_output(engine_config, output)?;
         let stress = config.scene.install(engine.data_model_mut())?;
+        let mut config = config;
         let mut renderer = SceneRenderer::default();
         if let Some(frames) = config.max_frames {
             // The whole measured run, so the report summarises every measured frame.
             renderer.set_perf_window(usize::try_from(frames).unwrap_or(usize::MAX).min(1 << 20));
         }
         renderer.set_overlay(config.overlay);
+        let graphics = config.effective_graphics();
+        // A benchmark keeps its own pacing (no cap); otherwise the settings' cap, 0 for none, replaces the default.
+        if config.max_frames.is_none()
+            && let Some(cap) = graphics.frame_cap
+        {
+            config.frame_cap = (cap > 0).then_some(cap);
+        }
+        log::info!("graphics: the {} preset", graphics.preset);
+        renderer.set_graphics(graphics);
+        renderer.set_frame_cap(config.frame_cap);
+        // `UserGameSettings` holds the settings before the scripts' first lines run.
+        renderer.write_user_settings(engine.data_model_mut());
         let renderer = Rc::new(RefCell::new(renderer));
         engine.set_render_hook(Box::new(Rc::clone(&renderer)))?;
-        if let Some(preset) = config.preset {
-            log::info!("preset `{preset}` asked for; graphics settings are not applied until #84");
-        }
         engine.start()?;
         Ok(Self {
             engine,
@@ -126,7 +152,12 @@ impl<O: OutputSink> Player<O> {
     pub fn frame(&mut self, real_dt: Duration) -> FrameStats {
         let next = self.engine.frame_count() + 1;
         animate(self.stress.as_ref(), self.engine.data_model_mut(), next);
-        self.engine.frame(real_dt)
+        self.renderer
+            .borrow_mut()
+            .write_user_settings(self.engine.data_model_mut());
+        let stats = self.engine.frame(real_dt);
+        save_calibration(&self.renderer, &mut self.config);
+        stats
     }
 
     /// The summary of the frames recorded so far (frame times, CPU and GPU times, draws): empty until the renderer
@@ -208,7 +239,8 @@ impl<O: OutputSink> PlayerApp<O> {
         let surface = renderer.renderer().map(|r| (r.settings().width, r.settings().height));
         Report {
             scene: self.config.scene,
-            preset: self.config.preset,
+            preset: Some(self.config.effective_graphics().preset),
+            graphics: renderer.graphics_status(),
             warmup_frames: self.config.warmup_frames,
             total_frames: engine.frame_count(),
             wall_time,
@@ -273,12 +305,16 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
         }
         let start = Instant::now();
         animate(self.stress.as_ref(), self.app.engine_mut().data_model_mut(), before + 1);
+        self.renderer
+            .borrow_mut()
+            .write_user_settings(self.app.engine_mut().data_model_mut());
         self.app.about_to_wait(cx);
         let frame = self.app.engine().frame_count();
         if frame == before {
             // No frame ran: the first iteration only reads the clock, or the app is suspended or exiting.
             return;
         }
+        save_calibration(&self.renderer, &mut self.config);
         self.first_frame.get_or_insert(start);
         self.last_frame_end = Some(Instant::now());
         if frame == self.config.warmup_frames {

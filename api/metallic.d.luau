@@ -418,6 +418,17 @@ declare extern type EnumKeyCode_INTERNAL extends Enum with
     function GetEnumItems(self): { EnumKeyCode }
 end
 
+--- A graphics preset: how much a frame may cost, never what the game looks like. Auto measures the machine and holds the frame time with dynamic resolution.
+declare extern type EnumGraphicsPreset extends EnumItem with end
+declare extern type EnumGraphicsPreset_INTERNAL extends Enum with
+    read Low: EnumGraphicsPreset
+    read Medium: EnumGraphicsPreset
+    read High: EnumGraphicsPreset
+    read Ultra: EnumGraphicsPreset
+    read Auto: EnumGraphicsPreset
+    function GetEnumItems(self): { EnumGraphicsPreset }
+end
+
 --- How the mouse cursor behaves: free (Default), or held so the mouse turns the camera (LockCenter at the middle of the window, LockCurrentPosition where it is). Movement keeps arriving while it is held.
 declare extern type EnumMouseBehavior extends EnumItem with end
 declare extern type EnumMouseBehavior_INTERNAL extends Enum with
@@ -456,6 +467,7 @@ declare Enum: {
     UserInputType: EnumUserInputType_INTERNAL,
     UserInputState: EnumUserInputState_INTERNAL,
     KeyCode: EnumKeyCode_INTERNAL,
+    GraphicsPreset: EnumGraphicsPreset_INTERNAL,
     MouseBehavior: EnumMouseBehavior_INTERNAL,
     Material: EnumMaterial_INTERNAL,
     PartShape: EnumPartShape_INTERNAL,
@@ -557,6 +569,7 @@ declare extern type DataModel extends Instance with
     function GetService(self, className: "ServerStorage"): ServerStorage
     function GetService(self, className: "RunService"): RunService
     function GetService(self, className: "UserInputService"): UserInputService
+    function GetService(self, className: "UserGameSettings"): UserGameSettings
     function GetService(self, className: string): Instance
 end
 
@@ -656,6 +669,34 @@ end
 declare extern type SourceContainer extends Instance with
     --- The project-relative path of the script's source file, such as "Scripts/Door.luau", chosen with a file picker. The file's extension selects the language. Empty means the script has no source and does nothing.
     Source: string
+end
+
+--- The player's graphics settings: the preset, the quality level it draws at and the values in effect. Scripts can read them, to adapt a game to the player's machine, but never change them: they are the player's. Get it with game:GetService("UserGameSettings").
+declare extern type UserGameSettings extends Instance with
+    --- The graphics preset the player chose.
+    read GraphicsPreset: EnumGraphicsPreset
+    --- The quality level drawn at, from 1 (Low) to 4 (Ultra). With the Auto preset, the level its calibration chose for this machine.
+    read QualityLevel: number
+    --- The share of the window's width and height the scene is drawn at before it is scaled to the window (0.5 to 2). With dynamic resolution, the highest scale it may use.
+    read RenderScale: number
+    --- Whether the render scale changes every frame to hold the GPU frame time at TargetFrameTime.
+    read DynamicResolution: boolean
+    --- The GPU frame time dynamic resolution holds, in milliseconds.
+    read TargetFrameTime: number
+    --- How far the camera sees, in metres; 0 when it sees without limit.
+    read ViewDistance: number
+    --- The quality of the sun's shadows, from 1 (Low) to 4 (Ultra): how many shadow maps, how sharp.
+    read ShadowQualityLevel: number
+    --- How far from the camera the sun's shadows reach, in metres.
+    read ShadowDistance: number
+    --- How many point and spot lights a frame draws at full strength, the most important ones; the others fade out.
+    read LocalLightBudget: number
+    --- How finely distant round parts are drawn: 1 keeps their outlines within half a pixel; higher is finer.
+    read LodBias: number
+    --- Whether frames wait for the display's refresh.
+    read VSync: boolean
+    --- The most frames per second; 0 when uncapped.
+    read FrameRateCap: number
 end
 
 --- Keyboard, mouse and touch input: events for every key, button, movement and touch, what is held right now, and how the mouse cursor behaves. Input arrives at the start of each frame. Get it with game:GetService("UserInputService").

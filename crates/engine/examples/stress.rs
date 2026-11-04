@@ -20,6 +20,12 @@
 //! detail), `--lod-bias <x>` and `--lod-tint` (colour the parts by level of detail).
 //! `WGPU_BACKEND=dx12` (or `vulkan`, `gl`) picks the backend.
 //!
+//! Graphics settings (#84): `--preset <low|medium|high|ultra|auto>` sets the culling, shadows, lights, levels of
+//! detail and resolution as the Player's preset does (so it cannot be combined with the flags above that set them
+//! one by one; auto calibrates in the warm-up), `--render-scale <x>` draws the scene at that scale, and
+//! `--dynamic-resolution <ms>` holds that GPU frame time between `--min-scale <x>` and `--max-scale <x>` (0.5 and 1
+//! by default). `--switch-presets <n>` switches between Low and Ultra every `n` frames, to measure the switches.
+//!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
 //! prints a JSON array. The JSON's fields are `metallic_engine::stress::BenchReport`'s; times are in milliseconds.
 
@@ -27,6 +33,8 @@ use std::error::Error;
 use std::process::{Command, ExitCode};
 
 use metallic_engine::stress::{BenchOptions, StressKind, run_bench};
+use metallic_render::resolution::ResolutionSettings;
+use metallic_render::settings::{GraphicsSettings, Preset};
 use metallic_render::{CullSettings, LightSettings, LodSettings};
 
 fn usage() -> String {
@@ -37,6 +45,8 @@ fn usage() -> String {
          \x20             [--dynamic-cascades N] [--lights low|medium|high|off] [--light-budget N]\n\
          \x20             [--lights-per-cluster N] [--shadowed-lights N] [--no-light-shadows]\n\
          \x20             [--lod low|medium|high|off] [--lod-bias X] [--lod-tint]\n\
+         \x20             [--preset low|medium|high|ultra|auto] [--render-scale X] [--dynamic-resolution MS]\n\
+         \x20             [--min-scale X] [--max-scale X] [--switch-presets N]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -46,6 +56,10 @@ fn usage() -> String {
 fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, String> {
     let mut scene = None;
     let mut options = BenchOptions::new(StressKind::Parts10k);
+    // A flag that sets one system's settings, which a preset would override.
+    let mut per_system = None;
+    let mut preset = None;
+    let (mut render_scale, mut target_ms, mut min_scale, mut max_scale) = (None, None, None, None);
     let mut it = args.iter();
     let number = |value: Option<&String>, flag: &str| -> Result<u64, String> {
         value
@@ -59,7 +73,22 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             .ok_or_else(|| format!("{flag} needs a number"))
     };
     while let Some(arg) = it.next() {
+        if PER_SYSTEM_FLAGS.contains(&arg.as_str()) {
+            per_system = Some(arg.clone());
+        }
         match arg.as_str() {
+            "--preset" => {
+                let name = it.next().ok_or("--preset needs a name")?;
+                preset = Some(name.parse::<Preset>().map_err(|e| e.to_string())?);
+            }
+            "--render-scale" => render_scale = Some(decimal(it.next(), "--render-scale")?),
+            "--dynamic-resolution" => target_ms = Some(decimal(it.next(), "--dynamic-resolution")?),
+            "--min-scale" => min_scale = Some(decimal(it.next(), "--min-scale")?),
+            "--max-scale" => max_scale = Some(decimal(it.next(), "--max-scale")?),
+            "--switch-presets" => {
+                options.switch_presets =
+                    Some(u32::try_from(number(it.next(), "--switch-presets")?).map_err(|e| e.to_string())?);
+            }
             "--list" => {
                 for kind in StressKind::ALL {
                     println!("{}", kind.name());
@@ -149,8 +178,57 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
     if let Some(kind) = scene {
         options.scene = kind;
     }
+    if options.switch_presets.is_some() && preset.is_none() {
+        preset = Some(Preset::Low);
+    }
+    match preset {
+        Some(preset) => {
+            if let Some(flag) = per_system {
+                return Err(format!("{flag} sets what --preset sets; use one or the other"));
+            }
+            options.graphics = Some(GraphicsSettings {
+                render_scale,
+                dynamic_resolution: target_ms.map(|_| true),
+                target_frame_ms: target_ms,
+                min_render_scale: min_scale,
+                max_render_scale: max_scale,
+                ..GraphicsSettings::new(preset)
+            });
+        }
+        None => {
+            options.resolution = match target_ms {
+                Some(target) => {
+                    let max = max_scale.unwrap_or(1.0);
+                    ResolutionSettings {
+                        scale: render_scale.unwrap_or(max),
+                        ..ResolutionSettings::dynamic(target, min_scale.unwrap_or(0.5), max)
+                    }
+                }
+                None => ResolutionSettings::fixed(render_scale.unwrap_or(1.0)),
+            };
+        }
+    }
     Ok(Some((scene, options)))
 }
+
+/// The flags that set one system's settings, which `--preset` sets as a whole.
+const PER_SYSTEM_FLAGS: &[&str] = &[
+    "--no-cull",
+    "--view-distance",
+    "--min-screen-size",
+    "--no-shadows",
+    "--shadow-cascades",
+    "--shadow-resolution",
+    "--shadow-distance",
+    "--dynamic-cascades",
+    "--lights",
+    "--light-budget",
+    "--shadowed-lights",
+    "--no-light-shadows",
+    "--lights-per-cluster",
+    "--lod",
+    "--lod-bias",
+];
 
 /// Runs every scene, each in a child process with the same options, and prints a JSON array.
 fn run_all(args: &[String]) -> Result<(), Box<dyn Error>> {

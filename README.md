@@ -49,11 +49,17 @@ Flags (`cargo run -p metallic_player --release -- --help`):
 | Flag | Does |
 |---|---|
 | `--scene <name>` | the built-in game to run: `demo`, or a stress scene (`parts_10k`, `parts_50k`, `parts_100k`, `many_lights`, `overdraw`, `mobile`, `see_through_10k`; see [docs/perf.md](docs/perf.md#stress-scenes)) |
-| `--preset <name>` | `low`, `medium`, `high`, `ultra` or `auto`; kept until graphics settings land (#84) |
+| `--preset <name>` | `low`, `medium`, `high`, `ultra` or `auto` for this run, in place of the settings file's preset (below) |
 | `--bench <frames>` | runs that many frames after a 30-frame warm-up, with no frame cap (vsync still paces it), then prints frame times (p50, p99, 1% low), script, physics and render CPU time, GPU time per pass and the draws per pass as JSON on stdout and exits |
 | `--overlay` | starts with the performance overlay shown; F3 shows or hides it |
 
 `METALLIC_LOG=info` (or `debug`, ...) shows the engine's logs on stderr.
+
+Graphics settings live in `graphics.toml` in the user's config folder (`%APPDATA%\metallic\Player\config` on Windows,
+`~/Library/Application Support/dev.metallic.Player` on macOS, `~/.config/metallic/player` on Linux), made with the
+Auto preset on the first run: the preset and any overrides, one `key = value` a line (every key is listed, commented
+out, with the preset's value). A damaged file is ignored with a warning, and Auto is used. See
+[docs/perf.md](docs/perf.md#graphics-settings-84).
 
 Light instances are in the scene already; the renderer draws them once the sun and sky (#81) and point and spot
 lights (#83) land. Until then one temporary directional light shades everything.

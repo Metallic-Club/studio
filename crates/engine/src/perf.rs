@@ -16,7 +16,49 @@
 
 use std::time::Duration;
 
+use metallic_render::resolution::ResolutionStats;
+use metallic_render::settings::{Preset, Tier};
 use metallic_render::{DrawStats, FrameTimings, MAX_CASCADES, Overlay, PassId};
+
+/// The graphics settings in effect, as the overlay and the reports show them
+/// ([`SceneRenderer::graphics_status`](crate::SceneRenderer::graphics_status)).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GraphicsStatus {
+    /// The player's preset; `None` when no graphics settings were set (the per-system settings as set one by one).
+    pub preset: Option<Preset>,
+    /// The tier drawn at (for Auto, the calibrated one, or the one being measured).
+    pub tier: Option<Tier>,
+    /// The tier Auto's calibration is measuring, while it runs.
+    pub calibrating: Option<Tier>,
+    /// The render scale and dynamic resolution of the last frame.
+    pub resolution: ResolutionStats,
+}
+
+impl GraphicsStatus {
+    /// The status as the members of a JSON object, without the braces: `preset`, `tier` and `calibrating` (names,
+    /// or `null`), and `resolution` (`scale`, `width`, `height`, `dynamic`, `target_ms`, `min_scale`,
+    /// `max_scale`).
+    pub fn write_json_members(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        let name = |name: Option<&str>| name.map_or_else(|| "null".to_owned(), json_string);
+        let r = &self.resolution;
+        let _ = write!(
+            out,
+            "\"preset\":{},\"tier\":{},\"calibrating\":{},\"resolution\":{{\"scale\":{:.4},\"width\":{},\
+             \"height\":{},\"dynamic\":{},\"target_ms\":{:.3},\"min_scale\":{:.3},\"max_scale\":{:.3}}}",
+            name(self.preset.map(Preset::name)),
+            name(self.tier.map(Tier::name)),
+            name(self.calibrating.map(Tier::name)),
+            r.scale,
+            r.width,
+            r.height,
+            r.dynamic,
+            r.target_ms,
+            r.min_scale,
+            r.max_scale
+        );
+    }
+}
 
 /// Frames [`PerfStats`] keeps by default: ten seconds at 60 fps.
 pub const DEFAULT_WINDOW: usize = 600;
@@ -52,6 +94,8 @@ pub struct FrameSample {
     /// Shadow-atlas tiles drawn this frame ([`metallic_render::lights`]). [`PerfStats::record`] fills it from the
     /// frame's draws.
     pub light_tiles_redrawn: u32,
+    /// The render scale the scene was drawn at ([`metallic_render::resolution`]): 1 at the window's resolution.
+    pub render_scale: f32,
 }
 
 fn ms(d: Duration) -> f32 {
@@ -71,6 +115,7 @@ impl FrameSample {
             shadow_redrawn: 0,
             shadow_built: 0,
             light_tiles_redrawn: 0,
+            render_scale: 1.0,
         }
     }
 
@@ -78,6 +123,14 @@ impl FrameSample {
     pub fn with_cull(self, cull: Duration) -> Self {
         Self {
             cull_ms: ms(cull),
+            ..self
+        }
+    }
+
+    /// The sample drawn at render scale `scale`.
+    pub fn with_render_scale(self, scale: f32) -> Self {
+        Self {
+            render_scale: scale,
             ..self
         }
     }
@@ -132,6 +185,8 @@ pub struct PerfSummary {
     pub cull_ms: Distribution,
     /// Local lights' CPU time (part of the render CPU time).
     pub lights_ms: Distribution,
+    /// The render scale frames were drawn at (not a time: 1 is the window's resolution).
+    pub render_scale: Distribution,
     /// Timed GPU frames summarised.
     pub gpu_frames: usize,
     /// GPU time of the whole frame.
@@ -181,8 +236,8 @@ impl PerfSummary {
 impl PerfSummary {
     /// Writes the summary as the members of a JSON object, without the braces, so a report can put its own
     /// members around them (times in milliseconds): `frames`, `frame_ms`, `fps_p50`, `low_1pct_ms`,
-    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`, `lights`), `gpu_ms` (`frames`, `total`,
-    /// `passes` by name, `shadow` and `shadow_build` per cascade, `light_shadows`), `draws` (with `culled`, and
+    /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`, `lights`), `render_scale` (the scale frames
+    /// were drawn at), `gpu_ms` (`frames`, `total`, `passes` by name, `shadow` and `shadow_build` per cascade, `light_shadows`), `draws` (with `culled`, and
     /// `levels`: the instances drawn at each level of detail, full detail first), `shadow`
     /// (the last frame's `cascades`, `casters` and `moving` per cascade, `draws`, `instances` and `triangles`, and per
     /// cascade the summarised frames its casters were drawn in, `redraws`, and its map built in, `builds`) and
@@ -218,6 +273,7 @@ impl PerfSummary {
             dist(&self.cull_ms),
             dist(&self.lights_ms)
         )?;
+        write!(out, "\"render_scale\":{},", dist(&self.render_scale))?;
         write!(
             out,
             "\"gpu_ms\":{{\"frames\":{},\"total\":{},\"passes\":{{",
@@ -544,6 +600,7 @@ impl PerfStats {
         summary.render_ms = distribution(scratch, frames.iter().map(|f| f.render_ms));
         summary.cull_ms = distribution(scratch, frames.iter().map(|f| f.cull_ms));
         summary.lights_ms = distribution(scratch, frames.iter().map(|f| f.lights_ms));
+        summary.render_scale = distribution(scratch, frames.iter().map(|f| f.render_scale));
         summary.gpu_total_ms = distribution(scratch, gpu.iter().map(|g| g.total_ms));
         summary.gpu_light_shadow_ms = distribution(scratch, gpu.iter().map(|g| g.light_shadow_ms));
         for pass in PassId::ALL {
@@ -606,20 +663,76 @@ fn bar_color(ms: f32) -> [u8; 4] {
     }
 }
 
+/// A preset's or tier's name in the overlay's capitals.
+fn upper(name: &str) -> &'static str {
+    match name {
+        "low" => "LOW",
+        "medium" => "MEDIUM",
+        "high" => "HIGH",
+        "ultra" => "ULTRA",
+        "auto" => "AUTO",
+        _ => "?",
+    }
+}
+
+/// The overlay's graphics line: the preset and tier (or what calibration measures), the scale and size drawn, and
+/// dynamic resolution's range and target with the median scale of the summarised frames.
+fn draw_graphics_line(overlay: &mut Overlay, x0: f32, y: f32, graphics: &GraphicsStatus, summary: &PerfSummary) {
+    let r = &graphics.resolution;
+    let preset = graphics.preset.map_or("DEFAULTS", |p| upper(p.name()));
+    let (mut x, _) = match (graphics.calibrating, graphics.tier) {
+        (Some(probe), _) => overlay.text_fmt(
+            x0,
+            y,
+            SCALE,
+            SLOW,
+            format_args!("GRAPHICS {preset}  CALIBRATING {}", upper(probe.name())),
+        ),
+        (None, Some(tier)) if graphics.preset.and_then(Preset::tier) != Some(tier) => overlay.text_fmt(
+            x0,
+            y,
+            SCALE,
+            TEXT,
+            format_args!("GRAPHICS {preset} ({})", upper(tier.name())),
+        ),
+        _ => overlay.text_fmt(x0, y, SCALE, TEXT, format_args!("GRAPHICS {preset}")),
+    };
+    (x, _) = overlay.text_fmt(
+        x,
+        y,
+        SCALE,
+        TEXT,
+        format_args!("  SCALE {:.2} {}X{}", r.scale, r.width, r.height),
+    );
+    if r.dynamic {
+        overlay.text_fmt(
+            x,
+            y,
+            SCALE,
+            DIM,
+            format_args!(
+                "  DYNAMIC {:.2}-{:.2} TARGET {:.2} MS P50 {:.2}",
+                r.min_scale, r.max_scale, r.target_ms, summary.render_scale.p50
+            ),
+        );
+    }
+}
+
 /// Clears `overlay` and draws the performance overlay at its top-left corner: frame time with p50, p99 and the
 /// 1% low; script, physics, render and cull CPU time; GPU time per pass; the shadow cascades; the point and spot
 /// lights (in the scene, in view, drawn, fading, shadowed) and their CPU and atlas cost; draws, instances and
-/// triangles per pass and the instances culled; and a
-/// graph of the last [`GRAPH_FRAMES`] frame times (green within 60 fps, yellow within 30, red beyond; guides at
-/// 16.7 and 33.3 ms). `summary` is usually refreshed a few times a second; the graph and the "now" numbers come
-/// from `stats` every frame. Allocates nothing.
-pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSummary) {
+/// triangles per pass and the instances culled; the graphics settings in effect (`graphics`: the preset and its
+/// tier, or Auto's calibration while it runs, the render scale and size drawn, and dynamic resolution's range and
+/// target); and a graph of the last [`GRAPH_FRAMES`] frame times (green within 60 fps, yellow within 30, red beyond;
+/// guides at 16.7 and 33.3 ms). `summary` is usually refreshed a few times a second; the graph and the "now" numbers
+/// come from `stats` every frame. Allocates nothing.
+pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSummary, graphics: &GraphicsStatus) {
     overlay.clear();
     let (x0, y0) = (12.0, 12.0);
     let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
     // Wide enough for the graph and for the longest line of text (about 74 characters).
     let width = (GRAPH_FRAMES as f32 * BAR).max(76.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
-    let lines = 12.0;
+    let lines = 13.0;
     overlay.rect(x0 - 8.0, y0 - 8.0, width, lines * line + GRAPH_HEIGHT + 24.0, PANEL);
 
     let now = stats.last().copied().unwrap_or_default();
@@ -638,6 +751,8 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
             summary.low_1pct_ms,
         ),
     );
+    y += line;
+    draw_graphics_line(overlay, x0, y, graphics, summary);
     y += line;
     overlay.text_fmt(
         x0,
@@ -870,7 +985,12 @@ mod tests {
         assert_eq!(stats.summary(), PerfSummary::default());
         assert_eq!(stats.summary().fps_p50(), 0.0);
         let mut overlay = Overlay::new();
-        draw_overlay(&mut overlay, &stats, &stats.clone().summary());
+        draw_overlay(
+            &mut overlay,
+            &stats,
+            &stats.clone().summary(),
+            &GraphicsStatus::default(),
+        );
         assert!(!overlay.is_empty());
         assert_eq!(overlay.dropped(), 0);
     }
@@ -883,7 +1003,7 @@ mod tests {
         }
         let summary = stats.summary();
         let mut overlay = Overlay::new();
-        draw_overlay(&mut overlay, &stats, &summary);
+        draw_overlay(&mut overlay, &stats, &summary, &GraphicsStatus::default());
         assert_eq!(overlay.dropped(), 0);
         assert!(overlay.len() > GRAPH_FRAMES, "a bar per frame plus the text");
     }

@@ -5,14 +5,19 @@
 //! metallic_player --bench 600          # 600 frames after a warm-up, then the stats as JSON on stdout
 //! metallic_player --scene demo --preset high
 //! ```
+//!
+//! The graphics settings are read from `graphics.toml` in the user's config folder (made with the Auto preset the
+//! first time); `--preset` overrides its preset for one run.
 
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::sync::OnceLock;
 
 use metallic_engine::StdOutput;
+use metallic_engine::graphics::{graphics_settings_path, load_graphics_settings, save_graphics_settings};
+use metallic_engine::metallic_platform::AppId;
 use metallic_engine::metallic_script::{OutputSink, OutputSource};
-use metallic_player::{Player, PlayerConfig, Preset, Scene};
+use metallic_player::{PLAYER_APP_ID, Player, PlayerConfig, Preset, Scene};
 
 const HELP: &str = "\
 Metallic Player: runs a game in a window.
@@ -21,7 +26,7 @@ Usage: metallic_player [OPTIONS]
 
 Options:
   --scene <NAME>     The built-in game to run [default: demo] (scenes: {scenes})
-  --preset <NAME>    The graphics preset (presets: {presets}); kept until graphics settings land (#84)
+  --preset <NAME>    The graphics preset for this run, in place of the settings file's (presets: {presets})
   --bench <FRAMES>   Run FRAMES frames after a warm-up, without a frame cap, print the stats as JSON and exit
   --overlay          Start with the performance overlay shown (F3 toggles it)
   -h, --help         Print this help
@@ -102,7 +107,8 @@ fn main() -> ExitCode {
         log::set_max_level(LOGGER.level());
     }
 
-    let config = args.config();
+    let mut config = args.config();
+    load_user_graphics(&mut config);
     if args.bench.is_none() {
         eprintln!(
             "Metallic Player {}: scene `{}`. {}F3 shows the performance overlay.",
@@ -133,6 +139,29 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Loads the player's graphics settings into `config` from their file in the user's config folder: the Auto preset
+/// when there is none (the file is then made, so there is one to edit) or it is damaged (with a warning; the file is
+/// left as it is until the settings are next saved). `--preset` still overrides the file's preset for this run.
+fn load_user_graphics(config: &mut PlayerConfig) {
+    let path = match AppId::parse(PLAYER_APP_ID).and_then(|app| graphics_settings_path(&app)) {
+        Ok(path) => path,
+        Err(error) => {
+            log::warn!("graphics: no settings file ({error}); using the Auto preset");
+            return;
+        }
+    };
+    let loaded = load_graphics_settings(&path);
+    if let Some(problem) = &loaded.problem {
+        log::warn!("graphics: {problem}");
+    } else if !loaded.from_file
+        && let Err(error) = save_graphics_settings(&path, &loaded.settings)
+    {
+        log::warn!("graphics: could not write {}: {error}", path.display());
+    }
+    config.graphics = loaded.settings;
+    config.graphics_file = Some(path);
 }
 
 /// Script output for `--bench`: everything on stderr, prints included.

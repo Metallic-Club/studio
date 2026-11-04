@@ -352,9 +352,10 @@ cargo run --release -p metallic_player -- --scene parts_100k --overlay          
 The example opens a window of the scene's size, presents without vsync (`AutoNoVsync`), drops 120 warm-up frames,
 summarises the next 1,000 and exits; `--frames`, `--warm-up`, `--seed`, `--size`, `--vsync` and `--overlay` change
 that, and `WGPU_BACKEND` picks the backend. `metallic_player --scene <name> --bench <frames>` prints the same
-statistics, but with vsync until graphics settings land (#84), so its frame times show the display's rate, and the
-GPU, running at low clocks, takes longer per frame (about 3.5× on `see_through_10k` here). Use the example for
-these tables.
+statistics, but with the player's graphics settings (vsync on unless its settings file says `vsync = false`), so
+its frame times show the display's rate, and the GPU, running at low clocks, takes longer per frame (about 3.5× on
+`see_through_10k` here). Use the example for these tables; without `--preset` it draws with the renderer's
+defaults, as every table before #84 did.
 
 What the numbers are (`metallic_engine::perf`, which also feeds the performance overlay):
 
@@ -766,3 +767,138 @@ Low 0.43 M for 0.492 ms.
   holds every preset to such a bound on rows of balls and cylinders, checks both instance paths draw the same, and
   that coarser shadows put no acne on their receivers: none at any preset, while with the casters drawn at full
   detail instead it finds 1.4% of the parts' pixels darkened.
+
+### Graphics settings (#84)
+
+A player's [`GraphicsSettings`](../crates/render/src/settings.rs) (ADR 0008 §8): a preset (Low, Medium, High, Ultra or
+Auto) and any per-setting overrides (render scale, dynamic resolution with its target and range, frame cap and vsync,
+view distance, shadow quality and distance, local-light budget, LOD bias), resolved into the settings of every system
+above (`Quality`). Presets scale cost and never remove a game's look: none turns the sun's shadows or the local
+lights off, and no override can. Anti-aliasing and effect quality join with the post chain (#85).
+
+| Preset | Render scale | View distance | Culled under | Sun cascades | Local lights a frame (per cluster) | Shadowed lights, atlas / tile | LOD bias |
+| --- | ---: | ---: | ---: | --- | ---: | --- | ---: |
+| Low | 75% | 512 m | 2 px | 1 × 1024², 128 m (ADR 0008's Low) | 32 (32) | 2, 1024² / 256² | 0.5 |
+| Medium | 100% | 1,024 m | 1.5 px | 2 × 2048², 192 m, the far one cached | 128 (48) | 8, 2048² / 256² | 1 |
+| High | 100% | 2,048 m | 1 px | 3 × 2048², 256 m, the far one cached (the renderer's defaults) | 192 (64) | 8, 4096² / 512² | 2 |
+| Ultra | 100% | none | 0.5 px | 3 × 3072², 256 m, the far one cached | 256 (64) | 10, 4096² / 512² | 4 |
+
+**Auto** draws at the tier its calibration chose, with dynamic resolution between 50% and 100% holding 15 ms of
+GPU time a frame (a 60 fps frame with 10% to spare). The fixed presets have dynamic resolution off unless the
+settings turn it on.
+
+**Render scale.** The scene is drawn into a scene colour texture at `scale ×` the window's size and the upscale pass
+(`PassId::Upscale`, `src/upscale.rs`: one bilinear tap a pixel, the seam #85's better upscaler replaces) draws it over
+the whole window; the UI is drawn after it at the window's resolution. At 100% with dynamic resolution off nothing
+changes: no texture, no upscale pass, the same wgpu calls as before (`tests/no_alloc.rs`). **Dynamic resolution**
+makes the scene's textures at its highest scale once and draws each frame into their top-left corner (a viewport
+and scissor), so a new scale never makes a texture; the scale follows the GPU timestamps (one to three frames late)
+with a damped step: from a frame drawn at scale `s` that took `t` ms the scale that takes the target `T` is
+`s·√(T/t)`, each step goes a quarter of the way there, and none is taken within 3% of the target. Culling, levels of
+detail and the lights' ranking keep the window's size, so the scale moves none of them; the light clusters follow
+the size drawn (`tests/resolution.rs` checks the lights land in the same places at half and double scale).
+
+**Auto's calibration** (`settings::Calibrator`) times the game's own first frames on the GPU: 10 frames at Ultra to
+settle (shadow maps, atlas and first uploads), then the median of the next 30 timed frames; Ultra is kept if it takes
+at most half a 60 fps frame (8.3 ms), otherwise High is measured the same way (at most 60%, 10 ms), then Medium (80%,
+13.3 ms), and Low is what is left. It reads the timestamps the renderer already takes, so it waits for nothing; a
+machine that takes Ultra is calibrated after about 45 frames (the Player on `many_lights` with vsync: at frame 50,
+under a second at 60 Hz), the slowest after about 130. A device without timestamp queries gets a tier from its kind
+(discrete: High, integrated or software: Low). The result is saved with the adapter's name and driver and measured
+again when either changes. Measuring the game being played rather than a fixed workload keeps it short, but a
+calibration made on a light game is kept for heavier ones, where dynamic resolution then holds the frame time (#139
+tracks a fixed workload). Under vsync the GPU runs at lower clocks, so it measures longer times than the uncapped
+numbers below (3.93 ms against 3.08 on `many_lights` at Ultra), which only makes it more careful.
+
+**The file** is `graphics.toml` in the user's config folder (`metallic_platform::UserPaths::config_dir`; on Windows
+`%APPDATA%\metallic\Player\config`): `key = value` lines, a small subset of TOML written and read by
+`GraphicsSettings::to_text` and `from_text` (no dependency), every key not set listed as a comment with the preset's
+value, and a `[calibration]` section. The Player makes it with the Auto preset the first time, falls back to Auto with
+a warning when it cannot be read or understood (leaving the file as it is), applies `--preset` on top for one run, and
+saves Auto's calibration back. **Scripts** read the settings in effect from `game:GetService("UserGameSettings")`
+(`GraphicsPreset`, `QualityLevel` 1 to 4, `RenderScale`, `DynamicResolution`, `TargetFrameTime`, `ViewDistance`,
+`ShadowQualityLevel`, `ShadowDistance`, `LocalLightBudget`, `LodBias`, `VSync`, `FrameRateCap`), each read-only for
+scripts and never saved with the game.
+
+**2026-11-04**, same machine as the tables above (Ryzen 5 5500, RX 6650 XT, Windows 11, **DX12**, `AutoNoVsync`,
+1,000 frames after 120 of warm-up, seed 1, the scenes' still cameras), branch `84-graphics-settings`; "defaults" is the
+renderer's defaults (no `--preset`), what every table above measured. Times are p50 in ms, p99 in brackets; Auto
+calibrated to Ultra on every scene here (in the warm-up) and then held its 15 ms target at 100%.
+
+| Scene | Preset | Frame | Render CPU | GPU | Opaque pass | Upscale pass |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `parts_100k` (1920 × 1080) | defaults | 0.796 (0.890) | 0.647 (0.728) | 0.527 | 0.260 | |
+| | Low | 0.723 (0.934) | 0.574 (0.775) | 0.330 | 0.187 | 0.053 |
+| | Medium | 0.726 (0.888) | 0.577 (0.695) | 0.446 | 0.240 | |
+| | High | 0.796 (0.921) | 0.646 (0.745) | 0.527 | 0.260 | |
+| | Ultra | 1.019 (1.272) | 0.694 (0.913) | 0.906 | 0.301 | |
+| | Auto (Ultra) | 1.080 (1.319) | 0.690 (0.894) | 0.959 | 0.285 | 0.045 |
+| `many_lights` (1920 × 1080) | defaults | 2.261 (2.460) | 0.552 (0.714) | 2.100 | 1.831 | |
+| | Low | 0.705 (0.861) | 0.344 (0.475) | 0.582 | 0.498 | 0.058 |
+| | Medium | 2.135 (2.342) | 0.493 (0.612) | 1.980 | 1.798 | |
+| | High | 2.599 (2.763) | 0.613 (0.742) | 2.457 | 2.218 | |
+| | Ultra | 3.224 (3.449) | 0.652 (0.754) | 3.084 | 2.654 | |
+| | Auto (Ultra) | 3.277 (3.484) | 0.676 (0.809) | 3.127 | 2.623 | 0.059 |
+| `mobile` (1280 × 720) | defaults | 0.383 (0.509) | 0.283 (0.403) | 0.292 | 0.110 | |
+| | Low | 0.310 (0.360) | 0.238 (0.280) | 0.121 | 0.069 | 0.024 |
+| | Medium | 0.310 (0.450) | 0.235 (0.360) | 0.205 | 0.095 | |
+| | High | 0.380 (0.518) | 0.281 (0.392) | 0.292 | 0.110 | |
+| | Ultra | 0.673 (0.815) | 0.270 (0.387) | 0.587 | 0.131 | |
+| | Auto (Ultra) | 0.697 (0.850) | 0.286 (0.404) | 0.605 | 0.117 | 0.024 |
+
+- **High is the renderer's defaults** but for its 192-light budget: the same frame on `parts_100k` and `mobile`, and
+  0.36 ms more GPU on `many_lights`, whose town of 1,152 lamps fills any budget.
+- **Ultra's cost is its shadows**: 3072² cascades hold 2.25 times the texels of High's, and the cached far cascade's
+  build pass copies them every frame (`parts_100k`: +0.38 ms of GPU); the opaque pass grows by the finer levels of
+  detail and, on `many_lights`, the 256 lights.
+- **Low** draws `many_lights` in under a third of Medium's GPU time: 32 lights a frame instead of 128 (those beyond
+  the budget fade by importance, ADR 0008 §6) at 75% scale. On `parts_100k` its single cascade is redrawn whenever a
+  part moves (one cascade cannot be cached), which is why its p99 is not much lower than Medium's.
+- **The upscale pass** costs 0.04 to 0.06 ms at 1080p and 0.02 ms at 720p. Auto pays it at 100% too, because
+  dynamic resolution draws into textures of its own.
+- **Render CPU** stays within 0.1 ms of the defaults at every preset, inside the High tier's 1.5 ms everywhere; Ultra's
+  256-light budget and finer levels of detail add the most.
+- **At the renderer's defaults nothing changes** against `main` at `225d5e1` (two interleaved rounds, `main` then the
+  branch): `parts_100k` frame 0.803 and 0.799 → 0.796 and 0.797, render CPU 0.653 and 0.649 → 0.645 and 0.647, GPU
+  0.527 → 0.527 and 0.528; `many_lights` GPU 2.099 and 2.050 → 2.101 and 2.054; `mobile` render CPU 0.288 and 0.285 →
+  0.281 and 0.281. All within the run-to-run noise: a frame at the window's resolution makes the same calls as before.
+
+Render scale against GPU time on `parts_100k` at High (1920 × 1080; 600 measured frames, p50 in ms):
+
+| Render scale | 50% | 75% | 100% (no upscale) | 150% | 200% |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GPU | 0.443 | 0.501 | 0.527 | 0.786 | 1.087 |
+| Opaque pass | 0.132 | 0.182 | 0.260 | 0.430 | 0.684 |
+| Upscale pass | 0.043 | 0.044 | | 0.042 | 0.048 |
+
+**Dynamic resolution holds the target** (the done-when). On this GPU `parts_100k` costs 0.53 ms at 100% and 1.09 ms
+at 200%, and about 0.38 ms of it (the shadow passes and the far cascade's build) does not depend on the resolution, so
+a target of 2 ms, or Auto's 15, is met at every scale and nothing scales. The targets below are inside what the scales
+can reach, so the controller has to hold them: 0.8 ms over 50 to 200% (about 150%, supersampling) and 0.48 ms over 50
+to 100% (about 63%), at the High preset. 1,000 frames after 120 of warm-up; the deviation is from the target.
+
+| Target | Range | Camera | GPU mean | GPU p50 | GPU p99 | Scale mean (max) |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 0.80 ms | 50–200% | still | 0.794 (−0.8%) | 0.796 (−0.5%) | 0.804 (+0.5%) | 1.488 (1.488) |
+| 0.48 ms | 50–100% | still | 0.478 (−0.4%) | 0.478 (−0.4%) | 0.484 (+0.8%) | 0.630 (0.635) |
+| 0.80 ms | 50–200% | walking | 0.802 (+0.3%) | 0.803 (+0.4%) | 0.887 (+10.9%) | 1.419 (1.513) |
+
+With the walking camera the load changes under the controller: the mean and median stay within 0.4% of the target and
+99% of the frames within 11% (the slowest 1% include the far cascade's static map drawn again, 0.6 ms of GPU in one
+frame, which no resolution absorbs). `tests/no_alloc.rs` checks the moving scale allocates nothing, and that scaled
+frames add exactly what the upscale pass and the viewports add by hand.
+
+**Switching presets causes no hitch** (the done-when). Nothing waits for the GPU: a switch makes the new shadow maps,
+atlas and scaled textures (wgpu frees the old ones once the GPU is done with them), every pipeline was made with the
+renderer, and the first frame after it draws every shadow map again. `--switch-presets 30` switches between Low and
+Ultra every 30 frames (34 switches in the 1,000 measured frames; frame times in ms):
+
+| Scene | Steady Low p99 / max | Steady Ultra p99 / max | Switching p50 / p99 / max | Switching render CPU max |
+| --- | ---: | ---: | ---: | ---: |
+| `parts_100k` | 0.934 / 1.225 | 1.272 / 2.072 | 0.859 / 2.051 / 2.114 (2.425 in a second run) | 1.495 (2.094) |
+| `many_lights` | 0.861 / 0.933 | 3.449 / 3.627 | 1.731 / 3.719 / 3.829 | 1.139 |
+| `mobile` | 0.360 / 0.423 | 0.815 / 0.866 | 0.446 / 1.144 / 1.316 | 0.521 |
+
+The worst frame of a switch sequence was 2.4 ms on `parts_100k` and 3.8 ms on `many_lights`, at most 0.4 ms over
+the slowest steady Ultra frame: making the textures and culling every cascade's casters again, the far cascade's static
+map included. That is a seventh of a 60 fps frame at worst.

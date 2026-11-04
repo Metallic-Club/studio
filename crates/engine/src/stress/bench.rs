@@ -18,13 +18,15 @@ use std::time::Instant;
 use metallic_platform::{
     AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
+use metallic_render::resolution::ResolutionSettings;
+use metallic_render::settings::{GraphicsSettings, Preset};
 use metallic_render::{ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
 use crate::engine::Engine;
 use crate::error::EngineError;
-use crate::perf::{PerfSummary, json_string};
+use crate::perf::{GraphicsStatus, PerfSummary, json_string};
 use crate::scene_renderer::SceneRenderer;
 use crate::windowed::{WindowedApp, WindowedOptions};
 use crate::{RunContext, StdOutput};
@@ -68,6 +70,14 @@ pub struct BenchOptions {
     pub lod_tint: bool,
     /// Walk the camera through the scene ([`StressScene::move_camera`]) instead of keeping it still.
     pub moving_camera: bool,
+    /// A player's graphics settings ([`SceneRenderer::set_graphics`]), which then set the culling, shadows, lights,
+    /// levels of detail and resolution instead of the fields above; `None` keeps those.
+    pub graphics: Option<GraphicsSettings>,
+    /// The scene's resolution when there are no graphics settings (the window's own by default).
+    pub resolution: ResolutionSettings,
+    /// Switch between the Low and Ultra presets every this many frames, warm-up included (the first switch goes to
+    /// the one the run did not start at), to measure what a switch costs.
+    pub switch_presets: Option<u32>,
 }
 
 impl BenchOptions {
@@ -90,6 +100,9 @@ impl BenchOptions {
             lod: LodSettings::default(),
             lod_tint: false,
             moving_camera: false,
+            graphics: None,
+            resolution: ResolutionSettings::NATIVE,
+            switch_presets: None,
         }
     }
 }
@@ -145,6 +158,13 @@ pub struct BenchReport {
     pub moving_camera: bool,
     /// How long building the scene took, in milliseconds.
     pub build_ms: f32,
+    /// The graphics settings in effect at the end of the run.
+    pub graphics: GraphicsStatus,
+    /// Auto's calibration, when it ran: the tier chosen and the median GPU frame time it measured.
+    pub calibration: Option<(&'static str, f32)>,
+    /// The frames between preset switches ([`BenchOptions::switch_presets`]), and how many switches the measured
+    /// frames saw.
+    pub switches: Option<(u32, u32)>,
     /// The measured frames.
     pub summary: PerfSummary,
 }
@@ -230,6 +250,20 @@ impl BenchReport {
             "\"lod\":{{\"enabled\":{},\"bias\":{:.2}}},",
             self.lod.enabled, self.lod.bias
         )?;
+        out.push_str("\"graphics\":{");
+        self.graphics.write_json_members(out);
+        match self.calibration {
+            Some((tier, gpu_ms)) => write!(
+                out,
+                ",\"calibration\":{{\"tier\":{},\"gpu_ms\":{gpu_ms:.3}}}",
+                json_string(tier)
+            )?,
+            None => out.push_str(",\"calibration\":null"),
+        }
+        match self.switches {
+            Some((every, count)) => write!(out, ",\"switch_every\":{every},\"switches\":{count}}},")?,
+            None => out.push_str(",\"switch_every\":null,\"switches\":0},"),
+        }
         self.summary.write_json_members(out);
         out.push('}');
         Ok(())
@@ -257,6 +291,10 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     renderer.set_shadows(options.shadows);
     renderer.set_lights(options.lights);
     renderer.set_lod(options.lod);
+    renderer.set_resolution(options.resolution);
+    if let Some(graphics) = options.graphics.clone() {
+        renderer.set_graphics(graphics);
+    }
     renderer.set_lod_tint(options.lod_tint);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo
@@ -277,6 +315,11 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         moving_camera: options.moving_camera,
         warm_up: u64::from(options.warm_up),
         end: u64::from(options.warm_up) + u64::from(options.frames.max(1)),
+        switch: options.switch_presets.filter(|&every| every > 0).map(|every| {
+            let graphics = options.graphics.clone().unwrap_or_default();
+            (u64::from(every), graphics)
+        }),
+        switches: 0,
         summary: None,
         present_mode: None,
         error: None,
@@ -311,12 +354,18 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         moving: app.scene.moving(),
         in_view: app.scene.in_view(),
         field_of_view: app.scene.field_of_view(),
-        cull: options.cull,
-        shadows: options.shadows,
-        light_settings: options.lights,
-        lod: options.lod,
+        cull: renderer.cull(),
+        shadows: renderer.shadows(),
+        light_settings: renderer.lights(),
+        lod: renderer.lod(),
         moving_camera: options.moving_camera,
         build_ms,
+        graphics: renderer.graphics_status(),
+        calibration: renderer
+            .graphics()
+            .and_then(|graphics| graphics.calibration.as_ref())
+            .map(|calibration| (calibration.tier.name(), calibration.gpu_ms)),
+        switches: app.switch.as_ref().map(|(every, _)| (*every as u32, app.switches)),
         summary,
     })
 }
@@ -329,6 +378,10 @@ struct BenchApp {
     moving_camera: bool,
     warm_up: u64,
     end: u64,
+    /// Every how many frames the preset switches between Low and Ultra, and the settings it switches.
+    switch: Option<(u64, GraphicsSettings)>,
+    /// Switches made in the measured frames.
+    switches: u32,
     summary: Option<PerfSummary>,
     present_mode: Option<wgpu::PresentMode>,
     error: Option<EngineError>,
@@ -382,6 +435,20 @@ impl AppHandler for BenchApp {
         }
         if frames == self.warm_up {
             self.renderer.borrow_mut().perf_mut().reset();
+        }
+        if let Some((every, graphics)) = self.switch.as_mut()
+            && frames.is_multiple_of(*every)
+            && frames < self.end
+        {
+            graphics.preset = if graphics.preset == Preset::Low {
+                Preset::Ultra
+            } else {
+                Preset::Low
+            };
+            self.renderer.borrow_mut().set_graphics(graphics.clone());
+            if frames >= self.warm_up {
+                self.switches += 1;
+            }
         }
         if frames >= self.end {
             let mut renderer = self.renderer.borrow_mut();
@@ -444,6 +511,23 @@ mod tests {
             lod: LodSettings::default(),
             moving_camera: false,
             build_ms: 12.5,
+            graphics: GraphicsStatus {
+                preset: Some(Preset::Auto),
+                tier: Some(metallic_render::settings::Tier::High),
+                calibrating: None,
+                resolution: metallic_render::resolution::ResolutionStats {
+                    scale: 0.75,
+                    width: 1440,
+                    height: 810,
+                    dynamic: true,
+                    target_ms: 2.0,
+                    min_scale: 0.5,
+                    max_scale: 1.0,
+                    gpu_ms: 2.1,
+                },
+            },
+            calibration: Some(("high", 3.25)),
+            switches: Some((60, 16)),
             summary,
         };
         let json = report.to_json();
@@ -476,6 +560,16 @@ mod tests {
         assert!(json.contains("\"light_shadows\":{\"mean\":"), "{json}");
         assert!(json.contains("\"lod\":{\"enabled\":true,\"bias\":2.00}"), "{json}");
         assert!(json.contains("\"culled\":0,\"levels\":[0,0,0,0]}"), "{json}");
+        assert!(
+            json.contains(
+                "\"graphics\":{\"preset\":\"auto\",\"tier\":\"high\",\"calibrating\":null,\"resolution\":{\
+                 \"scale\":0.7500,\"width\":1440,\"height\":810,\"dynamic\":true,\"target_ms\":2.000,\
+                 \"min_scale\":0.500,\"max_scale\":1.000},\"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\
+                 \"switch_every\":60,\"switches\":16},"
+            ),
+            "{json}"
+        );
+        assert!(json.contains("\"render_scale\":{\"mean\":"), "{json}");
         // Balanced braces.
         let open = json.matches('{').count();
         assert_eq!(open, json.matches('}').count(), "{json}");

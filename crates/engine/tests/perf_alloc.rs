@@ -1,5 +1,6 @@
 //! Allocation guard for the frame statistics (#78, ADR 0008 §9), measured with a counting global allocator: once
-//! made, recording a frame, summarising the window and drawing the performance overlay allocate nothing, with the
+//! made, recording a frame, summarising the window and drawing the performance overlay (its graphics line in every
+//! form too) allocate nothing, with the
 //! window filling and then wrapping. (GPU timings only come from a device; recording them copies a fixed-size
 //! array into the same kind of ring.)
 //!
@@ -12,7 +13,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use metallic_engine::perf::{FrameSample, PerfStats, draw_overlay};
+use metallic_engine::perf::{FrameSample, GraphicsStatus, PerfStats, draw_overlay};
+use metallic_render::resolution::ResolutionStats;
+use metallic_render::settings::{Preset, Tier};
 use metallic_render::{DrawStats, Overlay};
 
 thread_local! {
@@ -78,6 +81,39 @@ fn sample(frame: usize) -> FrameSample {
     }
 }
 
+/// The overlay's graphics line in each of its forms: no settings, Auto calibrating, and Auto at its calibrated tier
+/// with dynamic resolution.
+fn graphics(frame: usize) -> GraphicsStatus {
+    let resolution = ResolutionStats {
+        scale: 0.71,
+        width: 1363,
+        height: 767,
+        dynamic: true,
+        target_ms: 4.0,
+        min_scale: 0.5,
+        max_scale: 1.0,
+        gpu_ms: 4.1,
+    };
+    match frame % 3 {
+        0 => GraphicsStatus::default(),
+        1 => GraphicsStatus {
+            preset: Some(Preset::Auto),
+            tier: Some(Tier::Ultra),
+            calibrating: Some(Tier::Ultra),
+            resolution: ResolutionStats {
+                dynamic: false,
+                ..resolution
+            },
+        },
+        _ => GraphicsStatus {
+            preset: Some(Preset::Auto),
+            tier: Some(Tier::High),
+            calibrating: None,
+            resolution,
+        },
+    }
+}
+
 #[test]
 fn recording_summarising_and_drawing_the_overlay_allocate_nothing() {
     let mut stats = PerfStats::new(WINDOW);
@@ -104,7 +140,7 @@ fn recording_summarising_and_drawing_the_overlay_allocate_nothing() {
         let count = allocations_in(|| {
             stats.record(sample(frame), None, draws);
             let summary = stats.summary();
-            draw_overlay(&mut overlay, &stats, &summary);
+            draw_overlay(&mut overlay, &stats, &summary, &graphics(frame));
         });
         counts.push(count);
     }

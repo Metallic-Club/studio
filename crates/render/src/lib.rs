@@ -35,6 +35,11 @@
 //!   budget that fades lights in and out by importance, and a cached shadow atlas for lights with `Shadows`.
 //! - The debug overlay ([`overlay`], [`Renderer::set_overlay_enabled`]): rectangles and bitmap-font text in the UI
 //!   pass, which carries the performance overlay (ADR 0008 §10).
+//! - Render scale and dynamic resolution ([`resolution`], [`RendererSettings::resolution`]): the scene drawn at a
+//!   fraction of the target's size and upscaled before the UI, or at a scale that follows the GPU timings to hold a
+//!   frame time.
+//! - Graphics settings ([`settings`]): the Low / Medium / High / Ultra / Auto presets composed from the settings
+//!   above, the player's overrides, their file format, and the Auto preset's calibration (ADR 0008 §8).
 
 mod context;
 pub mod cull;
@@ -47,11 +52,14 @@ pub mod lod;
 pub mod overlay;
 pub mod parts;
 mod renderer;
+pub mod resolution;
 pub mod scene;
+pub mod settings;
 pub mod shadow;
 mod surface;
 mod target;
 mod timing;
+mod upscale;
 
 pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
 pub use cull::{Casters, CullSettings, CullStats, CullView, Frustum, VisibleSet};

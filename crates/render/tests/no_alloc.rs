@@ -38,6 +38,11 @@
 //! map and builds its map (the copy of the static map and the moving casters on top) allocates exactly what the same
 //! wgpu calls do by hand, for two workloads with different casters and moving casters.
 //!
+//! Render scale and dynamic resolution (#84) too: a frame drawn into the scene colour at half scale and upscaled, and
+//! one drawn into the corner of larger textures (a viewport and scissor in every scene pass), add exactly what the
+//! upscale pass and the viewports add by hand; and the heap does not grow while dynamic resolution moves the scale.
+//! The other frames here draw at the target's own resolution, which makes the same wgpu calls as before #84.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 //!
 //! Every adapter, software (`DeviceType::Cpu`: WARP, lavapipe) or hardware, is held to the same exact comparison of
@@ -64,6 +69,7 @@ use std::cell::Cell;
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
+use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{GpuInstance, InstanceBinding, RenderComponents};
 use metallic_render::{
     Camera, DrawStats, GpuScene, InstanceScene, LightingReader, MAX_LOD_LEVELS, OffscreenTarget, PassId, PassSet,
@@ -522,6 +528,325 @@ fn nothing_accumulates_over_frames() {
     );
     assert!(renderer.gpu_timings().is_some() || !renderer.gpu_timing_enabled());
     // Slack for the frames still in flight at either end; anything kept per frame would be far beyond this.
+    assert!(
+        grown.abs() < 16 * 1024,
+        "the heap grew by {grown} bytes over {FRAMES} frames"
+    );
+}
+
+/// The scene colour, depth and upscale pass of a hand-written scaled frame: the renderer's own upscale shader
+/// (`src/upscale.wgsl`), with a bind group like the renderer's (parameters, the scene colour, a sampler).
+struct HandUpscale {
+    pipeline: wgpu::RenderPipeline,
+    group: wgpu::BindGroup,
+    scene: wgpu::TextureView,
+    depth: wgpu::TextureView,
+}
+
+impl HandUpscale {
+    /// Scene textures of `width` × `height`.
+    fn new(device: &wgpu::Device, (width, height): (u32, u32)) -> Self {
+        let texture = |label, format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | usage,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let scene = texture("hand scene colour", FORMAT, wgpu::TextureUsages::TEXTURE_BINDING);
+        let depth = texture("hand depth", DEPTH_FORMAT, wgpu::TextureUsages::empty());
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hand upscale"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../src/upscale.wgsl").into()),
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hand upscale"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_upscale"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_upscale"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(FORMAT.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hand upscale"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hand upscale"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&scene),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        Self {
+            pipeline,
+            group,
+            scene,
+            depth,
+        }
+    }
+
+    /// The renderer's default passes drawn into the scene colour (into its top-left `corner` when given: a viewport
+    /// and scissor in each), then the upscale pass over `target` and the UI on it: the wgpu calls
+    /// `Renderer::render` makes with a render scale.
+    fn frame(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+        corner: Option<(u32, u32)>,
+    ) -> wgpu::SubmissionIndex {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("metallic frame"),
+        });
+        for &(label, clear, depth_write) in &DEFAULT_PASSES[..3] {
+            let colors = [Some(wgpu::RenderPassColorAttachment {
+                view: &self.scene,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: if clear {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let depth = depth_write.map(|write| wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth,
+                depth_ops: write.then_some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(DEPTH_CLEAR),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &colors,
+                depth_stencil_attachment: depth,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some((width, height)) = corner {
+                pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                pass.set_scissor_rect(0, 0, width, height);
+            }
+        }
+        for (label, load) in [
+            ("upscale", wgpu::LoadOp::Clear(wgpu::Color::BLACK)),
+            ("ui", wgpu::LoadOp::Load),
+        ] {
+            let colors = [Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &colors,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if label == "upscale" {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        queue.submit(std::iter::once(encoder.finish()))
+    }
+}
+
+/// The fewest allocations of a frame of `Renderer::render` at `resolution` and of the same wgpu calls by hand
+/// ([`HandUpscale::frame`], its scene textures `texture` in size, drawn into `corner`), over [`FRAMES`] frames each in
+/// alternating order.
+fn scaled_frame_and_floor(
+    context: &RenderContext,
+    resolution: ResolutionSettings,
+    texture: (u32, u32),
+    corner: Option<(u32, u32)>,
+) -> (u64, u64) {
+    let (device, queue) = (context.device(), context.queue());
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
+    let mut renderer = Renderer::new(
+        context,
+        RendererSettings {
+            gpu_timing: false,
+            resolution,
+            ..RendererSettings::new(FORMAT, SIZE, SIZE)
+        },
+    )
+    .expect("a renderer");
+    assert!(renderer.plan().scaled());
+    let hand = HandUpscale::new(device, texture);
+    let mut pacer = Pacer::new();
+    let mut ours = Vec::with_capacity(FRAMES);
+    let mut floor = Vec::with_capacity(FRAMES);
+    for frame in 0..WARM_UP + FRAMES {
+        for renderer_turn in [frame % 2 == 0, frame % 2 != 0] {
+            let (count, submission) = if renderer_turn {
+                allocations_in(|| renderer.render(target.view()))
+            } else {
+                allocations_in(|| hand.frame(device, queue, target.view(), corner))
+            };
+            pacer.submitted(device, submission);
+            if frame >= WARM_UP {
+                if renderer_turn { &mut ours } else { &mut floor }.push(count);
+            }
+        }
+    }
+    let stats = renderer.resolution_stats();
+    assert_eq!(
+        corner.unwrap_or(texture),
+        (stats.width, stats.height),
+        "the frame was drawn at another size"
+    );
+    (
+        *ours.iter().min().expect("frames"),
+        *floor.iter().min().expect("frames"),
+    )
+}
+
+/// Render scale (#84): a frame that draws the scene into the scene colour and upscales it, and one that draws into
+/// the corner of larger textures (dynamic resolution below its highest scale: a viewport and scissor in every scene
+/// pass), cost the renderer exactly what the upscale pass, the viewports and the other target cost by hand over the
+/// same frame at the target's own resolution.
+#[test]
+fn a_scaled_frame_allocates_nothing_beyond_wgpus_own() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let _padding = pad_tracker_indices(&context);
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let depth = HandUpscale::new(context.device(), (SIZE, SIZE)).depth;
+    let (ours_native, floor_native) =
+        renderer_and_floor(&context, PassSet::default(), &DEFAULT_PASSES, &target, &depth);
+    let half = SIZE / 2;
+    let corner = ResolutionSettings {
+        scale: 0.5,
+        ..ResolutionSettings::dynamic(1000.0, 0.5, 1.0)
+    };
+    let (ours_half, floor_half) = scaled_frame_and_floor(&context, ResolutionSettings::fixed(0.5), (half, half), None);
+    let (ours_corner, floor_corner) = scaled_frame_and_floor(&context, corner, (SIZE, SIZE), Some((half, half)));
+    report(
+        "scaled frame",
+        &context,
+        &[
+            ("native", ours_native, floor_native),
+            ("half scale", ours_half, floor_half),
+            ("half scale in the corner", ours_corner, floor_corner),
+        ],
+    );
+    for (name, ours, floor) in [
+        ("half scale", ours_half, floor_half),
+        ("half scale in the corner", ours_corner, floor_corner),
+    ] {
+        // What the scaled frame adds to the native one costs the renderer exactly what it costs by hand...
+        assert_eq!(
+            ours.saturating_sub(ours_native),
+            floor.saturating_sub(floor_native),
+            "{name}: the upscale costs the renderer {ours} against {ours_native} at native, and by hand {floor} \
+             against {floor_native}, on {:?}",
+            context.capabilities().device_type
+        );
+        // ...and the frame nothing beyond wgpu's own, give or take its pooling.
+        assert!(
+            ours <= floor + WGPU_POOL_NOISE,
+            "{name}: {ours} against {floor} by hand"
+        );
+    }
+}
+
+/// Dynamic resolution (#84) moving the scale from the GPU timings for 100 frames (a target no frame meets, so it
+/// steps down to its lowest scale, rewriting the upscale's parameters on the way) does not grow the heap.
+#[test]
+fn nothing_accumulates_over_dynamic_resolution_frames() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let mut renderer = Renderer::new(
+        &context,
+        RendererSettings {
+            resolution: ResolutionSettings::dynamic(0.0001, 0.5, 1.0),
+            ..RendererSettings::new(FORMAT, SIZE, SIZE)
+        },
+    )
+    .unwrap();
+    let mut pacer = Pacer::new();
+    let mut before = 0;
+    let mut scales = Vec::with_capacity(WARM_UP + FRAMES);
+    for frame in 0..WARM_UP + FRAMES {
+        if frame == WARM_UP {
+            before = live_bytes();
+        }
+        let submission = renderer.render(target.view());
+        pacer.submitted(context.device(), submission);
+        scales.push(renderer.resolution_stats().scale);
+    }
+    let grown = live_bytes() - before;
+    eprintln!(
+        "{FRAMES} dynamic resolution frames: heap grew {grown} bytes, the scale from {:?} to {:?}",
+        scales.first(),
+        scales.last()
+    );
+    if renderer.gpu_timing_enabled() {
+        assert_eq!(
+            *scales.last().unwrap(),
+            0.5,
+            "no frame meets the target, so the lowest scale"
+        );
+        assert!(
+            scales.windows(2).filter(|w| w[0] != w[1]).count() > 3,
+            "the scale stepped"
+        );
+    }
     assert!(
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"

@@ -4,9 +4,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use metallic_classes::services::user_game_settings::{UserGameSettings, set_user_game_settings};
 use metallic_core::{DataModel, Id};
 use metallic_platform::{Size, Window};
+use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
+use metallic_render::settings::{Calibration, CalibrationStep, Calibrator, GraphicsSettings, Quality, Tier};
 use metallic_render::{
     CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings, LightingReader,
     LodSettings, RenderContext, RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, ShadowSettings,
@@ -14,7 +17,7 @@ use metallic_render::{
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
-use crate::perf::{FrameSample, PerfStats, PerfSummary, draw_overlay};
+use crate::perf::{FrameSample, GraphicsStatus, PerfStats, PerfSummary, draw_overlay};
 
 /// Frames between two refreshes of the overlay's percentiles: about four times a second at 60 fps.
 const SUMMARY_EVERY: u32 = 15;
@@ -35,7 +38,22 @@ struct Device {
 ///
 /// It also keeps the frame statistics ([`SceneRenderer::perf`]): every drawn frame records its frame time, the
 /// script and physics time the engine measured ([`Engine::set_cpu_timing`](crate::Engine::set_cpu_timing)), its own
-/// render CPU time, the GPU timings and the draws. [`SceneRenderer::set_overlay`] shows them on screen.
+/// render CPU time, the GPU timings, the render scale and the draws. [`SceneRenderer::set_overlay`] shows them on
+/// screen.
+///
+/// # Graphics settings
+///
+/// [`SceneRenderer::set_graphics`] applies a player's [`GraphicsSettings`] (ADR 0008 §8): the preset's settings of
+/// every system, with the player's overrides, at once. Without it the renderer keeps the per-system settings set
+/// one by one ([`SceneRenderer::set_cull`] and the others; the renderer's defaults until then). With the Auto preset
+/// and no calibration for the adapter and driver it attaches to, it calibrates first ([`Calibrator`]): the game's
+/// first frames are drawn at each tier it measures, then at the tier chosen, and [`SceneRenderer::take_calibration`]
+/// hands the result to the app to save. [`SceneRenderer::write_user_settings`] writes the settings in effect into
+/// the game's `UserGameSettings` service, which scripts read.
+///
+/// Switching settings at run time waits for nothing: the shadow maps, the light atlas and the scaled scene textures
+/// are made again without waiting for the GPU (the old ones are freed once it is done with them), and every pipeline
+/// was made with the renderer.
 pub struct SceneRenderer {
     options: ContextOptions,
     clear_color: wgpu::Color,
@@ -43,8 +61,21 @@ pub struct SceneRenderer {
     shadows: ShadowSettings,
     lights: LightSettings,
     lod: LodSettings,
+    resolution: ResolutionSettings,
     lod_tint: bool,
     present_mode: Option<wgpu::PresentMode>,
+    /// The player's graphics settings, once set ([`SceneRenderer::set_graphics`]).
+    graphics: Option<GraphicsSettings>,
+    /// The tier drawn at: the graphics settings', or the tier being measured while calibrating.
+    tier: Option<Tier>,
+    /// Auto's calibration, while it runs.
+    calibrator: Option<Calibrator>,
+    /// A calibration finished and not yet taken by the app.
+    new_calibration: Option<Calibration>,
+    /// The frame cap the app applies, reported to scripts.
+    frame_cap: Option<u32>,
+    /// `UserGameSettings` must be written again.
+    settings_changed: bool,
     device: Option<Device>,
     surface: Option<RenderSurface>,
     scene: Option<GpuScene>,
@@ -82,8 +113,15 @@ impl SceneRenderer {
             shadows: ShadowSettings::default(),
             lights: LightSettings::default(),
             lod: LodSettings::default(),
+            resolution: ResolutionSettings::NATIVE,
             lod_tint: false,
             present_mode: None,
+            graphics: None,
+            tier: None,
+            calibrator: None,
+            new_calibration: None,
+            frame_cap: None,
+            settings_changed: false,
             device: None,
             surface: None,
             scene: None,
@@ -111,7 +149,7 @@ impl SceneRenderer {
     }
 
     /// Changes what the camera culls (frustum, view distance, screen size; see [`metallic_render::cull`]). On by
-    /// default; graphics presets (#84) set the thresholds. Applies now and to every later renderer.
+    /// default; graphics settings ([`SceneRenderer::set_graphics`]) set the thresholds. Applies now and to every later renderer.
     pub fn set_cull(&mut self, cull: CullSettings) {
         self.cull = cull;
         if let Some(device) = self.device.as_mut() {
@@ -125,7 +163,7 @@ impl SceneRenderer {
     }
 
     /// Changes how the sun's shadows are drawn (cascades, map size, distance; see [`metallic_render::shadow`]). On
-    /// by default; graphics presets (#84) set them, and `Lighting.GlobalShadows` turns a game's shadows off. Applies
+    /// by default; graphics settings ([`SceneRenderer::set_graphics`]) set them, and `Lighting.GlobalShadows` turns a game's shadows off. Applies
     /// now and to every later renderer.
     pub fn set_shadows(&mut self, shadows: ShadowSettings) {
         self.shadows = shadows;
@@ -140,7 +178,7 @@ impl SceneRenderer {
     }
 
     /// Changes how point and spot lights are drawn (the light budget, shadowed lights, the shadow atlas; see
-    /// [`metallic_render::lights`]). The defaults are the Medium preset's; graphics presets (#84) set them, and each
+    /// [`metallic_render::lights`]). The defaults are the Medium preset's; graphics settings ([`SceneRenderer::set_graphics`]) set them, and each
     /// light's `Enabled` and `Shadows` are the game's. Applies now and to every later renderer.
     pub fn set_lights(&mut self, lights: LightSettings) {
         self.lights = lights;
@@ -155,7 +193,7 @@ impl SceneRenderer {
     }
 
     /// Changes how the round parts' levels of detail are chosen (the LOD bias; see [`metallic_render::lod`]). The
-    /// High preset's by default; graphics presets (#84) set it. Applies now and to every later renderer.
+    /// High preset's by default; graphics settings ([`SceneRenderer::set_graphics`]) set it. Applies now and to every later renderer.
     pub fn set_lod(&mut self, lod: LodSettings) {
         self.lod = lod;
         if let Some(device) = self.device.as_mut() {
@@ -174,6 +212,217 @@ impl SceneRenderer {
         self.lod_tint = on;
         if let Some(device) = self.device.as_mut() {
             device.renderer.set_lod_tint(on);
+        }
+    }
+
+    /// Changes the scene's resolution: a render scale, or dynamic resolution holding a GPU frame time (see
+    /// [`metallic_render::resolution`]). The target's own resolution by default; graphics settings set it. Applies
+    /// now and to every later renderer.
+    pub fn set_resolution(&mut self, resolution: ResolutionSettings) {
+        self.resolution = resolution;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_resolution(resolution);
+        }
+    }
+
+    /// The scene's resolution settings.
+    pub fn resolution(&self) -> ResolutionSettings {
+        self.resolution
+    }
+
+    /// Applies a player's graphics settings: the settings of every system at the preset's tier with the player's
+    /// overrides ([`GraphicsSettings::quality`]), and vsync when the settings say. With Auto and no calibration for
+    /// this adapter and driver, calibrates first (at once when attached, otherwise when it attaches). Applies now
+    /// and to every later renderer; waits for nothing.
+    pub fn set_graphics(&mut self, graphics: GraphicsSettings) {
+        if let Some(vsync) = graphics.vsync {
+            self.set_present_mode(if vsync {
+                wgpu::PresentMode::Fifo
+            } else {
+                wgpu::PresentMode::AutoNoVsync
+            });
+        }
+        self.calibrator = None;
+        self.graphics = Some(graphics);
+        self.start_graphics();
+    }
+
+    /// The player's graphics settings, once set; with Auto, its calibration once made.
+    pub fn graphics(&self) -> Option<&GraphicsSettings> {
+        self.graphics.as_ref()
+    }
+
+    /// A calibration Auto finished since the last call, for the app to save with the settings (it is already in
+    /// [`SceneRenderer::graphics`]).
+    pub fn take_calibration(&mut self) -> Option<Calibration> {
+        self.new_calibration.take()
+    }
+
+    /// The tier Auto's calibration is measuring, while it runs.
+    pub fn calibrating(&self) -> Option<Tier> {
+        self.calibrator.as_ref().map(Calibrator::probe)
+    }
+
+    /// Tells the renderer the frame cap the app applies (`None`: uncapped), which scripts read in
+    /// `UserGameSettings.FrameRateCap`. The renderer does not pace frames itself.
+    pub fn set_frame_cap(&mut self, fps: Option<u32>) {
+        self.frame_cap = fps;
+        self.settings_changed = true;
+    }
+
+    /// The graphics settings in effect, for the performance overlay and reports: the preset, the tier, Auto's
+    /// calibration, and this frame's render scale and dynamic resolution.
+    pub fn graphics_status(&self) -> GraphicsStatus {
+        GraphicsStatus {
+            preset: self.graphics.as_ref().map(|g| g.preset),
+            tier: self.tier,
+            calibrating: self.calibrating(),
+            resolution: self.renderer().map(Renderer::resolution_stats).unwrap_or_default(),
+        }
+    }
+
+    /// Applies the graphics settings now: calibrates first when Auto needs it on the attached adapter, otherwise
+    /// draws at their tier.
+    fn start_graphics(&mut self) {
+        let Some(graphics) = self.graphics.as_ref() else {
+            return;
+        };
+        let device = self.device.as_ref().map(|device| {
+            let caps = device.context.capabilities();
+            let calibrate = graphics.needs_calibration(&caps.adapter_name, &caps.driver);
+            (
+                calibrate,
+                device.renderer.gpu_timing_enabled(),
+                device.renderer.frame_index(),
+            )
+        });
+        match device {
+            Some((true, true, frame)) => {
+                let calibrator = Calibrator::new(frame);
+                log::info!(
+                    "graphics: calibrating the Auto preset, starting at {:?}",
+                    calibrator.probe()
+                );
+                self.apply_probe(calibrator.probe());
+                self.calibrator = Some(calibrator);
+            }
+            Some((true, false, _)) => {
+                // No timestamps to measure with: the tier from the kind of adapter.
+                let tier = self
+                    .capabilities()
+                    .map_or(Tier::Medium, |caps| Calibrator::untimed_tier(caps.device_type));
+                self.finish_calibration(tier, 0.0);
+            }
+            _ => {
+                let quality = graphics.quality();
+                self.apply_quality(&quality);
+            }
+        }
+    }
+
+    /// Draws at `tier`'s settings at the target's own resolution, as calibration measures them.
+    fn apply_probe(&mut self, tier: Tier) {
+        let quality = Quality {
+            resolution: ResolutionSettings::NATIVE,
+            ..Quality::for_tier(tier)
+        };
+        self.apply_quality(&quality);
+    }
+
+    fn apply_quality(&mut self, quality: &Quality) {
+        self.tier = Some(quality.tier);
+        self.set_cull(quality.cull);
+        self.set_shadows(quality.shadows);
+        self.set_lights(quality.lights);
+        self.set_lod(quality.lod);
+        self.set_resolution(quality.resolution);
+        self.settings_changed = true;
+    }
+
+    /// Keeps Auto's choice of `tier` (measured at `gpu_ms`) for this adapter and draws at it.
+    fn finish_calibration(&mut self, tier: Tier, gpu_ms: f32) {
+        self.calibrator = None;
+        let (adapter, driver) = self
+            .capabilities()
+            .map(|caps| (caps.adapter_name.clone(), caps.driver.clone()))
+            .unwrap_or_default();
+        let frame = self.renderer().map_or(0, Renderer::frame_index);
+        log::info!("graphics: Auto chose {tier:?} on {adapter} ({gpu_ms:.2} ms a frame), at frame {frame}");
+        let calibration = Calibration {
+            tier,
+            gpu_ms,
+            adapter,
+            driver,
+        };
+        self.new_calibration = Some(calibration.clone());
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.calibration = Some(calibration);
+            let quality = graphics.quality();
+            self.apply_quality(&quality);
+        }
+    }
+
+    /// Feeds the calibration the newest GPU timings after a frame.
+    fn advance_calibration(&mut self) {
+        let (Some(calibrator), Some(device)) = (self.calibrator.as_mut(), self.device.as_ref()) else {
+            return;
+        };
+        let renderer = &device.renderer;
+        let timed = renderer
+            .gpu_timings()
+            .map(|timings| (timings.frame(), timings.total_ms()));
+        match calibrator.observe(renderer.frame_index(), timed) {
+            CalibrationStep::Measuring => {}
+            CalibrationStep::Probe(tier) => self.apply_probe(tier),
+            CalibrationStep::Done(tier, gpu_ms) => self.finish_calibration(tier, gpu_ms),
+        }
+    }
+
+    /// Writes the graphics settings in effect into `dm`'s `UserGameSettings`, which scripts read, when they changed
+    /// since the last call (and the first time). The host calls it between frames (the render hook must not change
+    /// the game); nothing happens without graphics settings ([`SceneRenderer::set_graphics`]).
+    pub fn write_user_settings(&mut self, dm: &mut DataModel) {
+        if !self.settings_changed {
+            return;
+        }
+        self.settings_changed = false;
+        let Some(graphics) = self.graphics.as_ref() else {
+            return;
+        };
+        let tier = self.tier.unwrap_or_else(|| graphics.tier());
+        let shadow_tier = graphics.shadow_quality.unwrap_or(tier);
+        let (_, max_scale) = self.resolution.range();
+        let settings = UserGameSettings {
+            preset: match graphics.preset.tier() {
+                Some(Tier::Low) => "Low",
+                Some(Tier::Medium) => "Medium",
+                Some(Tier::High) => "High",
+                Some(Tier::Ultra) => "Ultra",
+                None => "Auto",
+            },
+            quality_level: tier.level(),
+            render_scale: f64::from(max_scale),
+            dynamic_resolution: self.resolution.dynamic,
+            target_frame_time: f64::from(self.resolution.target_ms),
+            view_distance: if self.cull.max_distance.is_finite() {
+                f64::from(self.cull.max_distance)
+            } else {
+                0.0
+            },
+            shadow_quality_level: shadow_tier.level(),
+            shadow_distance: f64::from(self.shadows.distance),
+            local_light_budget: self.lights.budget,
+            lod_bias: f64::from(self.lod.bias),
+            vsync: self.present_mode.is_none_or(|mode| {
+                matches!(
+                    mode,
+                    wgpu::PresentMode::Fifo | wgpu::PresentMode::FifoRelaxed | wgpu::PresentMode::AutoVsync
+                )
+            }),
+            frame_rate_cap: self.frame_cap.unwrap_or(0),
+        };
+        if let Err(error) = set_user_game_settings(dm, &settings) {
+            log::warn!("graphics: could not write UserGameSettings: {error}");
         }
     }
 
@@ -304,6 +553,7 @@ impl RenderHook for SceneRenderer {
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
         let window = Arc::new(window.clone());
+        let created = self.device.is_none();
         let mut surface = match self.device.as_ref() {
             Some(device) => device.context.create_surface(window, width, height)?,
             None => {
@@ -330,6 +580,10 @@ impl RenderHook for SceneRenderer {
         self.surface = Some(surface);
         // Time spent away (suspended, opening the window) is not a frame.
         self.frame_start = None;
+        if created {
+            // Auto calibrates on the adapter it now knows.
+            self.start_graphics();
+        }
         Ok(())
     }
 
@@ -357,6 +611,7 @@ impl RenderHook for SceneRenderer {
             log::error!("render: {error}");
             return;
         }
+        let status = self.overlay.then(|| self.graphics_status());
         let camera = self.world.and_then(|world| self.camera.read(frame.dm, world));
         let (Some(device), Some(scene)) = (self.device.as_mut(), self.scene.as_mut()) else {
             return;
@@ -371,12 +626,12 @@ impl RenderHook for SceneRenderer {
             self.lighting = self.lighting_reader.read(frame.dm, lighting);
             device.renderer.set_lighting(self.lighting);
         }
-        if self.overlay {
+        if let Some(status) = status {
             if self.since_summary == 0 {
                 self.summary = self.perf.summary();
             }
             self.since_summary = (self.since_summary + 1) % SUMMARY_EVERY;
-            draw_overlay(device.renderer.overlay_mut(), &self.perf, &self.summary);
+            draw_overlay(device.renderer.overlay_mut(), &self.perf, &self.summary, &status);
         }
         let acquire_start = Instant::now();
         let image = match self.surface.as_mut().map(|surface| surface.acquire(&device.context)) {
@@ -423,9 +678,11 @@ impl RenderHook for SceneRenderer {
                 frame.stats.simulation_cpu,
                 render_cpu,
             )
-            .with_cull(cull);
+            .with_cull(cull)
+            .with_render_scale(device.renderer.resolution_stats().scale);
             self.perf.record(sample, device.renderer.gpu_timings(), draws);
         }
+        self.advance_calibration();
     }
 }
 
@@ -437,7 +694,72 @@ impl SceneRenderer {
             shadows: self.shadows,
             lights: self.lights,
             lod: self.lod,
+            resolution: self.resolution,
             ..RendererSettings::new(format, width, height)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use metallic_core::{EnumItem, Value};
+    use metallic_render::settings::Preset;
+
+    use super::*;
+
+    fn user_game_settings(dm: &DataModel, name: &str) -> Value {
+        let class = dm.registry().class_id("UserGameSettings").expect("the class");
+        let service = dm.service(class).expect("the service");
+        dm.get_by_name(service, name).expect("the property")
+    }
+
+    #[test]
+    fn graphics_settings_set_every_system_and_reach_scripts() {
+        let mut dm = metallic_classes::new_game().expect("a game");
+        let mut renderer = SceneRenderer::default();
+        // Nothing to write before there are graphics settings.
+        renderer.write_user_settings(&mut dm);
+        assert_eq!(user_game_settings(&dm, "QualityLevel"), Value::Int(2));
+
+        renderer.set_graphics(GraphicsSettings {
+            render_scale: Some(0.8),
+            vsync: Some(false),
+            ..GraphicsSettings::new(Preset::High)
+        });
+        renderer.set_frame_cap(Some(144));
+        let high = Quality::HIGH;
+        assert_eq!(renderer.cull(), high.cull);
+        assert_eq!(renderer.shadows(), high.shadows);
+        assert_eq!(renderer.lights(), high.lights);
+        assert_eq!(renderer.lod(), high.lod);
+        assert_eq!(renderer.resolution().range(), (0.8, 0.8));
+        let status = renderer.graphics_status();
+        assert_eq!(
+            (status.preset, status.tier, status.calibrating),
+            (Some(Preset::High), Some(Tier::High), None)
+        );
+
+        renderer.write_user_settings(&mut dm);
+        assert_eq!(
+            user_game_settings(&dm, "GraphicsPreset"),
+            Value::Enum(EnumItem::new("GraphicsPreset", "High"))
+        );
+        assert_eq!(user_game_settings(&dm, "QualityLevel"), Value::Int(3));
+        assert_eq!(user_game_settings(&dm, "RenderScale"), Value::Number(f64::from(0.8f32)));
+        assert_eq!(user_game_settings(&dm, "ViewDistance"), Value::Number(2048.0));
+        assert_eq!(user_game_settings(&dm, "LocalLightBudget"), Value::Int(192));
+        assert_eq!(user_game_settings(&dm, "VSync"), Value::Bool(false));
+        assert_eq!(user_game_settings(&dm, "FrameRateCap"), Value::Int(144));
+
+        // Auto before a device: drawn at Medium until it can calibrate, with dynamic resolution.
+        renderer.set_graphics(GraphicsSettings::new(Preset::Auto));
+        renderer.write_user_settings(&mut dm);
+        assert_eq!(
+            user_game_settings(&dm, "GraphicsPreset"),
+            Value::Enum(EnumItem::new("GraphicsPreset", "Auto"))
+        );
+        assert_eq!(user_game_settings(&dm, "QualityLevel"), Value::Int(2));
+        assert_eq!(user_game_settings(&dm, "DynamicResolution"), Value::Bool(true));
+        assert_eq!(user_game_settings(&dm, "ViewDistance"), Value::Number(1024.0));
     }
 }

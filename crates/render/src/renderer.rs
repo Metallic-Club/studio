@@ -8,10 +8,12 @@ use crate::lights::{LightSettings, LightStats};
 use crate::lod::{LodSettings, LodView};
 use crate::overlay::{Overlay, OverlayPass};
 use crate::parts::{Camera, DrawStats, PartRenderer};
+use crate::resolution::{DynamicResolution, ResolutionSettings, ResolutionStats, scaled_size};
 use crate::scene::{InstanceBinding, UploadStats};
 use crate::shadow::{MAX_CASCADES, ShadowSettings, ShadowStats};
 use crate::target::check_size;
 use crate::timing::{GpuTimer, Timed};
+use crate::upscale::Upscaler;
 use crate::{FrameTimings, GpuScene, MsaaSampleCounts, RenderContext, RenderError};
 
 /// What a [`Renderer`] draws into and how.
@@ -41,11 +43,15 @@ pub struct RendererSettings {
     /// How the main view chooses the round parts' levels of detail: the LOD bias ([`crate::lod`]). Levels are chosen
     /// by the cull, so with [`CullSettings::enabled`] off every part is drawn at full detail.
     pub lod: LodSettings,
+    /// The scene's resolution: a render scale, or dynamic resolution holding a GPU frame time
+    /// ([`crate::resolution`]). The UI is always drawn at the target's size.
+    pub resolution: ResolutionSettings,
 }
 
 impl RendererSettings {
     /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes, GPU timing on, a
-    /// black clear colour, the default culling, shadows, local lights and levels of detail.
+    /// black clear colour, the default culling, shadows, local lights and levels of detail, at the target's own
+    /// resolution.
     pub fn new(color_format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         Self {
             color_format,
@@ -59,6 +65,7 @@ impl RendererSettings {
             shadows: ShadowSettings::default(),
             lights: LightSettings::default(),
             lod: LodSettings::default(),
+            resolution: ResolutionSettings::NATIVE,
         }
     }
 }
@@ -83,6 +90,15 @@ pub struct Renderer {
     transient_attachments: bool,
     depth: Option<Attachment>,
     msaa_color: Option<Attachment>,
+    /// The scene colour at the render scale, while the scene is drawn at one ([`FramePlan::scaled`]).
+    scene_color: Option<Attachment>,
+    /// The size of the scene's attachments (depth, MSAA colour, scene colour): the target's, or with a render scale
+    /// its highest scale's.
+    texture_size: (u32, u32),
+    /// The size the scene is drawn at this frame: the top-left corner of the scene's attachments.
+    render_size: (u32, u32),
+    resolution: DynamicResolution,
+    upscaler: Upscaler,
     timer: Option<GpuTimer>,
     parts: PartRenderer,
     last_upload: UploadStats,
@@ -133,6 +149,12 @@ impl Renderer {
             transient_attachments: context.capabilities().transient_attachments,
             depth: None,
             msaa_color: None,
+            scene_color: None,
+            texture_size: (settings.width, settings.height),
+            render_size: (settings.width, settings.height),
+            resolution: DynamicResolution::new(settings.resolution),
+            // Made with the renderer even when nothing is scaled: turning a render scale on later compiles nothing.
+            upscaler: Upscaler::new(context.device(), settings.color_format),
             timer,
             parts,
             last_upload: UploadStats::default(),
@@ -231,6 +253,44 @@ impl Renderer {
         self.settings.lod = lod;
     }
 
+    /// Changes the scene's resolution: a render scale, or dynamic resolution ([`crate::resolution`]). Makes the
+    /// scene's attachments again when their size changes (a settings change: it waits for nothing, and the textures
+    /// in use are freed once the GPU is done with them); a new scale within dynamic resolution's range makes none.
+    pub fn set_resolution(&mut self, resolution: ResolutionSettings) {
+        if resolution == self.settings.resolution {
+            return;
+        }
+        let old = self.settings.resolution;
+        self.settings.resolution = resolution;
+        self.resolution.set_settings(resolution);
+        let (width, height) = (self.settings.width, self.settings.height);
+        if old.scaled() != resolution.scaled()
+            || self.clamped_texture_size(resolution.texture_size(width, height)) != self.texture_size
+        {
+            self.rebuild();
+        }
+    }
+
+    /// The scene's resolution this frame: the render scale, the size drawn, and dynamic resolution's state.
+    pub fn resolution_stats(&self) -> ResolutionStats {
+        let settings = &self.settings.resolution;
+        let (min_scale, max_scale) = settings.range();
+        ResolutionStats {
+            scale: if self.plan.scaled() {
+                self.resolution.scale()
+            } else {
+                1.0
+            },
+            width: self.render_size.0,
+            height: self.render_size.1,
+            dynamic: settings.dynamic,
+            target_ms: settings.target_ms,
+            min_scale,
+            max_scale,
+            gpu_ms: self.resolution.last_gpu_ms(),
+        }
+    }
+
     /// Colours every part by the level of detail it is drawn at, a debug view: the Ball and the Cylinder from green
     /// (full detail) through yellow and orange to red (the coarsest level), every other kind grey. Off by default.
     pub fn set_lod_tint(&mut self, on: bool) {
@@ -327,9 +387,10 @@ impl Renderer {
         self.last_upload = scene.upload_view(&mut encoder, view.as_ref());
         self.last_cull = scene.cull_stats();
         // After the upload (the casters are culled from what its coalesce left), before the sun's shadows take the
-        // scene's caster changes.
+        // scene's caster changes. Culling, levels of detail and the lights' ranking see the target's size, so a
+        // render scale changes none of them; only the light clusters' pixels follow the size drawn.
         self.parts
-            .prepare_lights(scene, camera, size, &self.settings.cull, &lod);
+            .prepare_lights(scene, camera, size, self.render_size, &self.settings.cull, &lod);
         self.parts.prepare_shadows(&mut encoder, scene, camera, size, &lod);
         self.shadow_in_use = u8::try_from(self.parts.shadow_stats().cascades).unwrap_or(0);
         // After the upload, which may have replaced the buffers the bind groups use.
@@ -518,10 +579,33 @@ impl Renderer {
             Some(timer) => timer.begin_frame(&self.device),
             None => None,
         };
+        self.update_resolution();
         let encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
         });
         (encoder, slot)
+    }
+
+    /// Chooses the size this frame draws the scene at: with dynamic resolution, from the newest GPU timings (just
+    /// collected by the timer's `begin_frame`).
+    fn update_resolution(&mut self) {
+        if !self.plan.scaled() {
+            self.render_size = (self.settings.width, self.settings.height);
+            return;
+        }
+        if self.settings.resolution.dynamic
+            && let Some((frame, gpu_ms)) = self
+                .timer
+                .as_ref()
+                .and_then(GpuTimer::latest)
+                .map(|timings| (timings.frame(), timings.total_ms()))
+        {
+            self.resolution.observe(frame, gpu_ms);
+        }
+        self.resolution.drawing(self.frame);
+        let (width, height) = scaled_size(self.settings.width, self.settings.height, self.resolution.scale());
+        self.render_size = (width.min(self.texture_size.0), height.min(self.texture_size.1));
+        self.upscaler.prepare(&self.queue, self.render_size, self.texture_size);
     }
 
     /// Records every planned pass into `encoder`, with `scene`'s draws when there is one.
@@ -536,6 +620,11 @@ impl Renderer {
         let prepass = self.settings.passes.contains(PassId::DepthPrepass);
         let msaa_view = self.msaa_color.as_ref().map(|attachment| &attachment.view);
         let depth_view = self.depth.as_ref().map(|attachment| &attachment.view);
+        let scene_view = self.scene_color.as_ref().map(|attachment| &attachment.view);
+        // Where the scene ends up: the target, or with a render scale the scene colour the upscale pass reads.
+        let scene_output = if self.plan.scaled() { scene_view } else { Some(target) };
+        // A frame drawn below the attachments' size draws into their top-left corner.
+        let corner = (self.plan.scaled() && self.render_size != self.texture_size).then_some(self.render_size);
 
         for (index, pass) in self.plan.passes().iter().enumerate() {
             let color = pass.color.and_then(|color| match color {
@@ -545,10 +634,16 @@ impl Renderer {
                     resolve_target: None,
                     ops: color_ops(ops, clear_color),
                 }),
+                ColorAttachment::Scene(ops) => scene_view.map(|view| wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: color_ops(ops, clear_color),
+                }),
                 ColorAttachment::Msaa { ops, resolve } => msaa_view.map(|view| wgpu::RenderPassColorAttachment {
                     view,
                     depth_slice: None,
-                    resolve_target: resolve.then_some(target),
+                    resolve_target: if resolve { scene_output } else { None },
                     ops: color_ops(ops, clear_color),
                 }),
             });
@@ -590,9 +685,18 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some((width, height)) = corner
+                && !matches!(pass.id, PassId::Upscale | PassId::Ui)
+            {
+                render_pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                render_pass.set_scissor_rect(0, 0, width, height);
+            }
             // The post system adds its draws here when it arrives.
             if let Some(scene) = scene {
                 self.parts.draw(pass.id, prepass, scene, &mut render_pass);
+            }
+            if pass.id == PassId::Upscale {
+                self.upscaler.draw(&mut render_pass);
             }
             if pass.id == PassId::Ui
                 && let Some(overlay) = self.overlay_pass.as_ref()
@@ -638,41 +742,86 @@ impl Renderer {
 
     /// Plans the frame again and recreates the attachments it needs. Runs on settings changes, never per frame.
     fn rebuild(&mut self) {
-        self.plan = FramePlan::new(self.settings.passes, self.settings.msaa_samples);
+        // The upscale pass is the renderer's to plan, from the resolution settings.
+        let resolution = self.settings.resolution;
+        let passes = self.settings.passes.without(PassId::Upscale);
+        let passes = if resolution.scaled() {
+            passes.with(PassId::Upscale)
+        } else {
+            passes
+        };
+        self.plan = FramePlan::new(passes, self.settings.msaa_samples);
+        let (width, height) = (self.settings.width, self.settings.height);
+        self.texture_size = if self.plan.scaled() {
+            self.clamped_texture_size(resolution.texture_size(width, height))
+        } else {
+            (width, height)
+        };
+        self.render_size = self.texture_size;
         self.parts
             .set_target(self.settings.color_format, self.plan.msaa_samples());
         if let Some(overlay) = self.overlay_pass.as_mut() {
             overlay.set_format(&self.device, self.settings.color_format);
         }
-        let transient = self.transient_attachments;
+        // An attachment living only inside one pass (cleared, then discarded) is in tile memory only on tile-based
+        // GPUs.
+        let transient = |within_one_pass: bool| {
+            if self.transient_attachments && within_one_pass {
+                wgpu::TextureUsages::TRANSIENT_ATTACHMENT
+            } else {
+                wgpu::TextureUsages::empty()
+            }
+        };
+        let samples = self.plan.msaa_samples();
+        let depth_usage = transient(self.plan.depth_transient());
+        let msaa_usage = transient(self.plan.msaa_color_transient());
         self.depth = self
             .plan
             .uses_depth()
-            .then(|| self.attachment("metallic depth", DEPTH_FORMAT, transient && self.plan.depth_transient()));
-        self.msaa_color = self.plan.uses_msaa_color().then(|| {
+            .then(|| self.attachment("metallic depth", DEPTH_FORMAT, samples, depth_usage));
+        self.msaa_color = self
+            .plan
+            .uses_msaa_color()
+            .then(|| self.attachment("metallic msaa colour", self.settings.color_format, samples, msaa_usage));
+        // The upscale pass samples it.
+        self.scene_color = self.plan.scaled().then(|| {
             self.attachment(
-                "metallic msaa colour",
+                "metallic scene colour",
                 self.settings.color_format,
-                transient && self.plan.msaa_color_transient(),
+                1,
+                wgpu::TextureUsages::TEXTURE_BINDING,
             )
         });
+        self.upscaler.set_source(
+            &self.device,
+            self.scene_color.as_ref().map(|attachment| &attachment.view),
+        );
     }
 
-    fn attachment(&self, label: &str, format: wgpu::TextureFormat, transient: bool) -> Attachment {
-        let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        if transient {
-            // Lives only inside one pass (cleared, then discarded): tile memory only on tile-based GPUs.
-            usage |= wgpu::TextureUsages::TRANSIENT_ATTACHMENT;
-        }
+    /// `size` within the device's largest texture.
+    fn clamped_texture_size(&self, (width, height): (u32, u32)) -> (u32, u32) {
+        (width.min(self.max_texture_size), height.min(self.max_texture_size))
+    }
+
+    /// A scene attachment of the scene's attachment size with `samples` per pixel, usable as a render attachment and
+    /// as `usage` says.
+    fn attachment(
+        &self,
+        label: &str,
+        format: wgpu::TextureFormat,
+        samples: u32,
+        usage: wgpu::TextureUsages,
+    ) -> Attachment {
+        let usage = usage | wgpu::TextureUsages::RENDER_ATTACHMENT;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width: self.settings.width,
-                height: self.settings.height,
+                width: self.texture_size.0,
+                height: self.texture_size.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: self.plan.msaa_samples(),
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage,

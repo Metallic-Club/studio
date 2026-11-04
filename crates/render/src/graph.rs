@@ -1,6 +1,7 @@
 //! The frame-graph-lite: a fixed, ordered list of passes with explicit attachments.
 //!
-//! A frame is at most these passes, always in this order: depth prepass, opaque, sky, transparent, post, UI. The sky
+//! A frame is at most these passes, always in this order: depth prepass, opaque, sky, transparent, post, upscale,
+//! UI. The sky
 //! comes after the opaque scene, drawn at the far plane with a depth test, so it only shades pixels nothing else
 //! covered (ADR 0008 §7). Which passes run is a [`PassSet`]; disabled passes cost nothing.
 //!
@@ -12,6 +13,12 @@
 //!   tile-based (mobile) GPUs saves writing the tile back to memory;
 //! - with MSAA the multisampled colour is resolved into the output inside its last pass and then discarded;
 //! - an attachment only one pass touches can be transient (memoryless on tile-based GPUs).
+//!
+//! **Render scale.** With [`PassId::Upscale`] in the set (the renderer plans it when the scene is drawn at a render
+//! scale, [`crate::resolution`]), the scene passes and post draw into the *scene colour* ([`ColorAttachment::Scene`]),
+//! a texture at the render scale, and the upscale pass draws it over the whole output (cleared first: nothing before
+//! it wrote there). UI then draws on the output at its full resolution. With MSAA the multisampled colour resolves
+//! into the scene colour instead of the output.
 //!
 //! The scene passes (prepass, opaque, sky, transparent) draw into the scene colour and the depth buffer; post and
 //! UI draw into the output. Until the post chain exists the scene colour *is* the output (or its MSAA source), so
@@ -35,18 +42,22 @@ pub enum PassId {
     Transparent,
     /// The post chain (tone mapping, bloom, grading).
     Post,
+    /// Draws the scene colour, rendered at the render scale, over the whole output (a bilinear upscale; see
+    /// [`crate::resolution`]). Only planned when the scene is drawn at a render scale.
+    Upscale,
     /// Screen-space UI.
     Ui,
 }
 
 impl PassId {
     /// Every pass, in frame order.
-    pub const ALL: [PassId; 6] = [
+    pub const ALL: [PassId; 7] = [
         PassId::DepthPrepass,
         PassId::Opaque,
         PassId::Sky,
         PassId::Transparent,
         PassId::Post,
+        PassId::Upscale,
         PassId::Ui,
     ];
 
@@ -61,6 +72,7 @@ impl PassId {
             PassId::Sky => "sky",
             PassId::Transparent => "transparent",
             PassId::Post => "post",
+            PassId::Upscale => "upscale",
             PassId::Ui => "ui",
         }
     }
@@ -74,9 +86,10 @@ impl PassId {
         matches!(self, PassId::Opaque | PassId::Sky | PassId::Transparent)
     }
 
-    /// Whether the pass draws into the output (after the scene).
+    /// Whether the pass draws into the output (after the scene). With a render scale post draws into the scene
+    /// colour instead ([`FramePlan::new`]).
     const fn draws_output(self) -> bool {
-        matches!(self, PassId::Post | PassId::Ui)
+        matches!(self, PassId::Post | PassId::Upscale | PassId::Ui)
     }
 
     /// How the pass uses depth, if at all, given whether a depth prepass runs.
@@ -87,7 +100,7 @@ impl PassId {
             PassId::Opaque if prepass => Some(DepthUse::Test),
             PassId::Opaque => Some(DepthUse::Write),
             PassId::Sky | PassId::Transparent => Some(DepthUse::Test),
-            PassId::Post | PassId::Ui => None,
+            PassId::Post | PassId::Upscale | PassId::Ui => None,
         }
     }
 }
@@ -167,11 +180,14 @@ pub struct AttachmentOps {
 pub enum ColorAttachment {
     /// The frame's output (the swapchain image or the offscreen target).
     Output(AttachmentOps),
-    /// The multisampled scene colour. `resolve` resolves it into the output at the end of the pass.
+    /// The scene colour at the render scale, which the upscale pass reads ([`PassId::Upscale`]).
+    Scene(AttachmentOps),
+    /// The multisampled scene colour. `resolve` resolves it into the output (with a render scale, into the scene
+    /// colour) at the end of the pass.
     Msaa {
         /// Load and store of the multisampled texture.
         ops: AttachmentOps,
-        /// Resolve into the output at the end of this pass (its last use).
+        /// Resolve at the end of this pass (its last use).
         resolve: bool,
     },
 }
@@ -204,13 +220,22 @@ pub struct FramePlan {
     msaa_samples: u32,
     depth_uses: u8,
     msaa_uses: u8,
+    scaled: bool,
 }
 
 impl FramePlan {
-    /// Plans the frame for `passes`, with the scene drawn at `msaa_samples` per pixel (1 for no MSAA).
+    /// Plans the frame for `passes`, with the scene drawn at `msaa_samples` per pixel (1 for no MSAA). With
+    /// [`PassId::Upscale`] in `passes` the scene is drawn into the scene colour and upscaled; it is left out when no
+    /// pass draws the scene.
     pub fn new(passes: PassSet, msaa_samples: u32) -> Self {
         let msaa = msaa_samples > 1;
         let prepass = passes.contains(PassId::DepthPrepass);
+        let scaled = passes.contains(PassId::Upscale) && passes.iter().any(PassId::draws_scene_color);
+        let passes = if scaled {
+            passes
+        } else {
+            passes.without(PassId::Upscale)
+        };
         let placeholder = PlannedPass {
             id: PassId::Opaque,
             color: None,
@@ -222,10 +247,12 @@ impl FramePlan {
             msaa_samples: msaa_samples.max(1),
             depth_uses: 0,
             msaa_uses: 0,
+            scaled,
         };
 
-        // Which pass indices (bits) use each attachment. Resolving into the output counts as using it.
-        let (mut depth_users, mut msaa_users, mut output_users) = (0u8, 0u8, 0u8);
+        // Which pass indices (bits) use each attachment. Resolving into the output (or the scene colour) counts as
+        // using it, and so does the upscale pass reading the scene colour.
+        let (mut depth_users, mut msaa_users, mut output_users, mut scene_users) = (0u8, 0u8, 0u8, 0u8);
         for (i, pass) in passes.iter().enumerate() {
             let bit = 1 << i;
             if pass.depth_use(prepass).is_some() {
@@ -234,18 +261,27 @@ impl FramePlan {
             if pass.draws_scene_color() {
                 if msaa {
                     msaa_users |= bit;
+                } else if scaled {
+                    scene_users |= bit;
                 } else {
                     output_users |= bit;
                 }
             }
-            if pass.draws_output() {
+            if scaled && matches!(pass, PassId::Post | PassId::Upscale) {
+                scene_users |= bit;
+            }
+            if pass.draws_output() && !(scaled && pass == PassId::Post) {
                 output_users |= bit;
             }
         }
-        // The last multisampled pass resolves into the output.
+        // The last multisampled pass resolves into the output, or the scene colour.
         let resolver = last_index(msaa_users);
         if let Some(r) = resolver {
-            output_users |= 1 << r;
+            if scaled {
+                scene_users |= 1 << r;
+            } else {
+                output_users |= 1 << r;
+            }
         }
 
         for (i, pass) in passes.iter().enumerate() {
@@ -258,6 +294,9 @@ impl FramePlan {
                     ops: ops(msaa_users),
                     resolve: resolver == Some(i),
                 })
+            } else if scaled && (pass.draws_scene_color() || pass == PassId::Post) {
+                // Every writer stores: the upscale pass, the scene colour's last user, reads it.
+                Some(ColorAttachment::Scene(ops(scene_users)))
             } else if pass.draws_scene_color() || pass.draws_output() {
                 // The output is what the frame produces: always stored.
                 Some(ColorAttachment::Output(AttachmentOps {
@@ -312,6 +351,12 @@ impl FramePlan {
     /// Whether the multisampled scene colour lives within a single pass, so it can be transient.
     pub fn msaa_color_transient(&self) -> bool {
         self.msaa_uses == 1
+    }
+
+    /// Whether the scene is drawn into the scene colour at a render scale and upscaled into the output
+    /// ([`PassId::Upscale`]).
+    pub fn scaled(&self) -> bool {
+        self.scaled
     }
 }
 
@@ -459,6 +504,62 @@ mod tests {
         );
         assert_eq!(pass(&plan, PassId::Ui).color, Some(ColorAttachment::Output(LOAD_STORE)));
         assert!(!plan.uses_depth() && !plan.uses_msaa_color());
+    }
+
+    #[test]
+    fn a_scaled_frame_draws_the_scene_into_the_scene_colour_and_upscales_it() {
+        let plan = FramePlan::new(PassSet::default().with(PassId::Upscale), 1);
+        assert!(plan.scaled());
+        let order: Vec<_> = plan.passes().iter().map(|p| p.id.name()).collect();
+        assert_eq!(order, ["opaque", "sky", "transparent", "upscale", "ui"]);
+        assert_eq!(
+            pass(&plan, PassId::Opaque).color,
+            Some(ColorAttachment::Scene(CLEAR_STORE))
+        );
+        assert_eq!(pass(&plan, PassId::Sky).color, Some(ColorAttachment::Scene(LOAD_STORE)));
+        // The last scene pass still stores: the upscale pass reads it.
+        assert_eq!(
+            pass(&plan, PassId::Transparent).color,
+            Some(ColorAttachment::Scene(LOAD_STORE))
+        );
+        assert_eq!(pass(&plan, PassId::Transparent).depth, Some(DepthOps::ReadOnly));
+        // Nothing wrote the output before the upscale, which covers all of it.
+        let upscale = pass(&plan, PassId::Upscale);
+        assert_eq!(upscale.color, Some(ColorAttachment::Output(CLEAR_STORE)));
+        assert_eq!(upscale.depth, None);
+        assert_eq!(pass(&plan, PassId::Ui).color, Some(ColorAttachment::Output(LOAD_STORE)));
+    }
+
+    #[test]
+    fn a_scaled_frame_with_msaa_resolves_into_the_scene_colour() {
+        let plan = FramePlan::new(PassSet::default().with(PassId::Post).with(PassId::Upscale), 4);
+        assert_eq!(
+            pass(&plan, PassId::Transparent).color,
+            Some(ColorAttachment::Msaa {
+                ops: LOAD_DISCARD,
+                resolve: true
+            })
+        );
+        // Post draws over the resolved scene colour, at the render scale.
+        assert_eq!(
+            pass(&plan, PassId::Post).color,
+            Some(ColorAttachment::Scene(LOAD_STORE))
+        );
+        assert_eq!(
+            pass(&plan, PassId::Upscale).color,
+            Some(ColorAttachment::Output(CLEAR_STORE))
+        );
+    }
+
+    #[test]
+    fn upscale_without_a_scene_is_left_out() {
+        let plan = FramePlan::new(PassSet::EMPTY.with(PassId::Upscale).with(PassId::Ui), 1);
+        assert!(!plan.scaled());
+        assert_eq!(plan.passes().len(), 1);
+        assert_eq!(
+            pass(&plan, PassId::Ui).color,
+            Some(ColorAttachment::Output(CLEAR_STORE))
+        );
     }
 
     #[test]

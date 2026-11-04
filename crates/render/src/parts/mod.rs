@@ -747,16 +747,18 @@ impl PartRenderer {
     /// Selects, clusters and shadows the local lights for a frame of `scene` seen from `camera` (see
     /// [`crate::lights`]), the casters at levels of detail no finer than `lod` (the camera view's) draws what
     /// receives their shadows. Call it after [`GpuScene::upload_view`] and before [`PartRenderer::prepare_shadows`],
-    /// which takes the scene's shadow-caster changes the atlas also reads.
+    /// which takes the scene's shadow-caster changes the atlas also reads. `size` is the target's, `render` the size
+    /// the scene is drawn at this frame (smaller with a render scale), which the clusters' pixels follow.
     pub(crate) fn prepare_lights(
         &mut self,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
-        (width, height): (u32, u32),
+        size: (u32, u32),
+        render: (u32, u32),
         cull: &CullSettings,
         lod: &LodView,
     ) {
-        self.lights.prepare(scene, camera, (width, height), cull, lod);
+        self.lights.prepare(scene, camera, size, render, cull, lod);
         self.refresh_light_group();
     }
 
@@ -1013,7 +1015,7 @@ impl PartRenderer {
                 render_pass.draw(0..3, 0..1);
                 self.stats.sky_draws += 1;
             }
-            PassId::Post | PassId::Ui => {}
+            PassId::Post | PassId::Upscale | PassId::Ui => {}
         }
     }
 

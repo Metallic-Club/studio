@@ -118,7 +118,7 @@ pub fn cascade_views(
     (views, count)
 }
 
-/// How the sun's shadows are drawn, which graphics presets (#84) drive: ADR 0008 sets Low at 1 × 1024 and High at
+/// How the sun's shadows are drawn, which the graphics presets drive ([`crate::settings::Quality`]): ADR 0008 sets Low at 1 × 1024 and High at
 /// 3 × 2048. The defaults are High's cascades, with the nearest two redrawn every frame. Presets scale the cost (map
 /// size, cascades, distance, filter taps), never whether a game has shadows: that is `Lighting.GlobalShadows`.
 #[derive(Clone, Copy, Debug, PartialEq)]

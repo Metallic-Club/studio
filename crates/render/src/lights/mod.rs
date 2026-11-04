@@ -116,7 +116,7 @@ pub const MAX_LIGHTS_PER_CLUSTER: u32 = 64;
 /// The most shadow-atlas tiles: the size of the tiles' uniform array.
 pub const MAX_SHADOW_TILES: usize = 64;
 
-/// How local lights are drawn, which graphics presets (#84) drive: [`LightSettings::LOW`], [`LightSettings::MEDIUM`]
+/// How local lights are drawn, which the graphics presets drive ([`crate::settings::Quality`]): [`LightSettings::LOW`], [`LightSettings::MEDIUM`]
 /// (the default) and [`LightSettings::HIGH`]. Presets scale the cost (how many lights a frame draws, how many cast
 /// shadows, how sharp the shadows are), never whether a game's lights shine or cast shadows at all: that is each
 /// light's `Enabled` and `Shadows`.

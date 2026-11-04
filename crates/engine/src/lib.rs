@@ -124,6 +124,8 @@ mod clock;
 mod config;
 mod engine;
 mod error;
+#[cfg(feature = "render")]
+pub mod graphics;
 mod hooks;
 #[cfg(feature = "render")]
 mod input;
@@ -160,4 +162,7 @@ pub use metallic_script::{MemorySources, RunContext, SourceLoader};
 // instances and drives the platform's event loop through these.
 pub use metallic_core;
 pub use metallic_platform;
+// The renderer too (with a window), so apps name its graphics settings through the engine.
+#[cfg(feature = "render")]
+pub use metallic_render;
 pub use metallic_script;
