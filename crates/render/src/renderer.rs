@@ -118,6 +118,9 @@ impl Switch {
 /// three and MLAA's, or the upscale pass.
 const MAX_NEEDED: usize = 10;
 
+/// The most pipelines a scene's first frame waits for: its settings' and the lit ones.
+const FIRST_FRAME_KEYS: usize = MAX_NEEDED + PartPipeline::LIT.len();
+
 /// Draws frames: the passes of a [`FramePlan`] into a target view, with per-pass GPU timing.
 ///
 /// A frame allocates nothing on the heap in this crate and never waits for the GPU (ADR 0008 §9). Parts and the
@@ -131,8 +134,15 @@ const MAX_NEEDED: usize = 10;
 /// pipelines are still compiling ([`Renderer::set_anti_aliasing`], [`Renderer::set_passes`], [`Renderer::set_post`],
 /// [`Renderer::set_msaa_samples`], [`Renderer::set_resolution`]) waits for them while frames keep drawing with the
 /// settings before it: [`Renderer::settings`] and the stats say what is drawn, and [`Renderer::pipeline_stats`] what
-/// is pending. Local lights are drawn once their pipelines exist. [`Renderer::wait_for_pipelines`] waits for all of
-/// it, for tests, tools and loading screens.
+/// is pending.
+///
+/// A scene's first frame never shows a setting or a light short: the first [`Renderer::render_scene`] after
+/// [`Renderer::new`] (or [`Renderer::begin_scene`], for a newly loaded place) waits for the pipelines it draws with,
+/// those of the settings asked for (a change still compiling included) and, when the scene has local lights, the
+/// lit ones, prioritized ahead of the rest. Later frames never wait: a light made while the lit pipelines still
+/// compile (only possible in the first second or so) hurries them to the front of the queue, is drawn once they
+/// exist, and fades in over [`crate::LightSettings::fade_time`] rather than popping on.
+/// [`Renderer::wait_for_pipelines`] waits for everything, for tests, tools and loading screens.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -184,6 +194,8 @@ pub struct Renderer {
     waiting: Option<Switch>,
     /// The overlay's pipeline once compiled, kept while the overlay is off.
     overlay_pipeline: Option<wgpu::RenderPipeline>,
+    /// The next [`Renderer::render_scene`] is a scene's first frame: it waits for the pipelines it draws with.
+    first_scene_frame: bool,
 }
 
 impl Renderer {
@@ -264,10 +276,23 @@ impl Renderer {
             pipeline_cache,
             waiting: None,
             overlay_pipeline: None,
+            first_scene_frame: true,
         };
-        // The rest of what the first frame draws (the post chain's passes it runs), all at once on the workers.
-        renderer.queue_needed(&Switch::of(&settings));
-        renderer.wait_for_compiles();
+        // The rest of what the first frame draws (the post chain's passes it runs), all at once on the workers; then
+        // the lit pipelines of the same target behind them, which a scene with lights waits for in its first frame,
+        // so they start now rather than after this returns. This returns when the first frame's alone are done.
+        let switch = Switch::of(&settings);
+        renderer.queue_needed(&switch);
+        let (format, samples) = (first_format, first.msaa_samples());
+        for pipeline in PartPipeline::LIT {
+            renderer.queue(PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            });
+        }
+        let (keys, count) = renderer.needed_keys(&switch, false);
+        renderer.wait_for_keys(&keys[..count]);
         renderer.compiler.first_frame_ready();
         renderer.rebuild();
         renderer.parts.set_shadows(settings.shadows, renderer.shadow_min_layers);
@@ -469,6 +494,84 @@ impl Renderer {
             self.waiting = None;
             self.apply(next);
         }
+    }
+
+    /// Makes the next [`Renderer::render_scene`] a scene's first frame, as the first one after [`Renderer::new`] is:
+    /// it waits for exactly the pipelines it draws with (those of the settings asked for, a change still compiling
+    /// included, and the local lights' when the scene has any), so the first frame of a game or a newly loaded place
+    /// already looks as it should. Call it when a new scene is attached; later frames never wait.
+    pub fn begin_scene(&mut self) {
+        self.first_scene_frame = true;
+    }
+
+    /// The first frame of a scene: waits until the pipelines it draws `scene` with are compiled (prioritized, on the
+    /// workers) and makes a settings change that waited for them.
+    fn wait_for_scene(&mut self, scene: &GpuScene) {
+        let lit = self.settings.lights.enabled && scene.scene().light_count() > 0;
+        let (keys, count) = self.needed_keys(&self.wanted(), lit);
+        self.wait_for_keys(&keys[..count]);
+    }
+
+    /// The pipelines a frame drawn with `switch` needs, with the lit ones when `lit`: an array and how much of it
+    /// holds them.
+    fn needed_keys(&self, switch: &Switch, lit: bool) -> ([PipelineKey; FIRST_FRAME_KEYS], usize) {
+        let mut keys = [PipelineKey::Overlay; FIRST_FRAME_KEYS];
+        let mut count = 0;
+        let mut push = |key| {
+            if let Some(slot) = keys.get_mut(count) {
+                *slot = key;
+                count += 1;
+            }
+        };
+        self.needs(switch, &mut push);
+        if lit {
+            let plan = switch.plan();
+            let format = if plan.post() {
+                self.hdr_format
+            } else {
+                self.settings.color_format
+            };
+            for pipeline in PartPipeline::LIT {
+                push(PipelineKey::Part {
+                    format,
+                    samples: plan.msaa_samples(),
+                    pipeline,
+                });
+            }
+        }
+        (keys, count)
+    }
+
+    /// Queues what `keys` lacks, waits for all of it (prioritized), and makes a settings change that waited for it.
+    fn wait_for_keys(&mut self, keys: &[PipelineKey]) {
+        for &key in keys {
+            self.queue(key);
+        }
+        let Self {
+            compiler,
+            parts,
+            post,
+            upscaler,
+            overlay_pass,
+            overlay_pipeline,
+            ..
+        } = self;
+        compiler.wait_for(keys, |key, pipeline| {
+            install(parts, post, upscaler, (overlay_pass, overlay_pipeline), key, pipeline);
+        });
+        self.apply_waiting();
+    }
+
+    /// Moves the lit pipelines of the target drawn into to the front of the compile queue: a frame has local lights
+    /// to draw and draws without them until they exist (a light made while they still compile, #86).
+    fn hurry_lights(&mut self) {
+        let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
+        let keys = PartPipeline::LIT.map(|pipeline| PipelineKey::Part {
+            format,
+            samples,
+            pipeline,
+        });
+        self.compiler.prioritize(&keys);
     }
 
     /// Waits for every pipeline compile queued (the background ones included) and makes a settings change that was
@@ -778,13 +881,18 @@ impl Renderer {
     /// passes run without draws (the clear colour). Only what the camera sees is drawn, as
     /// [`RendererSettings::cull`] says ([`Renderer::cull_stats`]).
     ///
-    /// Sync the scene ([`GpuScene::sync`]) first. Never blocks on the GPU; see [`Renderer::render`] about pacing.
+    /// Sync the scene ([`GpuScene::sync`]) first. Never blocks on the GPU; see [`Renderer::render`] about pacing. A
+    /// scene's first frame (the first after [`Renderer::new`] or [`Renderer::begin_scene`]) waits on the CPU for the
+    /// pipelines it draws with, so it looks as every later frame does.
     pub fn render_scene(
         &mut self,
         target: &wgpu::TextureView,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
     ) -> wgpu::SubmissionIndex {
+        if std::mem::take(&mut self.first_scene_frame) {
+            self.wait_for_scene(scene);
+        }
         let (mut encoder, slot) = self.begin_frame();
         let cull = &self.settings.cull;
         let size = (self.settings.width, self.settings.height);
@@ -800,6 +908,9 @@ impl Renderer {
         // render scale changes none of them; only the light clusters' pixels follow the size drawn.
         self.parts
             .prepare_lights(scene, camera, size, self.render_size, &self.settings.cull, &lod);
+        if self.parts.lights_held() {
+            self.hurry_lights();
+        }
         self.parts.prepare_shadows(&mut encoder, scene, camera, size, &lod);
         self.shadow_in_use = u8::try_from(self.parts.shadow_stats().cascades).unwrap_or(0);
         // After the upload, which may have replaced the buffers the bind groups use.

@@ -275,6 +275,17 @@ impl LocalLights {
         self.atlas.draw(meshes, pass)
     }
 
+    /// Starts every light's fade, and its shadow's, again from nothing: lights a frame could not draw yet (their
+    /// pipelines were still compiling, #86) fade in over [`LightSettings::fade_time`] from this frame on instead of
+    /// popping on.
+    pub(crate) fn restart_fades(scene: &mut GpuScene) {
+        let (_, runtime) = scene.lights_mut();
+        for state in runtime {
+            state.fade = 0.0;
+            state.shadow_fade = 0.0;
+        }
+    }
+
     /// Selects, fades, clusters and shadows the local lights of `scene` for a frame seen from `camera` on a
     /// `width` × `height` target with the main view's `cull` settings and levels of detail `lod`, and writes what
     /// changed to the GPU. The scene is drawn at `render` pixels (the target's size, or less with a render scale),

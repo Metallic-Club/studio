@@ -72,8 +72,8 @@
 //!
 //! Every pipeline (shadow casters, depth prepass, opaque, opaque after a prepass, sky, transparent) is compiled off
 //! the frame (ADR 0008 §9, [`crate::pipelines`]): the shadow casters with the renderer, the rest on compile workers,
-//! for every colour format and MSAA count the renderer can switch to. A frame draws local lights once their
-//! pipelines are compiled, and without them until then.
+//! for every colour format and MSAA count the renderer can switch to. A scene's first frame waits for the lit ones
+//! when it has local lights; a light made later, while they still compile, is drawn once they are and fades in.
 
 mod camera;
 mod material;
@@ -459,6 +459,8 @@ pub struct PartRenderer {
     visible: bool,
     /// Colour parts by level of detail (a debug view).
     lod_tint: bool,
+    /// A frame had local lights to draw while their pipelines were compiling: they fade in once they exist.
+    lights_held: bool,
     stats: DrawStats,
 }
 
@@ -688,6 +690,7 @@ impl PartRenderer {
             draws: Vec::new(),
             visible: false,
             lod_tint: false,
+            lights_held: false,
             stats: DrawStats::default(),
         }
     }
@@ -852,8 +855,27 @@ impl PartRenderer {
         cull: &CullSettings,
         lod: &LodView,
     ) {
+        // Lights a frame wanted while their pipelines were compiling were not drawn: now that they can be, they fade
+        // in rather than pop on (#86).
+        let lit_ready = {
+            let target = &self.targets[self.current];
+            target.has_lights(Lights::Unshadowed) && target.has_lights(Lights::Shadowed)
+        };
+        if self.lights_held && lit_ready {
+            LocalLights::restart_fades(scene);
+            self.lights_held = false;
+        }
         self.lights.prepare(scene, camera, size, render, cull, lod);
         self.refresh_light_group();
+        if !lit_ready && self.wanted_light_variant() != Lights::None {
+            self.lights_held = true;
+        }
+    }
+
+    /// Whether this frame has local lights to draw whose pipelines are still compiling (so it draws without them, and
+    /// they fade in once the pipelines exist).
+    pub(crate) fn lights_held(&self) -> bool {
+        self.lights_held
     }
 
     /// Makes the frame group with the local lights' resources when they first exist, or again when one of them was
@@ -1127,18 +1149,23 @@ impl PartRenderer {
     /// when no drawn light has one. Until the variant's pipelines are compiled (in the background, after the first
     /// frame's), the frame draws without local lights, as it did before they appeared.
     fn light_variant(&self) -> Lights {
+        let wanted = self.wanted_light_variant();
+        if wanted == Lights::None || self.targets[self.current].has_lights(wanted) {
+            wanted
+        } else {
+            Lights::None
+        }
+    }
+
+    /// Which variant of the lit pipelines this frame's lights call for, compiled or not.
+    fn wanted_light_variant(&self) -> Lights {
         let frame = self.lights.frame();
-        let wanted = if frame.local[0] <= 0.0 || self.frame_group.is_none() {
+        if frame.local[0] <= 0.0 || self.frame_group.is_none() {
             Lights::None
         } else if frame.atlas[2] > 0.0 {
             Lights::Shadowed
         } else {
             Lights::Unshadowed
-        };
-        if wanted == Lights::None || self.targets[self.current].has_lights(wanted) {
-            wanted
-        } else {
-            Lights::None
         }
     }
 

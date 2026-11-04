@@ -251,6 +251,9 @@ pub struct BenchReport {
     pub moving_camera: bool,
     /// How long building the scene took, in milliseconds.
     pub build_ms: f32,
+    /// Milliseconds from making the device until the first frame was presented
+    /// ([`SceneRenderer::first_frame_ms`]).
+    pub first_frame_ms: Option<f32>,
     /// The graphics settings in effect at the end of the run.
     pub graphics: GraphicsStatus,
     /// Auto's calibration, when it ran: the tier chosen and the median GPU frame time it measured.
@@ -304,6 +307,10 @@ impl BenchReport {
              \"build_ms\":{:.1},",
             self.parts, self.see_through, self.lights, self.moving, self.in_view, self.field_of_view, self.build_ms
         )?;
+        match self.first_frame_ms {
+            Some(ms) => write!(out, "\"first_frame_ms\":{ms:.1},")?,
+            None => out.push_str("\"first_frame_ms\":null,"),
+        }
         let cull = &self.cull;
         write!(
             out,
@@ -480,6 +487,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         lod: renderer.lod(),
         moving_camera: options.moving_camera,
         build_ms,
+        first_frame_ms: renderer.first_frame_ms(),
         graphics: renderer.graphics_status(),
         calibration: renderer
             .graphics()
@@ -666,6 +674,7 @@ mod tests {
             lod: LodSettings::default(),
             moving_camera: false,
             build_ms: 12.5,
+            first_frame_ms: Some(141.3),
             graphics: GraphicsStatus {
                 preset: Some(Preset::Auto),
                 tier: Some(metallic_render::settings::Tier::High),
@@ -721,6 +730,7 @@ mod tests {
         assert!(json.ends_with("}}"), "{json}");
         assert!(json.contains("\"adapter\":\"GPU \\\"X\\\"\""), "{json}");
         assert!(json.contains("\"fps_p50\":500.0"), "{json}");
+        assert!(json.contains("\"build_ms\":12.5,\"first_frame_ms\":141.3,"), "{json}");
         assert!(json.contains("\"passes\":{\"opaque\":{"), "{json}");
         assert!(json.contains("\"opaque\":4"), "{json}");
         assert!(

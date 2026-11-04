@@ -102,6 +102,10 @@ pub struct SceneRenderer {
     overlay: bool,
     /// When the previous frame's render started: frame time is the time between two.
     frame_start: Option<Instant>,
+    /// When the device was being made (the first attach), until the first frame is presented.
+    attached_at: Option<Instant>,
+    /// Milliseconds from the first attach until the first frame was presented.
+    first_frame_ms: Option<f32>,
 }
 
 impl SceneRenderer {
@@ -147,7 +151,15 @@ impl SceneRenderer {
             since_summary: 0,
             overlay: false,
             frame_start: None,
+            attached_at: None,
+            first_frame_ms: None,
         }
+    }
+
+    /// Milliseconds from the first attach to a window (the device and the renderer made, the first frame's pipelines
+    /// compiled) until the first frame was presented: what a player waits for the first image. `None` before it.
+    pub fn first_frame_ms(&self) -> Option<f32> {
+        self.first_frame_ms
     }
 
     /// Changes the colour frames start from (linear).
@@ -625,6 +637,11 @@ impl SceneRenderer {
             scene.watch(lighting);
         }
         self.scene = Some(scene);
+        // A newly loaded place's first frame waits for the pipelines it draws with (its lights, the settings' AA and
+        // effects): a delayed first present rather than a frame that looks wrong.
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.begin_scene();
+        }
         Ok(())
     }
 
@@ -657,6 +674,9 @@ impl RenderHook for SceneRenderer {
         let (width, height) = (size.width.max(1), size.height.max(1));
         let window = Arc::new(window.clone());
         let created = self.device.is_none();
+        if created {
+            self.attached_at = Some(Instant::now());
+        }
         let mut surface = match self.device.as_ref() {
             Some(device) => device.context.create_surface(window, width, height)?,
             None => {
@@ -757,6 +777,9 @@ impl RenderHook for SceneRenderer {
                 device.renderer.render_scene(image.view(), scene, camera.as_ref());
                 render_cpu = start.elapsed().saturating_sub(acquire);
                 image.present(&device.context);
+                if let Some(attached) = self.attached_at.take() {
+                    self.first_frame_ms = Some(attached.elapsed().as_secs_f32() * 1000.0);
+                }
                 self.last_upload = device.renderer.upload_stats();
                 draws = device.renderer.draw_stats();
                 cull = device.renderer.cull_stats().cpu_time + device.renderer.shadow_stats().cull_time;

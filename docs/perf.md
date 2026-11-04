@@ -1038,20 +1038,29 @@ on. Now (`metallic_render::pipelines`):
   `Renderer::new` returns when they are done: the scene's pipelines without local lights for the format and MSAA
   count it draws with (5), and the post chain's passes it runs (the finish pass's variant and bloom's three; MLAA's
   or the upscale pass's when they run). The sun's and the lights' shadow pipelines (4, small) are made on the calling
-  thread meanwhile.
-- **Every other permutation follows in the background**: the scene's lit pipelines (6), the overlay's, every post
+  thread meanwhile, and the scene's lit pipelines (6) for the same target start right behind them.
+- **A scene's first frame waits for what it draws with**: the first `Renderer::render_scene` after `Renderer::new`
+  (or `Renderer::begin_scene`, which `SceneRenderer` calls for a newly loaded place) waits until the pipelines of the
+  settings asked for (a change still compiling included, such as the preset's MSAA) are compiled and, when the scene
+  has local lights, the lit ones too, moved to the front of the queue. The first image a player sees is the one every
+  later frame shows: no unlit flash at a night start, no first frames without the preset's anti-aliasing. The Player
+  presents its first frame that much later.
+- **Every other permutation follows in the background**: the overlay's, every post
   effect and quality (the finish pass's other variants, bloom's other filters, MLAA) and the upscale pass, then the
   scene's 11 at every other MSAA count up to 8. A compile may wait for another whose shader stages it reuses (the
   depth prepass and the opaque pass after it wait for the opaque pass; another MSAA count for the first one's), so
   DX12, which caches each shader stage it compiles inside the device, compiles each stage once rather than on several
   workers at the same moment: that halved the CPU the background compiles took (4.3 s → 2.6 s summed over the workers
   on DX12) and shortened them (800 → 680 ms).
-- **A frame never waits.** It takes the compiles that finished (one lock, nothing allocated; nothing at all once
-  everything is compiled) and draws with what exists. A settings change whose pipelines are still compiling (an MSAA
+- **Later frames never wait.** They take the compiles that finished (one lock, nothing allocated; nothing at all once
+  everything is compiled) and draw with what exists. A settings change whose pipelines are still compiling (an MSAA
   count, MLAA, an effect quality, the post chain off, a render scale without it) is kept waiting while frames draw
-  with the settings before it, and takes effect in the first frame after its pipelines are; local lights are drawn
-  once their pipelines exist; the overlay once its own does. `Renderer::wait_for_pipelines` waits for all of it, for
-  tests, tools and loading screens; `Renderer::pause_pipeline_compiles` holds the background compiles back.
+  with the settings before it, and takes effect in the first frame after its pipelines are; the overlay is drawn once
+  its pipeline exists. A light made mid-game while the lit pipelines still compile (only possible in the first
+  second or so of a scene that started without lights) moves them to the front of the queue, is not drawn until they
+  exist, and then fades in over the lights' fade time (0.3 s) instead of popping on. `Renderer::wait_for_pipelines`
+  waits for everything, for tests, tools and loading screens; `Renderer::pause_pipeline_compiles` holds the
+  background compiles back (a compile a frame needs first still runs).
 - **OpenGL compiles inline**, on its context's thread, all of it before `Renderer::new` returns, as before (so do
   WebAssembly and a machine with one core).
 - **Stats:** `Renderer::pipeline_stats` (compiled, pending, failed, workers, the first frame's and the last compile's
@@ -1066,25 +1075,45 @@ on. Now (`metallic_render::pipelines`):
 branch `86-no-hitches` against `main` at `805b283`, `cargo run --release -p metallic_render --example prewarm`
 (offscreen 1280 × 720, the renderer's defaults). "First frame" is from the start of `Renderer::new` until the first
 frame is done on the GPU; "everything" until the last background compile is (from when the compiles start, a few
-milliseconds into `Renderer::new`). Before #86 both are the same moment. A driver keeps its compiled shaders on disk
+milliseconds into `Renderer::new`). Before #86 both are the same moment. (The example draws no scene, so its first
+frame waits for no lights; the lit pipelines compiling beside the first frame's cost it 10 to 20 ms on DX12 and save
+about 100 ms on everything.) A driver keeps its compiled shaders on disk
 per executable, so the cold rows run a fresh copy of the executable; warm rows are its second and third runs. Times
 in ms.
 
 | Backend | Driver cache | Before: first frame (everything) | After: first frame | After: everything |
 | --- | --- | ---: | ---: | ---: |
-| DX12, FXC (default) | cold | 2,880 | 228 | 882 |
-| | warm | 2,071 | 145 / 162 | 677 / 672 |
-| DX12, DXC (`dxcompiler.dll`) | cold | 1,214 | 131 | 288 |
-| | warm | 606 / 614 | 70 / 71 | 154 / 159 |
-| Vulkan | cold | 691 | 78 | 179 |
-| | warm | 58 | 21 / 20 | 15 / 15 |
+| DX12, FXC (default) | cold | 2,880 | 245 | 782 |
+| | warm | 2,071 | 167 / 179 | 578 / 599 |
+| DX12, DXC (`dxcompiler.dll`) | cold | 1,214 | 131 | 285 |
+| | warm | 606 / 614 | 73 / 73 | 150 / 150 |
+| Vulkan | cold | 691 | 86 / 88 | 178 / 179 |
+| | warm | 58 | 22 | 15 |
 | OpenGL (inline) | cold | 667 | 710 | 700 |
 | | warm | 75 / 76 | 80 / 79 | 71 / 71 |
 
 - **DX12 is where the time went**: FXC turns the lit parts' shader into DXBC in about half a second a stage, on one
-  thread, every run (nothing caches it across runs). The first frame now waits for the unlit scene's stages only
-  (≈ 150 ms on one worker); the lit ones compile behind it (≈ 400 to 530 ms each, side by side), so on DX12 with FXC
-  local lights show from about 0.7 s after the renderer is made (1.0 s while a game toggles effects at the same time).
+  thread, every run (nothing caches it across runs). The renderer returns after the unlit scene's stages
+  (≈ 150 ms on one worker); the lit ones (≈ 400 to 530 ms each, side by side) are what a scene with lights waits for
+  in its first frame, below.
+
+**A lit scene's first frame** (`stress --scene many_lights --warm-up 0`, 1920 × 1080 in a window, DX12): the
+report's `first_frame_ms`, from making the device until the first frame is presented, the device's own setup
+(about 360 ms on DX12) included. "Unlit first frame" is this branch before the scene's first frame waited for its
+lights (the first frames of a night start then drew without them for about half a second); "waits" is the branch
+now. The renderer's defaults, and the High preset (MSAA 4, which the first frame now also waits for). Times in ms.
+
+| Settings | Driver cache | Unlit first frame | Waits (first frame lit) |
+| --- | --- | ---: | ---: |
+| defaults, FXC | cold | 811 | 1,286 |
+| | warm | 612 / 605 | 999 / 1,027 |
+| High preset, FXC | cold | 713 | 1,111 |
+| | warm | 632 / 638 | 1,018 / 1,048 |
+| defaults, DXC | cold / warm | | 587 / 529 |
+
+The wait is the lit stages' FXC compile, about 0.4 s, on the critical path; the lit pipelines start compiling with
+the first frame's, so it is shorter than their compile after `Renderer::new` returned would make it. With DXC the
+lit first frame comes sooner than FXC's unlit one did.
 - **Vulkan's pipeline cache** (`ContextOptions::pipeline_cache_dir`; the Player keeps it in the user's cache folder,
   `pipelines/wgpu_pipeline_cache_vulkan_<vendor>_<device>.bin`, 136 KB here) is loaded at start and written by a
   compile worker whenever its queue runs dry, never in a frame. The file is checked (its length and an FNV-1a hash in
@@ -1132,6 +1161,7 @@ No toggle compiles anything on a frame, and no frame waits for the GPU. What is 
 Ultra: its first frame makes the 3 × 3072² cascades and the 4096² atlas and draws all of them again (render CPU about
 1 ms). That is 16 ms uncapped and 23 to 27 ms with vsync on DX12 (2 spikes against a 120 Hz target's 16.7 ms, none
 against 60 fps), and 37 ms on OpenGL (all 9 of its spikes, at High → Ultra); #152 spreads that redraw over frames.
+So the done-when of #86 holds on DX12; on OpenGL it depends on #152.
 `METALLIC_TRACE_SPIKES=1` prints each spike and the toggle before it. Vulkan has no adapter for a window on this PC
 (#110), so its numbers are the offscreen ones above. On OpenGL, `no_alloc`'s heap-growth tests fail on this PC on
 `main` too (#153); CI does not run them there.

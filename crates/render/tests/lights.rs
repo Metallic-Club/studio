@@ -136,6 +136,13 @@ struct Frames {
 
 impl Frames {
     fn new(context: &RenderContext, game: &mut Game, lights: LightSettings) -> Self {
+        Self::with(context, game, lights, true)
+    }
+
+    /// Like [`Frames::new`], with the renderer as it comes from `Renderer::new` when `!warm`: its background compiles
+    /// paused at once, so nothing the first frame does not ask for (the lit pipelines among them) is compiled by the
+    /// time it is drawn unless it waits for them (#86).
+    fn with(context: &RenderContext, game: &mut Game, lights: LightSettings, warm: bool) -> Self {
         let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
         let mut renderer = Renderer::new(
             context,
@@ -145,7 +152,11 @@ impl Frames {
             },
         )
         .expect("a renderer");
-        renderer.wait_for_pipelines();
+        if warm {
+            renderer.wait_for_pipelines();
+        } else {
+            renderer.pause_pipeline_compiles(true);
+        }
         let scene = GpuScene::new(
             context,
             &mut game.dm,
@@ -191,6 +202,32 @@ fn render(context: &RenderContext, game: &mut Game, lights: LightSettings) -> Ve
         frames.frame(context, game);
     }
     frames.pixels(context)
+}
+
+/// A lit night scene's very first frame already shows its lights (#86): on a cold start, with every background
+/// compile held back right after the renderer is made (so the lit pipelines exist only if that frame waits for
+/// them), the first frame matches the steady image drawn with every pipeline compiled. Without the wait it would be
+/// drawn without its lights, which the test also checks it would tell apart.
+#[test]
+fn the_first_frame_of_a_lit_scene_shows_its_lights() {
+    let Some(context) = gpu() else { return };
+    let settings = LightSettings::default();
+    let steady = render(&context, &mut shadow_game().0, settings);
+    let mut game = shadow_game().0;
+    let mut cold = Frames::with(&context, &mut game, settings, false);
+    cold.frame(&context, &mut game);
+    let first = cold.pixels(&context);
+    let stats = cold.renderer.pipeline_stats();
+    assert_eq!(stats.failed, 0, "{stats:?}");
+    let diff = scenes::compare(&steady, &first, THRESHOLD);
+    assert!(
+        diff.over <= MAX_OVER && diff.mean <= MAX_MEAN,
+        "the first frame is not the steady one: {diff:?} ({stats:?})"
+    );
+    // The same frame without its lights is far from it: the comparison would catch an unlit first frame.
+    let unlit = render(&context, &mut shadow_game().0, LightSettings::OFF);
+    let dark = scenes::compare(&steady, &unlit, THRESHOLD);
+    assert!(dark.over > 10.0 * MAX_OVER, "{dark:?}");
 }
 
 /// Where world point `point` lands on the target, in pixels from the top left.

@@ -12,9 +12,13 @@
 //!   it for the opaque pass; another MSAA count for the first one's), so a backend that caches compiled stages
 //!   inside the device (DX12, whose FXC takes up to half a second for the lit parts' shader) compiles each stage
 //!   once, not once per worker that happens to need it at the same time.
-//! - **A frame never waits.** It takes what has finished (one lock, nothing allocated) and draws with it: lights
-//!   appear once their pipelines exist, and a settings change whose pipelines are still compiling takes effect in the
-//!   first frame after they are ([`crate::Renderer`]'s settings say what is drawn until then).
+//! - **A scene's first frame waits for what it draws with**, and nothing else: the pipelines of the settings asked
+//!   for (a change still compiling included) and, when the scene has local lights, the lit ones, moved to the front
+//!   of the queue ([`Compiler::prioritize`]). So the first frame a player sees looks as every later one does.
+//! - **Later frames never wait.** They take what has finished (one lock, nothing allocated) and draw with it: a
+//!   settings change whose pipelines are still compiling takes effect in the first frame after they are
+//!   ([`crate::Renderer`]'s settings say what is drawn until then), and a light made while the lit pipelines still
+//!   compile hurries them and fades in once they exist.
 //! - **OpenGL compiles on the thread that owns its context**, so there (and on WebAssembly, or a machine with one
 //!   core, or where no thread can be started) every compile runs inline, all of them before
 //!   [`crate::Renderer::new`] returns, as before #86.
@@ -156,6 +160,9 @@ struct Job {
     recipe: Recipe,
     /// Starts only when this one is neither queued nor compiling.
     after: Option<PipelineKey>,
+    /// A frame needs it now ([`Compiler::prioritize`]): at the front of the queue, and started even while the
+    /// background compiles are paused.
+    urgent: bool,
 }
 
 /// A finished compile: its pipeline, or `None` when it failed.
@@ -192,8 +199,8 @@ impl Pool {
         self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Takes the first queued job a worker may start (one whose `after` is neither queued nor compiling), waiting for
-    /// one; `None` once the pool is closed.
+    /// Takes the first queued job a worker may start (one whose `after` is neither queued nor compiling, and while
+    /// paused only an urgent one), waiting for one; `None` once the pool is closed.
     fn take(&self) -> Option<Job> {
         let mut state = self.lock();
         loop {
@@ -201,14 +208,11 @@ impl Pool {
                 return None;
             }
             let waits_on = |key: PipelineKey| state.running.contains(&key) || state.jobs.iter().any(|j| j.key == key);
-            let startable = if state.paused {
-                None
-            } else {
-                state
-                    .jobs
-                    .iter()
-                    .position(|job| job.after.is_none_or(|after| !waits_on(after)))
-            };
+            let paused = state.paused;
+            let startable = state
+                .jobs
+                .iter()
+                .position(|job| (!paused || job.urgent) && job.after.is_none_or(|after| !waits_on(after)));
             if let Some(job) = startable.and_then(|at| state.jobs.remove(at)) {
                 state.running.push(job.key);
                 return Some(job);
@@ -330,7 +334,12 @@ impl Compiler {
         self.queued.push(key);
         self.stats.pending = self.queued.len() as u32;
         self.stats.all_ms = None;
-        let job = Job { key, recipe, after };
+        let job = Job {
+            key,
+            recipe,
+            after,
+            urgent: false,
+        };
         match self.pool.as_ref() {
             Some(pool) => {
                 pool.lock().jobs.push_back(job);
@@ -381,6 +390,67 @@ impl Compiler {
         loop {
             self.drain(&mut install);
             if self.queued.is_empty() {
+                return;
+            }
+            let Some(pool) = self.pool.clone() else {
+                return;
+            };
+            let state = pool.lock();
+            if state.done.is_empty() {
+                drop(
+                    pool.finished
+                        .wait(state)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                );
+            }
+        }
+    }
+
+    /// Moves the compiles of `keys`, and those they wait for, to the front of the queue, to start even while compiles
+    /// are paused: a frame needs them now. Allocates nothing.
+    pub(crate) fn prioritize(&mut self, keys: &[PipelineKey]) {
+        let Some(pool) = self.pool.as_ref() else {
+            return;
+        };
+        let mut state = pool.lock();
+        // Mark the jobs and, a link at a time, the jobs they wait for (chains are at most two links long).
+        for _ in 0..3 {
+            for at in 0..state.jobs.len() {
+                let needed = keys.contains(&state.jobs[at].key)
+                    || state
+                        .jobs
+                        .iter()
+                        .any(|job| job.urgent && job.after == Some(state.jobs[at].key));
+                if needed {
+                    state.jobs[at].urgent = true;
+                }
+            }
+        }
+        // A stable move of the urgent jobs to the front, in place.
+        let jobs = state.jobs.make_contiguous();
+        let mut front = 0;
+        for at in 0..jobs.len() {
+            if jobs[at].urgent {
+                jobs[front..=at].rotate_right(1);
+                front += 1;
+            }
+        }
+        drop(state);
+        pool.work.notify_all();
+    }
+
+    /// Waits until none of `keys` is queued or compiling (prioritizing them first), handing every compile that
+    /// finishes meanwhile to `install`. For a scene's first frame, which must draw with what its scene and settings
+    /// need; never for later frames.
+    pub(crate) fn wait_for(
+        &mut self,
+        keys: &[PipelineKey],
+        mut install: impl FnMut(PipelineKey, wgpu::RenderPipeline),
+    ) {
+        self.prioritize(keys);
+        loop {
+            self.drain(&mut install);
+            if !keys.iter().any(|key| self.queued.contains(key)) {
                 return;
             }
             let Some(pool) = self.pool.clone() else {
