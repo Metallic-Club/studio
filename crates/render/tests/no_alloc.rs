@@ -1328,8 +1328,9 @@ const LEAK_VAR: &str = "METALLIC_TEST_LEAK_PER_FRAME";
 /// before it, so a buffer that keeps doubling (whose growth comes in steps twice as far apart each time) also grows
 /// in both.
 struct HeapGrowth {
-    /// The frames in each window and how many bytes the heap grew over them.
-    windows: [(usize, i64); 2],
+    /// The frames in each window and how many bytes the heap grew over them. The second window is measured only if
+    /// the heap grew too much in the first: otherwise it could not change the answer.
+    windows: [Option<(usize, i64)>; 2],
 }
 
 impl HeapGrowth {
@@ -1347,26 +1348,30 @@ impl HeapGrowth {
     fn measure_leaking(device: &wgpu::Device, first: usize, leak: usize, mut frame: impl FnMut(usize)) -> Self {
         let mut leaked: Vec<u8> = Vec::new();
         let mut next = first;
-        let mut windows = [(FRAMES, 0), (first + FRAMES, 0)];
-        for (frames, grown) in &mut windows {
+        let mut growth = Self { windows: [None; 2] };
+        for (window, frames) in [FRAMES, first + FRAMES].into_iter().enumerate() {
+            if window > 0 && !growth.accumulates() {
+                break;
+            }
             wait_for_idle(device);
             let before = live_bytes();
-            for _ in 0..*frames {
+            for _ in 0..frames {
                 frame(next);
                 leaked.resize(leaked.len() + leak, 0);
                 next += 1;
             }
             wait_for_idle(device);
-            *grown = live_bytes() - before;
+            growth.windows[window] = Some((frames, live_bytes() - before));
         }
         drop(leaked);
-        Self { windows }
+        growth
     }
 
-    /// Whether the heap grew in every window by more than [`KEPT_PER_FRAME`] per frame.
+    /// Whether the heap grew in every window measured so far by more than [`KEPT_PER_FRAME`] per frame.
     fn accumulates(&self) -> bool {
         self.windows
             .iter()
+            .flatten()
             .all(|&(frames, grown)| grown > KEPT_PER_FRAME * signed(frames))
     }
 
@@ -1377,11 +1382,14 @@ impl HeapGrowth {
 
 impl std::fmt::Display for HeapGrowth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let [(first, first_grown), (second, second_grown)] = self.windows;
-        write!(
-            f,
-            "heap grew {first_grown} bytes over {first} frames, then {second_grown} over {second}"
-        )
+        let [first, second] = self.windows;
+        if let Some((frames, grown)) = first {
+            write!(f, "heap grew {grown} bytes over {frames} frames")?;
+        }
+        if let Some((frames, grown)) = second {
+            write!(f, ", then {grown} over {frames}")?;
+        }
+        Ok(())
     }
 }
 
