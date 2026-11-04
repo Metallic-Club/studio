@@ -41,6 +41,8 @@
 //! textures still being made off the frame (#152), and each frame's GPU time per pass once it arrives (its own writes
 //! to stderr can cost a frame now and then: count spikes without it).
 //! `--pipeline-cache <dir>` keeps Vulkan's pipeline cache in `dir`.
+//! `--vertex-instances` draws with the vertex-buffer instance path (GLES's) on any backend, as on a device whose
+//! vertex shaders read no storage buffers: the transparent pass then draws one draw per run (#106).
 //!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
 //! prints a JSON array. The JSON's fields are `metallic_engine::stress::BenchReport`'s; times are in milliseconds.
@@ -65,6 +67,7 @@ fn usage() -> String {
          \x20             [--min-scale X] [--max-scale X] [--switch-presets N]\n\
          \x20             [--aa off|mlaa|msaa2|msaa4|msaa8] [--effects low|medium|high|ultra] [--split-scene]\n\
          \x20             [--no-post] [--toggle-effects N] [--frame-target MS] [--pipeline-cache DIR]\n\
+         \x20             [--vertex-instances]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -208,6 +211,7 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             "--merge-scene" => options.merge_scene_passes = true,
             "--split-scene" => options.merge_scene_passes = false,
             "--no-post" => options.post_chain = false,
+            "--vertex-instances" => options.context.force_vertex_instances = true,
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}
             other => return Err(format!("unknown argument {other:?}")),

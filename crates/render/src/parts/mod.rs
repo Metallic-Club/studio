@@ -31,9 +31,11 @@
 //!
 //! Partly see-through instances are drawn in the transparent pass, after opaque and the sky, with the depth test
 //! on and depth writes off, blended with premultiplied alpha. They are **sorted back to front per instance**
-//! (by distance from the camera to the instance's centre) whenever the camera moves or one of them changes, and
-//! drawn as one draw per run of consecutive instances with the same mesh and level, so the order is exact across mesh
-//! kinds.
+//! (by distance from the camera to the instance's centre) whenever the camera moves or one of them changes, so the
+//! order is exact across mesh kinds and levels. On the storage path they are drawn in **one draw** whatever their
+//! number and however their shapes interleave: the vertex shader pulls each instance's mesh from an unindexed copy of
+//! the pool (`vs_pulled`; `parts/transparent.rs` explains it, #106). On the vertex-buffer fallback they are drawn as one
+//! draw per run of consecutive instances with the same mesh and level.
 //! Fully transparent instances are not drawn at all.
 //!
 //! # Shading
@@ -102,7 +104,7 @@ use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, Shado
 use crate::textures::TextureMaker;
 use crate::{GpuScene, PassId};
 use material::MATERIAL_TABLE_SIZE;
-use transparent::TransparentList;
+use transparent::{TransparentList, TransparentPath};
 
 /// What the last frame drew.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -111,7 +113,8 @@ pub struct DrawStats {
     pub prepass_draws: u32,
     /// Draws in the opaque pass: one per mesh kind and level of detail with instances, whatever the part count.
     pub opaque_draws: u32,
-    /// Draws in the transparent pass: one per run of same-mesh, same-level instances in back-to-front order.
+    /// Draws in the transparent pass: one on the storage path (pulled vertices); on the vertex-buffer fallback one per
+    /// run of same-mesh, same-level instances in back-to-front order.
     pub transparent_draws: u32,
     /// Draws in the sky pass: one full-screen triangle when there is a camera and the pass runs.
     pub sky_draws: u32,
@@ -407,12 +410,15 @@ struct Shaders {
     /// The sky's layout: the frame group without the lights' entries.
     sky_layout: wgpu::PipelineLayout,
     sky: wgpu::ShaderModule,
+    /// The transparent pipelines' layouts with and without local lights where they pull their vertices
+    /// ([`TransparentPath::Pulled`]): the frame group and the pulled instance group.
+    pulled_layouts: Option<[wgpu::PipelineLayout; 2]>,
 }
 
-/// The storage path's instance bind group and the buffers it was made for.
+/// The storage path's instance bind group (`N` buffers) and the buffers it was made for.
 #[derive(Debug)]
-struct InstanceGroup {
-    buffers: [wgpu::Buffer; 3],
+struct InstanceGroup<const N: usize> {
+    buffers: [wgpu::Buffer; N],
     group: wgpu::BindGroup,
 }
 
@@ -442,6 +448,9 @@ pub struct PartRenderer {
     sun_layout: wgpu::BindGroupLayout,
     sun_group: wgpu::BindGroup,
     instance_layout: Option<wgpu::BindGroupLayout>,
+    /// The instance group of the transparent pass where it pulls its vertices: the regions, the sorted records and
+    /// the meshes' unindexed copy.
+    pulled_layout: Option<wgpu::BindGroupLayout>,
     /// The sun's shadow maps, which the frame group samples.
     shadows: ShadowMaps,
     /// The point and spot lights, which the frame group reads.
@@ -452,8 +461,11 @@ pub struct PartRenderer {
     targets: Vec<Target>,
     /// The target drawn into: an index into `targets`.
     current: usize,
-    opaque_group: Option<InstanceGroup>,
-    transparent_group: Option<InstanceGroup>,
+    opaque_group: Option<InstanceGroup<3>>,
+    /// The transparent pass's instance group on the runs path ([`TransparentPath::RunEntries`]).
+    transparent_group: Option<InstanceGroup<3>>,
+    /// The transparent pass's instance group where it pulls its vertices ([`TransparentPath::Pulled`]).
+    pulled_group: Option<InstanceGroup<4>>,
     transparent: TransparentList,
     draws: Vec<KindDraw>,
     /// Whether this frame has a camera (and so draws anything).
@@ -608,6 +620,41 @@ impl PartRenderer {
                 ],
             })
         });
+        // The transparent pass pulls its vertices where a vertex shader reads the two regions, the records and the
+        // meshes (and every backend with storage buffers in vertex shaders has four here); otherwise it draws runs.
+        let transparent_path = match binding {
+            InstanceBinding::Storage if device.limits().max_storage_buffers_per_shader_stage >= 4 => {
+                TransparentPath::Pulled
+            }
+            InstanceBinding::Storage => TransparentPath::RunEntries,
+            InstanceBinding::Vertex => TransparentPath::RunCopies,
+        };
+        let pulled_layout = (transparent_path == TransparentPath::Pulled).then(|| {
+            let storage = |binding, size: u64| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(size),
+                },
+                count: None,
+            };
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("metallic parts instances (pulled)"),
+                entries: &[
+                    storage(0, GpuInstance::SIZE),
+                    storage(1, GpuInstance::SIZE),
+                    // The record and chunk counts, a chunk and a record.
+                    storage(
+                        3,
+                        (3 * size_of::<u32>() + size_of::<transparent::PulledRecord>()) as u64,
+                    ),
+                    // One unindexed vertex.
+                    storage(4, 32),
+                ],
+            })
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("metallic parts"),
             bind_group_layouts: &[Some(&frame_layout), instance_layout.as_ref()],
@@ -617,6 +664,19 @@ impl PartRenderer {
             label: Some("metallic parts (no local lights)"),
             bind_group_layouts: &[Some(&sun_layout), instance_layout.as_ref()],
             immediate_size: 0,
+        });
+        let pulled_layouts = pulled_layout.as_ref().map(|pulled| {
+            [
+                (&frame_layout, "metallic parts transparent"),
+                (&sun_layout, "metallic parts transparent (no local lights)"),
+            ]
+            .map(|(frame, label)| {
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some(label),
+                    bind_group_layouts: &[Some(frame), Some(pulled)],
+                    immediate_size: 0,
+                })
+            })
         });
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("metallic sky"),
@@ -631,6 +691,7 @@ impl PartRenderer {
             unlit: unlit_module,
             sky_layout,
             sky,
+            pulled_layouts,
         });
         // Queued before the shadows' and lights' pipelines are made here, so the workers start at once.
         let key = |pipeline| PipelineKey::Part {
@@ -666,7 +727,7 @@ impl PartRenderer {
             device: device.clone(),
             queue: queue.clone(),
             binding,
-            meshes: MeshPool::new(device, queue),
+            meshes: MeshPool::with_pulled(device, queue, transparent_path == TransparentPath::Pulled),
             materials,
             lighting,
             resolved: lighting.resolve(),
@@ -678,6 +739,7 @@ impl PartRenderer {
             sun_layout,
             sun_group,
             instance_layout,
+            pulled_layout,
             shadows,
             lights,
             shaders,
@@ -685,7 +747,8 @@ impl PartRenderer {
             current: 0,
             opaque_group: None,
             transparent_group: None,
-            transparent: TransparentList::new(device, binding),
+            pulled_group: None,
+            transparent: TransparentList::new(device, transparent_path),
             draws: Vec::new(),
             visible: false,
             lod_tint: false,
@@ -1032,20 +1095,18 @@ impl PartRenderer {
             }
         }
         self.transparent.update(
-            &self.device,
-            &self.queue,
+            (&self.device, &self.queue),
             instances,
             scene.transparent_entries(),
             offset,
+            &self.meshes,
         );
         self.stats.culled_instances = scene.cull_stats().culled();
-        for run in self.transparent.runs() {
-            let mesh = self.meshes.range(run.kind, usize::from(run.level));
-            self.stats.transparent_instances += run.count;
-            self.stats.transparent_triangles += u64::from(run.count) * u64::from(mesh.index_count / 3);
-            if let Some(n) = self.stats.level_instances.get_mut(usize::from(run.level)) {
-                *n += run.count;
-            }
+        let transparent = self.transparent.counts();
+        self.stats.transparent_instances = transparent.instances;
+        self.stats.transparent_triangles = transparent.triangles;
+        for (n, drawn) in self.stats.level_instances.iter_mut().zip(transparent.levels) {
+            *n += drawn;
         }
         self.stats.instances = self.stats.opaque_instances + self.stats.transparent_instances;
         self.stats.triangles = self.stats.opaque_triangles + self.stats.transparent_triangles;
@@ -1057,14 +1118,31 @@ impl PartRenderer {
                 &self.device,
                 layout,
                 &mut self.opaque_group,
-                [statics, dynamics, scene.list_buffer()],
+                [(0, statics), (1, dynamics), (2, scene.list_buffer())],
             );
-            refresh_group(
-                &self.device,
-                layout,
-                &mut self.transparent_group,
-                [statics, dynamics, self.transparent.buffer()],
-            );
+            match (
+                self.transparent.path(),
+                self.pulled_layout.as_ref(),
+                self.meshes.pulled(),
+            ) {
+                (TransparentPath::Pulled, Some(pulled_layout), Some(vertices)) => refresh_group(
+                    &self.device,
+                    pulled_layout,
+                    &mut self.pulled_group,
+                    [
+                        (0, statics),
+                        (1, dynamics),
+                        (3, self.transparent.buffer()),
+                        (4, vertices),
+                    ],
+                ),
+                _ => refresh_group(
+                    &self.device,
+                    layout,
+                    &mut self.transparent_group,
+                    [(0, statics), (1, dynamics), (2, self.transparent.buffer())],
+                ),
+            }
         }
     }
 
@@ -1110,7 +1188,7 @@ impl PartRenderer {
                 }
             }
             PassId::Transparent => {
-                if self.transparent.runs().is_empty() {
+                if self.transparent.is_empty() {
                     return;
                 }
                 let variant = self.light_variant();
@@ -1118,6 +1196,17 @@ impl PartRenderer {
                     return;
                 };
                 render_pass.set_pipeline(pipeline);
+                if self.transparent.path() == TransparentPath::Pulled {
+                    // Every see-through instance in one draw, back to front, with no vertex or index buffer.
+                    let Some(group) = self.pulled_group.as_ref() else {
+                        return;
+                    };
+                    render_pass.set_bind_group(0, self.frame_group_of(variant), &[]);
+                    render_pass.set_bind_group(1, &group.group, &[]);
+                    render_pass.draw(0..self.transparent.counts().vertices, 0..1);
+                    self.stats.transparent_draws += 1;
+                    return;
+                }
                 self.bind(
                     render_pass,
                     variant,
@@ -1171,6 +1260,14 @@ impl PartRenderer {
         }
     }
 
+    /// The frame group of the pipeline `variant`: without the lights' entries for frames without local lights.
+    fn frame_group_of(&self, variant: Lights) -> &wgpu::BindGroup {
+        match variant {
+            Lights::None => &self.sun_group,
+            Lights::Unshadowed | Lights::Shadowed => self.frame_group.as_ref().unwrap_or(&self.sun_group),
+        }
+    }
+
     /// Binds the frame group of the pipeline `variant` (without the lights' entries for frames without local lights),
     /// the meshes and the instances: the storage path's instance group, or `copies` as the per-instance vertex
     /// buffer.
@@ -1178,14 +1275,10 @@ impl PartRenderer {
         &self,
         render_pass: &mut wgpu::RenderPass<'_>,
         variant: Lights,
-        group: Option<&InstanceGroup>,
+        group: Option<&InstanceGroup<3>>,
         copies: &wgpu::Buffer,
     ) {
-        let frame = match variant {
-            Lights::None => &self.sun_group,
-            Lights::Unshadowed | Lights::Shadowed => self.frame_group.as_ref().unwrap_or(&self.sun_group),
-        };
-        render_pass.set_bind_group(0, frame, &[]);
+        render_pass.set_bind_group(0, self.frame_group_of(variant), &[]);
         render_pass.set_vertex_buffer(0, self.meshes.vertices().slice(..));
         render_pass.set_index_buffer(self.meshes.indices().slice(..), wgpu::IndexFormat::Uint32);
         match self.binding {
@@ -1275,31 +1368,30 @@ fn frame_group(
 }
 
 /// Makes `slot`'s bind group again when any of `buffers` is not the one it was made with.
-fn refresh_group(
+/// `buffers` are (binding, buffer).
+fn refresh_group<const N: usize>(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    slot: &mut Option<InstanceGroup>,
-    buffers: [&wgpu::Buffer; 3],
+    slot: &mut Option<InstanceGroup<N>>,
+    buffers: [(u32, &wgpu::Buffer); N],
 ) {
     if slot
         .as_ref()
-        .is_some_and(|g| g.buffers.iter().zip(buffers).all(|(a, b)| a == b))
+        .is_some_and(|g| g.buffers.iter().zip(buffers).all(|(a, (_, b))| a == b))
     {
         return;
     }
-    fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
-        wgpu::BindGroupEntry {
-            binding,
-            resource: buffer.as_entire_binding(),
-        }
-    }
+    let entries = buffers.map(|(binding, buffer)| wgpu::BindGroupEntry {
+        binding,
+        resource: buffer.as_entire_binding(),
+    });
     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic parts instances"),
         layout,
-        entries: &[entry(0, buffers[0]), entry(1, buffers[1]), entry(2, buffers[2])],
+        entries: &entries,
     });
     *slot = Some(InstanceGroup {
-        buffers: buffers.map(Clone::clone),
+        buffers: buffers.map(|(_, buffer)| buffer.clone()),
         group,
     });
 }
@@ -1338,13 +1430,20 @@ fn create_pipeline(
     let variant = |label: &str,
                    depth: wgpu::DepthStencilState,
                    fragment: Option<(&str, Option<wgpu::BlendState>)>,
-                   lights: Lights| {
+                   lights: Lights,
+                   pulled: Option<&[wgpu::PipelineLayout; 2]>| {
         let constants = lights.constants();
         // Frames without local lights draw with the module and layout that have none of their bindings.
-        let (layout, module) = match lights {
+        let (mut layout, module) = match lights {
             Lights::None => (&shaders.unlit_layout, &shaders.unlit),
             Lights::Unshadowed | Lights::Shadowed => (layout, module),
         };
+        // The transparent pass's pulled vertices need no vertex buffer (parts/transparent.rs).
+        let (mut entry_point, mut buffers) = ("vs_main", buffers);
+        if let Some([lit, unlit]) = pulled {
+            layout = if lights == Lights::None { unlit } else { lit };
+            (entry_point, buffers) = ("vs_pulled", &[]);
+        }
         let targets = [Some(wgpu::ColorTargetState {
             format,
             blend: fragment.and_then(|(_, blend)| blend),
@@ -1355,7 +1454,7 @@ fn create_pipeline(
             layout: Some(layout),
             vertex: wgpu::VertexState {
                 module,
-                entry_point: Some("vs_main"),
+                entry_point: Some(entry_point),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers,
             },
@@ -1392,6 +1491,7 @@ fn create_pipeline(
             depth_stencil_state(true),
             None,
             Lights::None,
+            None,
         ),
         PartPipeline::Sky => sky_pipeline(device, cache, shaders, format, samples),
         PartPipeline::Opaque(lights) => {
@@ -1401,6 +1501,7 @@ fn create_pipeline(
                 depth_stencil_state(true),
                 Some(("fs_opaque", None)),
                 lights,
+                None,
             )
         }
         PartPipeline::Tested(lights) => {
@@ -1415,6 +1516,7 @@ fn create_pipeline(
                 tested,
                 Some(("fs_opaque", None)),
                 lights,
+                None,
             )
         }
         PartPipeline::Transparent(lights) => {
@@ -1424,6 +1526,7 @@ fn create_pipeline(
                 depth_stencil_state(false),
                 transparent_blend,
                 lights,
+                shaders.pulled_layouts.as_ref(),
             )
         }
     }

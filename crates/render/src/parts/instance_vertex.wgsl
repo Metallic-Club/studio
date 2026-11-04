@@ -15,5 +15,5 @@ fn vs_main(
     @location(8) flags: u32,
     @builtin(vertex_index) vertex: u32,
 ) -> VertexOut {
-    return place(vertex, position, normal, r0, r1, r2, color, transparency, mesh_material);
+    return place(pool_level(vertex), position, normal, r0, r1, r2, color, transparency, mesh_material);
 }

@@ -35,7 +35,8 @@
 //! A mesh kind's visible instances are listed per level, each level front to back, and the levels of a kind follow
 //! each other in its list segment, so a kind draws one instanced draw per level it uses: at most 1 + 4 + 3 + 1 = 9
 //! opaque draws for the built-in kinds, whatever the part count. See-through parts take their level the same way;
-//! sorted back to front, they draw one draw per run of the same mesh and level.
+//! sorted back to front, they are drawn in one draw that pulls each one's mesh at its level (one draw per run of the
+//! same mesh and level on the vertex-buffer fallback; `parts/transparent.rs`).
 //!
 //! # Shadows
 //!

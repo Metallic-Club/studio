@@ -43,11 +43,18 @@ fn unpack_color(packed: u32) -> vec3<f32> {
     return srgb_to_linear(srgb);
 }
 
-// The debug view of the levels of detail (lod.rs, `Renderer::set_lod_tint`): `frame.output.yzw` hold where levels 1,
-// 2 and 3 start in the mesh pool, which lays the meshes out level by level (0 when the view is off). The round kinds
-// (Ball 1, Cylinder 2: the ones with levels) take their level's colour, from green at full detail to red at the
-// coarsest, and every other kind is grey.
-fn lod_tint(vertex: u32, mesh_material: u32, color: vec3<f32>) -> vec3<f32> {
+// The level of detail of vertex number `vertex` in the mesh pool, for the debug view of the levels (lod.rs,
+// `Renderer::set_lod_tint`): `frame.output.yzw` hold where levels 1, 2 and 3 start in the pool, which lays the meshes
+// out level by level (0 when the view is off).
+fn pool_level(vertex: u32) -> u32 {
+    let v = f32(vertex);
+    return u32(v >= frame.output.y) + u32(v >= frame.output.z) + u32(v >= frame.output.w);
+}
+
+// The debug view of the levels of detail, when it is on (`frame.output.y` above 0): the round kinds (Ball 1,
+// Cylinder 2: the ones with levels) take their level's colour, from green at full detail to red at the coarsest, and
+// every other kind is grey.
+fn lod_tint(level: u32, mesh_material: u32, color: vec3<f32>) -> vec3<f32> {
     if frame.output.y <= 0.0 {
         return color;
     }
@@ -55,8 +62,6 @@ fn lod_tint(vertex: u32, mesh_material: u32, color: vec3<f32>) -> vec3<f32> {
     if kind != 1u && kind != 2u {
         return vec3<f32>(0.3);
     }
-    let v = f32(vertex);
-    let level = u32(v >= frame.output.y) + u32(v >= frame.output.z) + u32(v >= frame.output.w);
     var tints = array<vec3<f32>, 4>(
         vec3<f32>(0.05, 0.6, 0.05),
         vec3<f32>(0.8, 0.7, 0.02),
@@ -66,10 +71,10 @@ fn lod_tint(vertex: u32, mesh_material: u32, color: vec3<f32>) -> vec3<f32> {
     return tints[min(level, 3u)];
 }
 
-// Places a mesh vertex (number `vertex` in the mesh pool) with an instance's 3x4 affine (rows r0..r2) and packs what
-// the fragment needs.
+// Places a mesh vertex (of a mesh at level of detail `level`) with an instance's 3x4 affine (rows r0..r2) and packs
+// what the fragment needs.
 fn place(
-    vertex: u32,
+    level: u32,
     position: vec3<f32>,
     normal: vec3<f32>,
     r0: vec4<f32>,
@@ -90,7 +95,7 @@ fn place(
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
     out.position = world;
     out.normal = cofactor * normal;
-    out.color = vec4<f32>(lod_tint(vertex, mesh_material, unpack_color(color)), 1.0 - transparency);
+    out.color = vec4<f32>(lod_tint(level, mesh_material, unpack_color(color)), 1.0 - transparency);
     out.material = mesh_material & 0xffffu;
     return out;
 }
