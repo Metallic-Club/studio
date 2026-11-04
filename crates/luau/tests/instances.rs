@@ -63,3 +63,27 @@ fn errors_name_the_script_and_line() {
         ]
     );
 }
+
+#[test]
+fn a_member_name_that_is_not_utf8_is_refused() {
+    // A name with an atom skips the UTF-8 check (#143); a name without one is checked when it is read, so these
+    // fail as they always have: as a key that is not a member name, not as a lookup of mangled text.
+    let mut game = Game::new();
+    game.run("Read", "local p = Instance.new('Part')\nprint(p['Posi\\xfftion'])\n");
+    game.run("Write", "local p = Instance.new('Part')\n\np['Posi\\xfftion'] = 1\n");
+    game.run("Bare", "local p = Instance.new('Part')\nprint(p['\\xff'])\n");
+    game.run(
+        "Valid",
+        "local p = Instance.new('Part')\nlocal ok, e = pcall(function() return p['Position\\xff'] end)\n\
+         print(p.Position, ok, e:match(':%d+: (.*)$'))\n",
+    );
+    assert_eq!(
+        game.errors(),
+        [
+            "Workspace.Read:2: invalid member key of type string",
+            "Workspace.Write:3: invalid member key of type string",
+            "Workspace.Bare:2: invalid member key of type string",
+        ]
+    );
+    assert_eq!(game.prints(), ["0, 0, 0 false invalid member key of type string"]);
+}

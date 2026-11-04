@@ -13,7 +13,7 @@ use metallic_core::{
 use metallic_script::{ModuleKey, ThreadId, YieldReason};
 use mlua::{Function, MultiValue, Thread};
 
-use crate::ffi::EnumRef;
+use crate::ffi::{EnumRef, MemberName};
 use crate::watchdog::Budget;
 
 /// Registry references (`lua_ref`) of tables that C functions push values from.
@@ -288,17 +288,17 @@ impl Shared {
         }
     }
 
-    /// What `name` (with its atom, or -1) means on instances of `class`. A known atom costs two array indexes
-    /// after the first lookup.
+    /// What `name` means on instances of `class`. A name with an atom costs two array indexes after the first
+    /// lookup, and its text is not read.
     #[inline]
-    pub(crate) fn member(&self, class: ClassId, atom: i32, name: &str) -> Member {
+    pub(crate) fn member(&self, class: ClassId, name: MemberName<'_>) -> Member {
         #[cfg(test)]
         tests::LOOKUPS.with(|n| n.set(n.get() + 1));
-        let Ok(atom) = usize::try_from(atom) else {
-            return self.resolve(class, name);
+        let Ok(atom) = usize::try_from(name.atom()) else {
+            return self.resolve(class, name.text());
         };
         let Ok(mut cache) = self.members.try_borrow_mut() else {
-            return self.resolve(class, name);
+            return self.resolve(class, name.text());
         };
         let class_index = class.index();
         if cache.len() <= class_index {
@@ -310,7 +310,7 @@ impl Shared {
         }
         match row[atom] {
             Member::Unresolved => {
-                let member = self.resolve(class, name);
+                let member = self.resolve(class, name.text());
                 row[atom] = member;
                 member
             }
@@ -371,6 +371,8 @@ pub(crate) mod tests {
         pub(crate) static LOOKUPS: Cell<u64> = const { Cell::new(0) };
         /// `Shared::resolve` calls on this thread: lookups that went to the registry by name.
         pub(crate) static RESOLVES: Cell<u64> = const { Cell::new(0) };
+        /// Member names checked as UTF-8 on this thread (`ffi::MemberName::str`).
+        pub(crate) static UTF8_CHECKS: Cell<u64> = const { Cell::new(0) };
     }
 
     /// The perf gate's Luau workloads (`benches/perf_gate.rs`): 10,000 operations each.
@@ -430,32 +432,44 @@ pub(crate) mod tests {
         (dm, host, script)
     }
 
-    /// Member lookups and registry resolutions of a warm run of `source`, as the perf gate measures it.
-    fn counts(registry: &Arc<Registry>, source: &str) -> (u64, u64) {
+    /// Member lookups, registry resolutions and UTF-8 checks of member names in a warm run of `source`, as the perf
+    /// gate measures it.
+    fn counts(registry: &Arc<Registry>, source: &str) -> (u64, u64, u64) {
         let (mut dm, mut host, script) = game(registry);
         let mut run = || {
             let run = host.run_script(&mut dm, script, "Gate.luau", source).unwrap();
             assert!(matches!(run.resume, Resume::Finished(_)), "{:?}", run.resume);
         };
         run();
-        LOOKUPS.with(|n| n.set(0));
-        RESOLVES.with(|n| n.set(0));
+        for counter in [&LOOKUPS, &RESOLVES, &UTF8_CHECKS] {
+            counter.with(|n| n.set(0));
+        }
         run();
-        (LOOKUPS.with(Cell::get), RESOLVES.with(Cell::get))
+        (
+            LOOKUPS.with(Cell::get),
+            RESOLVES.with(Cell::get),
+            UTF8_CHECKS.with(Cell::get),
+        )
     }
 
     #[test]
     fn per_access_cost_does_not_grow_with_the_registry() {
         let registries = [0, 50, 500].map(|extra| (extra, registry(extra)));
         for (name, source) in [("reads", READS), ("writes", WRITES), ("calls", CALLS)] {
-            let (lookups, resolves) = counts(&registries[0].1, source);
+            let (lookups, resolves, checks) = counts(&registries[0].1, source);
             // One lookup per access, plus `workspace.Part`; none of the 10,000 goes back to the registry.
             assert_eq!(lookups, OPS + 1, "{name}: member lookups");
             assert!(resolves <= 1, "{name}: {resolves} registry lookups in a warm run");
+            // Nor re-checks the name as UTF-8 (#143): only `workspace.Part`'s `"Part"`, which has no atom, is
+            // checked: when it is read, to resolve it by name, and for the child lookup.
+            assert!(
+                checks <= 3,
+                "{name}: {checks} UTF-8 checks of member names in a warm run"
+            );
             for (extra, registry) in &registries[1..] {
                 assert_eq!(
                     counts(registry, source),
-                    (lookups, resolves),
+                    (lookups, resolves, checks),
                     "{name} with {extra} extra classes"
                 );
             }

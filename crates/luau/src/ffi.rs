@@ -509,6 +509,62 @@ pub(crate) enum Kind {
     Other,
 }
 
+/// A member name as Luau passed it (an index key, a `__namecall` name or a method closure's upvalue), with its atom.
+///
+/// Its text is only read when something needs it: resolving the member the first time, a child lookup, an error
+/// message. A cached member's access (`part.Position` after the first) therefore never measures or re-checks the
+/// name, which cost about 7% of a property read (#143). Skipping the check is safe without `from_utf8_unchecked`:
+/// a name that has an atom (0 or more) is valid UTF-8, because `atoms::atom_of` only gives atoms to names it finds
+/// in its table of `str`s, and a name without one is checked when it is read from the stack, so a key that is not
+/// UTF-8 is refused there as before.
+#[derive(Clone, Copy)]
+pub(crate) struct MemberName<'a> {
+    atom: i32,
+    raw: RawName<'a>,
+}
+
+/// Where a [`MemberName`]'s bytes are.
+#[derive(Clone, Copy)]
+enum RawName<'a> {
+    /// A string read with its length.
+    Bytes(&'a [u8]),
+    /// A NUL-terminated `__namecall` name, alive for `'a` (the call), measured only when its text is read.
+    CStr(ptr::NonNull<c_char>, PhantomData<&'a CStr>),
+}
+
+impl<'a> MemberName<'a> {
+    /// A name and its atom; a name without an atom must be valid UTF-8 (which keeps [`MemberName::text`] exact).
+    fn new(atom: c_int, raw: RawName<'a>) -> Option<Self> {
+        let name = Self { atom, raw };
+        if atom < 0 {
+            name.str()?;
+        }
+        Some(name)
+    }
+
+    /// The atom, or a negative number for a string that is not a known member name.
+    pub(crate) fn atom(&self) -> i32 {
+        self.atom
+    }
+
+    /// The name as text, checked as UTF-8 (`None` when it is not).
+    pub(crate) fn str(&self) -> Option<&'a str> {
+        #[cfg(test)]
+        crate::shared::tests::UTF8_CHECKS.with(|n| n.set(n.get() + 1));
+        match self.raw {
+            RawName::Bytes(bytes) => std::str::from_utf8(bytes).ok(),
+            // SAFETY: Luau strings are NUL-terminated, and `'a` is the call, during which the name stays alive.
+            RawName::CStr(name, _) => unsafe { CStr::from_ptr(name.as_ptr()) }.to_str().ok(),
+        }
+    }
+
+    /// The name as text. Always the name itself: [`MemberName::new`] (or, for a name with an atom, the atom table)
+    /// has checked it is UTF-8, so the replacement character is never returned in practice.
+    pub(crate) fn text(&self) -> &'a str {
+        self.str().unwrap_or("\u{fffd}")
+    }
+}
+
 /// A C function's view of its arguments. Reading never allocates in the VM, so it never raises.
 pub(crate) struct Args<'a> {
     state: *mut lua_State,
@@ -594,9 +650,9 @@ impl<'a> Args<'a> {
         self.bytes(idx).and_then(|b| std::str::from_utf8(b).ok())
     }
 
-    /// Argument `idx` as text and its atom (an id Luau caches in the string; -1 for strings that are not member
-    /// names).
-    pub(crate) fn str_atom(&self, idx: c_int) -> Option<(i32, &'a str)> {
+    /// Argument `idx` as a member name with its atom (an id Luau caches in the string), if it is a string of valid
+    /// UTF-8.
+    pub(crate) fn str_atom(&self, idx: c_int) -> Option<MemberName<'a>> {
         if self.kind(idx) != Kind::String {
             return None;
         }
@@ -610,11 +666,11 @@ impl<'a> Args<'a> {
             }
             std::slice::from_raw_parts(data.cast::<u8>(), len)
         };
-        std::str::from_utf8(bytes).ok().map(|s| (atom, s))
+        MemberName::new(atom, RawName::Bytes(bytes))
     }
 
-    /// Upvalue `n` of the running C closure as text and its atom, if it is a string.
-    pub(crate) fn upvalue_str_atom(&self, n: c_int) -> Option<(i32, &'a str)> {
+    /// Upvalue `n` of the running C closure as a member name with its atom, if it is a string of valid UTF-8.
+    pub(crate) fn upvalue_str_atom(&self, n: c_int) -> Option<MemberName<'a>> {
         let idx = ffi::lua_upvalueindex(n);
         let (mut len, mut atom): (usize, c_int) = (0, -1);
         // SAFETY: an upvalue pseudo-index of the running closure; it is only read when it holds a string, and the
@@ -629,20 +685,16 @@ impl<'a> Args<'a> {
             }
             std::slice::from_raw_parts(data.cast::<u8>(), len)
         };
-        std::str::from_utf8(bytes).ok().map(|s| (atom, s))
+        MemberName::new(atom, RawName::Bytes(bytes))
     }
 
-    /// The method name of a `__namecall` and its atom.
-    pub(crate) fn namecall(&self) -> Option<(i32, &'a str)> {
+    /// The method name of a `__namecall` and its atom, if it is valid UTF-8.
+    pub(crate) fn namecall(&self) -> Option<MemberName<'a>> {
         let mut atom: c_int = -1;
         // SAFETY: called from a `__namecall` metamethod, where Luau sets the name; otherwise it returns null.
         let name = unsafe { ffi::lua_namecallatom(self.state, &mut atom) };
-        if name.is_null() {
-            return None;
-        }
-        // SAFETY: Luau strings are NUL-terminated and the name stays alive during the call.
-        let name = unsafe { CStr::from_ptr(name) };
-        name.to_str().ok().map(|s| (atom, s))
+        let name = ptr::NonNull::new(name.cast_mut())?;
+        MemberName::new(atom, RawName::CStr(name, PhantomData))
     }
 
     /// Argument `idx` as a `Vector3`, if it is a native vector.

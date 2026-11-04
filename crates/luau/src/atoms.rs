@@ -74,3 +74,20 @@ pub(crate) fn atom_of(bytes: &[u8]) -> i16 {
         .and_then(|table| table.atoms.get(name).copied())
         .unwrap_or(-1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ffi::MemberName` skips the UTF-8 check of a name with an atom, which holds because only names in the
+    /// table (all `str`s) get one.
+    #[test]
+    fn only_utf8_member_names_get_atoms() {
+        let registry = metallic_core::Registry::build(metallic_classes::input()).unwrap();
+        register(&registry, &[]);
+        assert!(atom_of(b"Position") >= 0);
+        assert_eq!(atom_of(b"Posi\xfftion"), -1);
+        assert_eq!(atom_of(b"\xff"), -1);
+        assert_eq!(atom_of(b"Position\xff"), -1);
+    }
+}

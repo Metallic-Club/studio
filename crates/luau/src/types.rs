@@ -87,7 +87,7 @@ fn num(n: f32) -> Push {
 fn method_name<'a>(args: &Args<'a>) -> Result<&'a str, Raise> {
     args.namecall()
         .or_else(|| args.upvalue_str_atom(1))
-        .map(|(_, name)| name)
+        .and_then(|name| name.str())
         .ok_or_else(|| Raise::from("no method name"))
 }
 
