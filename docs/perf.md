@@ -704,3 +704,62 @@ then: not centred on the camera, one-texel steps).
   machine it is the 0.44 ms here.)
 - **What would cut the copy**: restoring only the texels last frame's moving casters covered, instead of the whole
   map, would make the build cost scale with the movers' footprint (#133).
+
+### Levels of detail (#80)
+
+Balls and cylinders far away are drawn with fewer triangles (`metallic_render::lod`, ADR 0008 §5). A Ball has four
+levels (32 × 16 segments and rings, 960 triangles; 16 × 8, 224; 8 × 4, 48; 4 × 2, 8), a Cylinder three (32, 16 and
+8 segments: 128, 64 and 32 triangles); a Block (12) and a Wedge (8) keep one. Each level halves the segments, so its
+vertices are a subset of the finer level's. The cull chooses a part's level by its projected size, the measure
+screen-size culling uses: a level is used while its outline strays from the true shape by less than half a pixel
+divided by the LOD bias (`LodSettings`: Low 0.5, Medium 1, High 2; the renderer's default is High, a quarter of a
+pixel). A part changes level only 10% past a threshold, and each grid item remembers the level it was drawn at, so a
+part hovering at a threshold switches once. A kind draws one instanced draw per level in use: at most 9 opaque draws
+for the built-in kinds. Shadow maps draw each caster at the coarsest level the camera could be drawing it wherever
+the map is looked up (a cascade's slice's far corner; for a local light's tile, the light's distance from the camera
+plus its range, rounded up to a power of two): never finer than the surface receiving the shadow, so levels add no
+acne, and a cached cascade stays valid as the camera moves. The stress example's `--lod low|medium|high|off`,
+`--lod-bias` and `--lod-tint` (the debug view colouring parts by level) set them; the JSON's `draws.levels` counts
+the instances drawn at each level.
+
+**2026-11-04**, same machine and settings as the tables above (DX12, `AutoNoVsync`, 1,000 frames after 120, seed 1),
+`main` at `441944f` against branch `80-primitive-lod` (default settings, so High). Two rounds each, which agreed
+within 5%; the table is their mean (`see_through_10k`: a third round, after the last change to the see-through
+sort). Times are p50 in ms, except the shadow pass: its mean over the measured frames.
+
+| Scene | Build | Frame (p99) | Render CPU | Cull CPU | GPU | Opaque / transparent pass | Cascade 1 | Triangles drawn | Shadow triangles | Draws opaque / transparent / shadow |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `parts_100k` | `main` | 0.852 (1.061) | 0.635 | 0.265 | 0.742 | 0.447 / 0.000 | 0.085 | 3.67 M | 464,884 | 4 / 0 / 12 |
+| `parts_100k` | #80 | 0.809 (0.915) | 0.657 | 0.314 | 0.529 | 0.261 / 0.000 | 0.063 | 0.66 M | 182,180 | 9 / 0 / 17 |
+| `parts_100k --moving-camera` | `main` | 0.815 (1.419) | 0.633 | 0.257 | 0.718 | 0.425 / 0.000 | 0.083 | 2.31 M | 441,824 | 4 / 0 / 12 |
+| `parts_100k --moving-camera` | #80 | 0.791 (1.256) | 0.638 | 0.287 | 0.543 | 0.276 / 0.000 | 0.061 | 0.46 M | 171,632 | 9 / 0 / 17 |
+| `see_through_10k` | `main` | 1.265 (1.595) | 1.084 | 0.022 | 1.170 | 0.066 / 1.034 | 0.014 | 4.86 M | 24 | 1 / 4,199 / 2 |
+| `see_through_10k` | #80 | 1.160 (1.235) | 1.077 | 0.047 | 0.758 | 0.065 / 0.626 | 0.013 | 1.23 M | 24 | 1 / 4,199 / 2 |
+| `mobile` | `main` | 0.408 (0.546) | 0.264 | 0.033 | 0.324 | 0.118 / 0.002 | 0.080 | 183,800 | 319,808 | 4 / 1 / 12 |
+| `mobile` | #80 | 0.378 (0.509) | 0.281 | 0.041 | 0.293 | 0.110 / 0.002 | 0.059 | 65,080 | 120,368 | 8 / 1 / 16 |
+
+`parts_100k`'s last frame drew 24,277 instances at full detail (every block and wedge, and the near round parts),
+1,051 at level 1, 4,801 at level 2 and 319 at level 3. At Medium it draws 0.51 M triangles for 0.508 ms of GPU, at
+Low 0.43 M for 0.492 ms.
+
+- **GPU**: the triangles at distance were most of the opaque pass's cost: 82% fewer of them on `parts_100k` take
+  0.19 ms (42%) off it and 29% off the frame's GPU time; the redrawn cascades' casters lose 61% of theirs.
+  `see_through_10k`'s 5,000 see-through balls take their levels too (half of them level 1), which takes 0.41 ms off
+  its blended pass.
+- **Draws**: one per kind and level in use, 9 at most for opaque parts, 5 more than `main` on `parts_100k`. The
+  see-through runs stay as many (4,199): they were already broken by every change of shape, and same-shape
+  neighbours in back-to-front order are mostly at the same level.
+- **CPU**: the cull chooses each round part's level from its distance (a few multiplies, branch-free, the level
+  written only when it changes): +0.05 ms of cull CPU on `parts_100k`, whose 30% round parts put levels in nearly
+  every grid cell, and +0.02 ms of render CPU in all. A grid cell that has never held a round part culls exactly as
+  without levels, so a scene of blocks (the perf gate's `render_cull`) pays nothing for them. `cargo bench -p
+  metallic_render --bench gpu_scene -- cull` on 100,000 parts with the stress city's mix of shapes: 114.6 µs with
+  levels, 109.7 µs without.
+- **Cached shadows**: the far cascade's static map was drawn in 8 of the walking camera's frames, as on `main`: its
+  casters' levels follow its slice and the camera's projection, not where the camera stands.
+- **The look**: rendered offscreen at 1920 × 1080 with the default settings, `parts_100k`'s default view has 5 pixels
+  of 2,073,600 more than 12 levels (of 255) away from the full-detail image, and a view from 45 m up over the whole
+  city 2,842 (0.14%), lone pixels on silhouettes and shadow edges (`docs/screenshots/80-lod-*.png`). `tests/lod.rs`
+  holds every preset to such a bound on rows of balls and cylinders, checks both instance paths draw the same, and
+  that coarser shadows put no acne on their receivers: none at any preset, while with the casters drawn at full
+  detail instead it finds 1.4% of the parts' pixels darkened.
