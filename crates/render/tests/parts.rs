@@ -18,7 +18,6 @@
 mod support;
 
 use std::path::PathBuf;
-use std::sync::{Mutex, Once, PoisonError};
 
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Value};
@@ -28,7 +27,7 @@ use metallic_render::{
     RenderContext, Renderer, RendererSettings, wgpu,
 };
 use support::scenes::{self, Game, ImageDiff, Look, SeeThrough};
-use support::{gpu, gpu_with, read_back_rgba8};
+use support::{assert_no_wgpu_errors, collect_wgpu_messages, gpu, gpu_with, read_back_rgba8};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -57,55 +56,6 @@ const MAX_MEAN: f64 = 1.0;
 
 fn reference_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/reference/parts.png")
-}
-
-/// wgpu's warnings and errors, which include the graphics API's validation messages in debug builds (Vulkan
-/// validation layers, the D3D12 debug layer) where the machine has them installed, as CI's images do.
-struct WgpuMessages(Mutex<Vec<(log::Level, String)>>);
-
-impl log::Log for WgpuMessages {
-    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-        metadata.level() <= log::Level::Warn && metadata.target().starts_with("wgpu")
-    }
-
-    fn log(&self, record: &log::Record<'_>) {
-        if self.enabled(record.metadata()) {
-            let message = format!("{}: {}", record.target(), record.args());
-            // The Vulkan loader's own messages while instances are made (on a machine without a Vulkan driver,
-            // "Found no drivers" is an error) say nothing about the frames drawn; the loader names the instance.
-            if message.contains("[Loader Message") || message.contains("type: INSTANCE") {
-                return;
-            }
-            self.0
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push((record.level(), message));
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-static MESSAGES: WgpuMessages = WgpuMessages(Mutex::new(Vec::new()));
-
-/// Starts collecting wgpu's messages (once per test binary).
-fn collect_wgpu_messages() {
-    static INSTALL: Once = Once::new();
-    INSTALL.call_once(|| {
-        if log::set_logger(&MESSAGES).is_ok() {
-            log::set_max_level(log::LevelFilter::Warn);
-        }
-    });
-}
-
-/// Fails on any validation error wgpu reported since the last check (by any test); prints the warnings.
-fn assert_no_wgpu_errors() {
-    let messages = std::mem::take(&mut *MESSAGES.0.lock().unwrap_or_else(PoisonError::into_inner));
-    for (level, message) in &messages {
-        eprintln!("wgpu {level}: {message}");
-    }
-    let errors = messages.iter().filter(|(level, _)| *level == log::Level::Error).count();
-    assert_eq!(errors, 0, "wgpu reported {errors} error(s), printed above");
 }
 
 /// Renders `game` once (a few frames, so everything is uploaded and sorted) and reads the image back, with the

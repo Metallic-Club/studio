@@ -799,9 +799,9 @@ impl PartRenderer {
     }
 
     /// Changes how the sun's shadows are drawn (a settings change: it may make the maps again; every map is drawn
-    /// again next frame). `min_layers` is 2 on OpenGL, where a one-layer texture cannot be sampled as an array.
-    pub(crate) fn set_shadows(&mut self, settings: ShadowSettings, min_layers: u32) {
-        if self.shadows.configure(settings, min_layers) {
+    /// again next frame).
+    pub(crate) fn set_shadows(&mut self, settings: ShadowSettings) {
+        if self.shadows.configure(settings) {
             self.rebuild_frame_group();
         }
     }

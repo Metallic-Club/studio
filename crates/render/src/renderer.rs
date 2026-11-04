@@ -176,8 +176,6 @@ pub struct Renderer {
     overlay: Overlay,
     /// The overlay's GPU side; `Some` while the overlay is on.
     overlay_pass: Option<OverlayPass>,
-    /// The fewest layers a shadow map array gets on this backend (2 on OpenGL).
-    shadow_min_layers: u32,
     /// The shadow passes recorded this frame, in order (their queries come first): the cascades drawn and the
     /// cached cascades built.
     shadow_passes: [Timed; 2 * MAX_CASCADES],
@@ -262,12 +260,6 @@ impl Renderer {
             frame: 0,
             overlay: Overlay::default(),
             overlay_pass: None,
-            // A one-layer texture cannot be sampled as an array there.
-            shadow_min_layers: if context.capabilities().backend == wgpu::Backend::Gl {
-                2
-            } else {
-                1
-            },
             shadow_passes: [Timed::Cascade(0); 2 * MAX_CASCADES],
             shadow_recorded: 0,
             shadow_in_use: 0,
@@ -295,7 +287,7 @@ impl Renderer {
         renderer.wait_for_keys(&keys[..count]);
         renderer.compiler.first_frame_ready();
         renderer.rebuild();
-        renderer.parts.set_shadows(settings.shadows, renderer.shadow_min_layers);
+        renderer.parts.set_shadows(settings.shadows);
         renderer.parts.set_lights(settings.lights);
         renderer.prewarm();
         renderer.compiler.flush_inline();
@@ -819,7 +811,7 @@ impl Renderer {
     pub fn set_shadows(&mut self, shadows: ShadowSettings) {
         if shadows != self.settings.shadows {
             self.settings.shadows = shadows;
-            self.parts.set_shadows(shadows, self.shadow_min_layers);
+            self.parts.set_shadows(shadows);
         }
     }
 

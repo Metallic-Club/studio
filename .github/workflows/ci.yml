@@ -150,6 +150,19 @@ jobs:
         shell: bash
         run: echo "METALLIC_REQUIRE_GPU=1" >> "$GITHUB_ENV"
       - run: cargo test --workspace
+      # The renderer's image tests again on the GL fallback (llvmpipe through EGL), the path phones and older
+      # hardware take. The run above picks Vulkan (lavapipe) whenever it has an adapter, so GL otherwise only gets
+      # device setup (tests/offscreen.rs), which is how GL bugs like #155 went unseen. WGPU_BACKEND=gl leaves GL the
+      # only backend, so with METALLIC_REQUIRE_GPU a missing GL adapter fails here. The binaries are the ones built
+      # above; only the runs are new. Left out: no_alloc.rs, whose heap-growth tests are flaky on GL (#151), and
+      # pipelines.rs, whose first-frame test fails on GL (#156).
+      - name: Renderer image tests on GL (llvmpipe)
+        if: runner.os == 'Linux'
+        env:
+          WGPU_BACKEND: gl
+        run: >-
+          cargo test -p metallic_render --test parts --test shadows --test lights --test post --test resolution
+          --test sky --test lod --test overlay --test gpu_scene --test timings
       # Script errors are C++ exceptions unwinding through Rust frames, which only works with the panic strategy of
       # the profile that ships (`dist`); tests use the default and cannot see it. This runs every Luau error path in
       # `dist` and fails on an abort (crates/luau/src/ffi.rs). LTO is turned down to keep it cheap; the panic

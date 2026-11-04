@@ -144,7 +144,7 @@ pub(crate) struct ShadowMaps {
     /// Cascades the maps have room for (0 when off).
     count: usize,
     resolution: u32,
-    /// The fewest layers the texture gets: 2 on OpenGL, where a one-layer texture cannot be viewed as an array.
+    /// The fewest layers the texture gets, set by the backend: see [`min_layers`].
     min_layers: u32,
     max_resolution: u32,
     sample_view: wgpu::TextureView,
@@ -243,7 +243,9 @@ impl ShadowMaps {
             ..wgpu::SamplerDescriptor::default()
         });
         let limits = device.limits();
-        let (sample_view, layer_views) = maps(device, 1, 1, 1);
+        let min_layers = min_layers(device.adapter_info().backend);
+        // The placeholder is bound until the first `configure`, so it needs the backend's minimum too.
+        let (sample_view, layer_views) = maps(device, 1, min_layers, 1);
         let (copy_layout, copy_pipeline) = copy_pipeline(device, cache);
         Self {
             device: device.clone(),
@@ -252,7 +254,7 @@ impl ShadowMaps {
             settings: ShadowSettings::OFF,
             count: 0,
             resolution: 1,
-            min_layers: 1,
+            min_layers,
             max_resolution: limits.max_texture_dimension_2d,
             sample_view,
             layer_views,
@@ -288,9 +290,9 @@ impl ShadowMaps {
     }
 
     /// Applies `settings`, making the maps again when their size or count changed (a settings change, never per
-    /// frame). `min_layers` is 2 on OpenGL (see [`ShadowMaps`]). Returns whether the sampled view was replaced, so
-    /// the bind groups that hold it must be made again. Every map is drawn again after a change.
-    pub(crate) fn configure(&mut self, settings: ShadowSettings, min_layers: u32) -> bool {
+    /// frame). Returns whether the sampled view was replaced, so the bind groups that hold it must be made again.
+    /// Every map is drawn again after a change.
+    pub(crate) fn configure(&mut self, settings: ShadowSettings) -> bool {
         let limits = self.device.limits();
         let count = settings.cascade_count().min(limits.max_texture_array_layers as usize);
         let resolution = if count == 0 {
@@ -298,13 +300,12 @@ impl ShadowMaps {
         } else {
             settings.resolution.clamp(16, self.max_resolution)
         };
-        let replaced = count != self.count || resolution != self.resolution || min_layers != self.min_layers;
+        let replaced = count != self.count || resolution != self.resolution;
         if replaced {
-            let layers = (count as u32).max(1).max(min_layers);
+            let layers = (count as u32).max(self.min_layers);
             (self.sample_view, self.layer_views) = maps(&self.device, resolution, layers, count.max(1));
             self.count = count;
             self.resolution = resolution;
-            self.min_layers = min_layers;
         }
         self.settings = ShadowSettings { resolution, ..settings };
         let cached = count.saturating_sub(self.settings.dynamic_count());
@@ -793,6 +794,15 @@ fn level_counts(set: &VisibleSet, kind: MeshKind, capacity: u32) -> [u32; MAX_LO
         room -= n;
         n
     })
+}
+
+/// The fewest layers the maps' texture gets on `backend`. wgpu's OpenGL backend has to pick a texture's GL target
+/// when it creates it, and it has no hint for that: a one-layer texture becomes `TEXTURE_2D`, which a
+/// `texture_depth_2d_array` binding cannot sample (wgpu reports an error and the bind is invalid). So there a
+/// single cascade (the Low preset), or the 1×1 placeholder bound while shadows are off, gets a second layer that is
+/// never drawn or read. Every other backend views a one-layer texture as an array, and keeps one layer.
+fn min_layers(backend: wgpu::Backend) -> u32 {
+    if backend == wgpu::Backend::Gl { 2 } else { 1 }
 }
 
 /// The maps: a `resolution`² depth array of `layers` layers, its view for sampling and a render view of each of
