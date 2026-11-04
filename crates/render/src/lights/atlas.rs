@@ -17,6 +17,7 @@ use crate::scene::{
     bounding_sphere, entry, is_shadow_caster,
 };
 use crate::shadow::{SHADOW_FORMAT, caster_pipeline};
+use crate::textures::{Made, TextureMaker, TextureSpec, Ticket};
 
 /// Texels kept clear around a tile's face, so the filter's taps near its edge stay inside the tile.
 const BORDER: f32 = 2.0;
@@ -242,18 +243,32 @@ struct AtlasGpu {
     caster_group: wgpu::BindGroup,
 }
 
+/// The atlas's size, its tiles' size, tiles per row and tile count ([`layout`]).
+type Layout = (u32, u32, u32, usize);
+
+/// The atlas texture being made off the frame ([`crate::textures`]): the first one, or one of a new size while the
+/// atlas before it stays in use.
+#[derive(Debug)]
+struct Incoming {
+    layout: Layout,
+    ticket: Ticket,
+}
+
 /// The shadow atlas and everything that draws it. [`super::LocalLights`] owns one.
 #[derive(Debug)]
 pub(crate) struct ShadowAtlas {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    maker: TextureMaker,
+    /// The texture asked for and not yet made.
+    incoming: Option<Incoming>,
     binding: InstanceBinding,
     resolution: u32,
     tile: u32,
     per_row: u32,
     /// Tiles in the atlas.
     capacity: usize,
-    /// `None` until a drawn light first has a shadow (and again after a new atlas size, until the next one).
+    /// `None` until a drawn light first has a shadow (and the texture is made).
     gpu: Option<AtlasGpu>,
     /// Changes whenever the texture is made or dropped, so the bind groups that sample it are made again.
     revision: u64,
@@ -293,8 +308,7 @@ impl ShadowAtlas {
     /// An atlas for `settings` on the instance path `binding`, whose storage-path instance group has
     /// `instance_layout`, its pipelines made through `cache` where there is one.
     pub(crate) fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        (device, queue, maker): (&wgpu::Device, &wgpu::Queue, &TextureMaker),
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: &LightSettings,
@@ -319,6 +333,8 @@ impl ShadowAtlas {
         Self {
             device: device.clone(),
             queue: queue.clone(),
+            maker: maker.clone(),
+            incoming: None,
             binding,
             resolution,
             tile,
@@ -351,31 +367,63 @@ impl ShadowAtlas {
         }
     }
 
-    /// Makes the atlas's texture and the casters' uniform, at the size the settings say now, when they do not exist
-    /// yet. Runs when a drawn light first has a shadow.
-    fn ensure_gpu(&mut self) {
-        if self.gpu.is_some() {
-            return;
+    /// Makes sure the atlas's texture exists, or is being made at the size the settings say now: at once before a
+    /// scene's first frame (or when small), otherwise off the frame ([`crate::textures`]). Runs when a drawn light
+    /// has a shadow; whether the texture exists.
+    fn ensure_gpu(&mut self) -> bool {
+        self.poll_incoming();
+        if self.gpu.is_none() && self.incoming.is_none() {
+            let layout = (self.resolution, self.tile, self.per_row, self.capacity);
+            match self.maker.make(atlas_spec(self.resolution)) {
+                Made::Ready(texture) => self.install(layout, &texture),
+                Made::Pending(ticket) => self.incoming = Some(Incoming { layout, ticket }),
+            }
         }
-        let caster_uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("metallic shadow atlas tiles (casters)"),
-            size: UNIFORM_STRIDE * MAX_SHADOW_TILES as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let caster_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("metallic shadow atlas tile"),
-            layout: &self.caster_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &caster_uniform,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(UNIFORM_SIZE),
-                }),
-            }],
-        });
-        let (sample_view, render_view) = atlas_texture(&self.device, self.resolution);
+        self.gpu.is_some()
+    }
+
+    /// Draws with the texture asked for once it is made.
+    fn poll_incoming(&mut self) {
+        let Some(incoming) = self.incoming.as_ref() else {
+            return;
+        };
+        let Some(texture) = self.maker.take(&incoming.ticket) else {
+            return;
+        };
+        let layout = incoming.layout;
+        self.incoming = None;
+        self.install(layout, &texture);
+    }
+
+    /// Draws with `texture`, cut as `layout` says, from now on: every tile is drawn again into it. The casters'
+    /// uniform is made with the first texture.
+    fn install(&mut self, layout: Layout, texture: &wgpu::Texture) {
+        self.apply_layout(layout);
+        let (caster_uniform, caster_group) = match self.gpu.take() {
+            Some(gpu) => (gpu.caster_uniform, gpu.caster_group),
+            None => {
+                let caster_uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("metallic shadow atlas tiles (casters)"),
+                    size: UNIFORM_STRIDE * MAX_SHADOW_TILES as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let caster_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("metallic shadow atlas tile"),
+                    layout: &self.caster_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &caster_uniform,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(UNIFORM_SIZE),
+                        }),
+                    }],
+                });
+                (caster_uniform, caster_group)
+            }
+        };
+        let (sample_view, render_view) = atlas_views(texture);
         self.gpu = Some(AtlasGpu {
             sample_view,
             render_view,
@@ -393,28 +441,47 @@ impl ShadowAtlas {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Applies `settings`' atlas and tile size (a settings change, never per frame). A new atlas size drops the
-    /// texture; the next frame with a shadow makes it at that size. Returns whether the sampled view changed. Every
-    /// tile is drawn again after a change.
-    pub(crate) fn configure(&mut self, settings: &LightSettings) -> bool {
-        let (resolution, tile, per_row, capacity) = layout(&self.device, settings);
-        let replaced = resolution != self.resolution && self.gpu.is_some();
-        if replaced {
-            self.gpu = None;
-            self.revision = self.revision.wrapping_add(1);
+    /// Cuts the atlas as `layout` says. Lights keep their tiles (a tile's number stays its own, wherever it now
+    /// sits), but for tiles past a smaller count, which are given back; tiles that moved are drawn again.
+    fn apply_layout(&mut self, (resolution, tile, per_row, capacity): Layout) {
+        if (resolution, tile, per_row) != (self.resolution, self.tile, self.per_row) {
+            for cache in &mut self.caches {
+                cache.valid = false;
+            }
         }
         self.resolution = resolution;
         self.tile = tile;
         self.per_row = per_row;
         self.capacity = capacity;
-        // Every light's tiles are given back (their owners no longer match) and drawn again.
-        self.owner.clear();
         self.owner.resize(capacity, None);
         self.holder.resize(capacity, FREE);
         self.active.resize(capacity, false);
-        self.caches.clear();
         self.caches.resize(capacity, TileCache::default());
-        replaced
+    }
+
+    /// Applies `settings`' atlas and tile size (a settings change, never per frame). A new atlas size, once the atlas
+    /// exists, makes a texture of that size, off the frame once a scene's first frame is drawn: frames draw with the
+    /// atlas before it until it is made, and every tile is drawn again into it then. Without an atlas yet, the next
+    /// frame with a shadow makes it at that size.
+    pub(crate) fn configure(&mut self, settings: &LightSettings) {
+        let layout = layout(&self.device, settings);
+        if let Some(incoming) = self.incoming.take() {
+            self.maker.cancel(incoming.ticket);
+        }
+        if self.gpu.is_none() || layout.0 == self.resolution {
+            self.apply_layout(layout);
+            return;
+        }
+        match self.maker.make(atlas_spec(layout.0)) {
+            Made::Ready(texture) => self.install(layout, &texture),
+            Made::Pending(ticket) => self.incoming = Some(Incoming { layout, ticket }),
+        }
+    }
+
+    /// Whether the atlas is still being made for its first shadow (its lights are drawn without their shadows
+    /// meanwhile).
+    pub(crate) fn waiting(&self) -> bool {
+        self.gpu.is_none() && self.incoming.is_some()
     }
 
     /// The atlas the parts sample, once it exists.
@@ -464,6 +531,8 @@ impl ShadowAtlas {
         settings: &LightSettings,
         dt: f32,
     ) {
+        // A new atlas size made since the last frame: its layout is in effect for this frame's assignment.
+        self.poll_incoming();
         // Who still holds what: a light holds its tiles while the atlas says it owns them.
         self.holder.fill(FREE);
         self.active.fill(false);
@@ -610,11 +679,14 @@ impl ShadowAtlas {
         self.jobs.clear();
         self.table.clear();
         self.list.clear();
-        if !shadowed.is_empty() {
-            self.ensure_gpu();
-        }
         self.ranges.clear();
         self.stats = AtlasStats::default();
+        self.poll_incoming();
+        if !shadowed.is_empty() && !self.ensure_gpu() {
+            // The atlas is still being made: its lights are drawn without shadows this frame.
+            bases.fill(-1.0);
+            return;
+        }
         let to_camera = Mat4::from_translation(camera_offset);
         let tile_uv = self.tile as f32 / self.resolution as f32;
         {
@@ -897,7 +969,7 @@ fn collect_moving_casters(instances: &InstanceScene, out: &mut Vec<(Vec3, f32)>)
 }
 
 /// The atlas's size, its tiles' size, tiles per row and tile count for `settings` on `device`.
-fn layout(device: &wgpu::Device, settings: &LightSettings) -> (u32, u32, u32, usize) {
+fn layout(device: &wgpu::Device, settings: &LightSettings) -> Layout {
     let max = device.limits().max_texture_dimension_2d;
     let resolution = settings.atlas_resolution.clamp(64, max);
     let tile = settings.tile_resolution.clamp(32, resolution);
@@ -906,22 +978,18 @@ fn layout(device: &wgpu::Device, settings: &LightSettings) -> (u32, u32, u32, us
     (resolution, tile, per_row, capacity)
 }
 
-/// The atlas texture: its view for sampling and for drawing.
-fn atlas_texture(device: &wgpu::Device, resolution: u32) -> (wgpu::TextureView, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("metallic shadow atlas"),
-        size: wgpu::Extent3d {
-            width: resolution,
-            height: resolution,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: SHADOW_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
+/// The atlas texture, `resolution` texels square.
+fn atlas_spec(resolution: u32) -> TextureSpec {
+    TextureSpec::new(
+        "metallic shadow atlas",
+        (resolution, resolution, 1),
+        SHADOW_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+/// The atlas texture's views for sampling and for drawing.
+fn atlas_views(texture: &wgpu::Texture) -> (wgpu::TextureView, wgpu::TextureView) {
     let view = |label| {
         texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some(label),

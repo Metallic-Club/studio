@@ -78,7 +78,10 @@
 //! existed. The pipelines are made with the renderer (so the first light costs no compile, ADR 0008 §9), but the
 //! lights' uniform array (16 KiB), the shadow tiles' (6 KiB) and the cluster texture (232 KiB) are made on the first
 //! frame that draws a light, and the shadow atlas (16 MiB at Medium) with its casters' uniform (16 KiB) on the first
-//! frame with a shadow, at the size the settings say then.
+//! frame with a shadow, at the size the settings say then. After a scene's first frame the atlas is made off the
+//! frame (`textures`, #152): its lights are drawn without their shadows for the frame or two that takes,
+//! which then fade in. A new atlas size likewise keeps the atlas before it in use until the new one is made; lights
+//! keep their tiles (wherever they now sit), all drawn again into it.
 //!
 //! `DirectionalLight` instances (extra suns) are not drawn yet: see #123.
 

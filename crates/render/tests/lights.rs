@@ -882,15 +882,23 @@ fn light_memory_is_made_when_first_needed() {
     game.dm
         .set_by_name(lamp, "Shadows", Value::Bool(true))
         .expect("Shadows");
+    // After a scene's first frame the atlas (16 MiB) is made off the frame (#152): until it exists the light is drawn
+    // without its shadow, which then fades in.
     frames.frame(&context, &mut game);
+    assert_eq!(frames.renderer.light_stats().shadowed, 0);
+    assert!(frames.renderer.texture_stats().pending > 0);
     let atlas = u64::from(LightSettings::default().atlas_resolution).pow(2) * 4;
-    let shadowed = frames.renderer.light_stats().gpu_bytes;
-    assert!(
-        shadowed >= unshadowed + atlas,
-        "GPU memory held once a light has a shadow: {shadowed} bytes, expected at least {} (the atlas)",
-        unshadowed + atlas
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while frames.renderer.light_stats().gpu_bytes < unshadowed + atlas {
+        assert!(std::time::Instant::now() < deadline, "the atlas was never made");
+        frames.frame(&context, &mut game);
+    }
+    let stats = frames.renderer.light_stats();
+    assert_eq!((stats.shadowed, stats.tiles_redrawn), (1, 6), "{stats:?}");
+    eprintln!(
+        "light GPU memory: none, {unshadowed} with a light, {} with a shadow",
+        stats.gpu_bytes
     );
-    eprintln!("light GPU memory: none, {unshadowed} with a light, {shadowed} with a shadow");
 }
 
 /// Every night scene's shaders write finite values, read before the post chain (which would make the others 0): no

@@ -99,6 +99,7 @@ use crate::lod::{LodView, MAX_LOD_LEVELS};
 use crate::pipelines::{Compiler, PartPipeline, PipelineKey, Recipe};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
 use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, ShadowStats};
+use crate::textures::TextureMaker;
 use crate::{GpuScene, PassId};
 use material::MATERIAL_TABLE_SIZE;
 use transparent::TransparentList;
@@ -470,8 +471,7 @@ impl PartRenderer {
     /// a frame without local lights draws with into `format` at `samples` are queued on `compiler` first, so they
     /// compile while the rest is made; the renderer installs them ([`PartRenderer::install`]).
     pub(crate) fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        (device, queue, maker): (&wgpu::Device, &wgpu::Queue, &TextureMaker),
         binding: InstanceBinding,
         (format, samples): (wgpu::TextureFormat, u32),
         compiler: &mut Compiler,
@@ -651,10 +651,9 @@ impl PartRenderer {
         });
         let materials = MaterialTable::new(device);
         debug_assert_eq!(materials.buffer().size(), MATERIAL_TABLE_SIZE);
-        let shadows = ShadowMaps::new(device, queue, binding, instance_layout.as_ref(), cache);
+        let shadows = ShadowMaps::new((device, queue, maker), binding, instance_layout.as_ref(), cache);
         let lights = LocalLights::new(
-            device,
-            queue,
+            (device, queue, maker),
             binding,
             instance_layout.as_ref(),
             LightSettings::default(),
@@ -798,8 +797,8 @@ impl PartRenderer {
         self.shadows.stats()
     }
 
-    /// Changes how the sun's shadows are drawn (a settings change: it may make the maps again; every map is drawn
-    /// again next frame).
+    /// Changes how the sun's shadows are drawn (a settings change: it may make the maps again, off the frame once a
+    /// scene's first frame is drawn; every map is drawn again once the change takes effect).
     pub(crate) fn set_shadows(&mut self, settings: ShadowSettings) {
         if self.shadows.configure(settings) {
             self.rebuild_frame_group();
@@ -928,7 +927,10 @@ impl PartRenderer {
         let lit = self.lighting.global_shadows && self.resolved.light_color.max_element() > 0.0;
         let aspect = width as f32 / height.max(1) as f32;
         let light = lit.then_some(self.resolved.light_direction);
-        self.shadows.prepare(encoder, scene, camera, aspect, light, lod);
+        if self.shadows.prepare(encoder, scene, camera, aspect, light, lod) {
+            // A settings change's new maps took over this frame.
+            self.rebuild_frame_group();
+        }
     }
 
     /// Where shadow cascade `cascade`'s casters are drawn when they are this frame: its map, or a cached cascade's

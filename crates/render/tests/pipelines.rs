@@ -130,6 +130,54 @@ fn anti_aliasing_switches_in_a_frame_once_its_pipelines_are_compiled() {
     assert_eq!(renderer.plan().msaa_samples(), aa.msaa_samples());
 }
 
+/// A switch whose attachments are large (#152): once its pipelines exist, its attachments are made off the frame, one
+/// a frame, while frames draw with the settings before it; then it takes effect at once. Before the first frame they
+/// are made at once, like the renderer's own.
+#[test]
+fn a_switch_waits_for_its_large_attachments_while_frames_draw_as_before() {
+    let Some(context) = gpu() else { return };
+    // 1024² at 4 bytes and 4 samples: 16 MiB a texture, at the size made off the frame.
+    let size = 1024;
+    let target = OffscreenTarget::new(&context, size, size, FORMAT).expect("a target");
+    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, size, size)).expect("a renderer");
+    renderer.wait_for_pipelines();
+    let Some(samples) = renderer.msaa_sample_counts().iter().filter(|&n| n >= 4).min() else {
+        return;
+    };
+    renderer.render(target.view());
+    renderer.set_msaa_samples(samples).expect("a supported count");
+    let stats = renderer.texture_stats();
+    // The MSAA colour and depth.
+    assert_eq!(stats.pending, 2, "{stats:?}");
+    assert!(renderer.pipeline_stats().switch_waiting);
+    assert_eq!(renderer.plan().msaa_samples(), 1);
+    // One a frame, each made on a worker while the frame before is presented.
+    let (mut frames, deadline) = (0, Instant::now() + Duration::from_secs(10));
+    while renderer.plan().msaa_samples() == 1 {
+        assert!(
+            Instant::now() < deadline,
+            "the switch never took effect: {:?}",
+            renderer.texture_stats()
+        );
+        frame(&context, &mut renderer, &target);
+        frames += 1;
+    }
+    assert!(frames >= 2, "both attachments arrived in one frame");
+    assert_eq!(renderer.plan().msaa_samples(), samples);
+    assert_eq!(renderer.settings().msaa_samples, samples);
+    assert!(!renderer.pipeline_stats().switch_waiting);
+    assert_eq!(renderer.texture_stats().pending, 0);
+    let msaa = read_back_rgba8(&context, target.texture());
+    // `wait_for_pipelines` makes them at once (tools and tests); switching back makes none (one sample needs no MSAA
+    // colour, and the depth is 4 MiB).
+    renderer.set_msaa_samples(1).expect("one sample");
+    assert_eq!(renderer.plan().msaa_samples(), 1);
+    renderer.set_msaa_samples(samples).expect("a supported count");
+    renderer.wait_for_pipelines();
+    assert_eq!(renderer.plan().msaa_samples(), samples);
+    assert_eq!(frame(&context, &mut renderer, &target), msaa);
+}
+
 #[test]
 fn the_pipeline_cache_is_kept_between_runs() {
     let dir = std::env::temp_dir().join(format!("metallic-pipeline-cache-{}", std::process::id()));

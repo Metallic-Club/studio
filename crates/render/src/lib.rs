@@ -47,6 +47,9 @@
 //!   frame draws before [`Renderer::new`] returns and every other permutation in the background, a settings change
 //!   waiting for its pipelines while frames draw as before; and on Vulkan a pipeline cache kept on disk
 //!   ([`ContextOptions::pipeline_cache_dir`]) (ADR 0008 §9).
+//! - Large textures off the frame (`textures`, [`Renderer::texture_stats`]): the shadow maps, the lights' atlas and the
+//!   scene's attachments a settings change needs are made one a frame on a worker thread while frames draw with the
+//!   ones they replace, each system switching once all of its own exist (#152, ADR 0008 §9).
 
 mod context;
 pub mod cull;
@@ -70,6 +73,7 @@ pub mod settings;
 pub mod shadow;
 mod surface;
 mod target;
+mod textures;
 mod timing;
 mod upscale;
 
@@ -89,6 +93,7 @@ pub use scene::{GpuScene, InstanceScene};
 pub use shadow::{CascadeStats, MAX_CASCADES, ShadowSettings, ShadowStats};
 pub use surface::{RenderSurface, SurfaceFrame};
 pub use target::OffscreenTarget;
+pub use textures::TextureStats;
 pub use timing::{FrameTimings, PassTiming, TIMING_RING_SIZE};
 
 /// Re-exported so callers name exactly the `wgpu` types this crate's API uses.

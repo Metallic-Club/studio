@@ -11,6 +11,7 @@ use crate::cull::{Casters, VisibleSet};
 use crate::lod::{self, LodView, MAX_LOD_LEVELS};
 use crate::parts::{Camera, MeshPool, MeshVertex};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind, Region, bounding_sphere, entry, is_shadow_caster};
+use crate::textures::{Slot, TextureMaker, TextureSpec};
 use crate::{GpuScene, InstanceScene};
 
 /// The maps' format: 32-bit float depth, standard (0 at the light's end, cleared to 1).
@@ -134,11 +135,29 @@ struct InstanceGroup {
     group: wgpu::BindGroup,
 }
 
+/// The maps of a settings change that needs new textures, while they are made: until all of them exist, frames keep
+/// drawing with the maps before it (#152).
+#[derive(Debug)]
+struct Incoming {
+    settings: ShadowSettings,
+    count: usize,
+    resolution: u32,
+    /// Cached cascades (static maps) the change has.
+    cached: usize,
+    /// The cascades' maps; `None` keeps the current ones (only the static maps change).
+    maps: Option<Slot>,
+    /// The cached cascades' static maps; `None` keeps the current ones.
+    static_maps: Option<Vec<Slot>>,
+}
+
 /// The sun's cascade maps and everything that draws them. [`crate::parts::PartRenderer`] owns one.
 #[derive(Debug)]
 pub(crate) struct ShadowMaps {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    maker: TextureMaker,
+    /// A settings change waiting for its textures.
+    incoming: Option<Incoming>,
     binding: InstanceBinding,
     settings: ShadowSettings,
     /// Cascades the maps have room for (0 when off).
@@ -177,8 +196,7 @@ impl ShadowMaps {
     /// The maps (off until [`ShadowMaps::configure`]) and the caster pipeline for the instance path `binding`, whose
     /// storage-path instance bind group has `instance_layout`, made through `cache` where there is one.
     pub(crate) fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        (device, queue, maker): (&wgpu::Device, &wgpu::Queue, &TextureMaker),
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
         cache: Option<&wgpu::PipelineCache>,
@@ -245,11 +263,14 @@ impl ShadowMaps {
         let limits = device.limits();
         let min_layers = min_layers(device.adapter_info().backend);
         // The placeholder is bound until the first `configure`, so it needs the backend's minimum too.
-        let (sample_view, layer_views) = maps(device, 1, min_layers, 1);
+        let placeholder = maps_spec(1, min_layers).make_now(device);
+        let (sample_view, layer_views) = map_views(&placeholder, 1);
         let (copy_layout, copy_pipeline) = copy_pipeline(device, cache);
         Self {
             device: device.clone(),
             queue: queue.clone(),
+            maker: maker.clone(),
+            incoming: None,
             binding,
             settings: ShadowSettings::OFF,
             count: 0,
@@ -289,9 +310,11 @@ impl ShadowMaps {
         }
     }
 
-    /// Applies `settings`, making the maps again when their size or count changed (a settings change, never per
-    /// frame). Returns whether the sampled view was replaced, so the bind groups that hold it must be made again.
-    /// Every map is drawn again after a change.
+    /// Applies `settings` (a settings change, never per frame). When their size or count changed the maps are made
+    /// again: at once before a scene's first frame (and when small), otherwise off the frame ([`crate::textures`]),
+    /// frames drawing with the maps before the change until every new one exists ([`ShadowMaps::prepare`] switches).
+    /// Returns whether the sampled view was replaced now, so the bind groups that hold it must be made again. Every
+    /// map is drawn again after a change.
     pub(crate) fn configure(&mut self, settings: ShadowSettings) -> bool {
         let limits = self.device.limits();
         let count = settings.cascade_count().min(limits.max_texture_array_layers as usize);
@@ -300,27 +323,86 @@ impl ShadowMaps {
         } else {
             settings.resolution.clamp(16, self.max_resolution)
         };
-        let replaced = count != self.count || resolution != self.resolution;
-        if replaced {
-            let layers = (count as u32).max(self.min_layers);
-            (self.sample_view, self.layer_views) = maps(&self.device, resolution, layers, count.max(1));
-            self.count = count;
-            self.resolution = resolution;
+        let settings = ShadowSettings { resolution, ..settings };
+        let cached = count.saturating_sub(settings.dynamic_count());
+        if let Some(incoming) = self.incoming.as_mut()
+            && (incoming.count, incoming.resolution, incoming.cached) == (count, resolution, cached)
+        {
+            // The same textures as the change already waiting: it takes these settings instead.
+            incoming.settings = settings;
+            return false;
         }
-        self.settings = ShadowSettings { resolution, ..settings };
-        let cached = count.saturating_sub(self.settings.dynamic_count());
-        if replaced || cached != self.static_maps.len() {
-            self.static_maps = (0..cached)
-                .map(|_| static_map(&self.device, &self.copy_layout, resolution))
+        self.cancel_incoming();
+        let replaced = count != self.count || resolution != self.resolution;
+        let maps = replaced.then(|| {
+            let layers = (count as u32).max(self.min_layers);
+            Slot::new(self.maker.make(maps_spec(resolution, layers)))
+        });
+        let static_maps = (replaced || cached != self.static_maps.len()).then(|| {
+            (0..cached)
+                .map(|_| Slot::new(self.maker.make(static_map_spec(resolution))))
+                .collect()
+        });
+        self.incoming = Some(Incoming {
+            settings,
+            count,
+            resolution,
+            cached,
+            maps,
+            static_maps,
+        });
+        self.poll_incoming()
+    }
+
+    /// Switches to the change waiting for its textures once every one of them exists; whether the sampled view was
+    /// replaced (see [`ShadowMaps::configure`]).
+    fn poll_incoming(&mut self) -> bool {
+        let Some(incoming) = self.incoming.as_mut() else {
+            return false;
+        };
+        let mut here = incoming.maps.as_mut().is_none_or(|slot| slot.poll(&self.maker));
+        for slot in incoming.static_maps.iter_mut().flatten() {
+            here &= slot.poll(&self.maker);
+        }
+        if !here {
+            return false;
+        }
+        let Some(incoming) = self.incoming.take() else {
+            return false;
+        };
+        let replaced = incoming.maps.is_some();
+        if let Some(Slot::Made(texture)) = incoming.maps {
+            (self.sample_view, self.layer_views) = map_views(&texture, incoming.count.max(1));
+            self.count = incoming.count;
+            self.resolution = incoming.resolution;
+        }
+        if let Some(static_maps) = incoming.static_maps {
+            self.static_maps = static_maps
+                .into_iter()
+                .filter_map(Slot::into_texture)
+                .map(|texture| static_map(&self.device, &self.copy_layout, &texture))
                 .collect();
             // The lists' blocks are per cascade and per cached cascade's moving casters: lay them out again.
             self.lists.capacities.clear();
         }
+        self.settings = incoming.settings;
         for cascade in &mut self.cascades {
             cascade.cache = CascadeCache::default();
             cascade.built = None;
         }
         replaced
+    }
+
+    /// Gives up the change waiting for its textures.
+    fn cancel_incoming(&mut self) {
+        if let Some(incoming) = self.incoming.take() {
+            if let Some(slot) = incoming.maps {
+                slot.cancel(&self.maker);
+            }
+            for slot in incoming.static_maps.into_iter().flatten() {
+                slot.cancel(&self.maker);
+            }
+        }
     }
 
     /// The settings in effect (the resolution clamped to the device).
@@ -373,7 +455,9 @@ impl ShadowMaps {
     /// wanted), decides which maps to draw again, culls their casters (at levels of detail that follow `lod`, the
     /// camera view's) and records the upload of their lists into `encoder`. Run it after [`GpuScene::upload_view`]
     /// (the coalesce it runs is what the culls see), every frame: it also takes the scene's shadow-caster changes
-    /// ([`crate::InstanceScene::clear_shadow_changes`]).
+    /// ([`crate::InstanceScene::clear_shadow_changes`]). First switches to the maps of a settings change once they are
+    /// all made ([`ShadowMaps::configure`]); returns whether that replaced the sampled view, so the bind groups that
+    /// hold it must be made again.
     pub(crate) fn prepare(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -381,6 +465,18 @@ impl ShadowMaps {
         camera: Option<&Camera>,
         aspect: f32,
         light: Option<Vec3>,
+        lod: &LodView,
+    ) -> bool {
+        let replaced = self.incoming.is_some() && self.poll_incoming();
+        self.prepare_cascades(encoder, scene, (camera, aspect, light), lod);
+        replaced
+    }
+
+    fn prepare_cascades(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &mut GpuScene,
+        (camera, aspect, light): (Option<&Camera>, f32, Option<Vec3>),
         lod: &LodView,
     ) {
         if *lod != self.lod {
@@ -805,28 +901,18 @@ fn min_layers(backend: wgpu::Backend) -> u32 {
     if backend == wgpu::Backend::Gl { 2 } else { 1 }
 }
 
-/// The maps: a `resolution`² depth array of `layers` layers, its view for sampling and a render view of each of
-/// the first `targets` layers.
-fn maps(
-    device: &wgpu::Device,
-    resolution: u32,
-    layers: u32,
-    targets: usize,
-) -> (wgpu::TextureView, Vec<wgpu::TextureView>) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("metallic shadow maps"),
-        size: wgpu::Extent3d {
-            width: resolution,
-            height: resolution,
-            depth_or_array_layers: layers,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: SHADOW_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
+/// The maps: a `resolution`² depth array of `layers` layers.
+fn maps_spec(resolution: u32, layers: u32) -> TextureSpec {
+    TextureSpec::new(
+        "metallic shadow maps",
+        (resolution, resolution, layers),
+        SHADOW_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+/// The maps' view for sampling and a render view of each of the first `targets` layers of `texture`.
+fn map_views(texture: &wgpu::Texture, targets: usize) -> (wgpu::TextureView, Vec<wgpu::TextureView>) {
     let sample_view = texture.create_view(&wgpu::TextureViewDescriptor {
         label: Some("metallic shadow maps"),
         dimension: Some(wgpu::TextureViewDimension::D2Array),
@@ -847,22 +933,19 @@ fn maps(
 }
 
 /// A cached cascade's static map: a `resolution`² depth texture of its own (one layer, so every backend can sample
-/// it as a plain 2D texture), and the bind group the copy into the cascade's map reads it through.
-fn static_map(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, resolution: u32) -> StaticMap {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("metallic shadow static map"),
-        size: wgpu::Extent3d {
-            width: resolution,
-            height: resolution,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: SHADOW_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
+/// it as a plain 2D texture).
+fn static_map_spec(resolution: u32) -> TextureSpec {
+    TextureSpec::new(
+        "metallic shadow static map",
+        (resolution, resolution, 1),
+        SHADOW_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+/// A static map of `texture` ([`static_map_spec`]), with the bind group the copy into the cascade's map reads it
+/// through.
+fn static_map(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, texture: &wgpu::Texture) -> StaticMap {
     let view = texture.create_view(&wgpu::TextureViewDescriptor {
         label: Some("metallic shadow static map"),
         dimension: Some(wgpu::TextureViewDimension::D2),
