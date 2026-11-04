@@ -201,6 +201,11 @@ fn render(context: &RenderContext, game: &mut Game, lights: LightSettings) -> Ve
     for _ in 0..2 {
         frames.frame(context, game);
     }
+    eprintln!(
+        "DIAG {:?} {:?}",
+        context.capabilities().backend,
+        frames.renderer.post_stats()
+    );
     frames.pixels(context)
 }
 
