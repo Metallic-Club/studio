@@ -68,6 +68,8 @@ pub(crate) fn select(
     drawn: &mut Vec<u32>,
 ) -> Selection {
     ranked.clear();
+    // Room for every light of the scene: grows when the scene does, never with what the view sees.
+    ranked.reserve(lights.len());
     drawn.clear();
     let budget = settings.light_budget();
     for (index, (light, state)) in (0u32..).zip(lights.iter().zip(runtime.iter_mut())) {

@@ -2117,9 +2117,12 @@ fn nothing_accumulates_over_lit_frames() {
         .expect("a scene");
         let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
         let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
+        // Fades by a fixed step, so which lights hold shadows in which frame does not depend on how fast the machine
+        // draws.
+        renderer.set_light_fade_step(Some(1.0 / 60.0));
         let mut pacer = Pacer::new();
-        let (mut before, mut redrawn) = (0, 0);
-        for frame in 0..WARM_UP + FRAMES {
+        let mut frame = 0;
+        let mut draw = |frame: usize| {
             // A quarter of the lamps move, shadowed ones among them.
             for (i, &lamp) in lamps.iter().enumerate().step_by(4) {
                 let at = Vec3::new(
@@ -2131,17 +2134,46 @@ fn nothing_accumulates_over_lit_frames() {
                     .set_by_name(lamp, "CFrame", Value::CFrame(CFrame::new(at)))
                     .expect("moved");
             }
-            if frame == WARM_UP {
-                before = live_bytes();
-            }
             scene.sync(&mut game.dm);
             let camera = orbiting_camera(frame);
             let submission = renderer.render_scene(target.view(), &mut scene, Some(&camera));
             pacer.submitted(context.device(), submission);
-            if frame >= WARM_UP {
-                redrawn += renderer.light_stats().tiles_redrawn;
+            renderer.light_stats()
+        };
+        // Warm up until the lights' GPU resources exist, the shadow atlas included: they are made when first
+        // needed (the first light drawn, the first shadow), and that must not land in the measured frames.
+        let atlas = u64::from(metallic_render::LightSettings::default().atlas_resolution).pow(2) * 4;
+        loop {
+            let stats = draw(frame);
+            frame += 1;
+            if frame >= WARM_UP && stats.gpu_bytes > atlas {
+                break;
             }
+            assert!(
+                frame < 10 * WARM_UP,
+                "no shadowed light was drawn in {frame} frames: {stats:?}"
+            );
         }
+        // Both measurements are taken with every frame finished. With two frames in flight, wgpu still holds a
+        // submission's bookkeeping until it is retired (lavapipe on CI: 14,041 bytes, held at one frame and given
+        // back at the next), so whether a measurement lands before or after that would otherwise decide the
+        // result. What a leak keeps stays after the device is idle.
+        let idle = || {
+            context
+                .device()
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .expect("wait for every frame");
+        };
+        idle();
+        let (before, mut redrawn) = (live_bytes(), 0);
+        for _ in 0..FRAMES {
+            redrawn += draw(frame).tiles_redrawn;
+            frame += 1;
+        }
+        idle();
         let grown = live_bytes() - before;
         eprintln!(
             "{FRAMES} lit frames on the {:?} path ({:?}, {redrawn} tiles drawn): heap grew {grown} bytes",
