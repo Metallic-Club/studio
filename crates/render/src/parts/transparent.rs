@@ -19,8 +19,8 @@ pub(crate) struct TransparentList {
     buffer: wgpu::Buffer,
     usage: wgpu::BufferUsages,
     gather: bool,
-    /// (sort key, entry, level), reused. The key orders far before near.
-    keys: Vec<(u32, u32, u8)>,
+    /// (sort key, position in the drawn entries), reused. The key orders far before near.
+    keys: Vec<(u32, u32)>,
     /// The upload, reused.
     bytes: Vec<u8>,
     runs: Vec<Run>,
@@ -73,11 +73,13 @@ impl TransparentList {
             return false;
         }
         self.sorted_for = Some(key);
-        sort_back_to_front(scene, drawn.entries, drawn.levels, camera, &mut self.keys);
+        sort_back_to_front(scene, drawn.entries, camera, &mut self.keys);
         self.runs.clear();
         self.bytes.clear();
 
-        for (position, &(_, entry, level)) in (0u32..).zip(&self.keys) {
+        for (position, &(_, index)) in (0u32..).zip(&self.keys) {
+            let entry = drawn.entries.get(index as usize).copied().unwrap_or(0);
+            let level = drawn.levels.get(index as usize).copied().unwrap_or(0);
             let instance = scene.entry_instance(entry).unwrap_or(&GpuInstance::FREE);
             match self.runs.last_mut() {
                 Some(run) if run.kind == instance.mesh() && run.level == level => run.count += 1,
@@ -106,22 +108,17 @@ impl TransparentList {
     }
 }
 
-/// `entries` of the scene with their `levels` (empty: all at full detail), farthest first from `camera`, ties broken
-/// by entry so the order is stable.
-pub(crate) fn sort_back_to_front(
-    scene: &InstanceScene,
-    entries: &[u32],
-    levels: &[u8],
-    camera: Vec3,
-    keys: &mut Vec<(u32, u32, u8)>,
-) {
+/// The positions in `entries` (the scene's), farthest first from `camera`, as `(key, position)`; ties broken by
+/// position, so the order is stable for the same entries. Sorting positions rather than entries keeps the keys 8
+/// bytes and finds each entry's level of detail at the same position of its list.
+pub(crate) fn sort_back_to_front(scene: &InstanceScene, entries: &[u32], camera: Vec3, keys: &mut Vec<(u32, u32)>) {
     keys.clear();
-    keys.extend(entries.iter().enumerate().map(|(i, &entry)| {
+    keys.extend((0u32..).zip(entries).map(|(i, &entry)| {
         let distance = scene
             .entry_instance(entry)
             .map_or(0.0, |instance| instance.translation().distance_squared(camera));
         // Non-negative floats order like their bits; inverted, the farthest sorts first.
-        (!distance.max(0.0).to_bits(), entry, levels.get(i).copied().unwrap_or(0))
+        (!distance.max(0.0).to_bits(), i)
     }));
     keys.sort_unstable();
 }

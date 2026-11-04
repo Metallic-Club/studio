@@ -826,7 +826,7 @@ fn levels_off_draw_everything_at_full_detail() {
         .sum();
     assert!(coarse > 0, "far balls and cylinders are coarser");
     assert!(
-        set.opaque(MeshKind::BALL, 3).len() > 0,
+        !set.opaque(MeshKind::BALL, 3).is_empty(),
         "the farthest balls at the coarsest level"
     );
     let visible = set.len();

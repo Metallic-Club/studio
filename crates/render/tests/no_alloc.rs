@@ -1594,7 +1594,7 @@ fn main_view(scene: &InstanceScene, camera: &Camera) -> metallic_render::CullVie
 fn expected_calls(
     scene: &mut InstanceScene,
     visible: &mut metallic_render::VisibleSet,
-    keys: &mut Vec<(u32, u32, u8)>,
+    keys: &mut Vec<(u32, u32)>,
     camera: &Camera,
 ) -> ((u32, u32, usize), [u32; 4]) {
     let view = main_view(scene, camera);
@@ -1609,25 +1609,22 @@ fn expected_calls(
             .filter(|&level| !visible.opaque(kind, level).is_empty())
             .count() as u32;
     }
-    // Back to front, then one draw per run of the same mesh and level (`parts/transparent.rs`).
+    // Back to front (ties by position in the visible list), then one draw per run of the same mesh and level
+    // (`parts/transparent.rs`).
     let eye = camera.position - scene.origin();
+    let (entries, levels) = (visible.transparent(), visible.transparent_levels());
     keys.clear();
-    keys.extend(
-        visible
-            .transparent()
-            .iter()
-            .zip(visible.transparent_levels())
-            .map(|(&entry, &level)| {
-                let distance = scene
-                    .entry_instance(entry)
-                    .map_or(0.0, |instance| instance.translation().distance_squared(eye));
-                (!distance.max(0.0).to_bits(), entry, level)
-            }),
-    );
+    keys.extend((0u32..).zip(entries).map(|(i, &entry)| {
+        let distance = scene
+            .entry_instance(entry)
+            .map_or(0.0, |instance| instance.translation().distance_squared(eye));
+        (!distance.max(0.0).to_bits(), i)
+    }));
     keys.sort_unstable();
     let mut runs = 0;
     let mut last = None;
-    for &(_, entry, level) in keys.iter() {
+    for &(_, i) in keys.iter() {
+        let (entry, level) = (entries[i as usize], levels[i as usize]);
         let kind = scene.entry_instance(entry).map(|i| (i.mesh(), level));
         if kind != last {
             runs += 1;

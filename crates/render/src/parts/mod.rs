@@ -228,11 +228,24 @@ fn vec4w(v: Vec3, w: f32) -> [f32; 4] {
     [v.x, v.y, v.z, w]
 }
 
+/// How the parts are written (`output` in frame.wgsl): whether the shader encodes sRGB itself, and for the debug view
+/// of [`crate::Renderer::set_lod_tint`] where levels 1, 2 and 3 start in the vertex pool (exact in f32 below 2²⁴
+/// vertices; 0 when the view is off).
+#[derive(Clone, Copy, Debug)]
+struct Output([f32; 4]);
+
+impl Output {
+    /// For a target that is `srgb` or not, with `tint` the first vertex of each level in the mesh pool.
+    fn new(srgb: bool, tint: Option<[u32; MAX_LOD_LEVELS]>) -> Self {
+        let [_, l1, l2, l3] = tint.map_or([0.0; MAX_LOD_LEVELS], |starts| starts.map(|s| s as f32));
+        Self([if srgb { 0.0 } else { 1.0 }, l1, l2, l3])
+    }
+}
+
 impl FrameUniforms {
     /// The uniform for `camera` on a target `aspect` (width / height) wide, `offset` (camera − scene origin) from
-    /// the scene origin, lit by `light` with `shadow`'s cascades and the local lights `local`. With `tint`, the
-    /// first vertex of each level of detail in the mesh pool, the parts are coloured by level (the debug view of
-    /// [`crate::Renderer::set_lod_tint`]).
+    /// the scene origin, lit by `light` with `shadow`'s cascades and the local lights `local`, written as `output`
+    /// says.
     fn new(
         camera: &Camera,
         aspect: f32,
@@ -240,8 +253,7 @@ impl FrameUniforms {
         light: &ResolvedLighting,
         shadow: &FrameShadow,
         local: &FrameLights,
-        srgb: bool,
-        tint: Option<[u32; MAX_LOD_LEVELS]>,
+        output: Output,
     ) -> Self {
         let aspect = if aspect.is_finite() && aspect > 0.0 {
             aspect
@@ -250,8 +262,6 @@ impl FrameUniforms {
         };
         // The sky's view rays: through the screen's edges at NDC ±1.
         let tan_half = (camera.fov_y * 0.5).tan();
-        // Where levels 1, 2 and 3 start in the vertex pool (exact in f32 below 2²⁴ vertices); 0 is no tint.
-        let [_, l1, l2, l3] = tint.map_or([0.0; MAX_LOD_LEVELS], |starts| starts.map(|s| s as f32));
         Self {
             view_proj: camera.view_projection(aspect).to_cols_array_2d(),
             camera_offset: vec4(offset),
@@ -259,7 +269,7 @@ impl FrameUniforms {
             light_color: vec4(light.light_color),
             sky_ambient: vec4(light.sky_ambient),
             ground_ambient: vec4(light.ground_ambient),
-            output: [if srgb { 0.0 } else { 1.0 }, l1, l2, l3],
+            output: output.0,
             view_right: vec4(camera.rotation * Vec3::X * (tan_half * aspect)),
             view_up: vec4(camera.rotation * Vec3::Y * tan_half),
             view_forward: vec4(camera.rotation * Vec3::NEG_Z),
@@ -867,8 +877,7 @@ impl PartRenderer {
             &self.resolved,
             self.shadows.frame(),
             self.lights.frame(),
-            srgb,
-            self.lod_tint.then(|| self.meshes.level_starts()),
+            Output::new(srgb, self.lod_tint.then(|| self.meshes.level_starts())),
         );
         self.stats.lights = self.lights.stats();
         let shadow = self.shadows.stats();
