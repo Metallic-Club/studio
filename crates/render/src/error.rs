@@ -10,6 +10,19 @@ pub enum RenderError {
         /// Every backend that was asked for an adapter.
         tried: wgpu::Backends,
     },
+    /// Adapters exist, but none of them can present to the window: the driver rejected the window's surface.
+    #[error(
+        "no graphics adapter can present to this window (backends tried: {tried:?}; adapters found: {names}): the \
+         driver rejected the window's surface. AMD's Vulkan driver on Windows does this while no monitor is \
+         connected, for example one switched off at its button (#110, docs/perf.md)",
+        names = .adapters.join(", ")
+    )]
+    NoPresentableAdapter {
+        /// Every backend that was asked for an adapter.
+        tried: wgpu::Backends,
+        /// The adapters that exist but cannot present to the window, as "name (backend)".
+        adapters: Vec<String>,
+    },
     /// The adapter refused to create a device.
     #[error("could not create the graphics device: {0}")]
     Device(#[from] wgpu::RequestDeviceError),
@@ -41,4 +54,21 @@ pub enum RenderError {
         /// The sample count asked for.
         samples: u32,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unpresentable_adapter_is_named_with_the_likely_cause() {
+        let error = RenderError::NoPresentableAdapter {
+            tried: wgpu::Backends::VULKAN,
+            adapters: vec!["AMD Radeon RX 6650 XT (vulkan)".to_owned()],
+        };
+        let message = error.to_string();
+        assert!(message.contains("no graphics adapter can present to this window"));
+        assert!(message.contains("AMD Radeon RX 6650 XT (vulkan)"));
+        assert!(message.contains("no monitor is connected"));
+    }
 }

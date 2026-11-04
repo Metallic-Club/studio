@@ -398,8 +398,9 @@ What the numbers are (`metallic_engine::perf`, which also feeds the performance 
 **2026-11-03**, Ryzen 5 5500, 16 GB, AMD Radeon RX 6650 XT (driver 32.0.21045.16010), Windows 11, **DX12**, branch
 `78-stress-scenes` at `0471e58`. Preset: none yet (#84), so the renderer's defaults: no MSAA, the opaque, sky,
 transparent and UI passes, no culling (#79), no depth prepass. Present mode `AutoNoVsync`, 1,000 frames after 120
-of warm-up, seed 1, window at 100% scaling. Vulkan could not be measured: on this PC no Vulkan adapter accepts a
-window's surface (#110; offscreen Vulkan works, see "Drawing parts").
+of warm-up, seed 1, window at 100% scaling. Vulkan could not be measured: no Vulkan adapter accepted a window's
+surface while the monitor was switched off (#110, "Vulkan in a window" below; offscreen Vulkan works, see
+"Drawing parts").
 
 | Scene | Parts (in view) | Size | Frame p50 / p99 / 1% low | Render CPU p50 / p99 | GPU p50: frame (opaque / transparent) | Draws opaque / transparent | Instances | Triangles |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -1164,9 +1165,9 @@ Ultra: its first frame makes the 3 × 3072² cascades and the 4096² atlas and d
 against 60 fps), and 37 ms on OpenGL (all 9 of its spikes, at High → Ultra); #152 spreads that redraw over frames.
 So the done-when of #86 holds on DX12; on OpenGL it depends on #152. (#152 found the cost was making the textures, not
 drawing them: see the next section.)
-`METALLIC_TRACE_SPIKES=1` prints each spike and the toggle before it. Vulkan has no adapter for a window on this PC
-(#110), so its numbers are the offscreen ones above. On OpenGL, `no_alloc`'s heap-growth tests fail on this PC on
-`main` too (#153); CI does not run them there.
+`METALLIC_TRACE_SPIKES=1` prints each spike and the toggle before it. Vulkan had no adapter for a window while the
+monitor was off (#110), so its numbers are the offscreen ones above. On OpenGL, `no_alloc`'s heap-growth tests fail on
+this PC on `main` too (#153); CI does not run them there.
 
 The perf gate's workloads (scene sync and cull, no GPU) are untouched: nothing was added to the sync or cull paths.
 
@@ -1324,7 +1325,7 @@ cost nothing measurable; on a tile-based GPU each removed boundary is a store an
 scene's colour and depth (the scene passes at Medium and above), which is what #97 is for. Render CPU drops by 0.02 to
 0.05 ms at Medium and above on DX12 (Ultra's two rounds 0.08 and 0.003: its own noise is that large), about 15 µs a
 render pass; GL's CPU varies by more than that from run to run.
-Vulkan has no adapter for a window on this PC (#110), so it is measured offscreen below.
+Vulkan had no adapter for a window while the monitor was off (#110), so it is measured offscreen below.
 
 **Offscreen, every backend** (`cargo bench -p metallic_render --bench scene_passes`: a 10,000-part grid with 1%
 see-through blocks under the sun, 1280 × 720, each preset's anti-aliasing, effects and scale, the scene passes apart
@@ -1445,3 +1446,74 @@ pass's GPU timestamp.
   workloads (80 and 750 see-through parts); the shadowed frame 277 / 277 on DX12 and 387 / 387 on GL. The heap-growth
   tests pass.
 - The perf gate's workloads (scene sync and cull) are untouched, and so is the sort.
+
+### Vulkan in a window (#110)
+
+From #78 to #97, `WGPU_BACKEND=vulkan` could not open a window on the dev PC, though offscreen Vulkan worked. The
+renderer found "no graphics adapter (backends tried: Backends(VULKAN))" because no Vulkan adapter was compatible with
+the window's surface. wgpu-hal logged why: `get_physical_device_surface_capabilities: An unknown error has occurred`
+(`VK_ERROR_UNKNOWN`).
+
+**The cause: no monitor was connected.** The dev PC's only monitor (3440 × 1440, `DISPLAY\MXM3400`) leaves the bus
+when it is switched off at its button: Windows logs a surprise removal (`Kernel-PnP` event 1010 in
+`Microsoft-Windows-Kernel-PnP/Device Management`) and the GPU has no output left. AMD's Vulkan driver here
+(32.0.21045.16010, Adrenalin 26.10.1) then fails the surface-capabilities query for any window. DX12's adapter takes
+the window either way. The evidence:
+
+- **The failures fell while the monitor was gone.** It was removed at 06:22 on 2026-11-04 and arrived again at 16:11
+  (EST; `DEVPKEY_Device_LastArrivalDate`). #86's branch, which found no Vulkan adapter for a window, was committed
+  from 08:49 to 09:36, inside that gap. #106's windowed Vulkan round (merged at 18:11) and this section's (18:15 to
+  18:30) came after it, with the same driver, boot, layers and code.
+- **#78's failures fit too.** #78's branch was committed from 06:36 to 06:58 on 11-03, #110 was filed at 06:32 and
+  the Player's log is from 06:48. The monitor had been removed at 02:24 and was not removed again until 10:24, so it
+  came back somewhere in between; its arrival time then is not logged.
+- **The display being off is not the cause.** Windows had turned the display off for idleness (`Kernel-Power` event
+  566, `MonitorReason` 12) with the monitor still connected. A minute later, windowed Vulkan worked:
+  `stress --scene parts_10k` drew 200 frames, and the probe described below found the surface supported.
+- **Nothing else is wrong.** These were checked with the monitor connected:
+  - The loader offers `VK_KHR_surface` and `VK_KHR_win32_surface`, and `vulkaninfo` presents to its own window (8
+    formats, 3 present modes).
+  - A throwaway winit + wgpu 30 probe sees the RX 6650 XT with `is_surface_supported = true` and full capabilities.
+    That holds for every `InstanceFlags` tried (empty, the release default, debugging), for window sizes from 720p to
+    4K, for a window placed off every monitor, and in debug and release builds.
+  - `RenderContext::new_with_window` creates the surface on the instance it asks for adapters.
+  - The implicit layers are Steam's overlay and Fossilize (`HKLM\SOFTWARE\Khronos\Vulkan\ImplicitLayers`) and AMD's
+    switchable-graphics layer. The Steam layers load only under `ENABLE_VK_LAYER_VALVE_steam_*_1=1`, which Steam sets
+    for its games. `vulkaninfo` loads the same set and works.
+
+The failure itself has not been reproduced on purpose, since that needs the monitor switched off at the PC.
+
+**The workaround: leave the monitor switched on (asleep is fine) for a windowed Vulkan run.** An agent measuring
+while it is off should measure Vulkan offscreen (`cargo bench -p metallic_render`) or wait. The engine cannot work
+around it, because the driver refuses every window until a monitor is back. `new_with_window` now says what happened:
+when adapters exist but none can present to the window, it returns `RenderError::NoPresentableAdapter`, which names
+them and the likely cause:
+
+```text
+stress: the renderer could not attach to the window: no graphics adapter can present to this window (backends tried:
+Backends(VULKAN); adapters found: AMD Radeon RX 6650 XT (vulkan)): the driver rejected the window's surface. AMD's
+Vulkan driver on Windows does this while no monitor is connected, for example one switched off at its button (#110,
+docs/perf.md)
+```
+
+**Vulkan against DX12 in a window**, on the same build: `main` at `ea9ef58`, the renderer's defaults, `AutoNoVsync`,
+1,000 frames after 120 of warm-up, seed 1, 100% scaling. Each figure is the median of 3 rounds, with each scene's
+backends run back to back. Times are p50 in ms, p99 in brackets:
+
+| Scene | Size | Backend | Frame | Render CPU | GPU | Opaque pass |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `parts_100k` | 1920 × 1080 | DX12 | 0.947 (2.045) | 0.788 (1.683) | 0.719 | 0.242 |
+| | | Vulkan | 3.509 (3.878) | 0.937 (1.161) | 2.074 | 0.824 |
+| `many_lights` | 1920 × 1080 | DX12 | 2.342 (2.566) | 0.712 (0.876) | 2.197 | 1.778 |
+| | | Vulkan | 3.073 (3.344) | 0.631 (0.792) | 1.901 | 1.516 |
+| `mobile` | 1280 × 720 | DX12 | 0.567 (1.069) | 0.461 (0.829) | 0.413 | 0.093 |
+| | | Vulkan | 1.705 (2.278) | 0.361 (0.512) | 0.807 | 0.191 |
+
+The opaque pass is from the third round alone. The rounds of each scene and backend agree within 0.07 ms for the p50
+frame (`mobile` on Vulkan within 0.13 ms).
+
+- **On Vulkan the frame is 0.9 to 1.4 ms longer than its GPU time;** on DX12 it is 0.15 to 0.25 ms longer. Acquiring
+  and presenting the image probably cost that much here.
+- **The GPU time is 2.9 times DX12's on `parts_100k` and 2 times on `mobile`**, mostly in the opaque pass, yet 13%
+  lower on `many_lights`. Render CPU is 0.08 to 0.1 ms lower on Vulkan except on `parts_100k`.
+- Both gaps are #164.
