@@ -555,7 +555,7 @@ impl ShadowMaps {
     }
 }
 
-/// The maps: a `resolution`Â² depth array of `layers` layers, its view for sampling and a render view of each of
+/// The maps: a `resolution`² depth array of `layers` layers, its view for sampling and a render view of each of
 /// the first `targets` layers.
 fn maps(
     device: &wgpu::Device,
@@ -618,9 +618,9 @@ fn staging_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
     })
 }
 
-/// The caster pipeline: depth only, **back faces culled**, so a map holds each caster's faces towards the light, and
-/// pushed away from the light by `bias`. Its group 0 is `cascade_layout`, one uniform
-/// matrix (the local lights' atlas binds it with a dynamic offset per tile).
+/// The caster pipeline: depth only, **back faces culled**, so a map holds each caster's faces towards the light,
+/// pushed away from the light by `bias`. Its group 0 is `cascade_layout`, one uniform matrix (the local lights' atlas
+/// binds it with a dynamic offset per tile).
 ///
 /// Front faces, not back faces: a back face is where a caster ends, and the bottom of a part resting on another is
 /// a back face level with the surface under it. Stored, it put the shadow's start at the receiving surface's own

@@ -1,11 +1,13 @@
 //! Sun shadows on a real adapter (#82): a pillar's shadow on the floor against a committed reference image,
 //! `CastShadow` and `Lighting.GlobalShadows` turning shadows off, the same image from the vertex-buffer fallback,
 //! and the caching of the far cascade: a frame in which nothing static changed and the camera and sun stayed draws
-//! only the near cascades, which hold the moving parts. Skips when the machine has no adapter (see
+//! only the near cascades, which hold the moving parts; and a cube resting on the floor under a low sun, shadowed
+//! right up to its foot with no acne on the lit surfaces (#126). Skips when the machine has no adapter (see
 //! `support::gpu`).
 //!
 //! The reference is `tests/reference/shadows.png`, compared with the tolerance of `tests/parts.rs`. To make a new
 //! one (after a deliberate change to how shadows look), run with `METALLIC_UPDATE_REFERENCES=1` and look at it.
+//! `METALLIC_SAVE_IMAGES=1` saves the contact test's image to the test's temporary folder.
 
 mod support;
 
@@ -396,8 +398,8 @@ fn grid_points(xs: &[f32], zs: &[f32], point: impl Fn(f32, f32) -> Vec3) -> Vec<
 
 /// A cube resting on a plate under a low sun: its shadow reaches its foot, with no lit band between them (#126),
 /// and the lit surfaces (the cube's top, a ramp the sun meets at about 15° and the floor it meets at 17°) have no
-/// acne. With the default cascades, and with ADR 0008's Low (one 1024² cascade, about 30 cm a texel), where the
-/// receivers' offsets reach their cap.
+/// acne. With the default cascades, with ADR 0008's Low (one 1024² cascade, about 30 cm a texel, where the depth
+/// bias reaches its cap) and with the 5 × 5 filter (whose taps reach furthest).
 #[test]
 fn the_sun_shadow_meets_the_foot_of_a_resting_cube() {
     let Some(context) = gpu() else { return };

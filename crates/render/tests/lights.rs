@@ -1,7 +1,10 @@
 //! Point and spot lights on a real adapter (#83): a point light's falloff, a spot light's cone and a shadowed local
 //! light against committed reference images, on both instance paths; the light's range as a hard edge; a light in a
 //! part following it; the shadow atlas kept while nothing changes and drawn again when a caster moves; and the
-//! budget fading lights rather than popping them. Skips when the machine has no adapter (see `support::gpu`).
+//! budget fading lights rather than popping them; and a cube resting on the floor under a spot, a near and a far
+//! point light, shadowed right up to its foot with no acne on the lit surfaces, at every preset (#126). Skips when
+//! the machine has no adapter (see `support::gpu`). `METALLIC_SAVE_IMAGES=1` saves the contact tests' images to the
+//! test's temporary folder.
 //!
 //! The scenes are at night (`ClockTime` 0), so the local lights are most of the light. The references are
 //! `tests/reference/lights_*.png`, compared with the tolerance of `tests/parts.rs`. To make new ones (after a
