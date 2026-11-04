@@ -1273,3 +1273,91 @@ under 33.3 ms either way.
   The scene's first frame still makes everything at once: the #121 and #86 tests and the reference images are
   unchanged.
 - The perf gate's workloads (scene sync and cull) are untouched.
+
+### Merged passes (#97)
+
+Consecutive passes that draw into the same attachments, none sampling what another wrote, are recorded as one render
+pass (`metallic_render::graph`). After #85 the frame merged the scene passes (opaque, sky, transparent) only at Low
+and on tile-based GPUs, and lost their GPU timings when it did; everything else was one render pass per logical pass.
+Now:
+
+- **UI is drawn in the finish pass** (or the upscale pass without the post chain), at every setting: both draw over
+  the whole window with no depth, so UI's own pass only stored the window and loaded it again. Without either (the
+  scene straight into the window) UI keeps its pass: the scene's has depth or is multisampled.
+- **Every preset merges the scene passes**, desktop included (`Quality::merge_scene_passes`, and `SceneRenderer`'s
+  default). Merged or apart, the image is the same to the bit (below), merging never cost GPU time on DX12, Vulkan or
+  GL here, and it saves two render passes' CPU.
+- **The logical passes are still timed one by one** where the device writes timestamps inside a pass
+  (`TIMESTAMP_QUERY_INSIDE_PASSES`: DX12, Vulkan and GL here): a timestamp between two passes ends one and starts the
+  next, so the overlay and the stress JSON's `gpu_ms.passes` keep `opaque`, `sky`, `transparent` and `ui`. On a
+  tile-based GPU (which draws a pass tile by tile, each tile running all of its draws, so a timestamp between draws
+  means nothing) and without the feature, the merged pass is reported as `scene` (UI's time with `post`).
+  `graphics.post.passes` lists the render passes as planned (`scene`, …, `post`).
+- **The depth prepass is never merged**: its pipelines have no colour target, so they cannot draw in a pass with one.
+  Merging a scene with a prepass failed wgpu's validation before (nothing had drawn that layout); now the prepass
+  stays a depth-only pass and the merged pass after it only tests its depth. No preset draws a prepass.
+- `stress --split-scene` (without `--preset`) draws the scene passes apart, to measure what merging saves;
+  `--merge-scene` is the default.
+
+**The `mobile` stress scene** (the done-when): 2026-11-04, same machine (Ryzen 5 5500, RX 6650 XT, driver
+32.0.21045.16010, Windows 11), `AutoNoVsync`, 1,000 frames after 120 of warm-up, seed 1, `--preset <tier>`, `main` at
+`e2b149a` (before) and this branch, run interleaved, two rounds each (shown as round 1 / round 2). Render passes per
+frame and full-screen passes are the JSON's `graphics.post`; times are p50 in ms.
+
+| Backend | Preset | Render passes before → after | Full-screen before → after | Render CPU before → after | GPU before → after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| DX12 | Low | 11 → 10 | 4 → 3 | 0.324 / 0.366 → 0.319 / 0.342 | 0.198 / 0.211 → 0.198 / 0.199 |
+| | Medium | 15 → 12 | 6 → 3 | 0.457 / 0.470 → 0.423 / 0.447 | 0.397 / 0.397 → 0.398 / 0.398 |
+| | High | 14 → 11 | 5 → 2 | 0.528 / 0.544 → 0.481 / 0.504 | 0.462 / 0.463 → 0.464 / 0.464 |
+| | Ultra | 14 → 11 | 5 → 2 | 0.527 / 0.477 → 0.450 / 0.474 | 0.800 / 0.801 → 0.800 / 0.801 |
+| GL | Low | 11 → 10 | 4 → 3 | 1.697 / 1.715 → 1.716 / 1.703 | 0.621 / 0.616 → 0.621 / 0.615 |
+| | Medium | 15 → 12 | 6 → 3 | 2.498 / 2.512 → 2.452 / 2.504 | 1.266 / 1.266 → 1.266 / 1.267 |
+| | High | 14 → 11 | 5 → 2 | 2.577 / 2.521 → 2.482 / 2.505 | 1.266 / 1.267 → 1.266 / 1.268 |
+| | Ultra | 14 → 11 | 5 → 2 | 3.239 / 3.253 → 3.205 / 3.241 | 1.961 / 1.961 → 1.961 / 1.960 |
+
+The planned passes go from `opaque sky transparent [mlaa] bloom post ui` to `scene [mlaa] bloom post` (Low:
+`scene mlaa bloom post ui` to `scene mlaa bloom post`); bloom's chain is the rest of the render passes. The scene
+passes' GPU time is the same merged as apart (DX12 High: opaque 0.105 / sky 0.008 / transparent 0.031 apart, 0.106 /
+0.008 / 0.031 merged, timed inside the pass). The GPU frame does not move on this desktop GPU, whose pass boundaries
+cost nothing measurable; on a tile-based GPU each removed boundary is a store and a load of the window (UI) or of the
+scene's colour and depth (the scene passes at Medium and above), which is what #97 is for. Render CPU drops by 0.02 to
+0.05 ms at Medium and above on DX12 (Ultra's two rounds 0.08 and 0.003: its own noise is that large), about 15 µs a
+render pass; GL's CPU varies by more than that from run to run.
+Vulkan has no adapter for a window on this PC (#110), so it is measured offscreen below.
+
+**Offscreen, every backend** (`cargo bench -p metallic_render --bench scene_passes`: a 10,000-part grid with 1%
+see-through blocks under the sun, 1280 × 720, each preset's anti-aliasing, effects and scale, the scene passes apart
+and merged; p50 over three rounds of 400 frames). This branch (UI in the finish pass either way); in ms:
+
+| Backend | Preset | Render CPU apart → merged | GPU apart → merged | Scene passes' GPU apart → merged |
+| --- | --- | ---: | ---: | ---: |
+| DX12 | Low | 0.202 → 0.186 | 0.182 → 0.183 | 0.059 → 0.059 |
+| | Medium | 0.220 → 0.204 | 0.270 → 0.270 | 0.073 → 0.073 |
+| | High | 0.218 → 0.203 | 0.250 → 0.251 | 0.117 → 0.118 |
+| | Ultra | 0.221 → 0.203 | 0.287 → 0.289 | 0.154 → 0.155 |
+| Vulkan | Low | 0.159 → 0.147 | 0.179 → 0.173 | 0.065 → 0.059 |
+| | Medium | 0.175 → 0.162 | 0.250 → 0.245 | 0.079 → 0.073 |
+| | High | 0.177 → 0.162 | 0.242 → 0.235 | 0.135 → 0.128 |
+| | Ultra | 0.178 → 0.162 | 0.270 → 0.260 | 0.162 → 0.153 |
+| GL | Low | 1.367 → 1.311 | 0.594 → 0.595 | 0.199 → 0.198 |
+| | Medium | 1.759 → 1.723 | 0.904 → 0.901 | 0.255 → 0.255 |
+| | High | 1.579 → 1.518 | 0.735 → 0.734 | 0.355 → 0.355 |
+| | Ultra | 1.668 → 1.598 | 0.816 → 0.815 | 0.437 → 0.436 |
+
+Merging saves 12 to 18 µs of render CPU on DX12 and Vulkan and 36 to 70 µs on GL, and 5 to 10 µs of GPU on Vulkan
+(its pass boundaries, MSAA's stores and loads among them, are not free there); nothing got slower. UI in the finish
+pass saves another 2 to 8 µs of CPU on DX12 and Vulkan and 16 to 41 µs on GL (`main`'s bench against this branch's,
+both apart: 12 render passes instead of 13 at Low, 14 instead of 15 at Medium, 13 instead of 14 at High and Ultra;
+merged, two fewer). That decided it: merging is the default everywhere rather than only on tilers and at Low.
+
+- **The same image** (`tests/post.rs`, `merged_scene_passes_draw_the_same_image`): the demo scene with the overlay on,
+  at each preset's layout (no anti-aliasing, MLAA, MLAA at 75%, MSAA, MSAA at 75%, a depth prepass with and without
+  MSAA, and without the post chain plain, with MSAA and at 75%), drawn apart and merged: no pixel differs, on Vulkan,
+  DX12 and GL here; CI runs it on lavapipe, WARP and llvmpipe (GL).
+- **Timings** (`tests/timings.rs`): a merged frame reports `depth_prepass, opaque, sky, transparent, bloom, post, ui`
+  where timestamps can be written inside passes, and `depth_prepass, scene, bloom, post` otherwise.
+- **Allocations** (`tests/no_alloc.rs`): the hand-written frames draw UI in the finish pass too, and every frame
+  still makes exactly the wgpu calls written out by hand: the default frame 199 / 199 on Vulkan, 191 / 191 on DX12,
+  272 / 272 on GL; the merged scene 178, 173 and 247. The timestamps written inside a pass
+  allocate nothing of ours, and the heap-growth tests pass (they run with timing on).
+- The perf gate's workloads (scene sync and cull) are untouched.

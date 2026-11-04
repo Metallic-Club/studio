@@ -2,7 +2,7 @@
 
 use crate::cull::{CullSettings, CullStats, CullView};
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
-use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet};
+use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
 use crate::lighting::SceneLighting;
 use crate::lights::{LightSettings, LightStats};
 use crate::lod::{LodSettings, LodView};
@@ -243,7 +243,9 @@ impl Renderer {
             });
         }
         let timer = if settings.gpu_timing {
-            GpuTimer::new(context.device(), context.queue())
+            // A tiler's timestamps between draws mean nothing (`timing`): merged passes are timed as one there.
+            let inside_passes = !context.capabilities().transient_attachments;
+            GpuTimer::new(context.device(), context.queue(), inside_passes)
         } else {
             None
         };
@@ -1323,12 +1325,15 @@ impl Renderer {
         // A frame drawn below the attachments' size draws into their top-left corner.
         let corner = (self.plan.scaled() && self.render_size != self.texture_size).then_some(self.render_size);
 
-        for (index, pass) in self.plan.passes().iter().enumerate() {
+        // The shadow passes recorded before took the first queries.
+        let mut timed = self.shadow_recorded + usize::from(self.atlas_recorded);
+        let inside = self.timer.as_ref().is_some_and(GpuTimer::inside_passes);
+        for pass in self.plan.passes() {
+            let count = timed_passes(pass, inside).count();
+            let first = timed;
+            timed += count;
             let timestamp_writes = match (self.timer.as_ref(), slot) {
-                // The shadow passes recorded before took the first queries.
-                (Some(timer), Some(slot)) => {
-                    Some(timer.pass_writes(slot, self.shadow_recorded + usize::from(self.atlas_recorded) + index))
-                }
+                (Some(timer), Some(slot)) => Some(timer.span_writes(slot, first, timed - 1)),
                 _ => None,
             };
             // The effects begin passes of their own, into their own textures.
@@ -1400,21 +1405,28 @@ impl Renderer {
                 render_pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
                 render_pass.set_scissor_rect(0, 0, width, height);
             }
-            if let Some(scene) = scene {
-                // A merged scene pass draws each of the passes it stands for, in order.
-                for id in pass.runs.iter() {
-                    self.parts.draw(id, prepass, scene, &mut render_pass);
+            // A merged pass draws each of the passes it stands for, in order, timed apart where it can be.
+            for (i, id) in pass.runs.iter().enumerate() {
+                if i > 0
+                    && inside
+                    && let (Some(timer), Some(slot)) = (self.timer.as_ref(), slot)
+                {
+                    timer.write_between(&mut render_pass, slot, first + i - 1);
                 }
-            }
-            match pass.id {
-                PassId::Post => self.post.finish.draw(&mut render_pass),
-                PassId::Upscale => self.upscaler.draw(&mut render_pass),
-                _ => {}
-            }
-            if pass.id == PassId::Ui
-                && let Some(overlay) = self.overlay_pass.as_ref()
-            {
-                overlay.draw(&mut render_pass);
+                match id {
+                    PassId::Post => self.post.finish.draw(&mut render_pass),
+                    PassId::Upscale => self.upscaler.draw(&mut render_pass),
+                    PassId::Ui => {
+                        if let Some(overlay) = self.overlay_pass.as_ref() {
+                            overlay.draw(&mut render_pass);
+                        }
+                    }
+                    _ => {
+                        if let Some(scene) = scene {
+                            self.parts.draw(id, prepass, scene, &mut render_pass);
+                        }
+                    }
+                }
             }
             drop(render_pass);
         }
@@ -1425,7 +1437,13 @@ impl Renderer {
         if let (Some(timer), Some(slot)) = (self.timer.as_mut(), slot) {
             let cascades = self.shadow_passes[..self.shadow_recorded].iter().copied();
             let atlas = self.atlas_recorded.then_some(Timed::LightShadows);
-            let passes = self.plan.passes().iter().map(|pass| Timed::Pass(pass.id));
+            let inside = timer.inside_passes();
+            let passes = self
+                .plan
+                .passes()
+                .iter()
+                .flat_map(move |pass| timed_passes(pass, inside))
+                .map(Timed::Pass);
             timer.end_frame(
                 &mut encoder,
                 slot,
@@ -1623,6 +1641,17 @@ const SHADOW_PASS_NAMES: [&str; MAX_CASCADES] = ["shadow_0", "shadow_1", "shadow
 /// The passes building cached cascades' maps, likewise.
 const SHADOW_BUILD_NAMES: [&str; MAX_CASCADES] =
     ["shadow_0_build", "shadow_1_build", "shadow_2_build", "shadow_3_build"];
+
+/// The passes `pass` reports GPU time for, in order: each it runs when timestamps are written `inside` passes,
+/// otherwise the render pass as a whole.
+fn timed_passes(pass: &PlannedPass, inside: bool) -> impl Iterator<Item = PassId> {
+    if inside {
+        pass.runs
+    } else {
+        PassSet::EMPTY.with(pass.id)
+    }
+    .iter()
+}
 
 fn color_ops(ops: AttachmentOps, clear: wgpu::Color) -> wgpu::Operations<wgpu::Color> {
     wgpu::Operations {

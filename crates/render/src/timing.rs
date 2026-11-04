@@ -11,6 +11,12 @@
 //! casters were kept in a frame took no GPU time in it. A cached cascade's map is built from its static map and its
 //! moving casters in a pass of its own, timed apart. The local lights' shadow atlas ([`crate::lights`]) is one pass, timed
 //! in the frames that draw any of its tiles.
+//!
+//! A render pass that runs several of the frame's passes (merged scene passes, UI in the finish pass; see
+//! [`crate::FramePlan`]) still reports each of them where the device writes timestamps inside a pass
+//! (`TIMESTAMP_QUERY_INSIDE_PASSES`) and is not tile-based: a timestamp between two of them ends one and starts the
+//! next. A tile-based GPU draws a pass tile by tile, each tile running all of its draws, so a timestamp between draws
+//! means nothing there; there, and without the feature, the merged pass is reported under its own name.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -161,11 +167,15 @@ pub(crate) struct GpuTimer {
     /// Nanoseconds per timestamp tick.
     period_ns: f64,
     latest: Option<FrameTimings>,
+    /// Each pass a merged render pass runs is timed apart, with timestamps written between them.
+    inside_passes: bool,
 }
 
 impl GpuTimer {
-    /// Creates the timer, or `None` when the device cannot write timestamps around passes.
-    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+    /// Creates the timer, or `None` when the device cannot write timestamps around passes. With `inside_passes` (the
+    /// device can write them inside a pass, and they mean something there) the passes a merged render pass runs are
+    /// timed one by one; otherwise the merged pass is timed as one.
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue, inside_passes: bool) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
@@ -199,7 +209,16 @@ impl GpuTimer {
             slots,
             period_ns: f64::from(queue.get_timestamp_period()),
             latest: None,
+            inside_passes: inside_passes
+                && device
+                    .features()
+                    .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES),
         })
+    }
+
+    /// Whether the passes a merged render pass runs are timed one by one.
+    pub(crate) fn inside_passes(&self) -> bool {
+        self.inside_passes
     }
 
     /// Collects every readback that finished since the last frame and picks a free slot for this one. Never
@@ -216,12 +235,29 @@ impl GpuTimer {
     /// The timestamp writes for the `index`-th timed pass of the frame recorded in `slot` (in recording order:
     /// the shadow cascades drawn, then the frame's passes).
     pub(crate) fn pass_writes(&self, slot: usize, index: usize) -> wgpu::RenderPassTimestampWrites<'_> {
-        let base = slot as u32 * QUERIES_PER_FRAME + 2 * index.min(MAX_TIMED - 1) as u32;
+        self.span_writes(slot, index, index)
+    }
+
+    /// The timestamp writes for a render pass that runs the `first`-th to the `last`-th timed passes of the frame:
+    /// the first one's start and the last one's end. [`GpuTimer::write_between`] writes the ones between them.
+    pub(crate) fn span_writes(&self, slot: usize, first: usize, last: usize) -> wgpu::RenderPassTimestampWrites<'_> {
         wgpu::RenderPassTimestampWrites {
             query_set: &self.query_set,
-            beginning_of_pass_write_index: Some(base),
-            end_of_pass_write_index: Some(base + 1),
+            beginning_of_pass_write_index: Some(Self::query(slot, first)),
+            end_of_pass_write_index: Some(Self::query(slot, last) + 1),
         }
+    }
+
+    /// Inside a render pass, ends the `index`-th timed pass of the frame recorded in `slot` and starts the next.
+    pub(crate) fn write_between(&self, render_pass: &mut wgpu::RenderPass<'_>, slot: usize, index: usize) {
+        let end = Self::query(slot, index) + 1;
+        render_pass.write_timestamp(&self.query_set, end);
+        render_pass.write_timestamp(&self.query_set, Self::query(slot, index + 1));
+    }
+
+    /// The start query of the `index`-th timed pass of `slot`'s frame (its end is the next).
+    fn query(slot: usize, index: usize) -> u32 {
+        slot as u32 * QUERIES_PER_FRAME + 2 * index.min(MAX_TIMED - 1) as u32
     }
 
     /// Records which passes frame `frame` timed (`timed`, in the order of their queries) with `cascade_count`

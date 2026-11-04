@@ -126,7 +126,7 @@ impl SceneRenderer {
             resolution: ResolutionSettings::NATIVE,
             post: PostSettings::default(),
             anti_aliasing: AntiAliasing::Off,
-            merge_scene_passes: false,
+            merge_scene_passes: true,
             post_chain: true,
             lod_tint: false,
             present_mode: None,
@@ -283,8 +283,8 @@ impl SceneRenderer {
     }
 
     /// Records the scene passes as one render pass ([`PassId::Scene`]), so colour and depth stay in tile memory on
-    /// tile-based GPUs. Off by default; the Low preset turns it on, and graphics settings turn it on at every tier
-    /// on tile-based GPUs. Applies now and to every later renderer.
+    /// tile-based GPUs, and two render passes' CPU is saved everywhere (#97). On by default and at every preset (and
+    /// graphics settings keep it on on tile-based GPUs); off is for measuring. Applies now and to every later renderer.
     pub fn set_merge_scene_passes(&mut self, merge: bool) {
         self.merge_scene_passes = merge;
         self.apply_passes();

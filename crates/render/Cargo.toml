@@ -46,6 +46,12 @@ harness = false
 name = "draw_parts"
 harness = false
 
+# Render passes, CPU and GPU time of each preset's frame with the scene passes apart and merged, offscreen at 720p
+# (`cargo bench -p metallic_render --bench scene_passes`).
+[[bench]]
+name = "scene_passes"
+harness = false
+
 # The perf gate's render suite (docs/perf.md): the scene's CPU side with no GPU. It needs Valgrind and
 # `gungraun-runner`, so a plain `cargo bench` leaves it out (`bench = false`); it runs by name.
 [[bench]]
