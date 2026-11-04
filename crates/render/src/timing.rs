@@ -8,7 +8,8 @@
 //! its timestamps back with a blocking `poll(Wait)` every frame; this never does (ADR 0008 §9).
 //!
 //! Shadow cascades ([`crate::shadow`]) are timed one by one, in the passes that draw their maps; a cascade whose map
-//! was kept in a frame took no GPU time in it.
+//! was kept in a frame took no GPU time in it. The local lights' shadow atlas ([`crate::lights`]) is one pass, timed
+//! in the frames that draw any of its tiles.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -21,8 +22,8 @@ use crate::shadow::MAX_CASCADES;
 /// every frame timed in a steady state.
 pub const TIMING_RING_SIZE: usize = 4;
 
-/// The most timed passes in a frame: every pass of the frame and every shadow cascade.
-const MAX_TIMED: usize = PassId::COUNT + MAX_CASCADES;
+/// The most timed passes in a frame: every pass of the frame, every shadow cascade and the shadow atlas.
+const MAX_TIMED: usize = PassId::COUNT + MAX_CASCADES + 1;
 /// Two timestamps (start and end) per timed pass.
 const QUERIES_PER_FRAME: u32 = 2 * MAX_TIMED as u32;
 /// Bytes of resolved timestamps per frame.
@@ -53,6 +54,8 @@ pub struct FrameTimings {
     cascade_count: u8,
     /// Bit `i` set when cascade `i` was drawn (and timed) that frame.
     cascades_drawn: u8,
+    /// The local lights' shadow atlas pass; 0 when it drew no tile that frame.
+    light_shadows: f32,
 }
 
 impl FrameTimings {
@@ -96,17 +99,23 @@ impl FrameTimings {
         self.cascades.iter().sum()
     }
 
+    /// The GPU time of the local lights' shadow atlas pass ([`crate::lights`]): 0 in a frame that kept every tile.
+    pub fn light_shadow_ms(&self) -> f32 {
+        self.light_shadows
+    }
+
     /// The sum of every pass's GPU time, shadows included, in milliseconds.
     pub fn total_ms(&self) -> f32 {
-        self.passes().iter().map(|timing| timing.gpu_ms).sum::<f32>() + self.shadow_ms()
+        self.passes().iter().map(|timing| timing.gpu_ms).sum::<f32>() + self.shadow_ms() + self.light_shadows
     }
 }
 
-/// A pass a frame timed: one of the frame's passes, or a shadow cascade's.
+/// A pass a frame timed: one of the frame's passes, a shadow cascade's, or the local lights' shadow atlas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Timed {
     Pass(PassId),
     Cascade(u8),
+    LightShadows,
 }
 
 /// A readback slot's state, shared with its `map_async` callback.
@@ -279,6 +288,7 @@ fn read_slot(slot: &Slot, period_ns: f64) -> Option<FrameTimings> {
         cascades: [0.0; MAX_CASCADES],
         cascade_count: slot.cascade_count,
         cascades_drawn: 0,
+        light_shadows: 0.0,
     };
     let (pairs, _) = view.as_chunks::<16>();
     for (pair, timed) in pairs.iter().zip(&slot.timed[..slot.len]) {
@@ -307,6 +317,7 @@ fn read_slot(slot: &Slot, period_ns: f64) -> Option<FrameTimings> {
                     timings.cascades_drawn |= 1 << cascade;
                 }
             }
+            Timed::LightShadows => timings.light_shadows = gpu_ms,
         }
     }
     Some(timings)
@@ -331,6 +342,7 @@ mod tests {
             cascades: [0.5, 0.0, 0.0, 0.0],
             cascade_count: 2,
             cascades_drawn: 1,
+            light_shadows: 0.0,
         };
         timings.passes[0] = PassTiming {
             pass: PassId::Opaque.name(),

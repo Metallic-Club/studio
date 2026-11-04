@@ -8,12 +8,14 @@ use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
 use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
+use super::lights::{LightChange, LightSet, SceneLight};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
 use super::{
     DEMOTE_REST, MAX_SHADOW_CHANGES, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED,
     PROMOTE_WINDOW, REST_CHECKS_PER_FRAME, Region, SHADOW_FLAGS, SlotRef, SyncStats, UploadRange, is_shadow_caster,
 };
+use crate::lights::LightRuntime;
 
 /// What the scene asks the data model to record for it (removals and `CREATED` are always recorded).
 fn interest() -> DirtyBits {
@@ -75,6 +77,8 @@ pub struct InstanceScene {
     watched: Vec<Id>,
     /// Static shadow casters that changed (see the module documentation).
     shadow: ShadowChanges,
+    /// The local lights in the world (see [`super::lights`]).
+    lights: LightSet,
 }
 
 /// The static region's shadow-caster changes since they were last taken: bounding spheres, origin-relative.
@@ -132,6 +136,7 @@ impl InstanceScene {
             revision: 0,
             watched: Vec::new(),
             shadow: ShadowChanges::default(),
+            lights: LightSet::default(),
         })
     }
 
@@ -174,6 +179,7 @@ impl InstanceScene {
         self.grid.clear();
         self.revision = self.revision.wrapping_add(1);
         self.shadow.everything();
+        self.lights.clear();
         self.rest_cursor = 0;
         dm.mark_all(self.consumer);
     }
@@ -195,6 +201,8 @@ impl InstanceScene {
             if let Some(slot) = self.lookup(id) {
                 self.release(id, slot);
                 stats.removed += 1;
+            } else if self.lights.remove(id) {
+                stats.lights += 1;
             }
         }
         self.removed = removed;
@@ -207,6 +215,7 @@ impl InstanceScene {
         }
         self.changes = changes;
         self.changes.clear();
+        stats.lights += self.lights.place_moved(dm, self.frame);
 
         self.demote_resting(&mut stats);
         stats
@@ -360,6 +369,26 @@ impl InstanceScene {
         self.shadow.spheres.clear();
     }
 
+    /// The local lights in the world, in no particular order (see [`super::lights`]).
+    pub fn lights(&self) -> &[SceneLight] {
+        self.lights.lights()
+    }
+
+    /// How many local lights there are.
+    pub fn light_count(&self) -> usize {
+        self.lights.len()
+    }
+
+    /// Changes whenever a local light appeared, changed, moved or left.
+    pub fn light_revision(&self) -> u64 {
+        self.lights.revision()
+    }
+
+    /// The local lights and the renderer's state of each, side by side.
+    pub(crate) fn lights_mut(&mut self) -> (&[SceneLight], &mut [LightRuntime]) {
+        self.lights.split_mut()
+    }
+
     /// Instances in the culling grid: every one on a draw list.
     pub fn culling_items(&self) -> usize {
         self.grid.len()
@@ -510,12 +539,15 @@ impl InstanceScene {
 
     fn apply(&mut self, dm: &DataModel, id: Id, bits: DirtyBits, stats: &mut SyncStats) {
         let Some(binding) = self.binding(dm, id) else {
-            // Only instances that are not drawn get here, so drawn ones never pay for the watch list.
-            if self.watched.contains(&id) {
-                stats.watched += 1;
-            }
+            // Only instances that are not drawn get here, so drawn ones never pay for lights or the watch list.
+            self.apply_undrawn(dm, id, bits, stats);
             return;
         };
+        if !self.lights.is_empty() && bits.contains(DirtyBits::TRANSFORM) {
+            // The lights in it follow it: they are placed again after the drain. A scene without lights pays one
+            // length test here and nothing else.
+            self.lights.part_moved(id, self.frame);
+        }
         let current = self.lookup(id);
         if bits.intersects(DirtyBits::CREATED | DirtyBits::STRUCTURE) {
             let in_world = match self.world {
@@ -549,6 +581,27 @@ impl InstanceScene {
         }
         self.write(dm, id, slot, &binding, transform);
         stats.updated += 1;
+    }
+
+    /// A change of an instance that is not drawn: a local light, or a watched instance (`Lighting`). Kept out of
+    /// [`InstanceScene::apply`], so the parts' path does not grow with it (the perf gate's sync workloads).
+    #[cold]
+    #[inline(never)]
+    fn apply_undrawn(&mut self, dm: &DataModel, id: Id, bits: DirtyBits, stats: &mut SyncStats) {
+        let Some(light) = dm
+            .class_of(id)
+            .ok()
+            .and_then(|class| self.classes.light(class))
+            .copied()
+        else {
+            if self.watched.contains(&id) {
+                stats.watched += 1;
+            }
+            return;
+        };
+        if self.lights.apply(dm, id, bits, &light, self.world, &self.classes) == LightChange::Changed {
+            stats.lights += 1;
+        }
     }
 
     /// Counts a transform change towards promotion (static region) or as activity (dynamic region). Returns the

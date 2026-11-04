@@ -121,8 +121,8 @@ local orb = part("GlassOrb", Ball, M.Glass, Vector3.new(6, 6, 6), CFrame.new(-20
 local core = part("OrbCore", Block, M.Neon, Vector3.new(1.5, 1.5, 1.5), CFrame.new(-20, 4, 26), Color3.fromRGB(255, 120, 40))
 
 -- The sun and the sky come from Lighting: a late afternoon, the sun low in the south-west, moving on slowly (a
--- game hour every two minutes; T plays a whole day in a minute and a half). The lights below render once the
--- renderer has them (#83 for point and spot lights).
+-- game hour every two minutes; T plays a whole day in a minute and a half: the lamps below light the night). Point
+-- and spot lights render (#83); a DirectionalLight does not yet (#123).
 Lighting.ClockTime = 15.5
 Lighting.Brightness = 2
 Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
@@ -139,7 +139,8 @@ sun.Color = Color3.fromRGB(255, 244, 214)
 sun.CFrame = CFrame.lookAt(Vector3.new(0, 0, 0), Vector3.new(-0.4, -1, -0.3))
 sun.Parent = workspace
 
--- A lamp post: a point light inside a neon bulb, so it follows the bulb.
+-- A lamp post: a point light inside a neon bulb, so it follows the bulb. It casts shadows; the bulb itself does not
+-- block its own light.
 part("LampPost", Cylinder, M.Metal, Vector3.new(7, 0.6, 0.6), CFrame.new(-8, 3.5, 20) * CFrame.Angles(0, 0, math.pi / 2), Color3.fromRGB(40, 40, 45))
 local bulb = part("LampBulb", Ball, M.Neon, Vector3.new(1.4, 1.4, 1.4), CFrame.new(-8, 7.4, 20), Color3.fromRGB(255, 214, 140))
 local lamp = Instance.new("PointLight")
@@ -147,9 +148,23 @@ lamp.Name = "Lamp"
 lamp.Color = Color3.fromRGB(255, 214, 140)
 lamp.Brightness = 3
 lamp.Range = 18
+lamp.Shadows = true
 lamp.Parent = bulb
 
--- A spotlight on a gantry over the gallery, pointing straight down (forward is -Z, so tilt -Z to -Y).
+-- Street lamps along the path: short posts with a warm bulb each, unshadowed (cheap to have many).
+for i, z in { -48, -30, 34, 52 } do
+    part(`StreetPost{i}`, Cylinder, M.Metal, Vector3.new(4, 0.4, 0.4), CFrame.new(4.5, 2, z) * CFrame.Angles(0, 0, math.pi / 2), Color3.fromRGB(40, 40, 45))
+    local globe = part(`StreetGlobe{i}`, Ball, M.Neon, Vector3.new(0.9, 0.9, 0.9), CFrame.new(4.5, 4.4, z), Color3.fromRGB(255, 196, 120))
+    local glow = Instance.new("PointLight")
+    glow.Name = "Glow"
+    glow.Color = Color3.fromRGB(255, 196, 120)
+    glow.Brightness = 2
+    glow.Range = 14
+    glow.Parent = globe
+end
+
+-- A spotlight on a gantry over the gallery, pointing straight down (forward is -Z, so tilt -Z to -Y), just below its
+-- head so the head does not block it. Its cone casts the gallery's shadows.
 part("GantryLeft", Block, M.Metal, Vector3.new(0.6, 12, 0.6), CFrame.new(8, 6, -6), Color3.fromRGB(40, 40, 45))
 part("GantryRight", Block, M.Metal, Vector3.new(0.6, 12, 0.6), CFrame.new(28, 6, -6), Color3.fromRGB(40, 40, 45))
 part("GantryBeam", Block, M.Metal, Vector3.new(20.6, 0.6, 0.6), CFrame.new(18, 12, -6), Color3.fromRGB(40, 40, 45))
@@ -160,7 +175,8 @@ spot.Color = Color3.fromRGB(180, 210, 255)
 spot.Brightness = 5
 spot.Range = 24
 spot.Angle = 45
-spot.CFrame = CFrame.lookAt(Vector3.new(18, 11, -6), Vector3.new(18, 0, -6))
+spot.Shadows = true
+spot.CFrame = CFrame.lookAt(Vector3.new(18, 10.4, -6), Vector3.new(18, 0, -6))
 spot.Parent = workspace
 
 -- A coloured point light circling the carousel.

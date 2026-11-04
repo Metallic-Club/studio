@@ -18,7 +18,7 @@ use std::time::Instant;
 use metallic_platform::{
     AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
-use metallic_render::{ContextOptions, CullSettings, ShadowSettings, wgpu};
+use metallic_render::{ContextOptions, CullSettings, LightSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
@@ -58,13 +58,16 @@ pub struct BenchOptions {
     pub field_of_view: Option<f32>,
     /// How the sun's shadows are drawn (the renderer's defaults unless changed; [`ShadowSettings::OFF`] draws none).
     pub shadows: ShadowSettings,
+    /// How point and spot lights are drawn (the renderer's defaults, the Medium preset's, unless changed;
+    /// [`LightSettings::OFF`] draws none).
+    pub lights: LightSettings,
     /// Walk the camera through the scene ([`StressScene::move_camera`]) instead of keeping it still.
     pub moving_camera: bool,
 }
 
 impl BenchOptions {
     /// 1,000 measured frames after 120 of warm-up, seed 1, the scene's window size and camera (still), no vsync, no
-    /// overlay, the default culling and shadows.
+    /// overlay, the default culling, shadows and lights.
     pub fn new(scene: StressKind) -> Self {
         Self {
             scene,
@@ -78,6 +81,7 @@ impl BenchOptions {
             cull: CullSettings::default(),
             field_of_view: None,
             shadows: ShadowSettings::default(),
+            lights: LightSettings::default(),
             moving_camera: false,
         }
     }
@@ -126,6 +130,8 @@ pub struct BenchReport {
     pub cull: CullSettings,
     /// How the sun's shadows were drawn.
     pub shadows: ShadowSettings,
+    /// How point and spot lights were drawn.
+    pub light_settings: LightSettings,
     /// Whether the camera walked ([`BenchOptions::moving_camera`]).
     pub moving_camera: bool,
     /// How long building the scene took, in milliseconds.
@@ -197,6 +203,19 @@ impl BenchReport {
             shadows.dynamic_count(),
             self.moving_camera
         )?;
+        let lights = &self.light_settings;
+        write!(
+            out,
+            "\"light_settings\":{{\"enabled\":{},\"budget\":{},\"per_cluster\":{},\"shadows\":{},\
+             \"shadowed_lights\":{},\"atlas\":{},\"tile\":{}}},",
+            lights.enabled,
+            lights.light_budget(),
+            lights.cluster_cap(),
+            lights.shadows,
+            lights.shadowed_lights,
+            lights.atlas_resolution,
+            lights.tile_resolution
+        )?;
         self.summary.write_json_members(out);
         out.push('}');
         Ok(())
@@ -222,6 +241,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     renderer.set_overlay(options.overlay);
     renderer.set_cull(options.cull);
     renderer.set_shadows(options.shadows);
+    renderer.set_lights(options.lights);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo
     } else {
@@ -277,6 +297,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         field_of_view: app.scene.field_of_view(),
         cull: options.cull,
         shadows: options.shadows,
+        light_settings: options.lights,
         moving_camera: options.moving_camera,
         build_ms,
         summary,
@@ -400,6 +421,7 @@ mod tests {
             field_of_view: 70.0,
             cull: CullSettings::default(),
             shadows: ShadowSettings::default(),
+            light_settings: LightSettings::default(),
             moving_camera: false,
             build_ms: 12.5,
             summary,
@@ -422,6 +444,12 @@ mod tests {
             json.contains("\"shadow\":{\"cascades\":3,\"redraws\":[10,10,1],\"casters\":[5,6,7]"),
             "{json}"
         );
+        assert!(
+            json.contains("\"light_settings\":{\"enabled\":true,\"budget\":128,\"per_cluster\":48"),
+            "{json}"
+        );
+        assert!(json.contains("\"lights\":{\"in_scene\":0,"), "{json}");
+        assert!(json.contains("\"light_shadows\":{\"mean\":"), "{json}");
         // Balanced braces.
         let open = json.matches('{').count();
         assert_eq!(open, json.matches('}').count(), "{json}");

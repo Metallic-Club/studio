@@ -609,8 +609,9 @@ fn staging_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
 }
 
 /// The caster pipeline: depth only, front faces culled (the casters' back faces are what the map holds, which
-/// keeps lit surfaces clear of their own depth), with a slope-scaled bias for surfaces edge-on to the light.
-fn caster_pipeline(
+/// keeps lit surfaces clear of their own depth), with a slope-scaled bias for surfaces edge-on to the light. Its group
+/// 0 is `cascade_layout`, one uniform matrix (the local lights' atlas binds it with a dynamic offset per tile).
+pub(crate) fn caster_pipeline(
     device: &wgpu::Device,
     binding: InstanceBinding,
     cascade_layout: &wgpu::BindGroupLayout,
