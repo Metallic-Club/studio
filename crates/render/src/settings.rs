@@ -188,15 +188,16 @@ pub struct Quality {
     /// draws bloom; the lower ones from fewer texels.
     pub post: PostSettings,
     /// Record the scene passes as one render pass ([`crate::PassId::Scene`]), keeping colour and depth in tile
-    /// memory on tile-based GPUs (the engine also merges them on any tier there).
+    /// memory on tile-based GPUs (the engine merges them on any tier there). Every tier does (#97): the image is the
+    /// same, each pass is still timed where the device can time inside a pass, and on desktop it saves the CPU of two
+    /// render passes and never costs GPU time (docs/perf.md).
     pub merge_scene_passes: bool,
 }
 
 impl Quality {
     /// Low (Intel Iris Xe laptops, mid-range phones; ADR 0008's Low tier): the scene at 75% scale, 512 m of view,
     /// parts under 2 pixels culled, one 1024² sun cascade out to 128 m (as the ADR sets), 32 local lights a frame
-    /// with 2 shadowed in a 1024² atlas, an LOD bias of 0.5, MLAA, bloom from a quarter of the output, and the scene
-    /// passes merged into one.
+    /// with 2 shadowed in a 1024² atlas, an LOD bias of 0.5, MLAA and bloom from a quarter of the output.
     pub const LOW: Self = Self {
         tier: Tier::Low,
         resolution: ResolutionSettings {
@@ -247,7 +248,7 @@ impl Quality {
         lod: LodSettings::MEDIUM,
         anti_aliasing: AntiAliasing::Mlaa,
         post: PostSettings::MEDIUM,
-        merge_scene_passes: false,
+        merge_scene_passes: true,
     };
 
     /// High (RTX 3060 Ti class): full resolution, 2 km of view, parts under a pixel culled, three 2048² sun
@@ -269,7 +270,7 @@ impl Quality {
         lod: LodSettings::HIGH,
         anti_aliasing: AntiAliasing::Msaa(4),
         post: PostSettings::HIGH,
-        merge_scene_passes: false,
+        merge_scene_passes: true,
     };
 
     /// Ultra: full resolution, no view distance, parts under half a pixel culled, three 3072² sun cascades out to
@@ -299,7 +300,7 @@ impl Quality {
         },
         anti_aliasing: AntiAliasing::Msaa(8),
         post: PostSettings::HIGH,
-        merge_scene_passes: false,
+        merge_scene_passes: true,
     };
 
     /// The settings of `tier`.
@@ -932,7 +933,7 @@ mod tests {
         let q = settings.quality();
         assert_eq!(q.anti_aliasing, AntiAliasing::Off);
         assert_eq!(q.post, PostSettings::LOW);
-        assert!(!q.merge_scene_passes, "the tier's, not the effects'");
+        assert!(q.merge_scene_passes, "every tier merges the scene passes");
         assert_eq!(q.tier, Tier::High);
         assert_eq!(q.resolution.range(), (0.6, 0.6));
         assert!(!q.resolution.dynamic);

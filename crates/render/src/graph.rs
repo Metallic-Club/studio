@@ -22,16 +22,25 @@
 //! bilinear upscale too, so [`PassId::Upscale`] is never planned beside it. The effects between them
 //! ([`PassId::Mlaa`], [`PassId::Bloom`]) only read the scene colour and write their own textures, so the plan gives
 //! them no attachment; they run only with the finish pass, which consumes what they make. UI then draws on the output
-//! at its full resolution. With MSAA the multisampled colour resolves into the scene colour.
+//! at its full resolution, in the finish pass's render pass (below). With MSAA the multisampled colour resolves into
+//! the scene colour.
 //!
 //! **Without the finish pass** the scene draws straight into the output, as before the post chain, or with
 //! [`PassId::Upscale`] (a render scale, [`crate::resolution`]) into the scene colour, which the upscale pass draws over
 //! the output.
 //!
-//! **Merged scene passes.** With [`PassId::Scene`] in the set the scene passes are recorded as one render pass
-//! instead of one each, so their colour and depth stay in tile memory on tile-based GPUs: depth (and the multisampled
-//! colour, resolved at the end of it) is cleared and discarded within that one pass and can be transient. Desktop
-//! GPUs gain little from it and lose the per-pass GPU timings, so the presets merge them only where tiles matter.
+//! **Merged passes (#97).** Consecutive passes that draw into the same attachments, none sampling what another
+//! wrote, are recorded as one render pass; [`PlannedPass::runs`] keeps the logical passes it stands for, and the GPU
+//! timings still report each of them where the device can write timestamps inside a pass ([`crate::FrameTimings`]).
+//!
+//! - **UI** always draws in the finish (or upscale) pass's render pass: both draw over the whole output with no depth,
+//!   so a pass of its own only stored the output and loaded it again (a whole window's worth of memory traffic on a
+//!   tile-based GPU) for nothing.
+//! - **The scene passes** (opaque, sky, transparent) are recorded as one with [`PassId::Scene`] in the set, so their
+//!   colour and depth stay in tile memory on tile-based GPUs: depth (and the multisampled colour, resolved at the end
+//!   of it) is cleared and discarded within that one pass and can be transient. A depth prepass stays a pass of its
+//!   own before it: its pipelines have no colour target. Every preset merges them, desktop included: the image is the
+//!   same, and it saves two render passes' CPU and never costs GPU time (`docs/perf.md`, #97).
 
 use std::fmt;
 
@@ -47,8 +56,8 @@ pub enum PassId {
     Sky,
     /// Transparent geometry, sorted back to front, over the sky.
     Transparent,
-    /// The scene passes above recorded as one render pass. In a [`PassSet`] it asks for them to be merged; the plan
-    /// then runs this one pass in their place (see the module documentation).
+    /// Opaque, sky and transparent recorded as one render pass (a depth prepass stays apart). In a [`PassSet`] it
+    /// asks for them to be merged; the plan then runs this one pass in their place (see the module documentation).
     Scene,
     /// MLAA's edges and blend weights ([`crate::post`]): reads the scene colour, writes the weights the finish pass
     /// blends with. Runs only with [`PassId::Post`].
@@ -63,7 +72,7 @@ pub enum PassId {
     /// [`crate::resolution`]). Only planned when the scene is drawn at a render scale without the finish pass, which
     /// otherwise upscales itself.
     Upscale,
-    /// Screen-space UI.
+    /// Screen-space UI. Drawn in the finish or upscale pass's render pass when one runs.
     Ui,
 }
 
@@ -127,10 +136,10 @@ impl PassId {
     /// How the pass uses depth, if at all, given whether a depth prepass runs.
     const fn depth_use(self, prepass: bool) -> Option<DepthUse> {
         match self {
-            PassId::DepthPrepass | PassId::Scene => Some(DepthUse::Write),
+            PassId::DepthPrepass => Some(DepthUse::Write),
             // After a prepass the depth is final; opaque shading only tests it (`Equal`/`GreaterEqual`).
-            PassId::Opaque if prepass => Some(DepthUse::Test),
-            PassId::Opaque => Some(DepthUse::Write),
+            PassId::Opaque | PassId::Scene if prepass => Some(DepthUse::Test),
+            PassId::Opaque | PassId::Scene => Some(DepthUse::Write),
             PassId::Sky | PassId::Transparent => Some(DepthUse::Test),
             PassId::Mlaa | PassId::Bloom | PassId::Post | PassId::Upscale | PassId::Ui => None,
         }
@@ -332,7 +341,8 @@ pub struct PlannedPass {
     pub color: Option<ColorAttachment>,
     /// The depth attachment; `None` when the pass does not use depth.
     pub depth: Option<DepthOps>,
-    /// The passes this one runs, in order: itself, or for [`PassId::Scene`] the scene passes it merges.
+    /// The passes this one runs, in order: itself, for [`PassId::Scene`] the scene passes it merges, and for the
+    /// finish or upscale pass UI after it.
     pub runs: PassSet,
 }
 
@@ -366,9 +376,11 @@ impl FramePlan {
         let post = passes.contains(PassId::Post) && has_scene;
         let scaled = passes.contains(PassId::Upscale) && has_scene;
         let to_scene_color = post || scaled;
-        let scene_passes = passes.intersect(PassSet::SCENE);
-        let merge = passes.contains(PassId::Scene) && !scene_passes.is_empty();
         let prepass = passes.contains(PassId::DepthPrepass);
+        // The depth prepass is never merged: its pipelines have no colour target, so they cannot draw in a pass with
+        // one, and it is a desktop option (ADR 0008 §6), where merging saves little.
+        let scene_passes = passes.intersect(PassSet::SCENE).without(PassId::DepthPrepass);
+        let merge = passes.contains(PassId::Scene) && !scene_passes.is_empty();
 
         // The planned passes, in order.
         let mut order = [PassId::Post; PassId::COUNT];
@@ -379,6 +391,9 @@ impl FramePlan {
             runs[len] = set;
             len += 1;
         };
+        if prepass {
+            add(PassId::DepthPrepass, PassSet::EMPTY.with(PassId::DepthPrepass));
+        }
         if merge {
             add(PassId::Scene, scene_passes);
         } else {
@@ -386,6 +401,10 @@ impl FramePlan {
                 add(pass, PassSet::EMPTY.with(pass));
             }
         }
+        // UI draws over the output right after the finish (or upscale) pass, which wrote all of it, with no depth and
+        // nothing sampled from it: the same pass draws it.
+        let ui = passes.contains(PassId::Ui);
+        let with_ui = |pass: PassId| PassSet::EMPTY.with(pass).with_if(PassId::Ui, ui);
         if post {
             let effects = chain.effects().iter().copied().chain(
                 PassId::ALL
@@ -395,11 +414,12 @@ impl FramePlan {
             for effect in effects.filter(|&e| passes.contains(e)) {
                 add(effect, PassSet::EMPTY.with(effect));
             }
-            add(PassId::Post, PassSet::EMPTY.with(PassId::Post));
+            add(PassId::Post, with_ui(PassId::Post));
         } else if scaled {
-            add(PassId::Upscale, PassSet::EMPTY.with(PassId::Upscale));
-        }
-        if passes.contains(PassId::Ui) {
+            add(PassId::Upscale, with_ui(PassId::Upscale));
+        } else if ui {
+            // After scene passes into the output: theirs has depth (or is multisampled), which UI's pipeline does
+            // not draw with, so UI keeps a pass of its own.
             add(PassId::Ui, PassSet::EMPTY.with(PassId::Ui));
         }
 
@@ -503,9 +523,15 @@ impl FramePlan {
         &self.passes[..self.len]
     }
 
-    /// Whether `pass` runs as a pass of its own (not merged into [`PassId::Scene`]).
+    /// Whether `pass` runs as a render pass of its own (not merged into another: [`PassId::Scene`], or UI into the
+    /// finish or upscale pass).
     pub fn contains(&self, pass: PassId) -> bool {
         self.passes().iter().any(|p| p.id == pass)
+    }
+
+    /// Whether `pass` runs at all, in a render pass of its own or merged into another.
+    pub fn runs(&self, pass: PassId) -> bool {
+        self.passes().iter().any(|p| p.runs.contains(pass))
     }
 
     /// Samples per pixel of the scene colour and depth.
@@ -550,7 +576,7 @@ impl FramePlan {
     }
 
     /// How many of the passes read or write a whole target at the scene's or the output's resolution: every planned
-    /// pass but bloom, whose chain works at half the output's resolution and below. Merged scene passes count once.
+    /// pass but bloom, whose chain works at half the output's resolution and below. Merged passes count once.
     pub fn full_screen_passes(&self) -> usize {
         self.passes().iter().filter(|p| p.id != PassId::Bloom).count()
     }
@@ -602,23 +628,15 @@ mod tests {
     fn passes_run_in_frame_order() {
         let every = PassSet::ALL.without(PassId::Scene);
         let plan = FramePlan::new(every, 1);
-        // The finish pass upscales, so the upscale pass is never planned beside it.
+        // The finish pass upscales, so the upscale pass is never planned beside it, and draws UI.
         assert_eq!(
             names(&plan),
-            [
-                "depth_prepass",
-                "opaque",
-                "sky",
-                "transparent",
-                "mlaa",
-                "bloom",
-                "post",
-                "ui"
-            ]
+            ["depth_prepass", "opaque", "sky", "transparent", "mlaa", "bloom", "post"]
         );
+        assert!(plan.runs(PassId::Ui) && !plan.contains(PassId::Ui));
         assert_eq!(
             names(&FramePlan::new(PassSet::default(), 1)),
-            ["opaque", "sky", "transparent", "bloom", "post", "ui"]
+            ["opaque", "sky", "transparent", "bloom", "post"]
         );
         assert_eq!(
             names(&FramePlan::new(direct(), 1)),
@@ -645,9 +663,12 @@ mod tests {
         let post = pass(&plan, PassId::Post);
         assert_eq!(post.color, Some(ColorAttachment::Output(CLEAR_STORE)));
         assert_eq!(post.depth, None);
-        assert_eq!(pass(&plan, PassId::Ui).color, Some(ColorAttachment::Output(LOAD_STORE)));
-        // Opaque, sky, transparent, the finish pass and UI: bloom works below the output's resolution.
-        assert_eq!(plan.full_screen_passes(), 5);
+        // UI draws over it in the same pass.
+        assert_eq!(post.runs, PassSet::EMPTY.with(PassId::Post).with(PassId::Ui));
+        assert!(!plan.contains(PassId::Ui) && plan.runs(PassId::Ui));
+        // Opaque, sky, transparent and the finish pass with UI: bloom works below the output's resolution.
+        assert_eq!(plan.full_screen_passes(), 4);
+        assert!(!FramePlan::new(PassSet::default().without(PassId::Ui), 1).runs(PassId::Ui));
     }
 
     #[test]
@@ -757,7 +778,7 @@ mod tests {
     #[test]
     fn merged_scene_passes_keep_depth_and_msaa_in_one_pass() {
         let plan = FramePlan::new(PassSet::default().with(PassId::Scene), 4);
-        assert_eq!(names(&plan), ["scene", "bloom", "post", "ui"]);
+        assert_eq!(names(&plan), ["scene", "bloom", "post"]);
         let scene = pass(&plan, PassId::Scene);
         assert_eq!(
             scene.runs,
@@ -776,17 +797,33 @@ mod tests {
         );
         assert_eq!(scene.depth, Some(DepthOps::Write(CLEAR_DISCARD)));
         assert!(plan.depth_transient() && plan.msaa_color_transient());
-        assert_eq!(plan.full_screen_passes(), 3);
+        assert_eq!(plan.full_screen_passes(), 2);
         assert!(!plan.contains(PassId::Opaque) && plan.contains(PassId::Scene));
+        assert!(plan.runs(PassId::Opaque) && !plan.runs(PassId::Scene));
         // Without MSAA the merged pass writes the scene colour itself.
         let plan = FramePlan::new(PassSet::default().with(PassId::Scene), 1);
         assert_eq!(
             pass(&plan, PassId::Scene).color,
             Some(ColorAttachment::Scene(CLEAR_STORE))
         );
-        // With a prepass it merges that too.
-        let plan = FramePlan::new(PassSet::default().with(PassId::Scene).with(PassId::DepthPrepass), 1);
-        assert!(pass(&plan, PassId::Scene).runs.contains(PassId::DepthPrepass));
+        // A depth prepass stays a pass of its own (its pipelines have no colour target), and the merged pass after
+        // it only tests the depth it wrote.
+        let plan = FramePlan::new(PassSet::default().with(PassId::Scene).with(PassId::DepthPrepass), 4);
+        assert_eq!(names(&plan), ["depth_prepass", "scene", "bloom", "post"]);
+        assert_eq!(
+            pass(&plan, PassId::DepthPrepass).depth,
+            Some(DepthOps::Write(CLEAR_STORE))
+        );
+        let scene = pass(&plan, PassId::Scene);
+        assert!(!scene.runs.contains(PassId::DepthPrepass) && scene.runs.contains(PassId::Opaque));
+        assert_eq!(scene.depth, Some(DepthOps::ReadOnly));
+        assert_eq!(
+            scene.color,
+            Some(ColorAttachment::Msaa {
+                ops: CLEAR_DISCARD,
+                resolve: true
+            })
+        );
     }
 
     #[test]
@@ -796,13 +833,13 @@ mod tests {
         assert_eq!(reordered.effects(), [PassId::Bloom, PassId::Mlaa]);
         assert_eq!(
             names(&FramePlan::with_chain(set, reordered, 1)),
-            ["opaque", "sky", "transparent", "bloom", "mlaa", "post", "ui"]
+            ["opaque", "sky", "transparent", "bloom", "mlaa", "post"]
         );
         // An effect left out of the chain still runs, after the chain's.
         let only_bloom = PostChain::EMPTY.push(PassId::Bloom);
         assert_eq!(
             names(&FramePlan::with_chain(set, only_bloom, 1)),
-            ["opaque", "sky", "transparent", "bloom", "mlaa", "post", "ui"]
+            ["opaque", "sky", "transparent", "bloom", "mlaa", "post"]
         );
         // Not effects: ignored.
         assert_eq!(PostChain::EMPTY.push(PassId::Ui).effects(), []);
@@ -831,7 +868,7 @@ mod tests {
     fn a_scaled_frame_draws_the_scene_into_the_scene_colour_and_upscales_it() {
         let plan = FramePlan::new(direct().with(PassId::Upscale), 1);
         assert!(plan.scaled());
-        assert_eq!(names(&plan), ["opaque", "sky", "transparent", "upscale", "ui"]);
+        assert_eq!(names(&plan), ["opaque", "sky", "transparent", "upscale"]);
         assert_eq!(
             pass(&plan, PassId::Opaque).color,
             Some(ColorAttachment::Scene(CLEAR_STORE))
@@ -847,14 +884,15 @@ mod tests {
         let upscale = pass(&plan, PassId::Upscale);
         assert_eq!(upscale.color, Some(ColorAttachment::Output(CLEAR_STORE)));
         assert_eq!(upscale.depth, None);
-        assert_eq!(pass(&plan, PassId::Ui).color, Some(ColorAttachment::Output(LOAD_STORE)));
+        // UI draws over it in the same pass.
+        assert_eq!(upscale.runs, PassSet::EMPTY.with(PassId::Upscale).with(PassId::Ui));
     }
 
     #[test]
     fn a_scaled_frame_with_the_finish_pass_upscales_there() {
         let plan = FramePlan::new(PassSet::default().with(PassId::Upscale), 4);
         assert!(plan.scaled() && plan.post());
-        assert_eq!(names(&plan), ["opaque", "sky", "transparent", "bloom", "post", "ui"]);
+        assert_eq!(names(&plan), ["opaque", "sky", "transparent", "bloom", "post"]);
         assert_eq!(
             pass(&plan, PassId::Transparent).color,
             Some(ColorAttachment::Msaa {

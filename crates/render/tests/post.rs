@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use metallic_core::glam::{Quat, Vec3};
 use metallic_core::{CFrame, Value};
 use metallic_render::post::{BloomSettings, PostSettings};
+use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{InstanceBinding, RenderComponents};
 use metallic_render::{
     AntiAliasing, CameraReader, ContextOptions, GpuScene, LightingReader, OffscreenTarget, PassId, PassSet, PostStats,
@@ -127,14 +128,15 @@ fn a_frame_reports_its_passes() {
     assert!(stats.finish && !stats.mlaa);
     assert_eq!(stats.scene_format, hdr);
     assert_eq!(stats.bloom_levels as usize, BloomSettings::HIGH.levels(SIZE));
-    // Opaque, sky, transparent, the finish pass and UI; bloom's chain at half the size and below.
-    assert_eq!(stats.full_screen_passes, 5);
-    assert_eq!(stats.render_passes, 4 + 2 * stats.bloom_levels - 1 + 1);
+    // Opaque, sky, transparent and the finish pass, which draws UI (#97); bloom's chain at half the size and below.
+    assert_eq!(stats.full_screen_passes, 4);
+    assert_eq!(stats.render_passes, 3 + 2 * stats.bloom_levels - 1 + 1);
     let (_, mlaa) = render(&context, &mut demo(), |s| s.passes = s.passes.with(PassId::Mlaa));
     assert!(mlaa.mlaa);
-    assert_eq!(mlaa.full_screen_passes, 6);
+    assert_eq!(mlaa.full_screen_passes, 5);
     let (_, merged) = render(&context, &mut demo(), |s| s.passes = s.passes.with(PassId::Scene));
-    assert_eq!(merged.full_screen_passes, 3, "the scene, the finish pass and UI");
+    assert_eq!(merged.full_screen_passes, 2, "the scene, and the finish pass with UI");
+    assert_eq!(merged.render_passes, stats.render_passes - 2);
     let (_, low) = render(&context, &mut demo(), |s| s.post = PostSettings::LOW);
     assert_eq!(low.bloom_levels as usize, BloomSettings::LOW.levels(SIZE));
     assert!(low.bloom_levels < stats.bloom_levels, "Low skips the finest level");
@@ -145,6 +147,78 @@ fn a_frame_reports_its_passes() {
     assert!(!direct.finish && direct.bloom_levels == 0);
     assert_eq!(direct.scene_format, FORMAT);
     assert_eq!((direct.full_screen_passes, direct.render_passes), (4, 4));
+}
+
+/// Merging the scene passes into one render pass (#97) changes where depth and colour live between them, never what
+/// is drawn: each preset's frame layout (MLAA, MSAA, a render scale, a depth prepass, with the post chain or without
+/// it) draws the same image merged as apart, to the bit, with the overlay drawn in the last pass.
+#[test]
+fn merged_scene_passes_draw_the_same_image() {
+    let Some(context) = gpu() else { return };
+    let caps = context.capabilities();
+    eprintln!("adapter: {} ({:?})", caps.adapter_name, caps.backend);
+    let counts = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE))
+        .expect("a renderer")
+        .msaa_sample_counts();
+    let samples = match AntiAliasing::Msaa(4).supported(counts) {
+        AntiAliasing::Msaa(samples) => samples,
+        _ => 1,
+    };
+    let chain = PassSet::default();
+    let direct = PassSet::default().without(PassId::Post).without(PassId::Bloom);
+    let layouts = [
+        ("default", chain, 1, 1.0),
+        ("mlaa (medium)", chain.with(PassId::Mlaa), 1, 1.0),
+        ("mlaa at 75% (low)", chain.with(PassId::Mlaa), 1, 0.75),
+        ("msaa (high)", chain, samples, 1.0),
+        ("msaa at 75%", chain, samples, 0.75),
+        ("depth prepass", chain.with(PassId::DepthPrepass), 1, 1.0),
+        (
+            "depth prepass with msaa",
+            chain.with(PassId::DepthPrepass),
+            samples,
+            1.0,
+        ),
+        ("no post chain", direct, 1, 1.0),
+        ("no post chain, msaa", direct, samples, 1.0),
+        ("no post chain at 75%", direct, 1, 0.75),
+    ];
+    for (name, passes, msaa, scale) in layouts {
+        let draw = |merged: bool| {
+            render_with(
+                &context,
+                &mut demo(),
+                |s| {
+                    s.passes = passes.with_if(PassId::Scene, merged);
+                    s.msaa_samples = msaa;
+                    s.resolution = ResolutionSettings::fixed(scale);
+                },
+                |r| {
+                    r.set_overlay_enabled(true);
+                    r.overlay_mut().text(4.0, 4.0, 2.0, [255, 255, 0, 255], "MERGED?");
+                    r.wait_for_pipelines();
+                },
+            )
+        };
+        let (apart, apart_stats) = draw(false);
+        let (merged, merged_stats) = draw(true);
+        let diff = scenes::compare(&apart, &merged, 0);
+        eprintln!(
+            "{name}: render passes {} apart, {} merged; {diff:?}",
+            apart_stats.render_passes, merged_stats.render_passes
+        );
+        // Opaque, sky and transparent in one (a depth prepass stays apart).
+        assert_eq!(merged_stats.render_passes, apart_stats.render_passes - 2);
+        if diff.max != 0 {
+            let file = name.replace([' ', '(', ')', '%', ','], "_");
+            save(&format!("merged_{file}_apart"), &apart);
+            save(&format!("merged_{file}_merged"), &merged);
+        }
+        assert_eq!(
+            diff.max, 0,
+            "{name}: merging the scene passes changed the image: {diff:?}"
+        );
+    }
 }
 
 #[test]

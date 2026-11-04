@@ -86,7 +86,8 @@ pub struct BenchOptions {
     pub anti_aliasing: Option<AntiAliasing>,
     /// The post effects' quality when there are no graphics settings (the renderer's defaults, High's, when `None`).
     pub effects: Option<PostSettings>,
-    /// Record the scene passes as one render pass when there are no graphics settings.
+    /// Record the scene passes as one render pass when there are no graphics settings (on by default, as every
+    /// preset does; off draws them apart, to measure what merging saves).
     pub merge_scene_passes: bool,
     /// Toggle the next effect of [`TOGGLES`] every this many frames, warm-up included (from the first frame, while
     /// the renderer still compiles its pipelines in the background), to show that no switch hitches (#86).
@@ -193,7 +194,7 @@ impl BenchOptions {
             post_chain: true,
             anti_aliasing: None,
             effects: None,
-            merge_scene_passes: false,
+            merge_scene_passes: true,
             toggle_effects: None,
             frame_target_ms: None,
         }

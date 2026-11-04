@@ -27,9 +27,10 @@
 //! by default). `--switch-presets <n>` switches between Low and Ultra every `n` frames, to measure the switches.
 //!
 //! The post chain (#85): `--aa <off|mlaa|msaa2|msaa4|msaa8>` and `--effects <low|medium|high|ultra>` choose the
-//! anti-aliasing and the effect quality (with `--preset`, as the player's overrides); `--merge-scene` records the
-//! scene passes as one; `--no-post` draws the frame as before the post chain (no HDR target, bloom, tone curve or
-//! MLAA; the scene passes apart), to measure what it costs.
+//! anti-aliasing and the effect quality (with `--preset`, as the player's overrides); `--no-post` draws the frame as
+//! before the post chain (no HDR target, bloom, tone curve or MLAA; the scene passes apart), to measure what it costs.
+//! Merged passes (#97): the scene passes are recorded as one render pass by default, as every preset does;
+//! `--split-scene` (without `--preset`) records them apart, to measure what merging saves.
 //!
 //! No hitches (#86): `--toggle-effects <n>` toggles the next of `metallic_engine::stress::TOGGLES` every `n` frames
 //! from the first (every preset, anti-aliasing and effect quality, lights, shadows and the overlay off and on), while
@@ -62,7 +63,7 @@ fn usage() -> String {
          \x20             [--lod low|medium|high|off] [--lod-bias X] [--lod-tint]\n\
          \x20             [--preset low|medium|high|ultra|auto] [--render-scale X] [--dynamic-resolution MS]\n\
          \x20             [--min-scale X] [--max-scale X] [--switch-presets N]\n\
-         \x20             [--aa off|mlaa|msaa2|msaa4|msaa8] [--effects low|medium|high|ultra] [--merge-scene]\n\
+         \x20             [--aa off|mlaa|msaa2|msaa4|msaa8] [--effects low|medium|high|ultra] [--split-scene]\n\
          \x20             [--no-post] [--toggle-effects N] [--frame-target MS] [--pipeline-cache DIR]\n\
          scenes: {}",
         StressKind::names().join(", ")
@@ -203,7 +204,9 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
                 let name = it.next().ok_or("--effects needs low, medium, high or ultra")?;
                 effects = Some(name.parse::<Tier>().map_err(|e| e.to_string())?);
             }
+            // The default since #97; kept so older commands still run.
             "--merge-scene" => options.merge_scene_passes = true,
+            "--split-scene" => options.merge_scene_passes = false,
             "--no-post" => options.post_chain = false,
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}
@@ -268,6 +271,7 @@ const PER_SYSTEM_FLAGS: &[&str] = &[
     "--lights-per-cluster",
     "--lod",
     "--lod-bias",
+    "--split-scene",
 ];
 
 /// Runs every scene, each in a child process with the same options, and prints a JSON array.

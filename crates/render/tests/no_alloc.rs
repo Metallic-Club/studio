@@ -211,7 +211,8 @@ struct HandCasters {
 type HandPass = (&'static str, bool, Option<bool>);
 
 /// The default frame's scene passes and UI (opaque, sky, transparent, UI), as the renderer plans them. With the
-/// post chain ([`HandPost`]) the scene passes draw into its scene colour, and its passes run before UI.
+/// post chain ([`HandPost`]) the scene passes draw into its scene colour, and its passes run in UI's place: its
+/// finish pass draws UI (#97).
 const DEFAULT_PASSES: [HandPass; 4] = [
     ("opaque", true, Some(true)),
     ("sky", false, Some(false)),
@@ -521,7 +522,7 @@ impl HandPost {
 }
 
 /// `passes` as plain wgpu calls (no MSAA, no timing): the floor any renderer on wgpu pays for that frame. With
-/// `post`, the passes before UI draw into its scene colour and its passes run before UI. A pass labelled `scene` is
+/// `post`, the passes before UI draw into its scene colour and its passes run in UI's place. A pass labelled `scene` is
 /// the merged scene pass, which discards depth at its end.
 fn hand_written_frame(
     device: &wgpu::Device,
@@ -536,9 +537,10 @@ fn hand_written_frame(
     });
     for &(label, clear, depth_write) in passes {
         let view = match post {
+            // The finish pass draws UI.
             Some(post) if label == "ui" => {
                 post.record(&mut encoder, target, None);
-                target
+                continue;
             }
             Some(post) => &post.scene,
             None => target,
@@ -1039,7 +1041,7 @@ impl HandScaled {
     }
 
     /// The renderer's default passes drawn into the scene colour (into its top-left `corner` when given: a viewport
-    /// and scissor in each), then the post chain over `target` and the UI on it: the wgpu calls `Renderer::render`
+    /// and scissor in each), then the post chain over `target`, whose finish pass draws UI: the wgpu calls `Renderer::render`
     /// makes with a render scale.
     fn frame(
         &self,
@@ -1086,24 +1088,8 @@ impl HandScaled {
                 pass.set_scissor_rect(0, 0, width, height);
             }
         }
+        // The finish pass draws UI.
         self.post.record(&mut encoder, target, corner);
-        let colors = [Some(wgpu::RenderPassColorAttachment {
-            view: target,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-        })];
-        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ui"),
-            color_attachments: &colors,
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        }));
         queue.submit(std::iter::once(encoder.finish()))
     }
 }
@@ -2362,12 +2348,13 @@ impl HandParts {
         queue.write_buffer(&self.frame, 0, &[0; FRAME_UNIFORM_SIZE as usize]);
         queue.write_buffer(&self.sorted, 0, &self.sorted_bytes[..sorted * 4]);
         for &(label, clear, depth_write) in &DEFAULT_PASSES {
-            // The post chain's passes come between the scene and UI.
+            // The post chain's passes come after the scene; its finish pass draws UI.
             if label == "ui" {
                 self.post.record(&mut encoder, target, None);
+                continue;
             }
             let colors = [Some(wgpu::RenderPassColorAttachment {
-                view: if label == "ui" { target } else { &self.post.scene },
+                view: &self.post.scene,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
