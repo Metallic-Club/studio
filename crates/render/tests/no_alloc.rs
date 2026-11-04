@@ -35,6 +35,18 @@
 //! path. The other parts frames above draw no shadows, so they still compare with their hand-written frames.
 //!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
+//!
+//! Every adapter, software (`DeviceType::Cpu`: WARP, lavapipe) or hardware, is held to the same exact comparison of
+//! the renderer's frames with the hand-written ones. The excess CI's runners used to show (up to 6 allocations on the
+//! software adapters, the "machine noise" of #77 to #82, and 4 to 8 on macOS's Metal) came from three things in the
+//! test setup, not the renderer, and each is now removed at its cause rather than allowed for (#125):
+//!
+//! - library backtraces, which wgpu-core's debug builds capture on every lock ([`assert_library_backtraces_off`]):
+//!   a constant excess on every runner, growing with the depth of the renderer's stack;
+//! - the Direct3D 12 debug layer's messages, and wgpu-hal's leaking handler for them ([`debug_output`]): WARP's
+//!   run-to-run swings of up to 40;
+//! - wgpu-core's per-encoder trackers growing with the order of the buffer indices a frame meets
+//!   ([`pad_tracker_indices`]): the ±3 between workloads (lavapipe's 205 against 211 in #125).
 
 // A `#[global_allocator]` needs `unsafe impl GlobalAlloc`. This test binary's allocator only counts, then forwards
 // every call unchanged to the system allocator.
@@ -247,6 +259,134 @@ fn renderer_and_floor(
     )
 }
 
+/// Prints a comparison's counts past the test harness's output capture (which only takes the print macros), so CI's
+/// logs keep every run's numbers, passing or not, on every adapter (#125).
+fn report(test: &str, context: &RenderContext, workloads: &[(&str, u64, u64)]) {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+    let mut line = format!("no_alloc {test} on {:?}:", context.capabilities().device_type);
+    for (name, ours, floor) in workloads {
+        let _ = write!(line, " {name} renderer {ours} / by hand {floor};");
+    }
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+/// A device for these tests (see [`support::gpu`]), on the vertex-buffer instance path if `force_vertex_instances`,
+/// in a process whose debug output wgpu-hal never sees ([`debug_output::keep_from_wgpu`]) and whose library
+/// backtraces are off ([`assert_library_backtraces_off`]).
+fn measuring_gpu(force_vertex_instances: bool) -> Option<RenderContext> {
+    assert_library_backtraces_off();
+    debug_output::keep_from_wgpu();
+    support::gpu_with(&metallic_render::ContextOptions {
+        force_vertex_instances,
+        ..metallic_render::ContextOptions::default()
+    })
+}
+
+/// Keeps the Direct3D 12 debug layer's messages from wgpu-hal's handler for them.
+///
+/// The debug layer (on in debug builds, where wgpu turns on validation) prints a warning through `OutputDebugString`
+/// for every clear of a texture made without a clear value, on the thread that records the clear: WARP on CI printed
+/// two per parts frame and five per shadowed frame, as many for the renderer as by hand. wgpu-hal's handler for them
+/// (`auxil/dxgi/exception.rs`, wgpu 30) decodes the exception's raw parameters instead of the message, so whether it
+/// allocates (a 120-byte `String`, grown to 240) depends on the addresses in them, and it is registered again every
+/// time a process's count of validating devices goes from zero to one, because its removal passes the function
+/// instead of the handle `AddVectoredExceptionHandler` returned (#128). On CI's WARP that came to anything from 0 to
+/// 50 allocations per frame, different for the renderer and the hand-written frame and from process to process: the
+/// swings of up to 40 in #125 (the dev PC has no debug layer installed, so it never saw them).
+///
+/// Turning validation off instead removes the messages too, but WARP without its debug layer crashed in about one test
+/// process in twelve on CI, on one of its own worker threads (#130). So validation stays on, and a handler that runs
+/// before wgpu-hal's marks every debug-output exception handled, which is what a debugger would do with it: the
+/// messages go nowhere (wgpu-hal never logged them anyway), and everything else the layer checks still runs.
+#[cfg(windows)]
+mod debug_output {
+    use windows_sys::Win32::Foundation::{DBG_PRINTEXCEPTION_C, DBG_PRINTEXCEPTION_WIDE_C};
+    use windows_sys::Win32::System::Diagnostics::Debug::{AddVectoredExceptionHandler, EXCEPTION_POINTERS};
+
+    /// `EXCEPTION_CONTINUE_EXECUTION` and `EXCEPTION_CONTINUE_SEARCH`, a vectored handler's two answers.
+    const HANDLED: i32 = -1;
+    const NOT_MINE: i32 = 0;
+
+    unsafe extern "system" fn swallow(info: *mut EXCEPTION_POINTERS) -> i32 {
+        // SAFETY: the system calls a vectored handler with valid exception pointers and a valid record.
+        let code = unsafe { (*(*info).ExceptionRecord).ExceptionCode };
+        if code == DBG_PRINTEXCEPTION_C || code == DBG_PRINTEXCEPTION_WIDE_C {
+            HANDLED
+        } else {
+            NOT_MINE
+        }
+    }
+
+    /// Puts [`swallow`] first in the process's vectored handlers, once.
+    pub(crate) fn keep_from_wgpu() {
+        static INSTALLED: std::sync::Once = std::sync::Once::new();
+        INSTALLED.call_once(|| {
+            // SAFETY: `swallow` is a valid handler for the life of the process and is never removed; `1` puts it
+            // before every handler already added (wgpu-hal adds its own last).
+            unsafe {
+                AddVectoredExceptionHandler(1, Some(swallow));
+            }
+        });
+    }
+}
+
+/// Only Direct3D 12 prints through debug-output exceptions.
+#[cfg(not(windows))]
+mod debug_output {
+    pub(crate) fn keep_from_wgpu() {}
+}
+
+/// Fails unless library backtraces are off, as `.cargo/config.toml` sets them (`RUST_LIB_BACKTRACE=0`).
+///
+/// Debug builds of wgpu-core capture a `Backtrace` on every snatch-lock acquisition (`snatch.rs`), dozens per frame.
+/// With library backtraces on (`RUST_BACKTRACE` set and `RUST_LIB_BACKTRACE` not `0`; CI's toolchain action sets
+/// `RUST_BACKTRACE=short`), each capture allocates its frame list, which grows with the depth of the stack that took
+/// the lock (the list's growth from 16 to 32 frames was the extra reallocation): a renderer frame, whose wgpu calls
+/// sit a few functions deeper than the hand-written frame's, made 1 to 5 more allocations than the same calls by hand
+/// on every runner (WARP, lavapipe, macOS's Metal) and on the dev PC once `RUST_BACKTRACE=1` was set there (#125).
+/// Release builds never capture. With captures on, the comparisons here would measure stack depth, not the renderer.
+fn assert_library_backtraces_off() {
+    assert_ne!(
+        std::backtrace::Backtrace::capture().status(),
+        std::backtrace::BacktraceStatus::Captured,
+        "library backtraces are on (RUST_LIB_BACKTRACE or RUST_BACKTRACE), so wgpu-core's debug lock tracing \
+         allocates per lock; run with RUST_LIB_BACKTRACE=0, as .cargo/config.toml sets"
+    );
+}
+
+/// Buffers made before anything else on a test's device, so every buffer a measured frame touches has a high wgpu
+/// tracker index: see [`pad_tracker_indices`].
+const TRACKER_PADDING: usize = 1024;
+
+/// Makes [`TRACKER_PADDING`] tiny buffers on `context`'s fresh device, to be kept alive for the whole test.
+///
+/// wgpu-core gives every buffer a tracker index (the lowest free one, from a per-device allocator) and every command
+/// encoder a fresh buffer tracker: vectors indexed by those indices (`BufferTracker`'s start and end states and its
+/// resource list), grown by `Vec::resize` to the index of each buffer a command touches and, at the first render
+/// pass, to the device's index count. How many times they grow depends on the order and size of the indices a frame
+/// meets before its first pass (its copies), not on the calls: a renderer frame whose first copy hit index 3, then 8,
+/// then a pass reallocated each vector three times, the same calls by hand on buffers 24 and up twice, so the two
+/// differed by 3 allocations, more or less with every workload (and lavapipe's "growth with the casters" in #125 was
+/// this). With the first [`TRACKER_PADDING`] indices taken, every index a frame meets is at least that, so the first
+/// copy allocates each vector at more than half the device's index count, and the next growth (the first copy to a
+/// newer buffer, or the first pass) doubles it past every index there is: one allocation and one reallocation each,
+/// in both frames, whatever the buffers (only a frame whose first copy went to the device's newest buffer would skip
+/// the reallocation; per-call histograms of both frames on every runner show each vector allocated once and
+/// reallocated once). The device has a few hundred buffers at most, well under the padding.
+fn pad_tracker_indices(context: &RenderContext) -> Vec<wgpu::Buffer> {
+    (0..TRACKER_PADDING)
+        .map(|_| {
+            context.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tracker index padding"),
+                size: wgpu::COPY_BUFFER_ALIGNMENT,
+                usage: wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        })
+        .collect()
+}
+
 /// On lavapipe (CI's software Vulkan) a renderer frame and the identical hand-written one differed by a constant 2
 /// allocations in some processes and by none in others, while the dev PC's Vulkan, DX12 and GL drivers never
 /// differ. `render()` only calls wgpu, so this is state inside wgpu (which pooled objects a frame gets), not ours.
@@ -254,7 +394,7 @@ const WGPU_POOL_NOISE: u64 = 2;
 
 #[test]
 fn a_frame_allocates_nothing_beyond_wgpus_own() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
     let depth = context
         .device()
@@ -277,13 +417,17 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
     let (ours_one, floor_one) =
         renderer_and_floor(&context, PassSet::EMPTY.with(PassId::Ui), &UI_ONLY, &target, &depth);
     let (ours, floor) = renderer_and_floor(&context, PassSet::default(), &DEFAULT_PASSES, &target, &depth);
-    // Per pass: what the default set's extra passes cost the renderer is what they cost by hand (exactly, on a
-    // hardware adapter), so nothing in the pass loop allocates. CI's WARP showed the renderer's four-pass frame 2
-    // above the identical hand-written one (77 against 75, with 43 against 43 for UI only) while the dev PC's
-    // WARP shows 67 against 67: the same runner noise as `machine_noise`'s.
+    report(
+        "plain frame",
+        &context,
+        &[("UI only", ours_one, floor_one), ("four passes", ours, floor)],
+    );
+    // Per pass: what the default set's extra passes cost the renderer is exactly what they cost by hand, so nothing
+    // in the pass loop allocates. (CI's WARP once showed 2 more: the debug layer and library backtraces, see
+    // `debug_output` and `assert_library_backtraces_off`.)
     let more = PassSet::default().iter().count() - 1;
     assert!(
-        ours.saturating_sub(ours_one) <= floor.saturating_sub(floor_one) + machine_noise(&context),
+        ours.saturating_sub(ours_one) <= floor.saturating_sub(floor_one),
         "{more} more passes cost the renderer {} allocations and the same wgpu calls {} on {:?}",
         ours.saturating_sub(ours_one),
         floor.saturating_sub(floor_one),
@@ -299,7 +443,7 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
 
 #[test]
 fn nothing_accumulates_over_frames() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     let samples = context.capabilities().msaa.iter().filter(|&n| n > 1).min().unwrap_or(1);
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
     let mut renderer = Renderer::new(
@@ -688,7 +832,7 @@ fn scene_upload_and_floor(context: &RenderContext, scatter: bool) -> Option<((u6
 
 #[test]
 fn a_scene_upload_allocates_nothing_beyond_wgpus_own() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     for scatter in [false, true] {
         let Some(((ours_min, floor_min), (ours_median, floor_median))) = scene_upload_and_floor(&context, scatter)
         else {
@@ -706,7 +850,7 @@ fn a_scene_upload_allocates_nothing_beyond_wgpus_own() {
 
 #[test]
 fn nothing_accumulates_over_scene_frames() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     let mut game = SceneGame::new();
     let mut scene = scene_on_gpu(&context, &mut game);
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
@@ -1438,35 +1582,25 @@ fn frame_and_floor(context: &RenderContext, parts: usize, see_through: usize, sh
     )
 }
 
-/// What a frame may allocate beyond the same wgpu calls by hand on `context`'s adapter, for the machine rather than
-/// for us.
-///
-/// - **Hardware adapters: nothing.** Every one on the dev PC (Vulkan, DX12, GL) shows 0, and so does WARP there.
-/// - **Software adapters** (`DeviceType::Cpu`: lavapipe, llvmpipe, WARP) on CI's runners: up to 6. They showed a
-///   constant excess on every frame, whether or not frames overlapped, the same for both workloads of each test:
-///   lavapipe 4 and WARP 3 on the parts frames before culling (#77), WARP 5 with it (#79), lavapipe 3 on the
-///   overlay frames, WARP 2 between the plain one-pass and four-pass frames (#81, whose calls do not differ from
-///   `main`'s there; the dev PC's WARP shows 0). The cause is in the runner environment, not found yet (no validation message was reported,
-///   and the dev PC's WARP shows 0 for the same calls); that the excess does not change between two very different
-///   workloads, which every test also checks, is what shows it is not the renderer's.
-fn machine_noise(context: &RenderContext) -> u64 {
-    if context.capabilities().device_type == wgpu::DeviceType::Cpu {
-        6
-    } else {
-        0
-    }
-}
-
 #[test]
 fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     if InstanceBinding::for_context(&context) != InstanceBinding::Storage {
         eprintln!("skipped: the hand-written frame is the storage path's");
         return;
     }
+    let _padding = pad_tracker_indices(&context);
     // Two workloads, the second with three times the parts and many more see-through parts, sorted runs and draws.
     let (ours_small, floor_small, small) = parts_frame_and_floor(&context, 2_000, 25);
     let (ours_large, floor_large, large) = parts_frame_and_floor(&context, 6_000, 8);
+    report(
+        "parts frame",
+        &context,
+        &[
+            ("2,000 parts", ours_small, floor_small),
+            ("6,000 parts", ours_large, floor_large),
+        ],
+    );
     assert_eq!((small.opaque_draws, large.opaque_draws), (4, 4));
     assert!(
         small.transparent_draws > 1 && large.transparent_draws > 4 * small.transparent_draws,
@@ -1483,50 +1617,66 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
         "the renderer's own allocations grow with the work: {extra_small} for {small:?}, {extra_large} for \
          {large:?}"
     );
-    // ...and no more than the machine's noise (none on a hardware adapter).
-    assert!(
-        extra_small <= machine_noise(&context),
+    // ...and nothing at all.
+    assert_eq!(
+        extra_small,
+        0,
         "drawing parts adds {extra_small} allocation(s) per frame on {:?}",
         context.capabilities().device_type
     );
 }
 
 /// Sun shadows (#82): a frame that also fits, culls, uploads and draws three cascades (the sun moving, so all three
-/// every frame) allocates no more than the same wgpu calls by hand, whatever the casters.
+/// every frame) allocates exactly what the same wgpu calls do by hand, for two workloads with very different casters.
 #[test]
 fn a_shadowed_frame_allocates_nothing_beyond_wgpus_own() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     if InstanceBinding::for_context(&context) != InstanceBinding::Storage {
         eprintln!("skipped: the hand-written frame is the storage path's");
         return;
     }
+    let _padding = pad_tracker_indices(&context);
     let (ours_small, floor_small, small) = shadowed_frame_and_floor(&context, 2_000, 25);
     let (ours_large, floor_large, large) = shadowed_frame_and_floor(&context, 6_000, 8);
+    report(
+        "shadowed frame",
+        &context,
+        &[
+            ("2,000 parts", ours_small, floor_small),
+            ("6,000 parts", ours_large, floor_large),
+        ],
+    );
     assert_eq!((small.shadow_cascades, large.shadow_cascades), (3, 3));
     assert!(
         large.shadow_instances > 2 * small.shadow_instances,
         "the workloads differ enough: {small:?} {large:?}"
     );
-    // The renderer makes the same wgpu calls as the hand-written frame, so they allocate the same, give or take what
-    // wgpu itself does differently with different buffers, sizes and offsets ([`WGPU_DATA_JITTER`]) and the
-    // machine's noise. That the culls, the fitting and the lists allocate nothing at all is checked exactly by
-    // `a_cull_allocates_nothing_once_warm`.
-    let allowed = WGPU_DATA_JITTER + machine_noise(&context);
-    for (ours, floor, stats) in [(ours_small, floor_small, small), (ours_large, floor_large, large)] {
-        assert!(
-            ours.abs_diff(floor) <= allowed,
-            "a shadowed frame allocates {ours} against {floor} by hand ({stats:?}) on {:?}",
-            context.capabilities().device_type
-        );
-    }
+    let (extra_small, extra_large) = (
+        ours_small.saturating_sub(floor_small),
+        ours_large.saturating_sub(floor_large),
+    );
+    // Nothing the shadows add allocates per caster, per cascade draw or per list: whatever a frame allocates beyond
+    // wgpu's own is the same for both workloads... (That the culls, the fitting and the lists allocate nothing at
+    // all is checked on its own by `a_cull_allocates_nothing_once_warm`.)
+    assert_eq!(
+        extra_small, extra_large,
+        "the shadows' own allocations grow with the casters: {extra_small} for {small:?}, {extra_large} for \
+         {large:?}"
+    );
+    // ...and nothing at all.
+    assert_eq!(
+        extra_small,
+        0,
+        "a shadowed frame allocates {ours_small} against {floor_small} by hand ({small:?}) on {:?}",
+        context.capabilities().device_type
+    );
 }
 
 /// How many allocations wgpu's own work in a frame can differ by between two frames that make the same calls with
-/// different resources and data, on a hardware adapter. Measured on the dev PC (#82): the plain parts frame of
-/// 6,000 parts, every 25th see-through, makes 122 allocations against 119 by hand, and 2,000 parts with every 8th
-/// see-through 120 against 121, while the two workloads `a_parts_frame_allocates_nothing_beyond_wgpus_own` uses
-/// match exactly; with three shadow cascades the five workloads tried were +3, 0, +3, −3 and 0 from their hand-
-/// written frames. A per-frame allocation of the renderer's own would show in every workload in the same direction.
+/// different resources: wgpu-core's per-encoder buffer trackers grow with the order and size of the tracker indices
+/// the frame's copies meet ([`pad_tracker_indices`]). Measured on the dev PC (#82): +3, 0, +3, −3 and 0 for five
+/// shadowed workloads against their hand-written frames. The lit frame compares two renderers with different
+/// buffers, so it allows this; the parts and shadowed frames pad the indices and compare exactly.
 const WGPU_DATA_JITTER: u64 = 3;
 
 /// Frames of moving parts seen from an orbiting camera, so every frame culls again and uploads the visible lists,
@@ -1534,11 +1684,7 @@ const WGPU_DATA_JITTER: u64 = 3;
 #[test]
 fn nothing_accumulates_over_parts_frames() {
     for force_vertex_instances in [false, true] {
-        let options = metallic_render::ContextOptions {
-            force_vertex_instances,
-            ..metallic_render::ContextOptions::default()
-        };
-        let Some(context) = support::gpu_with(&options) else {
+        let Some(context) = measuring_gpu(force_vertex_instances) else {
             return;
         };
         parts_frames_do_not_grow_the_heap(&context);
@@ -1846,16 +1992,20 @@ fn overlay_frame_and_floor(context: &RenderContext, work: OverlayWork) -> (u64, 
     (ours, floor, quads)
 }
 
-/// Like the parts frame above: CI's lavapipe showed a constant 3 allocations beyond the hand-written overlay frame
-/// (65 against 62 for about 260 quads) where every adapter on the dev PC shows 0, the same runner-only excess the
-/// parts frames show ([`machine_noise`]). The renderer's overlay frame and the hand-written one make the same wgpu
-/// calls, so the check is that the excess does not change with the overlay's size: nothing per quad, per glyph or
-/// per line of text allocates.
+/// The renderer's overlay frame and the hand-written one make the same wgpu calls, so they allocate the same, and the
+/// same for 35 quads as for 1,300: nothing per quad, per glyph or per line of text allocates. (CI's runners used to
+/// show 1 to 3 more for the renderer: library backtraces, see [`assert_library_backtraces_off`].)
 #[test]
 fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
+    let _padding = pad_tracker_indices(&context);
     let (ours_small, floor_small, small) = overlay_frame_and_floor(&context, SMALL_OVERLAY);
     let (ours_large, floor_large, large) = overlay_frame_and_floor(&context, LARGE_OVERLAY);
+    report(
+        "overlay frame",
+        &context,
+        &[("small", ours_small, floor_small), ("large", ours_large, floor_large)],
+    );
     assert!(
         large > 30 * small,
         "the workloads differ enough: {small} and {large} quads"
@@ -1871,9 +2021,10 @@ fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
         "the overlay's own allocations grow with its size: {extra_small} for {small} quads, {extra_large} for \
          {large}"
     );
-    // ...and no more than the machine's noise (none on a hardware adapter).
-    assert!(
-        extra_small <= machine_noise(&context),
+    // ...and nothing at all.
+    assert_eq!(
+        extra_small,
+        0,
         "the overlay adds {extra_small} allocation(s) per frame on {:?}",
         context.capabilities().device_type
     );
@@ -1881,7 +2032,7 @@ fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
 
 #[test]
 fn nothing_accumulates_over_overlay_frames() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
     let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
     renderer.set_overlay_enabled(true);
@@ -1974,7 +2125,7 @@ fn a_sync_of_moving_lamps_allocates_nothing() {
 /// uniform and the cluster texture) by hand. The shadowed lights' tiles are kept (nothing moves), so no atlas pass.
 #[test]
 fn a_lit_frame_allocates_only_its_writes() {
-    let Some(context) = support::gpu() else { return };
+    let Some(context) = measuring_gpu(false) else { return };
     let (device, queue) = (context.device(), context.queue());
     let mut game = support::scenes::Game::new();
     lit_grid(&mut game);
@@ -2089,7 +2240,7 @@ fn a_lit_frame_allocates_only_its_writes() {
         "{stats:?}"
     );
     assert!(
-        lit <= unlit + hand + WGPU_DATA_JITTER + machine_noise(&context),
+        lit <= unlit + hand + WGPU_DATA_JITTER,
         "a lit frame allocates {lit} against {unlit} unlit and {hand} for its writes"
     );
 }
@@ -2099,11 +2250,7 @@ fn a_lit_frame_allocates_only_its_writes() {
 #[test]
 fn nothing_accumulates_over_lit_frames() {
     for force_vertex_instances in [false, true] {
-        let options = metallic_render::ContextOptions {
-            force_vertex_instances,
-            ..metallic_render::ContextOptions::default()
-        };
-        let Some(context) = support::gpu_with(&options) else {
+        let Some(context) = measuring_gpu(force_vertex_instances) else {
             return;
         };
         let mut game = support::scenes::Game::new();

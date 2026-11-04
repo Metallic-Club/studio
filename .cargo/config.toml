@@ -1,2 +1,10 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+[env]
+# Library backtraces (`std::backtrace::Backtrace::capture`) off for everything cargo runs, unless set otherwise. Debug
+# builds of wgpu-core capture one on every snatch-lock acquisition (`snatch.rs`, to report a recursive lock), so with
+# RUST_BACKTRACE set (CI sets it) every frame captures dozens, each allocating more the deeper the caller's stack: the
+# allocation tests (crates/render/tests/no_alloc.rs) counted that as the renderer's own (#125). Panic backtraces follow
+# RUST_BACKTRACE alone and are unaffected.
+RUST_LIB_BACKTRACE = "0"

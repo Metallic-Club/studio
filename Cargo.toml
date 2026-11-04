@@ -73,6 +73,9 @@ pollster = "1.0.1"
 bytemuck = { version = "1.25", features = ["derive"] }
 # Reads and writes the renderer's reference images in its image tests (dev-dependency of `metallic_render` only).
 png = "0.18"
+# Windows-only dev-dependency of `metallic_render`'s allocation tests, which keep the Direct3D 12 debug layer's
+# messages away from wgpu-hal's message handler (crates/render/tests/no_alloc.rs, #125). Already in the tree via wgpu.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"
