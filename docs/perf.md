@@ -1026,3 +1026,114 @@ after and their difference times eight in `docs/screenshots/85-references.png`, 
 the brightest lit faces lose up to 6 levels to the shoulder and gain a glow. Against the old references the mean
 difference is 1 to 3 levels. `docs/screenshots/85-aa-edges.png` shows the same edges of `parts_10k` with no
 anti-aliasing, MLAA, 4× and 8× MSAA, four times enlarged.
+
+### No hitches: pipelines off the frame (#86)
+
+ADR 0008 §9 says no pipeline is compiled on the frame and nothing in a frame waits for the GPU. Before #86 every
+pipeline was compiled up front, on the calling thread, inside `Renderer::new`: no frame hitched on a compile, but the
+first frame waited for all of them (2 s on DX12), and the overlay compiled its pipeline the first time it was turned
+on. Now (`metallic_render::pipelines`):
+
+- **The first frame's pipelines are compiled at once on worker threads** (one per core but one, at most eight), and
+  `Renderer::new` returns when they are done: the scene's pipelines without local lights for the format and MSAA
+  count it draws with (5), and the post chain's passes it runs (the finish pass's variant and bloom's three; MLAA's
+  or the upscale pass's when they run). The sun's and the lights' shadow pipelines (4, small) are made on the calling
+  thread meanwhile.
+- **Every other permutation follows in the background**: the scene's lit pipelines (6), the overlay's, every post
+  effect and quality (the finish pass's other variants, bloom's other filters, MLAA) and the upscale pass, then the
+  scene's 11 at every other MSAA count up to 8. A compile may wait for another whose shader stages it reuses (the
+  depth prepass and the opaque pass after it wait for the opaque pass; another MSAA count for the first one's), so
+  DX12, which caches each shader stage it compiles inside the device, compiles each stage once rather than on several
+  workers at the same moment: that halved the CPU the background compiles took (4.3 s → 2.6 s summed over the workers
+  on DX12) and shortened them (800 → 680 ms).
+- **A frame never waits.** It takes the compiles that finished (one lock, nothing allocated; nothing at all once
+  everything is compiled) and draws with what exists. A settings change whose pipelines are still compiling (an MSAA
+  count, MLAA, an effect quality, the post chain off, a render scale without it) is kept waiting while frames draw
+  with the settings before it, and takes effect in the first frame after its pipelines are; local lights are drawn
+  once their pipelines exist; the overlay once its own does. `Renderer::wait_for_pipelines` waits for all of it, for
+  tests, tools and loading screens; `Renderer::pause_pipeline_compiles` holds the background compiles back.
+- **OpenGL compiles inline**, on its context's thread, all of it before `Renderer::new` returns, as before (so do
+  WebAssembly and a machine with one core).
+- **Stats:** `Renderer::pipeline_stats` (compiled, pending, failed, workers, the first frame's and the last compile's
+  time, the compile CPU summed, a switch waiting, the pipeline cache's size at start), shown on the overlay's
+  `PIPELINES` line and in the stress JSON's `graphics.pipelines`.
+- **The pipelines:** 71 were made in `Renderer::new` before (the scene's 11 for the output format and for each of the
+  four MSAA counts, though the output format's are only drawn with the post chain off; 11 post, the upscale pass, 4
+  shadow), and the overlay's on first use. Now 61: 9 for the first frame, 4 shadow ones beside them, 48 in the
+  background; the output format's scene pipelines only when the post chain is turned off, in the background then.
+
+**2026-11-04**, same machine (Ryzen 5 5500, 6 cores / 12 threads, RX 6650 XT, driver 32.0.21045.16010, Windows 11),
+branch `86-no-hitches` against `main` at `805b283`, `cargo run --release -p metallic_render --example prewarm`
+(offscreen 1280 × 720, the renderer's defaults). "First frame" is from the start of `Renderer::new` until the first
+frame is done on the GPU; "everything" until the last background compile is (from when the compiles start, a few
+milliseconds into `Renderer::new`). Before #86 both are the same moment. A driver keeps its compiled shaders on disk
+per executable, so the cold rows run a fresh copy of the executable; warm rows are its second and third runs. Times
+in ms.
+
+| Backend | Driver cache | Before: first frame (everything) | After: first frame | After: everything |
+| --- | --- | ---: | ---: | ---: |
+| DX12, FXC (default) | cold | 2,880 | 228 | 882 |
+| | warm | 2,071 | 145 / 162 | 677 / 672 |
+| DX12, DXC (`dxcompiler.dll`) | cold | 1,214 | 131 | 288 |
+| | warm | 606 / 614 | 70 / 71 | 154 / 159 |
+| Vulkan | cold | 691 | 78 | 179 |
+| | warm | 58 | 21 / 20 | 15 / 15 |
+| OpenGL (inline) | cold | 667 | 710 | 700 |
+| | warm | 75 / 76 | 80 / 79 | 71 / 71 |
+
+- **DX12 is where the time went**: FXC turns the lit parts' shader into DXBC in about half a second a stage, on one
+  thread, every run (nothing caches it across runs). The first frame now waits for the unlit scene's stages only
+  (≈ 150 ms on one worker); the lit ones compile behind it (≈ 400 to 530 ms each, side by side), so on DX12 with FXC
+  local lights show from about 0.7 s after the renderer is made (1.0 s while a game toggles effects at the same time).
+- **Vulkan's pipeline cache** (`ContextOptions::pipeline_cache_dir`; the Player keeps it in the user's cache folder,
+  `pipelines/wgpu_pipeline_cache_vulkan_<vendor>_<device>.bin`, 136 KB here) is loaded at start and written by a
+  compile worker whenever its queue runs dry, never in a frame. The file is checked (its length and an FNV-1a hash in
+  a header of its own) before wgpu sees it, and wgpu starts empty on another driver. On this PC it changes nothing:
+  a cold driver cache with the file warm took 77 ms to the first frame and 179 ms for everything, as without it.
+  AMD's Windows driver keeps its own cache per executable and returns about 2.4 KB a pipeline (keys, not binaries)
+  into the application's; drivers that store the binaries there (Android's, Mesa's) are what it is for.
+- **DXC on DX12 is an option, not the default** (`ContextOptions::dx12_compiler`, or `WGPU_DX12_COMPILER=dxc`). It
+  compiles 3 to 4 times as fast as FXC (above), but needs `dxcompiler.dll` (14.3 MB, DXC 1.8.2502 or newer; the
+  Windows SDK's works alone, without `dxil.dll`) shipped beside the executable. wgpu's `static-dxc` feature links it
+  instead, but downloads a prebuilt library from a third-party GitHub release while building (which neither
+  `cargo deny` nor the lockfile covers) and has none for Windows on ARM. The default build stays self-contained with
+  FXC, and since the first frame no longer waits for the lit shaders, FXC's cost is mostly off the critical path. The
+  default was wgpu's `Auto` before (DXC if a `dxcompiler.dll` is found on the DLL search path, FXC otherwise); it is
+  FXC now, so the shaders a machine compiles no longer depend on what happens to be on its `PATH`.
+- **OpenGL** compiles as before, inline (its context's thread); 61 pipelines instead of 71 cost the same.
+
+**No GPU waits in the frame** (the audit): the frame path waits for nothing. `context.rs` blocks on the adapter and
+device requests at setup; the timestamp readback (`timing.rs`) maps asynchronously and collects frames later with
+`PollType::Poll`; the GPU scene's buffer growth submits a copy and moves on; acquiring a swapchain image is the
+presentation's own pacing and is kept out of the render CPU time. `cargo xtask check-layout` now fails on
+`PollType::Wait`, `wait_indefinitely`, `block_on(` or `.map_async(` in `crates/render/src` or `crates/engine/src`
+outside `#[cfg(test)]` code, but for the two uses above (`GPU_WAIT_ALLOWED` in `xtask/src/layout.rs`, each with why).
+Tests, benches and examples may wait (they read frames back).
+
+**Allocations** (`tests/no_alloc.rs`): every renderer there waits for its background compiles before it is measured,
+and the default frame drawn while a switch waits for pipelines still compiling (paused, so they stay pending) is held
+to the same wgpu calls by hand: 200 / 200 allocations on DX12, 211 / 211 on Vulkan (on OpenGL, which compiles inline,
+the plain frame is measured: 286 / 286). Over 100 such frames the heap changes by at most 8.6 KB on DX12 and Vulkan
+(inside the tests' 16 KB for frames in flight). The compiles themselves allocate on their workers.
+
+**Toggling every effect** (the done-when): `stress --scene many_lights --toggle-effects 30 --warm-up 0` toggles the
+next of `stress::TOGGLES` every 30 frames from the first frame on, while the background compiles still run: every
+preset, every anti-aliasing (MSAA falling back to what the device has), every effect quality, lights, shadows and the
+overlay off and on. The spike counter (overlay and `spikes` in the JSON) counts the frames over twice the frame
+target after the first 2 s; the target is a 60 fps frame unless the app sets a frame cap (`--frame-target`).
+
+| Backend, present | Frames (toggles) | Pending at most | Frame p50 / p99 | Spikes over 33.3 ms | Worst after 2 s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DX12, uncapped | 6,000 (199) | 35 | 1.19 / 4.03 | 0 | 16.6 |
+| DX12, vsync (120 Hz) | 1,500 (49) | 25 | 8.33 / 8.95 | 0 | 23.5 |
+| OpenGL, uncapped | 6,000 (199) | 0 | 4.42 / 10.09 | 9 | 38.0 |
+
+No toggle compiles anything on a frame, and no frame waits for the GPU. What is left is the GPU work of a switch to
+Ultra: its first frame makes the 3 × 3072² cascades and the 4096² atlas and draws all of them again (render CPU about
+1 ms). That is 16 ms uncapped and 23 to 27 ms with vsync on DX12 (2 spikes against a 120 Hz target's 16.7 ms, none
+against 60 fps), and 37 ms on OpenGL (all 9 of its spikes, at High → Ultra); #152 spreads that redraw over frames.
+`METALLIC_TRACE_SPIKES=1` prints each spike and the toggle before it. Vulkan has no adapter for a window on this PC
+(#110), so its numbers are the offscreen ones above. On OpenGL, `no_alloc`'s heap-growth tests fail on this PC on
+`main` too (#153); CI does not run them there.
+
+The perf gate's workloads (scene sync and cull, no GPU) are untouched: nothing was added to the sync or cull paths.

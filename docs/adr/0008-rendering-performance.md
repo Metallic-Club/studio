@@ -125,7 +125,7 @@ Per-frame **render CPU** budget (sync + cull + encode + submit), main thread or 
 ### 9. No hitches by construction
 
 - **All pipeline permutations are known up front.** Pipelines for the enabled feature set are compiled at load on worker threads, never on the frame. Enabling an effect mid-game uses a pipeline that already exists, or compiles in the background and switches when ready.
-- Use the Vulkan `PipelineCache` where available, and DXC (`static-dxc`) on DX12.
+- Use the Vulkan `PipelineCache` where available, kept on disk. On DX12, DXC is an option rather than the default (#86, measured in `docs/perf.md`): it needs `dxcompiler.dll` shipped beside the executable, and `static-dxc` downloads a prebuilt library while building, so the default build keeps FXC, whose cost the background compiles take off the first frame.
 - **No per-frame heap allocation** in sync, cull or encode. Buffers and lists are reused; a test with a counting allocator guards it.
 - **No CPU waits on the GPU in the frame** (`device.poll(Wait)`, map-read stalls). Readbacks (timestamps, picking) are asynchronous, a frame or more late.
 - **Presentation:** `Fifo` (vsync) by default with `desired_maximum_frame_latency = 2`, and frame pacing for capped frame rates.
