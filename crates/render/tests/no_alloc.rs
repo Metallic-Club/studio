@@ -259,6 +259,18 @@ fn renderer_and_floor(
     )
 }
 
+/// Prints a comparison's counts past the test harness's output capture (which only takes the print macros), so CI's
+/// logs keep every run's numbers, passing or not, on every adapter (#125).
+fn report(test: &str, context: &RenderContext, workloads: &[(&str, u64, u64)]) {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+    let mut line = format!("no_alloc {test} on {:?}:", context.capabilities().device_type);
+    for (name, ours, floor) in workloads {
+        let _ = write!(line, " {name} renderer {ours} / by hand {floor};");
+    }
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
 /// A device for these tests (see [`support::gpu`]), on the vertex-buffer instance path if `force_vertex_instances`,
 /// with the backend's validation layers off.
 ///
@@ -361,6 +373,11 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
     let (ours_one, floor_one) =
         renderer_and_floor(&context, PassSet::EMPTY.with(PassId::Ui), &UI_ONLY, &target, &depth);
     let (ours, floor) = renderer_and_floor(&context, PassSet::default(), &DEFAULT_PASSES, &target, &depth);
+    report(
+        "plain frame",
+        &context,
+        &[("UI only", ours_one, floor_one), ("four passes", ours, floor)],
+    );
     // Per pass: what the default set's extra passes cost the renderer is exactly what they cost by hand, so nothing
     // in the pass loop allocates. (CI's WARP once showed 2 more: the debug layer and library backtraces, see
     // `measuring_gpu` and `assert_library_backtraces_off`.)
@@ -1532,6 +1549,14 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
     // Two workloads, the second with three times the parts and many more see-through parts, sorted runs and draws.
     let (ours_small, floor_small, small) = parts_frame_and_floor(&context, 2_000, 25);
     let (ours_large, floor_large, large) = parts_frame_and_floor(&context, 6_000, 8);
+    report(
+        "parts frame",
+        &context,
+        &[
+            ("2,000 parts", ours_small, floor_small),
+            ("6,000 parts", ours_large, floor_large),
+        ],
+    );
     assert_eq!((small.opaque_draws, large.opaque_draws), (4, 4));
     assert!(
         small.transparent_draws > 1 && large.transparent_draws > 4 * small.transparent_draws,
@@ -1569,6 +1594,14 @@ fn a_shadowed_frame_allocates_nothing_beyond_wgpus_own() {
     let _padding = pad_tracker_indices(&context);
     let (ours_small, floor_small, small) = shadowed_frame_and_floor(&context, 2_000, 25);
     let (ours_large, floor_large, large) = shadowed_frame_and_floor(&context, 6_000, 8);
+    report(
+        "shadowed frame",
+        &context,
+        &[
+            ("2,000 parts", ours_small, floor_small),
+            ("6,000 parts", ours_large, floor_large),
+        ],
+    );
     assert_eq!((small.shadow_cascades, large.shadow_cascades), (3, 3));
     assert!(
         large.shadow_instances > 2 * small.shadow_instances,
@@ -1924,6 +1957,11 @@ fn an_overlay_frame_allocates_nothing_beyond_wgpus_own() {
     let _padding = pad_tracker_indices(&context);
     let (ours_small, floor_small, small) = overlay_frame_and_floor(&context, SMALL_OVERLAY);
     let (ours_large, floor_large, large) = overlay_frame_and_floor(&context, LARGE_OVERLAY);
+    report(
+        "overlay frame",
+        &context,
+        &[("small", ours_small, floor_small), ("large", ours_large, floor_large)],
+    );
     assert!(
         large > 30 * small,
         "the workloads differ enough: {small} and {large} quads"
