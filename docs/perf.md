@@ -108,6 +108,13 @@ Base and head build into separate target folders. Cargo names a workspace crate'
 the workspace root, which is the same on both sides, so a shared folder would let the second build reuse the first
 one's binary and the gate would compare the base with itself.
 
+Only the head builds on the cargo cache saved from `main`; the base always compiles from scratch. The cache also holds
+what build scripts compiled with the runner's C and C++ compiler (Luau's VM, through `mlua-sys`), and cargo does not
+rebuild those when the compiler changes, so the cache is keyed by the compilers' versions. Without that key, a head
+built from a cache made by another compiler runs different machine code from the base: when `ubuntu-latest` moved
+from Ubuntu 24.04 (GCC 13) to 26.04 (GCC 15), every PR's Luau workloads showed as 2.4–3.3% slower with no Luau
+change, all of it in Luau's own C++ functions (#141).
+
 The Luau suite follows the same steps with `cargo bench -p metallic_luau --bench perf_gate` and reports with
 `cargo xtask perf-report --source crates/luau/benches/perf_gate.rs --suite metallic_luau` (plus `--new-suite` when
 the base lacks it). Its workloads only use public APIs, so the bench source is the only file copied to the base.
@@ -252,6 +259,24 @@ Criterion's own medians for #64 agree: 562 / 574 ms (interpreter) and 74.1 / 74.
 Perf-gate instruction counts of the Luau suite at introduction (#46; ubuntu-24.04 runner, Rust 1.99.1, gungraun
 0.20.0, release profile): `luau_reads` 13,859,424, `luau_writes` 15,281,853, `luau_method_calls` 21,521,695 (10,000
 operations each, plus one script start).
+
+The cost of an access does not depend on how many classes, members and enums the registry has: a member name's
+string carries its atom, and the per-class cache is an array indexed by it, so after the first access `part.Position`
+never goes back to the registry. `crates/luau/src/shared.rs`'s tests count it: the three workloads over the built-in
+classes and over 50 and 500 more (each with four properties and an enum of its own) make the same 10,001 member
+lookups and the same registry lookups (at most one, for `workspace.Part`). Measured with Callgrind for #141
+(ubuntu-26.04 runner, GCC 15, Valgrind 3.26.0, `main` at `d71a457`, a fresh build):
+
+| Extra classes | `luau_reads` | `luau_writes` | `luau_method_calls` |
+| --- | ---: | ---: | ---: |
+| 0 (the built-in classes, without `UserGameSettings`, `225d5e1`) | 10,836,525 | 14,269,035 | 18,747,126 |
+| 0 (the built-in classes) | 10,836,696 | 14,269,293 | 18,747,302 |
+| 50 | 10,836,487 | 14,268,993 | 18,746,927 |
+| 500 | 10,847,234 | 14,279,754 | 18,757,670 |
+
+The differences between rows (under 0.1%) do not follow the registry's size: on `225d5e1` the same workloads gave
+10,840,527 at 50 extra classes and 10,836,350 at 500, and the accesses' lookups are the same in every row (the test
+above).
 
 ### Script lifecycle
 

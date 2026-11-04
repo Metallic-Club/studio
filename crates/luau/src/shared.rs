@@ -292,6 +292,8 @@ impl Shared {
     /// after the first lookup.
     #[inline]
     pub(crate) fn member(&self, class: ClassId, atom: i32, name: &str) -> Member {
+        #[cfg(test)]
+        tests::LOOKUPS.with(|n| n.set(n.get() + 1));
         let Ok(atom) = usize::try_from(atom) else {
             return self.resolve(class, name);
         };
@@ -318,6 +320,8 @@ impl Shared {
 
     /// Looks `name` up in the registry: a property, then a method, then a signal, then the backend's own.
     fn resolve(&self, class: ClassId, name: &str) -> Member {
+        #[cfg(test)]
+        tests::RESOLVES.with(|n| n.set(n.get() + 1));
         let Some(info) = self.registry.class(class) else {
             return Member::Missing;
         };
@@ -345,5 +349,116 @@ impl Shared {
             return Member::GetPropertyChangedSignal;
         }
         Member::Missing
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    //! The per-access cost of a member does not depend on the registry's size (#141): after the first access, every
+    //! `part.Position`, `part.Transparency = x` and `part:IsA(..)` is one `Shared::member` lookup that never goes
+    //! back to the registry, whether the registry has the built-in classes alone or hundreds more.
+
+    use std::cell::Cell;
+    use std::sync::Arc;
+
+    use metallic_core::{ClassDesc, DataModel, EnumDesc, Id, PropMeta, Registry, RegistryInput};
+    use metallic_script::{Resume, ScriptHost};
+
+    use crate::LuauLanguage;
+
+    thread_local! {
+        /// `Shared::member` calls on this thread.
+        pub(crate) static LOOKUPS: Cell<u64> = const { Cell::new(0) };
+        /// `Shared::resolve` calls on this thread: lookups that went to the registry by name.
+        pub(crate) static RESOLVES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// The perf gate's Luau workloads (`benches/perf_gate.rs`): 10,000 operations each.
+    const OPS: u64 = 10_000;
+    const READS: &str =
+        "local part = workspace.Part\nlocal p\nfor i = 1, 10000 do\n    p = part.Position\nend\nreturn p\n";
+    const WRITES: &str =
+        "local part = workspace.Part\nfor i = 1, 10000 do\n    part.Transparency = (i % 100) / 100\nend\n";
+    const CALLS: &str = "local part = workspace.Part\nlocal n = 0\nfor i = 1, 10000 do\n    if part:IsA(\"BasePart\") then n += 1 end\nend\nreturn n\n";
+
+    fn leak(text: String) -> &'static str {
+        Box::leak(text.into_boxed_str())
+    }
+
+    /// The built-in classes plus `extra` more, each with four properties and an enum of its own.
+    fn registry(extra: usize) -> Arc<Registry> {
+        let input = metallic_classes::input();
+        let mut classes = input.classes.to_vec();
+        let mut enums = input.enums.to_vec();
+        for i in 0..extra {
+            let props: Vec<PropMeta> = (0..4)
+                .map(|p| PropMeta::number(leak(format!("Extra{i}Prop{p}")), 0.0))
+                .collect();
+            let class = ClassDesc::new(leak(format!("Extra{i}")), Some("Instance")).props(Box::leak(props.into()));
+            classes.push(Box::leak(Box::new(class)));
+            let items: &'static [&'static str] = &["A", "B", "C"];
+            enums.push(Box::leak(Box::new([EnumDesc::new(
+                leak(format!("ExtraEnum{i}")),
+                items,
+            )])));
+        }
+        let input = RegistryInput {
+            classes: &classes,
+            components: input.components,
+            enums: &enums,
+        };
+        Arc::new(Registry::build(input).unwrap())
+    }
+
+    /// A game over `registry` with a `Part` and a `Script` in `Workspace`, and a host running Luau.
+    fn game(registry: &Arc<Registry>) -> (DataModel, ScriptHost, Id) {
+        let mut dm = DataModel::new(Arc::clone(registry));
+        let class = |name: &str| registry.class_id(name).unwrap();
+        dm.create_root(class("DataModel")).unwrap();
+        for service in registry.services().to_vec() {
+            dm.create_service(service).unwrap();
+        }
+        let mut host = ScriptHost::new();
+        host.register_language(Box::new(LuauLanguage::new(Arc::clone(registry)).unwrap()))
+            .unwrap();
+        let workspace = dm.service(class("Workspace")).unwrap();
+        let part = dm.create(class("Part")).unwrap();
+        dm.set_name(part, "Part".into()).unwrap();
+        dm.set_parent(part, Some(workspace)).unwrap();
+        let script = dm.create(class("Script")).unwrap();
+        dm.set_parent(script, Some(workspace)).unwrap();
+        (dm, host, script)
+    }
+
+    /// Member lookups and registry resolutions of a warm run of `source`, as the perf gate measures it.
+    fn counts(registry: &Arc<Registry>, source: &str) -> (u64, u64) {
+        let (mut dm, mut host, script) = game(registry);
+        let mut run = || {
+            let run = host.run_script(&mut dm, script, "Gate.luau", source).unwrap();
+            assert!(matches!(run.resume, Resume::Finished(_)), "{:?}", run.resume);
+        };
+        run();
+        LOOKUPS.with(|n| n.set(0));
+        RESOLVES.with(|n| n.set(0));
+        run();
+        (LOOKUPS.with(Cell::get), RESOLVES.with(Cell::get))
+    }
+
+    #[test]
+    fn per_access_cost_does_not_grow_with_the_registry() {
+        let registries = [0, 50, 500].map(|extra| (extra, registry(extra)));
+        for (name, source) in [("reads", READS), ("writes", WRITES), ("calls", CALLS)] {
+            let (lookups, resolves) = counts(&registries[0].1, source);
+            // One lookup per access, plus `workspace.Part`; none of the 10,000 goes back to the registry.
+            assert_eq!(lookups, OPS + 1, "{name}: member lookups");
+            assert!(resolves <= 1, "{name}: {resolves} registry lookups in a warm run");
+            for (extra, registry) in &registries[1..] {
+                assert_eq!(
+                    counts(registry, source),
+                    (lookups, resolves),
+                    "{name} with {extra} extra classes"
+                );
+            }
+        }
     }
 }
