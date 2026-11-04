@@ -751,10 +751,13 @@ Low 0.43 M for 0.492 ms.
   neighbours in back-to-front order are mostly at the same level.
 - **CPU**: the cull chooses each round part's level from its distance (a few multiplies, branch-free, the level
   written only when it changes): +0.05 ms of cull CPU on `parts_100k`, whose 30% round parts put levels in nearly
-  every grid cell, and +0.02 ms of render CPU in all. A grid cell that has never held a round part culls exactly as
-  without levels, so a scene of blocks (the perf gate's `render_cull`) pays nothing for them. `cargo bench -p
-  metallic_render --bench gpu_scene -- cull` on 100,000 parts with the stress city's mix of shapes: 114.6 µs with
-  levels, 109.7 µs without.
+  every grid cell, and +0.02 ms of render CPU in all. A grid cell that has never held a round part takes the loop
+  without levels, and cells with round parts go through an out-of-line one, so a scene of blocks chooses nothing;
+  the perf gate's `render_cull` (10,000 blocks) still counts +4.8% instructions (334,647 → 350,854 `Ir`; a first
+  version with the levels' loop inline counted +8.0%, of which a temporary walk-only workload put +8.1% in the walk
+  itself, not in moving the 100 items), while its wall time on the dev PC is within 2% (a throwaway copy of the
+  workload: 18.8 against 19.1 µs a walk). `cargo bench -p metallic_render --bench gpu_scene -- cull` on 100,000
+  parts with the stress city's mix of shapes: 114.6 µs with levels, 109.7 µs without.
 - **Cached shadows**: the far cascade's static map was drawn in 8 of the walking camera's frames, as on `main`: its
   casters' levels follow its slice and the camera's projection, not where the camera stands.
 - **The look**: rendered offscreen at 1920 × 1080 with the default settings, `parts_100k`'s default view has 5 pixels
