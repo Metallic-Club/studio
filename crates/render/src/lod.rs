@@ -115,7 +115,7 @@ pub(crate) fn lod_class(kind: MeshKind) -> u8 {
     }
 }
 
-/// How levels are chosen: a quality setting, which graphics presets (#84) drive. Presets scale the cost, never the
+/// How levels are chosen: a quality setting, which the graphics presets drive ([`crate::settings::Quality`]). Presets scale the cost, never the
 /// look: every preset keeps a level's outline within a fraction of a pixel of the true shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LodSettings {
@@ -155,7 +155,7 @@ impl LodSettings {
 
 impl Default for LodSettings {
     /// [`LodSettings::HIGH`]: outlines within a quarter of a pixel, so the renderer's defaults look the same as
-    /// without levels (the presets, #84, trade some of that for speed). On `parts_100k` it draws 82% fewer
+    /// without levels (the presets trade some of that for speed). On `parts_100k` it draws 82% fewer
     /// triangles than full detail, against 86% at Medium.
     fn default() -> Self {
         Self::HIGH

@@ -41,7 +41,7 @@ use crate::lod::{self, LodSettings, LodView, MAX_LOD_LEVELS};
 use crate::parts::Camera;
 use crate::scene::MeshKind;
 
-/// The culling settings of a view, which graphics presets (#84) drive. The defaults cull what cannot be seen and
+/// The culling settings of a view, which the graphics presets drive ([`crate::settings::Quality`]). The defaults cull what cannot be seen and
 /// nothing that can: the frustum, and parts smaller than a pixel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CullSettings {
