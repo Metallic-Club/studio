@@ -232,11 +232,15 @@ fn the_sky_fills_only_what_the_parts_left() {
     let Some(context) = gpu() else { return };
     let mut game = sunset_game();
     set_clock_time(&mut game, 17.0);
-    let without = render(&context, &mut game, PassSet::default().without(PassId::Sky), 1);
-    let with = render(&context, &mut game, PassSet::default(), 1);
+    // Without bloom, which would carry the sky's light onto the parts' pixels.
+    let passes = PassSet::default().without(PassId::Bloom);
+    let without = render(&context, &mut game, passes.without(PassId::Sky), 1);
+    let with = render(&context, &mut game, passes, 1);
     let (mut parts, mut sky) = (0, 0);
+    // The magenta clear colour, through the tone curve.
+    let magenta = |p: &[u8; 4]| p[0] > 240 && p[1] < 4 && p[2] > 240;
     for (a, b) in without.iter().zip(&with) {
-        if a[..3] == [255, 0, 255] {
+        if magenta(a) {
             // Empty without the sky pass: the sky drew there.
             assert_ne!(a, b);
             sky += 1;

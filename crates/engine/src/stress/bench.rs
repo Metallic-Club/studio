@@ -18,9 +18,10 @@ use std::time::Instant;
 use metallic_platform::{
     AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
+use metallic_render::post::PostSettings;
 use metallic_render::resolution::ResolutionSettings;
 use metallic_render::settings::{GraphicsSettings, Preset};
-use metallic_render::{ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
+use metallic_render::{AntiAliasing, ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
@@ -78,6 +79,15 @@ pub struct BenchOptions {
     /// Switch between the Low and Ultra presets every this many frames, warm-up included (the first switch goes to
     /// the one the run did not start at), to measure what a switch costs.
     pub switch_presets: Option<u32>,
+    /// Draw with the post chain (on by default); off draws the frame as before it (#85), to measure what it costs
+    /// ([`SceneRenderer::set_post_chain`]).
+    pub post_chain: bool,
+    /// The anti-aliasing when there are no graphics settings (none, the renderer's default, when `None`).
+    pub anti_aliasing: Option<AntiAliasing>,
+    /// The post effects' quality when there are no graphics settings (the renderer's defaults, High's, when `None`).
+    pub effects: Option<PostSettings>,
+    /// Record the scene passes as one render pass when there are no graphics settings.
+    pub merge_scene_passes: bool,
 }
 
 impl BenchOptions {
@@ -103,6 +113,10 @@ impl BenchOptions {
             graphics: None,
             resolution: ResolutionSettings::NATIVE,
             switch_presets: None,
+            post_chain: true,
+            anti_aliasing: None,
+            effects: None,
+            merge_scene_passes: false,
         }
     }
 }
@@ -292,9 +306,17 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     renderer.set_lights(options.lights);
     renderer.set_lod(options.lod);
     renderer.set_resolution(options.resolution);
+    if let Some(aa) = options.anti_aliasing {
+        renderer.set_anti_aliasing(aa);
+    }
+    if let Some(effects) = options.effects {
+        renderer.set_post(effects);
+    }
+    renderer.set_merge_scene_passes(options.merge_scene_passes);
     if let Some(graphics) = options.graphics.clone() {
         renderer.set_graphics(graphics);
     }
+    renderer.set_post_chain(options.post_chain);
     renderer.set_lod_tint(options.lod_tint);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo

@@ -328,13 +328,14 @@ fn a_shadowed_light_casts_shadows_from_its_lamp() {
     let open = floor_level(&game, &pixels, -8.0, 0.0);
     let under = floor_level(&game, &pixels, -2.0, 0.0);
     eprintln!("floor behind the pillar {behind:.1}, on the open side {open:.1}, under the lamp {under:.1}");
-    assert!(open > behind + 20.0, "no shadow behind the pillar");
+    // (Bloom carries a little of the bright floor under the lamp into the shadow, #85.)
+    assert!(open > behind + 15.0, "no shadow behind the pillar");
     assert!(under > open, "the lamp's ball shadows its own light");
     // `Shadows` off: lit behind the pillar too.
     game.dm.set_by_name(id, "Shadows", Value::Bool(false)).expect("Shadows");
     let unshadowed = render(&context, &mut game, LightSettings::default());
     let behind_lit = floor_level(&game, &unshadowed, 4.0, 0.0);
-    assert!(behind_lit > behind + 20.0, "{behind_lit} against {behind}");
+    assert!(behind_lit > behind + 15.0, "{behind_lit} against {behind}");
 }
 
 /// The light in a lamp follows the lamp; a light switched off or out of the world lights nothing.

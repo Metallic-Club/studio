@@ -66,6 +66,7 @@ pub struct SceneRenderer {
     post: PostSettings,
     anti_aliasing: AntiAliasing,
     merge_scene_passes: bool,
+    post_chain: bool,
     lod_tint: bool,
     present_mode: Option<wgpu::PresentMode>,
     /// The player's graphics settings, once set ([`SceneRenderer::set_graphics`]).
@@ -121,6 +122,7 @@ impl SceneRenderer {
             post: PostSettings::default(),
             anti_aliasing: AntiAliasing::Off,
             merge_scene_passes: false,
+            post_chain: true,
             lod_tint: false,
             present_mode: None,
             graphics: None,
@@ -272,8 +274,33 @@ impl SceneRenderer {
     /// on tile-based GPUs. Applies now and to every later renderer.
     pub fn set_merge_scene_passes(&mut self, merge: bool) {
         self.merge_scene_passes = merge;
+        self.apply_passes();
+    }
+
+    /// Draws the frame without the post chain when `on` is false, as before it existed (#85): the scene straight into
+    /// the window, its passes apart, with no bloom, tone curve or MLAA. For measuring what the chain costs; presets
+    /// never turn it off (it is part of a game's look). On by default. Applies now and to every later renderer.
+    pub fn set_post_chain(&mut self, on: bool) {
+        self.post_chain = on;
+        self.apply_passes();
+    }
+
+    /// The passes a renderer runs, with MLAA when `mlaa`.
+    fn passes(&self, mlaa: bool) -> PassSet {
+        PassSet::default()
+            .with_if(PassId::Post, self.post_chain)
+            .with_if(PassId::Bloom, self.post_chain)
+            .with_if(PassId::Scene, self.merge_scene_passes && self.post_chain)
+            .with_if(PassId::Mlaa, mlaa)
+    }
+
+    /// Gives the renderer its passes again, keeping its anti-aliasing.
+    fn apply_passes(&mut self) {
+        let Some(mlaa) = self.renderer().map(|r| r.anti_aliasing().mlaa()) else {
+            return;
+        };
+        let passes = self.passes(mlaa);
         if let Some(device) = self.device.as_mut() {
-            let passes = device.renderer.settings().passes.with_if(PassId::Scene, merge);
             device.renderer.set_passes(passes);
         }
     }
@@ -762,9 +789,7 @@ impl SceneRenderer {
             resolution: self.resolution,
             post: self.post,
             // MLAA works everywhere; MSAA is set once the renderer knows its sample counts.
-            passes: PassSet::default()
-                .with_if(PassId::Scene, self.merge_scene_passes)
-                .with_if(PassId::Mlaa, self.anti_aliasing.mlaa()),
+            passes: self.passes(self.anti_aliasing.mlaa()),
             ..RendererSettings::new(format, width, height)
         }
     }

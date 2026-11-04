@@ -39,10 +39,13 @@ const SKY: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
-/// The renderer's default passes without the sky: the images show the parts on the clear colour.
+/// The renderer's default passes without the sky: the images show the parts on the clear colour, finished by the post
+/// chain (bloom, the tone curve) as every frame is.
 const PARTS_ONLY: PassSet = PassSet::EMPTY
     .with(PassId::Opaque)
     .with(PassId::Transparent)
+    .with(PassId::Bloom)
+    .with(PassId::Post)
     .with(PassId::Ui);
 
 /// A pixel differing by more than this in a channel counts as different.
@@ -408,7 +411,8 @@ fn without_a_camera_nothing_is_drawn() {
         (srgb * 255.0).round() as u8
     };
     let sky = [encode(SKY.r), encode(SKY.g), encode(SKY.b), 255];
-    support::assert_all_pixels(&pixels, sky, 1);
+    // Within two levels: the HDR scene colour (`Rg11b10Ufloat`) holds green to 1/128 and blue to 1/64 of its value.
+    support::assert_all_pixels(&pixels, sky, 2);
 }
 
 #[test]

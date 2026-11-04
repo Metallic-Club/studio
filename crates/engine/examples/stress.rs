@@ -26,6 +26,11 @@
 //! `--dynamic-resolution <ms>` holds that GPU frame time between `--min-scale <x>` and `--max-scale <x>` (0.5 and 1
 //! by default). `--switch-presets <n>` switches between Low and Ultra every `n` frames, to measure the switches.
 //!
+//! The post chain (#85): `--aa <off|mlaa|msaa2|msaa4|msaa8>` and `--effects <low|medium|high|ultra>` choose the
+//! anti-aliasing and the effect quality (with `--preset`, as the player's overrides); `--merge-scene` records the
+//! scene passes as one; `--no-post` draws the frame as before the post chain (no HDR target, bloom, tone curve or
+//! MLAA; the scene passes apart), to measure what it costs.
+//!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
 //! prints a JSON array. The JSON's fields are `metallic_engine::stress::BenchReport`'s; times are in milliseconds.
 
@@ -34,8 +39,8 @@ use std::process::{Command, ExitCode};
 
 use metallic_engine::stress::{BenchOptions, StressKind, run_bench};
 use metallic_render::resolution::ResolutionSettings;
-use metallic_render::settings::{GraphicsSettings, Preset};
-use metallic_render::{CullSettings, LightSettings, LodSettings};
+use metallic_render::settings::{GraphicsSettings, Preset, Quality, Tier};
+use metallic_render::{AntiAliasing, CullSettings, LightSettings, LodSettings};
 
 fn usage() -> String {
     format!(
@@ -47,6 +52,8 @@ fn usage() -> String {
          \x20             [--lod low|medium|high|off] [--lod-bias X] [--lod-tint]\n\
          \x20             [--preset low|medium|high|ultra|auto] [--render-scale X] [--dynamic-resolution MS]\n\
          \x20             [--min-scale X] [--max-scale X] [--switch-presets N]\n\
+         \x20             [--aa off|mlaa|msaa2|msaa4|msaa8] [--effects low|medium|high|ultra] [--merge-scene]\n\
+         \x20             [--no-post]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -60,6 +67,7 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
     let mut per_system = None;
     let mut preset = None;
     let (mut render_scale, mut target_ms, mut min_scale, mut max_scale) = (None, None, None, None);
+    let (mut anti_aliasing, mut effects) = (None, None);
     let mut it = args.iter();
     let number = |value: Option<&String>, flag: &str| -> Result<u64, String> {
         value
@@ -169,6 +177,16 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             }
             "--lod-bias" => options.lod.bias = decimal(it.next(), "--lod-bias")?,
             "--lod-tint" => options.lod_tint = true,
+            "--aa" => {
+                let name = it.next().ok_or("--aa needs off, mlaa, msaa2, msaa4 or msaa8")?;
+                anti_aliasing = Some(name.parse::<AntiAliasing>().map_err(|e| e.to_string())?);
+            }
+            "--effects" => {
+                let name = it.next().ok_or("--effects needs low, medium, high or ultra")?;
+                effects = Some(name.parse::<Tier>().map_err(|e| e.to_string())?);
+            }
+            "--merge-scene" => options.merge_scene_passes = true,
+            "--no-post" => options.post_chain = false,
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}
             other => return Err(format!("unknown argument {other:?}")),
@@ -192,10 +210,14 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
                 target_frame_ms: target_ms,
                 min_render_scale: min_scale,
                 max_render_scale: max_scale,
+                anti_aliasing,
+                effect_quality: effects,
                 ..GraphicsSettings::new(preset)
             });
         }
         None => {
+            options.anti_aliasing = anti_aliasing;
+            options.effects = effects.map(|tier| Quality::for_tier(tier).post);
             options.resolution = match target_ms {
                 Some(target) => {
                     let max = max_scale.unwrap_or(1.0);
