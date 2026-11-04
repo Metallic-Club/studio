@@ -11,6 +11,8 @@
 //! slice and [`CASTER_REACH`] metres towards the light. All maps are layers of one `Depth32Float` array
 //! texture, and each cached cascade (below) has a static map of the same size besides: their memory is
 //! `(cascades + cached cascades) × resolution² × 4` bytes (64 MiB for the default 3 × 2048, one of them cached).
+//! On OpenGL a single cascade's array gets a second, unused layer, because wgpu's GL backend cannot sample a
+//! one-layer texture as an array (#155): Low's one 1024² cascade takes 8 MiB there rather than 4.
 //!
 //! # Casters
 //!

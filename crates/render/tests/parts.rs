@@ -18,7 +18,6 @@
 mod support;
 
 use std::path::PathBuf;
-use std::sync::{Mutex, Once, PoisonError};
 
 use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Value};
@@ -28,7 +27,7 @@ use metallic_render::{
     RenderContext, Renderer, RendererSettings, wgpu,
 };
 use support::scenes::{self, Game, ImageDiff, Look, SeeThrough};
-use support::{gpu, gpu_with, read_back_rgba8};
+use support::{assert_no_wgpu_errors, collect_wgpu_messages, gpu, gpu_with, read_back_rgba8, reference_max_mean};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -52,60 +51,12 @@ const PARTS_ONLY: PassSet = PassSet::EMPTY
 const THRESHOLD: u8 = 12;
 /// At most this share of pixels may differ (triangle edges rasterised a little differently).
 const MAX_OVER: f64 = 0.01;
-/// The mean difference over all pixels may not exceed this.
+/// The mean difference over all pixels may not exceed this between two images from the same device (against the
+/// references, `support::reference_max_mean`).
 const MAX_MEAN: f64 = 1.0;
 
 fn reference_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/reference/parts.png")
-}
-
-/// wgpu's warnings and errors, which include the graphics API's validation messages in debug builds (Vulkan
-/// validation layers, the D3D12 debug layer) where the machine has them installed, as CI's images do.
-struct WgpuMessages(Mutex<Vec<(log::Level, String)>>);
-
-impl log::Log for WgpuMessages {
-    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-        metadata.level() <= log::Level::Warn && metadata.target().starts_with("wgpu")
-    }
-
-    fn log(&self, record: &log::Record<'_>) {
-        if self.enabled(record.metadata()) {
-            let message = format!("{}: {}", record.target(), record.args());
-            // The Vulkan loader's own messages while instances are made (on a machine without a Vulkan driver,
-            // "Found no drivers" is an error) say nothing about the frames drawn; the loader names the instance.
-            if message.contains("[Loader Message") || message.contains("type: INSTANCE") {
-                return;
-            }
-            self.0
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push((record.level(), message));
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-static MESSAGES: WgpuMessages = WgpuMessages(Mutex::new(Vec::new()));
-
-/// Starts collecting wgpu's messages (once per test binary).
-fn collect_wgpu_messages() {
-    static INSTALL: Once = Once::new();
-    INSTALL.call_once(|| {
-        if log::set_logger(&MESSAGES).is_ok() {
-            log::set_max_level(log::LevelFilter::Warn);
-        }
-    });
-}
-
-/// Fails on any validation error wgpu reported since the last check (by any test); prints the warnings.
-fn assert_no_wgpu_errors() {
-    let messages = std::mem::take(&mut *MESSAGES.0.lock().unwrap_or_else(PoisonError::into_inner));
-    for (level, message) in &messages {
-        eprintln!("wgpu {level}: {message}");
-    }
-    let errors = messages.iter().filter(|(level, _)| *level == log::Level::Error).count();
-    assert_eq!(errors, 0, "wgpu reported {errors} error(s), printed above");
 }
 
 /// Renders `game` once (a few frames, so everything is uploaded and sorted) and reads the image back, with the
@@ -174,7 +125,7 @@ fn demo_game(offset: Vec3) -> Game {
     game
 }
 
-fn check(name: &str, diff: ImageDiff) {
+fn check(name: &str, diff: ImageDiff, max_mean: f64) {
     eprintln!(
         "{name}: max difference {}, mean {:.3}, {:.3}% of pixels over {THRESHOLD}",
         diff.max,
@@ -182,13 +133,13 @@ fn check(name: &str, diff: ImageDiff) {
         diff.over * 100.0
     );
     assert!(
-        diff.over <= MAX_OVER && diff.mean <= MAX_MEAN,
+        diff.over <= MAX_OVER && diff.mean <= max_mean,
         "{name} differs from the reference beyond the tolerance ({diff:?})"
     );
 }
 
-/// The image against the committed reference, writing it instead when asked to.
-fn check_reference(name: &str, pixels: &[[u8; 4]]) {
+/// The image drawn on `context` against the committed reference, writing it instead when asked to.
+fn check_reference(context: &RenderContext, name: &str, pixels: &[[u8; 4]]) {
     let path = reference_path();
     if std::env::var("METALLIC_UPDATE_REFERENCES").is_ok_and(|v| v == "1") {
         scenes::write_png(&path, SIZE, SIZE, pixels);
@@ -203,12 +154,13 @@ fn check_reference(name: &str, pixels: &[[u8; 4]]) {
     };
     assert_eq!((width, height), (SIZE, SIZE));
     let diff = scenes::compare(pixels, &reference, THRESHOLD);
-    if diff.over > MAX_OVER || diff.mean > MAX_MEAN {
+    let max_mean = reference_max_mean(context);
+    if diff.over > MAX_OVER || diff.mean > max_mean {
         let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
         scenes::write_png(&out, SIZE, SIZE, pixels);
         eprintln!("{name}: the image is in {}", out.display());
     }
-    check(name, diff);
+    check(name, diff, max_mean);
 }
 
 fn describe(context: &RenderContext) {
@@ -232,7 +184,7 @@ fn the_demo_scene_matches_the_reference() {
     assert_eq!(stats.opaque_draws, 4);
     assert_eq!(stats.transparent_draws, 2);
     assert_eq!(stats.instances, 9);
-    check_reference("parts", &pixels);
+    check_reference(&context, "parts", &pixels);
 }
 
 #[test]
@@ -251,9 +203,9 @@ fn the_vertex_buffer_fallback_draws_the_same_image() {
     // Same device and maths, only the instance path differs: the images match exactly, give or take rounding.
     let (storage, _) = render(&primary, &mut demo_game(Vec3::ZERO), PARTS_ONLY);
     let diff = scenes::compare(&pixels, &storage, 1);
-    check("fallback against storage", diff);
+    check("fallback against storage", diff, MAX_MEAN);
     assert!(diff.max <= 2, "{diff:?}");
-    check_reference("parts-fallback", &pixels);
+    check_reference(&fallback, "parts-fallback", &pixels);
 }
 
 #[test]
@@ -265,7 +217,7 @@ fn far_from_the_origin_the_image_is_the_same() {
         &mut demo_game(Vec3::new(50_000.0, 200.0, -30_000.0)),
         PARTS_ONLY,
     );
-    check_reference("parts-far", &pixels);
+    check_reference(&context, "parts-far", &pixels);
 }
 
 #[test]
@@ -277,7 +229,7 @@ fn a_depth_prepass_draws_the_same_image() {
         PARTS_ONLY.with(PassId::DepthPrepass),
     );
     assert_eq!(stats.prepass_draws, 4);
-    check_reference("parts-prepass", &pixels);
+    check_reference(&context, "parts-prepass", &pixels);
 }
 
 /// The sky colour, sRGB-encoded as the target stores it.

@@ -22,7 +22,7 @@ use metallic_render::{
     RendererSettings, wgpu,
 };
 use support::scenes::{self, Game, Look};
-use support::{gpu, gpu_with, non_finite, read_back_rgba8, render_raw};
+use support::{gpu, gpu_with, non_finite, read_back_rgba8, reference_max_mean, render_raw};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -257,7 +257,7 @@ fn floor_level(game: &Game, pixels: &[[u8; 4]], x: f32, z: f32) -> f32 {
     level(pixels, project(game, Vec3::new(x, 0.0, z)))
 }
 
-fn check_reference(name: &str, pixels: &[[u8; 4]]) {
+fn check_reference(context: &RenderContext, name: &str, pixels: &[[u8; 4]]) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/reference/{name}.png"));
     if std::env::var("METALLIC_UPDATE_REFERENCES").is_ok_and(|v| v == "1") {
         scenes::write_png(&path, SIZE, SIZE, pixels);
@@ -278,7 +278,7 @@ fn check_reference(name: &str, pixels: &[[u8; 4]]) {
         diff.mean,
         diff.over * 100.0
     );
-    if diff.over > MAX_OVER || diff.mean > MAX_MEAN {
+    if diff.over > MAX_OVER || diff.mean > reference_max_mean(context) {
         let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
         scenes::write_png(&out, SIZE, SIZE, pixels);
         panic!(
@@ -303,7 +303,7 @@ fn fallback() -> Option<RenderContext> {
 fn both_paths(name: &str, make: fn() -> Game) -> Option<Vec<[u8; 4]>> {
     let primary = gpu()?;
     let pixels = render(&primary, &mut make(), LightSettings::default());
-    check_reference(name, &pixels);
+    check_reference(&primary, name, &pixels);
     if let Some(fallback) = fallback() {
         let vertex = render(&fallback, &mut make(), LightSettings::default());
         let diff = scenes::compare(&vertex, &pixels, 1);

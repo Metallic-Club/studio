@@ -19,7 +19,7 @@ use metallic_render::{
     RendererSettings, wgpu,
 };
 use support::scenes::{self, Game, Look};
-use support::{gpu, non_finite, read_back_rgba8, render_raw};
+use support::{gpu, non_finite, read_back_rgba8, reference_max_mean, render_raw};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -32,7 +32,6 @@ const CLEAR: wgpu::Color = wgpu::Color {
 };
 const THRESHOLD: u8 = 12;
 const MAX_OVER: f64 = 0.01;
-const MAX_MEAN: f64 = 1.0;
 
 /// A floor running to the horizon and a few parts, seen from head height looking west towards the late-afternoon
 /// sun. No see-through parts, so every drawn pixel is final before the sky pass.
@@ -152,7 +151,7 @@ fn pixel(pixels: &[[u8; 4]], x: u32, y: u32) -> [u8; 4] {
     pixels[(y * SIZE + x) as usize]
 }
 
-fn check_reference(name: &str, pixels: &[[u8; 4]]) {
+fn check_reference(context: &RenderContext, name: &str, pixels: &[[u8; 4]]) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/reference/{name}.png"));
     if std::env::var("METALLIC_UPDATE_REFERENCES").is_ok_and(|v| v == "1") {
         scenes::write_png(&path, SIZE, SIZE, pixels);
@@ -173,7 +172,7 @@ fn check_reference(name: &str, pixels: &[[u8; 4]]) {
         diff.mean,
         diff.over * 100.0
     );
-    if diff.over > MAX_OVER || diff.mean > MAX_MEAN {
+    if diff.over > MAX_OVER || diff.mean > reference_max_mean(context) {
         let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
         scenes::write_png(&out, SIZE, SIZE, pixels);
         panic!(
@@ -189,7 +188,7 @@ fn the_late_afternoon_matches_the_reference() {
     let mut game = sunset_game();
     set_clock_time(&mut game, 17.0);
     let pixels = render(&context, &mut game, PassSet::default(), 1);
-    check_reference("sky", &pixels);
+    check_reference(&context, "sky", &pixels);
     // No pixel kept the clear colour: the sky covers everything the parts left.
     assert!(pixels.iter().all(|p| p[..3] != [255, 0, 255]), "the clear colour shows");
 }
