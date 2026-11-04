@@ -19,6 +19,7 @@ use crate::lod::LodView;
 use crate::parts::{Camera, MeshPool};
 use crate::scene::{InstanceBinding, LightKind, SceneLight};
 use crate::shadow::SHADOW_FORMAT;
+use crate::textures::TextureMaker;
 
 /// The longest step a fade takes in one frame, in seconds: after a stall, lights fade on rather than jump.
 const MAX_STEP: f32 = 0.1;
@@ -182,8 +183,7 @@ impl LocalLights {
     /// `instance_layout`. Makes their pipelines (through `cache` where there is one); their buffers and textures wait
     /// for the first light.
     pub(crate) fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        (device, queue, maker): (&wgpu::Device, &wgpu::Queue, &TextureMaker),
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: LightSettings,
@@ -196,7 +196,7 @@ impl LocalLights {
             buffers: None,
             lights: Vec::with_capacity(MAX_GPU_LIGHTS),
             uploaded: Vec::with_capacity(MAX_GPU_LIGHTS),
-            atlas: ShadowAtlas::new(device, queue, binding, instance_layout, &settings, cache),
+            atlas: ShadowAtlas::new((device, queue, maker), binding, instance_layout, &settings, cache),
             ranked: Vec::with_capacity(MAX_GPU_LIGHTS),
             drawn: Vec::with_capacity(MAX_GPU_LIGHTS),
             spheres: Vec::with_capacity(MAX_GPU_LIGHTS),
@@ -394,6 +394,16 @@ impl LocalLights {
                     light.params[3] = 0.0;
                 }
                 any_shadow |= light.params[3] > 0.0;
+            }
+        }
+        if self.atlas.waiting() && !self.shadow_slots.is_empty() {
+            // The atlas is still being made, off the frame (#152): its lights are drawn without their shadows, which
+            // fade in once it exists rather than pop on.
+            let (_, runtime) = scene.lights_mut();
+            for &slot in &self.shadow_slots {
+                if let Some(state) = self.drawn.get(slot).and_then(|&index| runtime.get_mut(index as usize)) {
+                    state.shadow_fade = 0.0;
+                }
             }
         }
 

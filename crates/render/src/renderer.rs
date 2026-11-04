@@ -15,6 +15,7 @@ use crate::resolution::{DynamicResolution, ResolutionSettings, ResolutionStats, 
 use crate::scene::{InstanceBinding, UploadStats};
 use crate::shadow::{MAX_CASCADES, ShadowSettings, ShadowStats};
 use crate::target::check_size;
+use crate::textures::{Slot, TextureMaker, TextureSpec, TextureStats};
 use crate::timing::{GpuTimer, Timed};
 use crate::upscale::{Upscaler, upscale_params};
 use crate::{FrameTimings, GpuScene, MsaaSampleCounts, RenderContext, RenderError};
@@ -83,6 +84,22 @@ struct Attachment {
     view: wgpu::TextureView,
 }
 
+/// The scene's attachments for a set of settings: the plan they follow, their size, and the depth, MSAA colour and
+/// scene colour textures it uses.
+struct Attachments {
+    plan: FramePlan,
+    texture_size: (u32, u32),
+    specs: [Option<TextureSpec>; 3],
+}
+
+/// The attachments of a settings change, while they are made off the frame ([`crate::textures`]): until all of them
+/// exist, frames draw with the settings before it.
+struct PendingAttachments {
+    switch: Switch,
+    attachments: Attachments,
+    slots: [Option<Slot>; 3],
+}
+
 /// The settings that choose pipelines: a change to any of them takes effect once the pipelines it needs are compiled.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Switch {
@@ -143,6 +160,13 @@ const FIRST_FRAME_KEYS: usize = MAX_NEEDED + PartPipeline::LIT.len();
 /// compile (only possible in the first second or so) hurries them to the front of the queue, is drawn once they
 /// exist, and fades in over [`crate::LightSettings::fade_time`] rather than popping on.
 /// [`Renderer::wait_for_pipelines`] waits for everything, for tests, tools and loading screens.
+///
+/// # Textures
+///
+/// The large textures a settings change needs (the scene's attachments for a new MSAA count, scale or chain, the
+/// sun's shadow maps, the lights' atlas) are made off the frame once a scene's first frame is drawn
+/// (`textures`): one a frame, on a worker thread, while frames keep drawing with the settings before the
+/// change; each part switches once all of its own exist. [`Renderer::texture_stats`] says what is still being made.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -194,6 +218,12 @@ pub struct Renderer {
     overlay_pipeline: Option<wgpu::RenderPipeline>,
     /// The next [`Renderer::render_scene`] is a scene's first frame: it waits for the pipelines it draws with.
     first_scene_frame: bool,
+    /// Makes the large textures of settings changes off the frame ([`crate::textures`]).
+    maker: TextureMaker,
+    /// Textures are made at once: until a scene's first frame is drawn.
+    immediate: bool,
+    /// The attachments of the waiting settings change, being made.
+    pending_attachments: Option<PendingAttachments>,
 }
 
 impl Renderer {
@@ -227,10 +257,11 @@ impl Renderer {
         } else {
             settings.color_format
         };
+        // OpenGL makes textures on its context's thread too: cheaply, inline (#152).
+        let maker = TextureMaker::new(context.device(), !gl);
         // Queues the scene's first pipelines, then makes the shadows' and lights' while they compile.
         let parts = PartRenderer::new(
-            context.device(),
-            context.queue(),
+            (context.device(), context.queue(), &maker),
             InstanceBinding::for_context(context),
             (first_format, first.msaa_samples()),
             &mut compiler,
@@ -269,6 +300,9 @@ impl Renderer {
             waiting: None,
             overlay_pipeline: None,
             first_scene_frame: true,
+            maker,
+            immediate: true,
+            pending_attachments: None,
         };
         // The rest of what the first frame draws (the post chain's passes it runs), all at once on the workers; then
         // the lit pipelines of the same target behind them, which a scene with lights waits for in its first frame,
@@ -478,27 +512,91 @@ impl Renderer {
         self.apply_waiting();
     }
 
-    /// Makes the settings change that was waiting, once its pipelines are compiled.
+    /// Makes the settings change that was waiting, once its pipelines are compiled and its attachments made.
     fn apply_waiting(&mut self) {
-        if let Some(next) = self.waiting
-            && self.ready_for(&next)
-        {
-            self.waiting = None;
-            self.apply(next);
+        if self.waiting.is_some() {
+            self.advance_switch();
+        }
+    }
+
+    /// Moves the waiting settings change on: once its pipelines are compiled, asks for its attachments (made off the
+    /// frame when large, [`crate::textures`]), and once they exist makes it the one drawn.
+    fn advance_switch(&mut self) {
+        let Some(next) = self.waiting else {
+            return;
+        };
+        if !self.ready_for(&next) {
+            return;
+        }
+        let attachments = if self.needs_rebuild(&next) {
+            if self.pending_attachments.as_ref().is_none_or(|p| p.switch != next) {
+                self.cancel_attachments();
+                let attachments = self.attachments(&next);
+                let slots = attachments
+                    .specs
+                    .map(|spec| spec.map(|spec| Slot::new(self.maker.make(spec))));
+                self.pending_attachments = Some(PendingAttachments {
+                    switch: next,
+                    attachments,
+                    slots,
+                });
+            }
+            let Some(pending) = self.pending_attachments.as_mut() else {
+                return;
+            };
+            let mut here = true;
+            for slot in pending.slots.iter_mut().flatten() {
+                here &= slot.poll(&self.maker);
+            }
+            if !here {
+                return;
+            }
+            self.pending_attachments.take().map(|pending| {
+                (
+                    pending.attachments,
+                    pending.slots.map(|slot| slot.and_then(Slot::into_texture)),
+                )
+            })
+        } else {
+            // Those of a change it replaced are not needed.
+            self.cancel_attachments();
+            None
+        };
+        self.waiting = None;
+        self.apply(next, attachments);
+    }
+
+    /// Gives up the attachments being made for a settings change (a newer one, or a new target size, replaced it).
+    fn cancel_attachments(&mut self) {
+        if let Some(pending) = self.pending_attachments.take() {
+            for slot in pending.slots.into_iter().flatten() {
+                slot.cancel(&self.maker);
+            }
         }
     }
 
     /// Makes the next [`Renderer::render_scene`] a scene's first frame, as the first one after [`Renderer::new`] is:
     /// it waits for exactly the pipelines it draws with (those of the settings asked for, a change still compiling
     /// included, and the local lights' when the scene has any), so the first frame of a game or a newly loaded place
-    /// already looks as it should. Call it when a new scene is attached; later frames never wait.
+    /// already looks as it should. Textures are made at once again until it is drawn. Call it when a new scene is
+    /// attached; later frames never wait.
     pub fn begin_scene(&mut self) {
         self.first_scene_frame = true;
+        self.set_immediate(true);
+    }
+
+    /// Makes textures at once (until a scene's first frame is drawn) or off the frame.
+    fn set_immediate(&mut self, immediate: bool) {
+        if self.immediate != immediate {
+            self.immediate = immediate;
+            self.maker.set_immediate(immediate);
+        }
     }
 
     /// The first frame of a scene: waits until the pipelines it draws `scene` with are compiled (prioritized, on the
-    /// workers) and makes a settings change that waited for them.
+    /// workers) and the textures still being made exist, and makes a settings change that waited for them.
     fn wait_for_scene(&mut self, scene: &GpuScene) {
+        self.maker.finish();
         let lit = self.settings.lights.enabled && scene.scene().light_count() > 0;
         let (keys, count) = self.needed_keys(&self.wanted(), lit);
         self.wait_for_keys(&keys[..count]);
@@ -566,11 +664,19 @@ impl Renderer {
         self.compiler.prioritize(&keys);
     }
 
-    /// Waits for every pipeline compile queued (the background ones included) and makes a settings change that was
-    /// waiting for them. Blocks for as long as the compiles take, on the CPU (it never waits for the GPU): for
-    /// tests, tools and loading screens, never in a game's frame loop. Resumes paused compiles.
+    /// Waits for every pipeline compile queued (the background ones included) and every texture a settings change is
+    /// making off the frame (`textures`), and makes a settings change that was waiting for them (the sun's
+    /// shadows and the lights' atlas take theirs with the next frame). Blocks for as long as they take, on the CPU (it
+    /// never waits for the GPU): for tests, tools and loading screens, never in a game's frame loop. Resumes paused
+    /// compiles.
     pub fn wait_for_pipelines(&mut self) {
+        self.maker.finish();
         self.wait_for_compiles();
+    }
+
+    /// What the textures made off the frame have done and what is still being made (`textures`).
+    pub fn texture_stats(&self) -> TextureStats {
+        self.maker.stats()
     }
 
     /// Stops starting background compiles (those already running finish) until called again with `false`: for a
@@ -624,6 +730,8 @@ impl Renderer {
         if (width, height) != (self.settings.width, self.settings.height) {
             self.settings.width = width;
             self.settings.height = height;
+            // Attachments being made for a change are of the old size: asked for again at this one.
+            self.cancel_attachments();
             self.rebuild();
         }
         Ok(())
@@ -650,42 +758,52 @@ impl Renderer {
         self.waiting.unwrap_or_else(|| Switch::of(&self.settings))
     }
 
-    /// Draws with `next` from now on when its pipelines are compiled, otherwise queues them and draws as before until
-    /// they are (the first frame after they finish switches).
+    /// Draws with `next` from now on when its pipelines are compiled and its attachments made, otherwise queues what
+    /// it lacks and draws as before until it is ready (the first frame after that switches).
     fn switch(&mut self, next: Switch) {
         if next == Switch::of(&self.settings) {
             self.waiting = None;
-        } else if self.ready_for(&next) {
-            self.waiting = None;
-            self.apply(next);
-        } else {
-            self.queue_needed(&next);
-            self.waiting = Some(next);
+            self.cancel_attachments();
+            return;
         }
+        if !self.ready_for(&next) {
+            self.queue_needed(&next);
+        }
+        self.waiting = Some(next);
+        self.advance_switch();
     }
 
-    /// Draws with `next` from now on (its pipelines are compiled): makes what the change needs again, the attachments
-    /// and the frame plan, or the post effects' textures. A settings change: it waits for nothing.
-    fn apply(&mut self, next: Switch) {
+    /// Whether drawing with `next` needs new attachments and a new frame plan.
+    fn needs_rebuild(&self, next: &Switch) -> bool {
         let old = Switch::of(&self.settings);
+        let (width, height) = (self.settings.width, self.settings.height);
+        let rescaled = old.resolution != next.resolution
+            && (old.resolution.scaled() != next.resolution.scaled()
+                || self.clamped_texture_size(next.resolution.texture_size(width, height)) != self.texture_size);
+        old.passes != next.passes
+            || old.msaa_samples != next.msaa_samples
+            || old.post.chain != next.post.chain
+            || rescaled
+    }
+
+    /// Draws with `next` from now on (its pipelines are compiled): installs its `attachments` (made for it, or made
+    /// now when `None` and it needs them) and the frame plan, or makes the post effects' textures again. A settings
+    /// change: it waits for nothing.
+    fn apply(&mut self, next: Switch, attachments: Option<(Attachments, [Option<wgpu::Texture>; 3])>) {
+        let old = Switch::of(&self.settings);
+        let rebuild = self.needs_rebuild(&next);
         self.settings.passes = next.passes;
         self.settings.msaa_samples = next.msaa_samples;
         self.settings.post = next.post;
         self.settings.resolution = next.resolution;
-        let resolution_changed = old.resolution != next.resolution;
-        if resolution_changed {
+        if old.resolution != next.resolution {
             self.resolution.set_settings(next.resolution);
         }
-        let (width, height) = (self.settings.width, self.settings.height);
-        let rescaled = resolution_changed
-            && (old.resolution.scaled() != next.resolution.scaled()
-                || self.clamped_texture_size(next.resolution.texture_size(width, height)) != self.texture_size);
-        if old.passes != next.passes
-            || old.msaa_samples != next.msaa_samples
-            || old.post.chain != next.post.chain
-            || rescaled
-        {
-            self.rebuild();
+        if rebuild {
+            match attachments {
+                Some((attachments, textures)) => self.rebuild_with(attachments, textures),
+                None => self.rebuild(),
+            }
         } else if old.post.bloom != next.post.bloom || old.post.mlaa != next.post.mlaa {
             self.rebuild_post();
         }
@@ -698,8 +816,8 @@ impl Renderer {
 
     /// Changes the anti-aliasing: MLAA ([`PassId::Mlaa`] in the passes) or MSAA (the sample count), or none. Fails
     /// for an MSAA count the device lacks ([`AntiAliasing::supported`] picks one it has). A settings change: its
-    /// pipelines are compiled in the background with the renderer's (until they are, frames keep the anti-aliasing
-    /// before it), and the new attachments are made without waiting for the GPU.
+    /// pipelines are compiled in the background with the renderer's, and its attachments made off the frame (until
+    /// both are, frames keep the anti-aliasing before it); nothing waits for the GPU.
     pub fn set_anti_aliasing(&mut self, aa: AntiAliasing) -> Result<(), RenderError> {
         let samples = aa.msaa_samples();
         self.check_msaa(samples)?;
@@ -807,7 +925,8 @@ impl Renderer {
     }
 
     /// Changes how the sun's shadows are drawn ([`crate::shadow`]). A settings change, not for every frame: a new
-    /// size or cascade count makes the maps again, and every map is drawn again next frame.
+    /// size or cascade count makes the maps again (off the frame once a scene's first frame is drawn, see
+    /// [`Renderer`]), and every map is drawn again once they exist.
     pub fn set_shadows(&mut self, shadows: ShadowSettings) {
         if shadows != self.settings.shadows {
             self.settings.shadows = shadows;
@@ -1094,14 +1213,20 @@ impl Renderer {
         self.shadow_recorded = 0;
         self.shadow_in_use = 0;
         self.atlas_recorded = false;
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("metallic frame"),
+        });
+        // A texture a settings change waits for, made since the last frame: cleared first, then taken by its system
+        // (#152). Touches nothing when none is pending.
+        self.maker.begin_frame(&mut encoder);
+        if self.waiting.is_some() {
+            self.advance_switch();
+        }
         let slot = match self.timer.as_mut() {
             Some(timer) => timer.begin_frame(&self.device),
             None => None,
         };
         self.update_resolution();
-        let encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("metallic frame"),
-        });
         (encoder, slot)
     }
 
@@ -1313,6 +1438,10 @@ impl Renderer {
         if let (Some(timer), Some(slot)) = (self.timer.as_ref(), slot) {
             timer.after_submit(slot);
         }
+        // The next texture a settings change needs, made while the frame is presented (#152); from now on large
+        // ones are made so.
+        self.maker.kick();
+        self.set_immediate(false);
         self.frame += 1;
         submission
     }
@@ -1328,19 +1457,31 @@ impl Renderer {
         }
     }
 
-    /// Plans the frame again and recreates the attachments it needs. Runs on settings changes, never per frame.
+    /// Plans the frame again and makes the attachments it needs, now. Runs on settings changes (made at once: a new
+    /// target size, or a renderer's first settings), never per frame.
     fn rebuild(&mut self) {
-        let resolution = self.settings.resolution;
-        self.plan = Switch::of(&self.settings).plan();
+        let attachments = self.attachments(&Switch::of(&self.settings));
+        let textures = attachments
+            .specs
+            .map(|spec| spec.map(|spec| spec.make_now(&self.device)));
+        self.rebuild_with(attachments, textures);
+    }
+
+    /// The frame plan of `switch` at the target's size, and the scene attachments it needs: the depth, the MSAA
+    /// colour and the scene colour.
+    fn attachments(&self, switch: &Switch) -> Attachments {
+        let plan = switch.plan();
         let (width, height) = (self.settings.width, self.settings.height);
-        self.texture_size = if self.plan.scaled() {
-            self.clamped_texture_size(resolution.texture_size(width, height))
+        let texture_size = if plan.scaled() {
+            self.clamped_texture_size(switch.resolution.texture_size(width, height))
         } else {
             (width, height)
         };
-        self.render_size = self.texture_size;
-        let scene_format = self.scene_target_format();
-        self.parts.set_target(scene_format, self.plan.msaa_samples());
+        let scene_format = if plan.post() {
+            self.hdr_format
+        } else {
+            self.settings.color_format
+        };
         // An attachment living only inside one pass (cleared, then discarded) is in tile memory only on tile-based
         // GPUs.
         let transient = |within_one_pass: bool| {
@@ -1350,26 +1491,65 @@ impl Renderer {
                 wgpu::TextureUsages::empty()
             }
         };
-        let samples = self.plan.msaa_samples();
-        let depth_usage = transient(self.plan.depth_transient());
-        let msaa_usage = transient(self.plan.msaa_color_transient());
-        self.depth = self
-            .plan
-            .uses_depth()
-            .then(|| self.attachment("metallic depth", DEPTH_FORMAT, samples, depth_usage));
-        self.msaa_color = self
-            .plan
-            .uses_msaa_color()
-            .then(|| self.attachment("metallic msaa colour", scene_format, samples, msaa_usage));
-        // The finish pass (or the upscale pass) samples it.
-        self.scene_color = self.plan.uses_scene_color().then(|| {
-            self.attachment(
-                "metallic scene colour",
-                scene_format,
-                1,
-                wgpu::TextureUsages::TEXTURE_BINDING,
+        let samples = plan.msaa_samples();
+        let spec = |label, format, samples, usage| {
+            TextureSpec::new(
+                label,
+                (texture_size.0, texture_size.1, 1),
+                format,
+                usage | wgpu::TextureUsages::RENDER_ATTACHMENT,
             )
+            .multisampled(samples)
+        };
+        let specs = [
+            plan.uses_depth().then(|| {
+                spec(
+                    "metallic depth",
+                    DEPTH_FORMAT,
+                    samples,
+                    transient(plan.depth_transient()),
+                )
+            }),
+            plan.uses_msaa_color().then(|| {
+                spec(
+                    "metallic msaa colour",
+                    scene_format,
+                    samples,
+                    transient(plan.msaa_color_transient()),
+                )
+            }),
+            // The finish pass (or the upscale pass) samples it.
+            plan.uses_scene_color().then(|| {
+                spec(
+                    "metallic scene colour",
+                    scene_format,
+                    1,
+                    wgpu::TextureUsages::TEXTURE_BINDING,
+                )
+            }),
+        ];
+        Attachments {
+            plan,
+            texture_size,
+            specs,
+        }
+    }
+
+    /// Draws with `attachments`' plan from now on, into `textures` (made for its specs).
+    fn rebuild_with(&mut self, attachments: Attachments, textures: [Option<wgpu::Texture>; 3]) {
+        self.plan = attachments.plan;
+        self.texture_size = attachments.texture_size;
+        self.render_size = self.texture_size;
+        self.parts
+            .set_target(self.scene_target_format(), self.plan.msaa_samples());
+        let [depth, msaa_color, scene_color] = textures.map(|texture| {
+            texture.map(|texture| Attachment {
+                view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            })
         });
+        self.depth = depth;
+        self.msaa_color = msaa_color;
+        self.scene_color = scene_color;
         let scene_view = self.scene_color.as_ref().map(|attachment| &attachment.view);
         self.upscaler
             .set_source(&self.device, scene_view.filter(|_| !self.plan.post()));
@@ -1409,35 +1589,6 @@ impl Renderer {
     /// `size` within the device's largest texture.
     fn clamped_texture_size(&self, (width, height): (u32, u32)) -> (u32, u32) {
         (width.min(self.max_texture_size), height.min(self.max_texture_size))
-    }
-
-    /// A scene attachment of the scene's attachment size with `samples` per pixel, usable as a render attachment and
-    /// as `usage` says.
-    fn attachment(
-        &self,
-        label: &str,
-        format: wgpu::TextureFormat,
-        samples: u32,
-        usage: wgpu::TextureUsages,
-    ) -> Attachment {
-        let usage = usage | wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: self.texture_size.0,
-                height: self.texture_size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: samples,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage,
-            view_formats: &[],
-        });
-        Attachment {
-            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        }
     }
 }
 

@@ -450,6 +450,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         summary: None,
         present_mode: None,
         error: None,
+        trace: std::env::var_os("METALLIC_TRACE_SWITCHES").map(|_| SwitchTrace::default()),
     };
     Platform::new()?.run(&mut app)?;
     if let Some(error) = app.error.take().or_else(|| app.inner.take_error()) {
@@ -523,6 +524,82 @@ struct BenchApp {
     summary: Option<PerfSummary>,
     present_mode: Option<wgpu::PresentMode>,
     error: Option<EngineError>,
+    /// `METALLIC_TRACE_SWITCHES`: the frames after each toggle, printed.
+    trace: Option<SwitchTrace>,
+}
+
+/// Prints the frames after each toggle of the effect-toggle cycle on stderr (`METALLIC_TRACE_SWITCHES=1`): each
+/// frame's time, what it drew of the shadows, the textures still being made off the frame, and the GPU time of its
+/// passes once its timestamps arrive (one to three frames late), to see where a switch's cost goes and how many frames
+/// it takes (#152).
+#[derive(Debug, Default)]
+struct SwitchTrace {
+    /// The renderer's frame index at the last toggle, and the frames traced since.
+    switch: Option<u64>,
+    frames: u32,
+    /// The newest frame whose GPU times were printed.
+    printed: u64,
+}
+
+/// Frames traced after a toggle.
+const TRACED_FRAMES: u32 = 10;
+
+impl SwitchTrace {
+    fn switched(&mut self, toggle: Toggle, renderer: Option<&metallic_render::Renderer>) {
+        let Some(renderer) = renderer else { return };
+        self.switch = Some(renderer.frame_index());
+        self.frames = 0;
+        match toggle {
+            Toggle::Preset(preset) => eprintln!("switch to {preset:?} before frame {}", renderer.frame_index()),
+            other => eprintln!("toggle {other:?} before frame {}", renderer.frame_index()),
+        }
+    }
+
+    fn frame(&mut self, (frame_ms, render_ms): (f32, f32), renderer: Option<&metallic_render::Renderer>) {
+        let (Some(switch), Some(renderer)) = (self.switch, renderer) else {
+            return;
+        };
+        if self.frames < TRACED_FRAMES {
+            self.frames += 1;
+            let shadows = renderer.shadow_stats();
+            let lights = renderer.light_stats();
+            let textures = renderer.texture_stats();
+            eprintln!(
+                "  frame {}: {frame_ms:.2} ms (render {render_ms:.2}), cascades drawn {:03b} built {:03b}, tiles drawn \
+                 {}, msaa {}, textures pending {} (made {}, {:.0} MiB, longest {:.1} ms)",
+                renderer.frame_index().saturating_sub(1),
+                shadows.redrawn_mask(),
+                shadows.built_mask(),
+                lights.tiles_redrawn,
+                renderer.settings().msaa_samples,
+                textures.pending,
+                textures.made,
+                textures.made_bytes as f64 / f64::from(1 << 20),
+                textures.longest_ms
+            );
+        }
+        if let Some(timings) = renderer.gpu_timings()
+            && timings.frame() >= switch
+            && timings.frame() < switch + u64::from(TRACED_FRAMES)
+            && timings.frame() > self.printed
+        {
+            self.printed = timings.frame();
+            let mut line = format!("    gpu {}: total {:.2}", timings.frame(), timings.total_ms());
+            for cascade in 0..timings.cascade_count() {
+                let _ = write!(
+                    line,
+                    ", c{cascade} {:.2}/{:.2}",
+                    timings.cascade(cascade).unwrap_or(0.0),
+                    timings.cascade_build(cascade).unwrap_or(0.0)
+                );
+            }
+            let _ = write!(line, ", atlas {:.2}", timings.light_shadow_ms());
+            for pass in timings.passes() {
+                let _ = write!(line, ", {} {:.2}", pass.pass, pass.gpu_ms);
+            }
+            eprintln!("{line}");
+        }
+    }
 }
 
 impl AppHandler for BenchApp {
@@ -604,6 +681,11 @@ impl AppHandler for BenchApp {
                     TOGGLES[((frames - 1) / every) as usize % TOGGLES.len()]
                 );
             }
+            if let Some(trace) = self.trace.as_mut()
+                && let Some(last) = renderer.perf().last()
+            {
+                trace.frame((last.frame_ms, last.render_ms), renderer.renderer());
+            }
             if let Some((every, graphics)) = self.toggle.as_mut()
                 && frames.is_multiple_of(*every)
                 && frames < self.end
@@ -611,6 +693,9 @@ impl AppHandler for BenchApp {
                 let step = (frames / *every) as usize % TOGGLES.len();
                 TOGGLES[step].apply(&mut renderer, graphics);
                 self.toggles += 1;
+                if let Some(trace) = self.trace.as_mut() {
+                    trace.switched(TOGGLES[step], renderer.renderer());
+                }
             }
         }
         if frames >= self.end {

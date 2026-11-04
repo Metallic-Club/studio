@@ -639,6 +639,52 @@ fn a_static_frame_does_not_redraw_the_far_cascade() {
     assert!(checked, "no timings of a frame that kept the far cascade arrived");
 }
 
+/// A new map size after a scene's first frame (#152): its maps are made off the frame, one a frame, while frames keep
+/// drawing with the maps before it; then every cascade is drawn into them at once, and the image is the one a
+/// renderer made with that size draws. Before the first frame the maps are made at once (every other test here).
+#[test]
+fn a_new_map_size_takes_effect_once_its_maps_are_made() {
+    let Some(context) = gpu() else { return };
+    let mut built = shadow_game();
+    let game = &mut built.game;
+    let mut frames = Frames::new(&context, game, ShadowSettings::default());
+    frames.frame(&context, game);
+    assert_eq!(frames.renderer.parts().shadow_settings().resolution, 2048);
+    let sharper = ShadowSettings {
+        resolution: 3072,
+        ..ShadowSettings::default()
+    };
+    frames.renderer.set_shadows(sharper);
+    // The cascades' maps (3 × 3072², 108 MiB) and the far cascade's static map (36 MiB) are being made.
+    let stats = frames.renderer.texture_stats();
+    assert_eq!(stats.pending, 2, "{stats:?}");
+    frames.frame(&context, game);
+    assert_eq!(
+        frames.renderer.parts().shadow_settings().resolution,
+        2048,
+        "the maps before the change are drawn until the new ones exist"
+    );
+    assert_eq!(frames.renderer.shadow_stats().cascades, 3);
+    // One texture a frame, each made on a worker while the frame before is presented.
+    let (mut waited, deadline) = (1, Instant::now() + Duration::from_secs(10));
+    while frames.renderer.parts().shadow_settings().resolution != 3072 {
+        assert!(Instant::now() < deadline, "the new maps never took effect");
+        frames.frame(&context, game);
+        waited += 1;
+    }
+    eprintln!("the new maps took effect in frame {waited} after the change");
+    assert!(waited >= 2, "both textures arrived in one frame");
+    assert_eq!(redrawn(&frames), 0b111, "every cascade is drawn into the new maps");
+    assert_eq!(frames.renderer.texture_stats().pending, 0);
+    let switched = frames.pixels(&context);
+    let made_so = render(&context, game, sharper);
+    let diff = scenes::compare(&switched, &made_so, THRESHOLD);
+    assert!(diff.over <= MAX_OVER, "{diff:?}");
+    // Small maps (under 16 MiB: the Low preset's one 1024² cascade) are made at once.
+    frames.renderer.set_shadows(Quality::LOW.shadows);
+    assert_eq!(frames.renderer.parts().shadow_settings().resolution, 1024);
+}
+
 /// What [`far_mover_game`] built.
 struct FarMover {
     game: Game,

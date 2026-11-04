@@ -38,6 +38,15 @@ const WANTED_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
     // Compiled pipelines kept on disk between runs (Vulkan; `crate::pipeline_cache`).
     .union(wgpu::Features::PIPELINE_CACHE);
 
+/// The device memory blocks wgpu suballocates from on DX12 and Vulkan: 128 MiB each. Its default
+/// (`MemoryHints::Performance`) starts there and grows to 256 MiB. A new block is cleared by the OS on the thread that
+/// makes it, about 0.12 ms a MiB on the dev PC (#152): 15 ms for 128 MiB, which [`crate::textures`] makes on its
+/// worker while a frame is presented, but 25 to 30 ms for 256, which showed in the frame after (a 120 Hz frame took
+/// 19.7 ms at a switch to Ultra). Smaller blocks cost less each, but give every texture larger than a block a block of
+/// its own, freed again (on the frame's thread) when it goes, and measured no better. Host blocks (uploads) are half
+/// the size: 64 MiB, Performance's smallest.
+const MEMORY_BLOCKS: std::ops::Range<u64> = (128 << 20)..(128 << 20);
+
 /// How [`RenderContext`] looks for an adapter.
 #[derive(Clone, Debug)]
 pub struct ContextOptions {
@@ -294,6 +303,9 @@ impl RenderContext {
             required_features: adapter.features() & WANTED_FEATURES,
             // Everything the adapter offers: later systems size their buffers from `device.limits()`.
             required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::Manual {
+                suballocated_device_memory_block_size: MEMORY_BLOCKS,
+            },
             ..Default::default()
         }))?;
         let mut capabilities = Capabilities::new(&adapter, &device);

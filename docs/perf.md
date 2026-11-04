@@ -1161,9 +1161,115 @@ No toggle compiles anything on a frame, and no frame waits for the GPU. What is 
 Ultra: its first frame makes the 3 × 3072² cascades and the 4096² atlas and draws all of them again (render CPU about
 1 ms). That is 16 ms uncapped and 23 to 27 ms with vsync on DX12 (2 spikes against a 120 Hz target's 16.7 ms, none
 against 60 fps), and 37 ms on OpenGL (all 9 of its spikes, at High → Ultra); #152 spreads that redraw over frames.
-So the done-when of #86 holds on DX12; on OpenGL it depends on #152.
+So the done-when of #86 holds on DX12; on OpenGL it depends on #152. (#152 found the cost was making the textures, not
+drawing them: see the next section.)
 `METALLIC_TRACE_SPIKES=1` prints each spike and the toggle before it. Vulkan has no adapter for a window on this PC
 (#110), so its numbers are the offscreen ones above. On OpenGL, `no_alloc`'s heap-growth tests fail on this PC on
 `main` too (#153); CI does not run them there.
 
 The perf gate's workloads (scene sync and cull, no GPU) are untouched: nothing was added to the sync or cull paths.
+
+### Settings switches: new textures off the frame (#152)
+
+The last spike of the toggle run above was the first frame after a switch from High to Ultra. **It was not the
+redraw.** Timed pass by pass (`METALLIC_TRACE_SWITCHES=1`, below), that frame's GPU work on DX12 was 3.6 to 3.7 ms
+against Ultra's steady 3.6: redrawing every cascade and the far one's static map took 0.4 ms (0.06 + 0.15 + 0.03, and
+0.16 to build the far map), and the atlas 0.01 ms (Ultra keeps High's atlas size; 2 tiles of lights it adds). Render
+CPU was 1.0 to 1.2 ms. The other 12 to 13 ms of the 16 to 17 ms frame (uncapped) were spent **making the new
+textures**, on the CPU, in the settings call before the frame: the 3 × 3072² cascades (108 MiB) and their static map
+(36 MiB), and 8x MSAA's colour and depth (63 MiB each). Overriding Ultra's shadows to High's size alone, or its MSAA
+to 4x alone, left the spike as it was; both together removed it (3.8 ms).
+
+What a new texture costs, from `cargo run --release -p metallic_render --example texture_cost` (dev PC, Ryzen 5 5500,
+RX 6650 XT, Windows 11):
+
+| | DX12 / Vulkan | OpenGL |
+| --- | --- | --- |
+| Making it, room in a memory block | 0.05 ms | 0.2 ms |
+| Making it, a new block | about 0.12 ms a MiB, on the calling thread: 15 ms for 128 MiB, 25 ms for 256 | — |
+| First clear (the first use) | 0.3 to 1.8 ms (108 MiB), then 0.1 to 0.4 | about 0.11 ms a MiB (12 ms for 108 MiB), then 0.2 to 0.6 |
+| Freeing it | nothing in a block; 2.7 ms for a block of its own (144 MiB) | 0.05 ms |
+
+The OS clears every new device memory block (on DX12 and Vulkan when it is made; on OpenGL the driver at its first
+use). wgpu suballocates from blocks of 128 MiB growing to 256 (`MemoryHints::Performance`), so whichever texture
+needs a new block pays for all of it. wgpu's own lazy zero-initialisation cost nothing here: every new texture is
+first used by a pass that clears it (`LoadOp::Clear`), but for the atlas, whose size Ultra does not change.
+
+**What changed** (`metallic_render::textures`, ADR 0008 §9):
+
+- **One texture a frame, on a worker, while the frame is presented.** The large textures a settings change needs
+  (16 MiB or more: the shadow maps, the lights' atlas, the scene's depth, MSAA colour and scene colour) are queued;
+  right after each frame's submit a worker thread makes the next one, while the frame's present waits for the
+  display. A frame that writes a buffer while the worker is still making its texture waits for it (wgpu holds its
+  allocator's lock while the OS clears a block: the example's worker blocked such frames for the full 16 ms, frames
+  without writes for none), so only one is made at a time, and the present's wait hides most of it. Making them
+  inline at the same moment did not: a 13 ms texture made right before the present gave 24 and 52 ms frames; on the
+  worker, 10 ms.
+- **Each new texture is cleared in the frame it arrives**, before that frame's passes: its first use, which is where
+  OpenGL pays, falls in a frame of its own too (OpenGL makes them inline: one context thread, and making them is
+  cheap there).
+- **Frames keep drawing with what the change replaces until all of a system's textures exist**, then that system
+  switches at once: the sun's shadows (every cascade drawn again into the new maps, 0.4 ms), the atlas (every tile
+  drawn again; lights keep their tiles), the scene's attachments (the anti-aliasing, scale or post chain of the
+  switch, which waits for them as it already waited for its pipelines, #86). There is no seam: nothing is drawn half
+  from old maps and half from new. A light's first shadow mid-game waits for the atlas the same way: drawn unshadowed
+  for a frame or two, then its shadow fades in.
+- **Memory blocks of 128 MiB** (`RenderContext` asks wgpu for them; its default grows to 256): a new block is made on
+  the worker like any texture, and 15 ms of it hides behind the present, 25 to 30 ms does not. With wgpu's default
+  blocks one switch to Ultra in three runs took 19.7 ms, and three vsync toggle runs had 0, 3 and 0 spikes (worst
+  24.4 ms); with 128 MiB blocks 0, 0 and 0 (worst 13.6). Blocks of 8 to 32 MiB give each large texture a block of its
+  own (in proportion to its size: the same switch's worst frame 11.3 to 12.3 ms), but freeing such a block costs the
+  frame's thread 1 to 3 ms.
+- **Not spread:** redrawing the cascades and the atlas tiles stays in one frame (0.4 ms at Ultra, 0.05 ms for 30
+  tiles at High). A per-frame tile budget would have saved nothing measurable.
+- **The first frame of a scene** still makes everything at once (before it is drawn, every texture is made inline),
+  so it shows its shadows and lights; `Renderer::wait_for_pipelines` makes what is pending at once too.
+
+**High → Ultra on `many_lights`** (the done-when; `stress --scene many_lights --toggle-effects 30 --warm-up 0` with
+`METALLIC_TRACE_SWITCHES=1`, the switches to Ultra at frames 540 and 1140 (and every 600 frames after); the worst
+of the ten frames after each, in ms). Before is `main` at `f0fb441`, run interleaved with the branch:
+
+| Backend, present | Before | After |
+| --- | ---: | ---: |
+| DX12, vsync (120 Hz), 1,500 frames | 22.2 to 27.5 (7 runs, 14 switches) | 11.8 to 13.7 (9 runs, 18 switches) |
+| DX12, uncapped, 6,000 frames | 16.8 to 18.1 (10 switches) | 7.4 to 9.0 (9 switches), 21.4 the first |
+| OpenGL, uncapped, 6,000 frames | 40.9 to 41.9 (10 switches) | 27.4 to 29.7 (10 switches) |
+
+Under vsync a frame that waits X ms on the CPU took about 9.2 + X ms here (measured with a busy wait at the switch: 6
+ms gave 15.4, 8 gave 17.2), so twice the 120 Hz frame leaves about 7 ms for a switch: less than a new block for one
+of Ultra's textures costs. Uncapped, the run's first switch to Ultra still took 21.4 ms (under 33.3); the later ones
+under 9.
+
+The switch takes **5 frames** on both backends: the cascades' maps (108 MiB), the static map (36 MiB), the MSAA depth
+and the MSAA colour (63 MiB each) arrive one a frame (the scene colour, 8 MiB, is made at once; the atlas keeps its
+size); the shadows switch in the third frame, the anti-aliasing in the fifth. At 120 Hz that is 42 ms. **Memory** (wgpu's
+allocator report, DX12): High holds 222 MiB of textures and buffers and Ultra 368; during the switch the peak is 452
+MiB, for 4 frames: Ultra's new textures beside High's, which wgpu frees once the GPU is done with them (before #152
+both existed too, for the 2 to 3 frames the GPU took to finish with the old ones). The blocks reserved grow from 512 to
+896 MiB.
+
+The whole toggle run, against the run of #86 above (spikes are frames over twice the target after the first 2 s;
+counted without `METALLIC_TRACE_SWITCHES`, whose own writes to stderr can cost a frame now and then):
+
+| Backend, present | Frames (toggles) | Frame p50 / p99 before → after | Spikes before → after | Worst after 2 s before → after |
+| --- | ---: | ---: | ---: | ---: |
+| DX12, vsync (120 Hz, 16.7 ms) | 1,500 (49) | 8.33 / 16.8–17.8 → 8.33 / 9.6–10.6 | 2, 3 → 0, 0 | 24.4, 22.9 → 14.9, 10.7 |
+| DX12, uncapped (33.3 ms) | 6,000 (199) | 1.48 / 4.09 → 1.48–1.50 / 4.38–4.43 | 0 → 0 (4 runs) | 16.8 → 8.6 to 14.5 |
+| OpenGL, uncapped (33.3 ms) | 6,000 (199) | 4.97 / 13.28 → 4.94 / 13.74 | 10 → 0 | 39.3 → 24.5 |
+
+No toggle spikes against a 120 Hz frame on DX12 any more, and none against 60 fps on OpenGL. The uncapped p99 grows by
+0.3 ms: a switch now spends a few frames on its textures (each a millisecond or two of clearing and of the worker
+holding wgpu's allocator) where one frame took it all before. On OpenGL the High switch's worst frame moved a little
+(21.6 to 23.8 ms against 17.5 to 24.9): its frames clear the new textures one by one where one frame did it all,
+under 33.3 ms either way.
+
+- **Allocations** (`tests/no_alloc.rs`): a frame with nothing being made touches only an atomic flag (and a waiting
+  switch's pipeline check), so every frame there makes the same wgpu calls as before, and the heap-growth tests pass
+  as before; textures made off the frame allocate on the worker, and only while a switch makes them.
+- **Tests**: `tests/shadows.rs` switches the map size after the first frame and checks the old maps are drawn until
+  the new ones exist (two textures, at least two frames), every cascade is drawn into them, and the image is the one a
+  renderer made with that size draws; `tests/pipelines.rs` does the same with an MSAA switch's attachments, and
+  `tests/lights.rs` with the atlas a light's first shadow makes mid-game (drawn without the shadow until it exists).
+  The scene's first frame still makes everything at once: the #121 and #86 tests and the reference images are
+  unchanged.
+- The perf gate's workloads (scene sync and cull) are untouched.

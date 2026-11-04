@@ -12,7 +12,10 @@
 //! texture, and each cached cascade (below) has a static map of the same size besides: their memory is
 //! `(cascades + cached cascades) × resolution² × 4` bytes (64 MiB for the default 3 × 2048, one of them cached).
 //! On OpenGL a single cascade's array gets a second, unused layer, because wgpu's GL backend cannot sample a
-//! one-layer texture as an array (#155): Low's one 1024² cascade takes 8 MiB there rather than 4.
+//! one-layer texture as an array (#155): Low's one 1024² cascade takes 8 MiB there rather than 4. A new size or
+//! cascade count after a scene's first frame makes its maps off the frame (`textures`, #152): frames draw
+//! with the maps before it until all the new ones exist, then every cascade is drawn into them at once (about 0.4 ms
+//! of GPU at Ultra; making them is what costs).
 //!
 //! # Casters
 //!
