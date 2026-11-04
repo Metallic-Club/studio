@@ -155,7 +155,7 @@ impl SceneRenderer {
     }
 
     /// Changes how the round parts' levels of detail are chosen (the LOD bias; see [`metallic_render::lod`]). The
-    /// Medium preset's by default; graphics presets (#84) set it. Applies now and to every later renderer.
+    /// High preset's by default; graphics presets (#84) set it. Applies now and to every later renderer.
     pub fn set_lod(&mut self, lod: LodSettings) {
         self.lod = lod;
         if let Some(device) = self.device.as_mut() {

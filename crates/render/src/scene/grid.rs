@@ -558,7 +558,10 @@ fn choose_level(view: &CullView, item: &mut Item, remember: bool) -> u8 {
     if remember {
         let d2 = (item.center - view.eye).length_squared();
         let level = view.lod.choose(item.class(), item.radius * item.radius, d2, item.level);
-        item.level = level;
+        // Levels rarely change: leave the item's cache line clean when it keeps its own.
+        if level != item.level {
+            item.level = level;
+        }
         level
     } else {
         view.lod.choose_caster(item.class(), item.radius)

@@ -20,8 +20,8 @@
 //!   ([`FrameTimings`]). Nothing in a frame waits for the GPU.
 //! - The GPU-resident scene ([`scene`]): every renderable instance keeps a slot in an instance buffer, and only
 //!   what the data model's change tracking names is repacked and uploaded ([`GpuScene`], [`InstanceScene`]).
-//! - Drawing parts ([`parts`], [`Renderer::render_scene`]): one instanced draw per mesh kind over the scene's draw
-//!   lists, a material table, PBR-lite shading, a sorted transparent pass, and the camera from
+//! - Drawing parts ([`parts`], [`Renderer::render_scene`]): one instanced draw per mesh kind and level of detail over
+//!   the scene's draw lists, a material table, PBR-lite shading, a sorted transparent pass, and the camera from
 //!   `Workspace.CurrentCamera` ([`CameraReader`]).
 //! - Culling ([`cull`], [`RendererSettings::cull`]): a loose grid of every drawn instance's bounding sphere, culled
 //!   per view by frustum, distance and screen size into the same draw lists, opaque instances front to back.

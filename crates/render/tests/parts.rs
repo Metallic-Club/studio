@@ -24,8 +24,8 @@ use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Value};
 use metallic_render::scene::{InstanceBinding, RenderComponents};
 use metallic_render::{
-    CameraReader, ContextOptions, CullSettings, DrawStats, GpuScene, OffscreenTarget, PassId, PassSet, RenderContext,
-    Renderer, RendererSettings, wgpu,
+    CameraReader, ContextOptions, CullSettings, DrawStats, GpuScene, LodSettings, OffscreenTarget, PassId, PassSet,
+    RenderContext, Renderer, RendererSettings, wgpu,
 };
 use support::scenes::{self, Game, ImageDiff, Look, SeeThrough};
 use support::{gpu, gpu_with, read_back_rgba8};
@@ -118,6 +118,17 @@ fn render_culled(
     passes: PassSet,
     cull: CullSettings,
 ) -> (Vec<[u8; 4]>, DrawStats) {
+    render_with(context, game, passes, cull, LodSettings::default())
+}
+
+/// Like [`render_culled`], with the levels of detail `lod`.
+fn render_with(
+    context: &RenderContext,
+    game: &mut Game,
+    passes: PassSet,
+    cull: CullSettings,
+    lod: LodSettings,
+) -> (Vec<[u8; 4]>, DrawStats) {
     collect_wgpu_messages();
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(
@@ -127,6 +138,7 @@ fn render_culled(
             passes,
             gpu_timing: false,
             cull,
+            lod,
             ..RendererSettings::new(FORMAT, SIZE, SIZE)
         },
     )
@@ -327,8 +339,15 @@ fn culled_parts_are_not_drawn_on(context: &RenderContext) {
         "every part in view is drawn without culling"
     );
 
-    // The default culling: only the block behind the camera, and the image is the same.
-    let (pixels, stats) = render(context, &mut game, PARTS_ONLY);
+    // The default culling: only the block behind the camera, and the image is the same (with the levels of detail
+    // off: the culled view would draw the far ball at another level, tests/lod.rs).
+    let (pixels, stats) = render_with(
+        context,
+        &mut game,
+        PARTS_ONLY,
+        CullSettings::default(),
+        LodSettings::OFF,
+    );
     assert_eq!((stats.instances, stats.culled_instances), (3, 1), "{stats:?}");
     let diff = scenes::compare(&pixels, &everything, 0);
     assert_eq!(diff.max, 0, "frustum culling changed the image: {diff:?}");
@@ -439,7 +458,12 @@ fn the_draw_count_does_not_depend_on_the_part_count() {
             (0, parts as u32)
         );
         counts.push((stats.opaque_draws, stats.transparent_draws));
-        counts.push((culled.opaque_draws, culled.transparent_draws));
+        // Culled, the balls and cylinders also take levels of detail (#80): a draw per kind and level in use, at
+        // most nine whatever the part count.
+        assert!(
+            (4..=9).contains(&culled.opaque_draws) && culled.transparent_draws == 1,
+            "{parts} parts culled: {culled:?}"
+        );
     }
     assert!(counts.iter().all(|&c| c == (4, 1)), "{counts:?}");
 }

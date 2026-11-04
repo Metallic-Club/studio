@@ -1879,7 +1879,11 @@ fn a_parts_frame_allocates_nothing_beyond_wgpus_own() {
             ("6,000 parts", ours_large, floor_large),
         ],
     );
-    assert_eq!((small.opaque_draws, large.opaque_draws), (4, 4));
+    // One draw per mesh kind and level of detail in use: every kind, and the balls and cylinders at more than one
+    // level (#80), at most nine.
+    for stats in [&small, &large] {
+        assert!((5..=9).contains(&stats.opaque_draws), "{stats:?}");
+    }
     assert!(
         small.transparent_draws > 1 && large.transparent_draws > 4 * small.transparent_draws,
         "{small:?} {large:?}"

@@ -61,7 +61,7 @@ pub struct BenchOptions {
     /// How point and spot lights are drawn (the renderer's defaults, the Medium preset's, unless changed;
     /// [`LightSettings::OFF`] draws none).
     pub lights: LightSettings,
-    /// How the round parts' levels of detail are chosen (the renderer's defaults, the Medium preset's, unless
+    /// How the round parts' levels of detail are chosen (the renderer's defaults, the High preset's, unless
     /// changed; [`LodSettings::OFF`] draws every part at full detail).
     pub lod: LodSettings,
     /// Colour the parts by level of detail ([`metallic_render::Renderer::set_lod_tint`]).
@@ -474,7 +474,7 @@ mod tests {
         );
         assert!(json.contains("\"lights\":{\"in_scene\":0,"), "{json}");
         assert!(json.contains("\"light_shadows\":{\"mean\":"), "{json}");
-        assert!(json.contains("\"lod\":{\"enabled\":true,\"bias\":1.00}"), "{json}");
+        assert!(json.contains("\"lod\":{\"enabled\":true,\"bias\":2.00}"), "{json}");
         assert!(json.contains("\"culled\":0,\"levels\":[0,0,0,0]}"), "{json}");
         // Balanced braces.
         let open = json.matches('{').count();

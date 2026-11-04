@@ -696,6 +696,7 @@ fn camera_towards(x: f32, distance: f32) -> crate::cull::CullView {
     let target = Vec3::new(x, 0.0, 0.0);
     let camera = crate::parts::Camera::from_cframe(CFrame::look_at(target + Vec3::X * distance, target, Vec3::Y), 70.0);
     crate::cull::CullView::for_camera(&camera, Vec3::ZERO, 1920, 1080, &crate::cull::CullSettings::default())
+        .with_lod(&crate::lod::LodSettings::MEDIUM)
 }
 
 #[test]
@@ -713,42 +714,44 @@ fn a_ball_slowly_crossing_a_threshold_switches_once() {
     let slot = scene.slot_of(ball).unwrap();
     let e = entry(slot.region, slot.slot);
     let (_, radius) = grid::bounding_sphere(&instance(&scene, ball));
-    // Where the plain threshold between full detail and level 1 lies.
+    // Where the band between full detail and level 1 lies: a ball at full detail goes coarser past `coarser`, one at
+    // level 1 comes back nearer than `finer`; the threshold is between.
     let view = camera_at(1.0);
-    let level_at = |d: f32| view.lod.choose(1, radius * radius, d * d, crate::lod::NEW);
-    let (mut near, mut far) = (1.0f32, 10_000.0f32);
-    for _ in 0..60 {
-        let mid = (near + far) / 2.0;
-        if level_at(mid) == 0 {
-            near = mid;
-        } else {
-            far = mid;
+    let edge = |previous: u8| {
+        let (mut near, mut far) = (1.0f32, 10_000.0f32);
+        for _ in 0..60 {
+            let mid = (near + far) / 2.0;
+            if view.lod.choose(1, radius * radius, mid * mid, previous) == 0 {
+                near = mid;
+            } else {
+                far = mid;
+            }
         }
-    }
-    let threshold = near;
-    // 600 frames: the camera drifts from 8% inside the threshold to 8% outside it, shaking by 4% on the way, so the
-    // plain threshold is crossed again and again.
+        near
+    };
+    let (finer, coarser) = (edge(1), edge(0));
+    assert!(finer < coarser);
+    let threshold = (finer * coarser).sqrt();
+    // 600 frames: the camera drifts from 5% inside the band's near edge to 5% past its far edge, shaking by 4% on
+    // the way, so the threshold is crossed again and again.
     let mut set = crate::cull::VisibleSet::new();
-    let (mut levels, mut plain_switches, mut last_plain) = (Vec::new(), 0, None);
+    let (mut levels, mut crossings, mut last_side) = (Vec::new(), 0, None);
     for frame_index in 0..600 {
         let t = frame_index as f32 / 600.0;
-        let shake = 0.04 * (frame_index as f32 * 0.9).sin();
-        let d = threshold * (0.92 + 0.16 * t + shake);
+        let shake = 1.0 + 0.04 * (frame_index as f32 * 0.9).sin();
+        let d = (finer * 0.95 + (coarser * 1.05 - finer * 0.95) * t) * shake;
         scene.cull(&camera_at(d), &mut set);
         levels.push(listed_level(&set, MeshKind::BALL, e).expect("in view"));
-        let plain = level_at(d);
-        if last_plain.is_some_and(|l| l != plain) {
-            plain_switches += 1;
+        let side = d < threshold;
+        if last_side.is_some_and(|s| s != side) {
+            crossings += 1;
         }
-        last_plain = Some(plain);
+        last_side = Some(side);
     }
     let switches = levels.windows(2).filter(|w| w[0] != w[1]).count();
     assert_eq!((levels[0], levels[599]), (0, 1));
     assert_eq!(switches, 1, "{levels:?}");
-    assert!(
-        plain_switches > 10,
-        "the drift crosses the threshold {plain_switches} times"
-    );
+    assert!(crossings > 10, "the drift crosses the threshold {crossings} times");
 }
 
 #[test]
@@ -775,10 +778,12 @@ fn a_moved_part_keeps_its_level() {
     // Stepping back out by 15% is past the plain threshold but inside the band: still full detail.
     let back = d * 1.15;
     let (_, radius) = grid::bounding_sphere(&instance(&scene, ball));
-    let plain = camera_at(back)
-        .lod
-        .choose(1, radius * radius, back * back, crate::lod::NEW);
-    assert_eq!(plain, 1, "past the plain threshold");
+    let lod = camera_at(back).lod;
+    assert_eq!(
+        lod.choose(1, radius * radius, back * back, 1),
+        1,
+        "inside the band: a ball at level 1 would stay there"
+    );
     assert_eq!(level_of(&mut scene, &mut set, ball, (0.0, back)), Some(0));
     // Moving the ball a little (inside its cell, then into another cell, which also promotes it to the dynamic
     // region: a new slot) keeps the level it was drawn at.
@@ -789,7 +794,7 @@ fn a_moved_part_keeps_its_level() {
     frame(&mut scene, &mut game.dm);
     assert_eq!(scene.slot_of(ball).unwrap().region, Region::Dynamic);
     assert_eq!(level_of(&mut scene, &mut set, ball, (-40.0, back)), Some(0));
-    // A new ball at the same place starts from its size alone.
+    // A new ball at the same place starts at the coarse side of the band.
     let other = game.part();
     game.dm
         .set_by_name(other, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))

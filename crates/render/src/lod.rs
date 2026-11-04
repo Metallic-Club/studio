@@ -25,9 +25,10 @@
 //!
 //! **Hysteresis**: a part goes to a coarser level only once its size is [`HYSTERESIS`] (10%) below the threshold,
 //! and back only once it is 10% above it, so a part hovering at a threshold, or a camera stepping back and forth,
-//! switches once, not every frame. Each part remembers the level the camera's view drew it at in the culling grid,
-//! where the cull already computes what it needs (its distance), so choosing costs a few multiplies per round part
-//! in view and nothing for blocks and wedges: a grid cell that has held no round part culls exactly as before.
+//! switches once, not every frame. Each part remembers the level the camera's view drew it at in the culling grid
+//! (a part seen for the first time starts at the coarsest level the band allows), where the cull already computes
+//! what it needs (its distance), so choosing costs a few multiplies per round part in view and nothing for blocks and
+//! wedges: a grid cell that has held no round part culls exactly as before.
 //!
 //! # Draws
 //!
@@ -82,10 +83,12 @@ pub const PIXEL_ERROR: f32 = 0.5;
 /// How far past a threshold, as a fraction of it, a part's projected size must go before its level changes.
 pub const HYSTERESIS: f32 = 0.1;
 
-/// A part's level before the camera's view has chosen one: chosen without hysteresis.
-pub(crate) const NEW: u8 = u8::MAX;
-/// The level a shadow view asks for: the coarsest the camera could be drawing (the coarse side of every band).
-pub(crate) const COARSEST: u8 = u8::MAX - 1;
+/// What a level is chosen against when a part has none yet, or for a shadow view: the coarse side of every band,
+/// so the coarsest level the camera could be drawing at that size.
+pub(crate) const COARSEST: u8 = u8::MAX;
+/// A part's level before the camera's view has chosen one: it starts at the coarsest its size allows
+/// ([`COARSEST`]).
+pub(crate) const NEW: u8 = COARSEST;
 
 /// The shape classes that have levels: what the culling grid keeps per item ([`lod_class`]).
 const CLASS_NONE: u8 = 0;
@@ -151,17 +154,19 @@ impl LodSettings {
 }
 
 impl Default for LodSettings {
-    /// [`LodSettings::MEDIUM`].
+    /// [`LodSettings::HIGH`]: outlines within a quarter of a pixel, so the renderer's defaults look the same as
+    /// without levels (the presets, #84, trade some of that for speed). On `parts_100k` it draws 82% fewer
+    /// triangles than full detail, against 86% at Medium.
     fn default() -> Self {
-        Self::MEDIUM
+        Self::HIGH
     }
 }
 
 /// The squared size limits of one class: per boundary between a level and the next coarser one, `(T / S)²` for the
-/// threshold `T` in pixels and the view's size scale `S`, without the band and at its two edges.
+/// threshold `T` in pixels and the view's size scale `S`, at the band's two edges. 0 past the class's last level,
+/// which no size crosses.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct ClassLimits {
-    plain: [f32; MAX_LOD_LEVELS - 1],
     /// Back to the finer level only above `(1 + HYSTERESIS) T`.
     finer: [f32; MAX_LOD_LEVELS - 1],
     /// On to the coarser level only below `(1 − HYSTERESIS) T`.
@@ -183,7 +188,6 @@ impl LodView {
     /// No levels: everything at full detail.
     pub const OFF: Self = Self {
         limits: [ClassLimits {
-            plain: [0.0; MAX_LOD_LEVELS - 1],
             finer: [0.0; MAX_LOD_LEVELS - 1],
             coarser: [0.0; MAX_LOD_LEVELS - 1],
         }; CLASSES],
@@ -205,7 +209,6 @@ impl LodView {
                 // diameter `2 ratio R`.
                 let threshold = 2.0 * ratio * PIXEL_ERROR / (1.0 - (PI / n as f32).cos());
                 let k = (threshold / scale) * (threshold / scale);
-                limits.plain[j] = k;
                 limits.finer[j] = k * (1.0 + HYSTERESIS) * (1.0 + HYSTERESIS);
                 limits.coarser[j] = k * (1.0 - HYSTERESIS) * (1.0 - HYSTERESIS);
             }
@@ -243,31 +246,28 @@ impl LodView {
     }
 
     /// The level of a part of class `class` (not [`CLASS_NONE`]) with a bounding sphere of radius² `r2` whose centre
-    /// is `d2` squared metres from the eye, last drawn at `previous` ([`NEW`], [`COARSEST`] or a level).
+    /// is `d2` squared metres from the eye, last drawn at `previous` (a level, or [`COARSEST`]).
+    ///
+    /// Each boundary the part is past adds a level. A boundary the part was past last time is crossed back only
+    /// at the band's far edge, one it was short of only at the near edge. The thresholds are far enough apart (a
+    /// factor of four) that the bands never overlap, so the boundaries passed are always the first few, and the
+    /// count is the level, with no branch to mispredict.
     #[inline]
     pub(crate) fn choose(&self, class: u8, r2: f32, d2: f32, previous: u8) -> u8 {
         let Some(limits) = self.limits.get(usize::from(class)) else {
             return 0;
         };
-        let last = CLASS_LEVELS[usize::from(class)] - 1;
         // Projected size below the threshold: r² S² / (d² − r²) < T², so r² < k (d² − r²). The eye inside the sphere
-        // (d² ≤ r²) never passes: full detail.
+        // (d² ≤ r²) never passes: full detail. A limit of 0 is never passed either.
         let w = d2 - r2;
         let mut level = 0u8;
-        while level < last {
-            let j = usize::from(level);
-            let k = if previous == NEW {
-                limits.plain[j]
-            } else if previous > level {
+        for j in 0..MAX_LOD_LEVELS - 1 {
+            let k = if previous > j as u8 {
                 limits.finer[j]
             } else {
                 limits.coarser[j]
             };
-            if r2 < k * w {
-                level += 1;
-            } else {
-                break;
-            }
+            level += u8::from(r2 < k * w);
         }
         level
     }
@@ -313,28 +313,40 @@ mod tests {
         // A ball of bounding radius 1 has radius 1/√3; at 16 segments it may stray R (1 − cos(π/16)) ≤ 0.5 px.
         let t1 = 2.0 * 3f32.sqrt() * 0.5 / (1.0 - (PI / 16.0).cos());
         assert!((t1 - 90.1).abs() < 0.1, "{t1}");
-        let just_above = distance_for(t1 * 1.01, r);
-        let just_below = distance_for(t1 * 0.99, r);
-        assert_eq!(lod.choose(CLASS_BALL, r * r, just_above * just_above, NEW), 0);
-        assert_eq!(lod.choose(CLASS_BALL, r * r, just_below * just_below, NEW), 1);
+        // The band's edges, 10% either side of the threshold, from either level.
+        let at = |size: f32| distance_for(size, r).powi(2);
+        assert_eq!(lod.choose(CLASS_BALL, r * r, at(t1 * 0.91), 0), 0);
+        assert_eq!(lod.choose(CLASS_BALL, r * r, at(t1 * 0.89), 0), 1);
+        assert_eq!(lod.choose(CLASS_BALL, r * r, at(t1 * 1.09), 1), 1);
+        assert_eq!(lod.choose(CLASS_BALL, r * r, at(t1 * 1.11), 1), 0);
         // Far enough, the coarsest level; never past it.
         assert_eq!(lod.choose(CLASS_BALL, 1.0, 1e12, NEW), 3);
         assert_eq!(lod.choose(CLASS_CYLINDER, 1.0, 1e12, NEW), 2);
+        assert_eq!(lod.choose(CLASS_CYLINDER, 1.0, 1e12, 0), 2);
         // Inside the sphere: full detail.
         assert_eq!(lod.choose(CLASS_BALL, 1.0, 0.5, NEW), 0);
         // A cylinder's thresholds are lower: its round part is larger for its bounding sphere than a ball's.
         let t1c = 2.0 * 2f32.sqrt() * 0.5 / (1.0 - (PI / 16.0).cos());
-        let d = distance_for((t1 + t1c) / 2.0, r);
-        assert_eq!(lod.choose(CLASS_BALL, 1.0, d * d, NEW), 1);
-        assert_eq!(lod.choose(CLASS_CYLINDER, 1.0, d * d, NEW), 0);
-        let d = distance_for(t1c * 0.99, r);
-        assert_eq!(lod.choose(CLASS_CYLINDER, 1.0, d * d, NEW), 1);
+        let d2 = at((t1 * 0.9 + t1c * 1.1) / 2.0);
+        assert_eq!(lod.choose(CLASS_BALL, 1.0, d2, 0), 1);
+        assert_eq!(lod.choose(CLASS_CYLINDER, 1.0, d2, NEW), 0);
+        assert_eq!(lod.choose(CLASS_CYLINDER, 1.0, at(t1c * 0.89), 0), 1);
+        // Every level of both shapes, coming from far and from near.
+        let mut seen = [[false; MAX_LOD_LEVELS]; 2];
+        for step in 0..400 {
+            let d = 1.05f32.powi(step);
+            for previous in [0, NEW] {
+                seen[0][usize::from(lod.choose(CLASS_BALL, 1.0, d * d, previous))] = true;
+                seen[1][usize::from(lod.choose(CLASS_CYLINDER, 1.0, d * d, previous))] = true;
+            }
+        }
+        assert_eq!(seen, [[true; 4], [true, true, true, false]]);
     }
 
     #[test]
     fn the_bias_scales_the_distance() {
         let r = 1.0;
-        let level_at = |lod: &LodView, d: f32| lod.choose(CLASS_BALL, r * r, d * d, NEW);
+        let level_at = |lod: &LodView, d: f32| lod.choose(CLASS_BALL, r * r, d * d, 0);
         let medium = view(1.0);
         let high = view(2.0);
         let low = view(0.5);
@@ -357,16 +369,20 @@ mod tests {
         let r = 1.0;
         let t1 = 2.0 * 3f32.sqrt() * 0.5 / (1.0 - (PI / 16.0).cos());
         let threshold = distance_for(t1, r);
-        // A part drifting back and forth across the threshold by up to 5%, slowly getting farther: 2,000 frames.
-        let mut level = NEW;
+        // A part drifting back and forth across the threshold by up to 5%, slowly getting farther (from 15% nearer to
+        // 15% farther than the threshold): 2,000 frames.
+        let distance = |frame: i32| {
+            let t = frame as f32 / 2_000.0;
+            let wobble = 0.05 * (frame as f32 * 0.37).sin();
+            threshold * (0.85 + 0.3 * t) * (1.0 + wobble)
+        };
+        let mut level = 0;
         let mut switches = 0;
         let mut levels = Vec::new();
         for frame in 0..2_000 {
-            let t = frame as f32 / 2_000.0;
-            let wobble = 0.05 * (frame as f32 * 0.37).sin();
-            let d = threshold * (0.9 + 0.2 * t) * (1.0 + wobble);
+            let d = distance(frame);
             let next = lod.choose(CLASS_BALL, r * r, d * d, level);
-            if level != NEW && next != level {
+            if next != level {
                 switches += 1;
             }
             level = next;
@@ -375,20 +391,11 @@ mod tests {
         assert_eq!(levels.first(), Some(&0));
         assert_eq!(levels.last(), Some(&1));
         assert_eq!(switches, 1, "one switch, not one per crossing");
-        // Without the band, the same drift switches many times.
-        let mut flips = 0;
-        let mut last = 0;
-        for frame in 0..2_000 {
-            let t = frame as f32 / 2_000.0;
-            let wobble = 0.05 * (frame as f32 * 0.37).sin();
-            let d = threshold * (0.9 + 0.2 * t) * (1.0 + wobble);
-            let plain = lod.choose(CLASS_BALL, r * r, d * d, NEW);
-            if plain != last {
-                flips += 1;
-            }
-            last = plain;
-        }
-        assert!(flips > 10, "{flips}");
+        // Without the band, the same drift would switch many times.
+        let crossings = (1..2_000)
+            .filter(|&frame| (distance(frame - 1) < threshold) != (distance(frame) < threshold))
+            .count();
+        assert!(crossings > 10, "{crossings}");
     }
 
     #[test]
@@ -405,9 +412,11 @@ mod tests {
         // Past it, the level follows.
         assert_eq!(lod.choose(CLASS_BALL, 1.0, at(t1 * 0.85), 0), 1);
         assert_eq!(lod.choose(CLASS_BALL, 1.0, at(t1 * 1.15), 1), 0);
-        // A shadow view takes the coarse side of the band: never finer than the camera could be.
+        // A shadow view, and a part seen for the first time, take the coarse side of the band: never finer than the
+        // camera could be drawing.
         assert_eq!(lod.choose(CLASS_BALL, 1.0, at(t1 * 1.05), COARSEST), 1);
         assert_eq!(lod.choose(CLASS_BALL, 1.0, at(t1 * 1.15), COARSEST), 0);
+        assert_eq!(NEW, COARSEST);
     }
 
     #[test]
@@ -423,7 +432,7 @@ mod tests {
             // caster's level or finer.
             for step in 0..=200 {
                 let d = (120.0 + radius) * step as f32 / 200.0;
-                for previous in [NEW, 0, 1, 2, 3] {
+                for previous in [COARSEST, 0, 1, 2, 3] {
                     let drawn = camera.choose(CLASS_BALL, radius * radius, d * d, previous);
                     assert!(
                         drawn <= caster,

@@ -16,7 +16,7 @@
 //! `--shadow-distance <m>` and `--dynamic-cascades <n>` (the sun's shadows; 3, 2048, 256 and 2 by default),
 //! `--lights <low|medium|high|off>` (the point and spot lights' settings as the presets will set them; medium by
 //! default), `--light-budget <n>`, `--lights-per-cluster <n>`, `--shadowed-lights <n>` and `--no-light-shadows`,
-//! `--lod <low|medium|high|off>` (the levels of detail's preset, medium by default; off draws every part at full
+//! `--lod <low|medium|high|off>` (the levels of detail's preset, high by default; off draws every part at full
 //! detail), `--lod-bias <x>` and `--lod-tint` (colour the parts by level of detail).
 //! `WGPU_BACKEND=dx12` (or `vulkan`, `gl`) picks the backend.
 //!

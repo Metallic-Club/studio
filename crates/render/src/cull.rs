@@ -3,9 +3,9 @@
 //! The scene keeps every drawn instance in a loose grid of bounding spheres ([`crate::scene`]), updated from the
 //! same dirty slots its uploads come from, so a moving part costs O(1) and nothing is rebuilt. A **view**
 //! ([`CullView`]) is a frustum plus the settings that apply to it; [`crate::InstanceScene::cull`] walks the grid
-//! once for it and writes the visible entries into a [`VisibleSet`], in the draw lists' format (one list per mesh
-//! kind plus the see-through instances), which [`crate::GpuScene`] uploads into its list segments in place of every
-//! live entry. Nothing on the GPU is compacted or moved: only the lists say what is drawn.
+//! once for it and writes the visible entries into a [`VisibleSet`], in the draw lists' format (per mesh kind one
+//! list per level of detail, plus the see-through instances), which [`crate::GpuScene`] uploads into its list
+//! segments in place of every live entry. Nothing on the GPU is compacted or moved: only the lists say what is drawn.
 //!
 //! An instance is culled when its bounding sphere is
 //!
@@ -654,8 +654,14 @@ mod tests {
     #[test]
     fn camera_views_choose_levels_and_shadow_views_follow_them() {
         let camera = camera_at(Vec3::ZERO, Vec3::NEG_Z, 90.0);
-        let view = CullView::for_camera(&camera, Vec3::ZERO, 1000, 1000, &CullSettings::default());
-        assert!(view.lod.enabled(), "levels are on by default");
+        let view = CullView::for_camera(&camera, Vec3::ZERO, 1000, 1000, &CullSettings::default())
+            .with_lod(&LodSettings::MEDIUM);
+        assert!(
+            CullView::for_camera(&camera, Vec3::ZERO, 1000, 1000, &CullSettings::default())
+                .lod
+                .enabled(),
+            "levels are on by default"
+        );
         assert_eq!(view.lod.distance(), 0.0);
         let off = view.with_lod(&LodSettings::OFF);
         assert!(!off.lod.enabled());
