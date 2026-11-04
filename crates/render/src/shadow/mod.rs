@@ -190,12 +190,18 @@ impl Default for ShadowSettings {
 /// One cascade in the last frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CascadeStats {
-    /// The casters its map holds, as of its last drawing.
+    /// The casters its map holds, as of its last drawing (a cached cascade's: its static map's).
     pub casters: u32,
-    /// It was drawn in the last frame (otherwise its map was kept).
+    /// Its casters were drawn in the last frame (a cached cascade's: its static map; otherwise the map was kept).
     pub redrawn: bool,
-    /// It holds only static casters and is kept while they and its placement stay (see [`ShadowSettings`]).
+    /// Its static casters are cached in a static map, kept while they and its placement stay, and its moving
+    /// casters are drawn on a copy of it (see the [module documentation](self)).
     pub cached: bool,
+    /// A cached cascade's moving casters in the last frame, drawn on its map over the copy of its static map.
+    pub moving: u32,
+    /// A cached cascade's map was built in the last frame: its static map copied in and its moving casters drawn on
+    /// top (otherwise the map was kept: its static map and moving casters stayed).
+    pub built: bool,
 }
 
 /// What the last frame did for shadows.
@@ -217,12 +223,17 @@ impl ShadowStats {
 
     /// Bit `i` set when cascade `i` was drawn in the last frame.
     pub fn redrawn_mask(&self) -> u8 {
-        self.cascade
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.redrawn)
-            .fold(0, |mask, (i, _)| mask | 1 << i)
+        mask(self.cascade.iter().map(|c| c.redrawn))
     }
+
+    /// Bit `i` set when cached cascade `i`'s map was built in the last frame.
+    pub fn built_mask(&self) -> u8 {
+        mask(self.cascade.iter().map(|c| c.built))
+    }
+}
+
+fn mask(bits: impl Iterator<Item = bool>) -> u8 {
+    bits.enumerate().filter(|&(_, bit)| bit).fold(0, |mask, (i, _)| mask | 1 << i)
 }
 
 #[cfg(test)]

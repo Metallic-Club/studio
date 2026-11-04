@@ -7,8 +7,9 @@
 //! the ring is still in flight (the GPU is far behind), the frame is simply not timed. The archived renderer read
 //! its timestamps back with a blocking `poll(Wait)` every frame; this never does (ADR 0008 §9).
 //!
-//! Shadow cascades ([`crate::shadow`]) are timed one by one, in the passes that draw their maps; a cascade whose map
-//! was kept in a frame took no GPU time in it. The local lights' shadow atlas ([`crate::lights`]) is one pass, timed
+//! Shadow cascades ([`crate::shadow`]) are timed one by one, in the passes that draw their casters; a cascade whose
+//! casters were kept in a frame took no GPU time in it. A cached cascade's map is built from its static map and its
+//! moving casters in a pass of its own, timed apart. The local lights' shadow atlas ([`crate::lights`]) is one pass, timed
 //! in the frames that draw any of its tiles.
 
 use std::sync::Arc;
@@ -22,8 +23,9 @@ use crate::shadow::MAX_CASCADES;
 /// every frame timed in a steady state.
 pub const TIMING_RING_SIZE: usize = 4;
 
-/// The most timed passes in a frame: every pass of the frame, every shadow cascade and the shadow atlas.
-const MAX_TIMED: usize = PassId::COUNT + MAX_CASCADES + 1;
+/// The most timed passes in a frame: every pass of the frame, every shadow cascade drawn and built, and the shadow
+/// atlas.
+const MAX_TIMED: usize = PassId::COUNT + 2 * MAX_CASCADES + 1;
 /// Two timestamps (start and end) per timed pass.
 const QUERIES_PER_FRAME: u32 = 2 * MAX_TIMED as u32;
 /// Bytes of resolved timestamps per frame.
@@ -54,6 +56,10 @@ pub struct FrameTimings {
     cascade_count: u8,
     /// Bit `i` set when cascade `i` was drawn (and timed) that frame.
     cascades_drawn: u8,
+    /// Each cached cascade's build pass; 0 when its map was kept that frame.
+    builds: [f32; MAX_CASCADES],
+    /// Bit `i` set when cached cascade `i`'s map was built (and timed) that frame.
+    cascades_built: u8,
     /// The local lights' shadow atlas pass; 0 when it drew no tile that frame.
     light_shadows: f32,
 }
@@ -94,9 +100,21 @@ impl FrameTimings {
         cascade < MAX_CASCADES && self.cascades_drawn & (1 << cascade) != 0
     }
 
-    /// The GPU time of every shadow cascade drawn that frame.
+    /// The GPU time of the pass building cached shadow cascade `cascade`'s map from its static map and its moving
+    /// casters: `Some(0.0)` when the cascade was in use but its map was not built that frame, `None` when it was not
+    /// in use.
+    pub fn cascade_build(&self, cascade: usize) -> Option<f32> {
+        (cascade < self.cascade_count()).then(|| self.builds[cascade])
+    }
+
+    /// Whether cached shadow cascade `cascade`'s map was built that frame.
+    pub fn cascade_built(&self, cascade: usize) -> bool {
+        cascade < MAX_CASCADES && self.cascades_built & (1 << cascade) != 0
+    }
+
+    /// The GPU time of every shadow pass that frame: the cascades drawn and built.
     pub fn shadow_ms(&self) -> f32 {
-        self.cascades.iter().sum()
+        self.cascades.iter().sum::<f32>() + self.builds.iter().sum::<f32>()
     }
 
     /// The GPU time of the local lights' shadow atlas pass ([`crate::lights`]): 0 in a frame that kept every tile.
@@ -115,6 +133,7 @@ impl FrameTimings {
 pub(crate) enum Timed {
     Pass(PassId),
     Cascade(u8),
+    Built(u8),
     LightShadows,
 }
 
@@ -288,6 +307,8 @@ fn read_slot(slot: &Slot, period_ns: f64) -> Option<FrameTimings> {
         cascades: [0.0; MAX_CASCADES],
         cascade_count: slot.cascade_count,
         cascades_drawn: 0,
+        builds: [0.0; MAX_CASCADES],
+        cascades_built: 0,
         light_shadows: 0.0,
     };
     let (pairs, _) = view.as_chunks::<16>();
@@ -317,6 +338,12 @@ fn read_slot(slot: &Slot, period_ns: f64) -> Option<FrameTimings> {
                     timings.cascades_drawn |= 1 << cascade;
                 }
             }
+            Timed::Built(cascade) => {
+                if let Some(ms) = timings.builds.get_mut(usize::from(cascade)) {
+                    *ms = gpu_ms;
+                    timings.cascades_built |= 1 << cascade;
+                }
+            }
             Timed::LightShadows => timings.light_shadows = gpu_ms,
         }
     }
@@ -342,6 +369,8 @@ mod tests {
             cascades: [0.5, 0.0, 0.0, 0.0],
             cascade_count: 2,
             cascades_drawn: 1,
+            builds: [0.0, 0.125, 0.0, 0.0],
+            cascades_built: 2,
             light_shadows: 0.0,
         };
         timings.passes[0] = PassTiming {
@@ -362,7 +391,10 @@ mod tests {
             (Some(0.5), Some(0.0), None)
         );
         assert!(timings.cascade_drawn(0) && !timings.cascade_drawn(1));
-        assert!((timings.total_ms() - 2.25).abs() < 1e-6);
+        assert_eq!((timings.cascade_build(1), timings.cascade_build(2)), (Some(0.125), None));
+        assert!(timings.cascade_built(1) && !timings.cascade_built(0));
+        assert!((timings.shadow_ms() - 0.625).abs() < 1e-6);
+        assert!((timings.total_ms() - 2.375).abs() < 1e-6);
     }
 
     #[test]

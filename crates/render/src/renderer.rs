@@ -88,8 +88,9 @@ pub struct Renderer {
     overlay_pass: Option<OverlayPass>,
     /// The fewest layers a shadow map array gets on this backend (2 on OpenGL).
     shadow_min_layers: u32,
-    /// The shadow cascades drawn this frame, in the order their passes were recorded (their queries come first).
-    shadow_passes: [u8; MAX_CASCADES],
+    /// The shadow passes recorded this frame, in order (their queries come first): the cascades drawn and the
+    /// cached cascades built.
+    shadow_passes: [Timed; 2 * MAX_CASCADES],
     shadow_recorded: usize,
     /// Shadow cascades in use this frame.
     shadow_in_use: u8,
@@ -140,7 +141,7 @@ impl Renderer {
             } else {
                 1
             },
-            shadow_passes: [0; MAX_CASCADES],
+            shadow_passes: [Timed::Cascade(0); 2 * MAX_CASCADES],
             shadow_recorded: 0,
             shadow_in_use: 0,
             atlas_recorded: false,
@@ -363,34 +364,63 @@ impl Renderer {
         self.atlas_recorded = true;
     }
 
-    /// Records a depth pass for every shadow cascade drawn this frame, before the frame's passes that sample them.
+    /// Records the shadow passes of this frame, before the frame's passes that sample the maps: a depth pass for
+    /// every cascade whose casters are drawn (into its map, or a cached cascade's static map), and one for every
+    /// cached cascade whose map is built (from its static map, just drawn or not, and its moving casters).
     fn record_shadow_passes(&mut self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>) {
-        for (cascade, &label) in SHADOW_PASS_NAMES.iter().enumerate() {
-            let Some(view) = self.parts.shadow_target(cascade) else {
-                continue;
-            };
-            let timestamp_writes = match (self.timer.as_ref(), slot) {
-                (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, self.shadow_recorded)),
-                _ => None,
-            };
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(label),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
+        for cascade in 0..MAX_CASCADES {
+            if self.parts.shadow_target(cascade).is_some() {
+                self.record_shadow_pass(encoder, slot, Timed::Cascade(cascade as u8));
+            }
+            if self.parts.shadow_build_target(cascade).is_some() {
+                self.record_shadow_pass(encoder, slot, Timed::Built(cascade as u8));
+            }
+        }
+    }
+
+    /// Records one shadow pass: cleared, then drawn (`Timed::Cascade`) or built (`Timed::Built`).
+    fn record_shadow_pass(&mut self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>, pass: Timed) {
+        let (view, label) = match pass {
+            Timed::Cascade(cascade) => (
+                self.parts.shadow_target(usize::from(cascade)),
+                SHADOW_PASS_NAMES[usize::from(cascade) % MAX_CASCADES],
+            ),
+            Timed::Built(cascade) => (
+                self.parts.shadow_build_target(usize::from(cascade)),
+                SHADOW_BUILD_NAMES[usize::from(cascade) % MAX_CASCADES],
+            ),
+            _ => (None, ""),
+        };
+        let Some(view) = view else {
+            return;
+        };
+        let timestamp_writes = match (self.timer.as_ref(), slot) {
+            (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, self.shadow_recorded)),
+            _ => None,
+        };
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
                 }),
-                timestamp_writes,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.parts.draw_shadow(cascade, &mut render_pass);
-            drop(render_pass);
-            self.shadow_passes[self.shadow_recorded] = cascade as u8;
+                stencil_ops: None,
+            }),
+            timestamp_writes,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        match pass {
+            Timed::Cascade(cascade) => self.parts.draw_shadow(usize::from(cascade), &mut render_pass),
+            Timed::Built(cascade) => self.parts.build_shadow(usize::from(cascade), &mut render_pass),
+            _ => {}
+        }
+        drop(render_pass);
+        if let Some(recorded) = self.shadow_passes.get_mut(self.shadow_recorded) {
+            *recorded = pass;
             self.shadow_recorded += 1;
         }
     }
@@ -564,9 +594,7 @@ impl Renderer {
     /// Ends the frame: resolves its timestamps, submits it and counts it.
     fn end_frame(&mut self, mut encoder: wgpu::CommandEncoder, slot: Option<usize>) -> wgpu::SubmissionIndex {
         if let (Some(timer), Some(slot)) = (self.timer.as_mut(), slot) {
-            let cascades = self.shadow_passes[..self.shadow_recorded]
-                .iter()
-                .map(|&cascade| Timed::Cascade(cascade));
+            let cascades = self.shadow_passes[..self.shadow_recorded].iter().copied();
             let atlas = self.atlas_recorded.then_some(Timed::LightShadows);
             let passes = self.plan.passes().iter().map(|pass| Timed::Pass(pass.id));
             timer.end_frame(
@@ -646,6 +674,13 @@ impl Renderer {
 
 /// The shadow passes' names in GPU debuggers.
 const SHADOW_PASS_NAMES: [&str; MAX_CASCADES] = ["shadow_0", "shadow_1", "shadow_2", "shadow_3"];
+/// The passes building cached cascades' maps, likewise.
+const SHADOW_BUILD_NAMES: [&str; MAX_CASCADES] = [
+    "shadow_0_build",
+    "shadow_1_build",
+    "shadow_2_build",
+    "shadow_3_build",
+];
 
 fn color_ops(ops: AttachmentOps, clear: wgpu::Color) -> wgpu::Operations<wgpu::Color> {
     wgpu::Operations {
