@@ -248,7 +248,7 @@ pub struct PostSettings {
     pub tint: [f32; 3],
     /// Saturation after the tone curve (1 keeps it, 0 is grey).
     pub saturation: f32,
-    /// Contrast around mid-grey after the tone curve (1 keeps it).
+    /// Contrast around mid-grey after the tone curve (1 keeps it; taken as at least 0.001).
     pub contrast: f32,
     /// Bloom, when [`crate::PassId::Bloom`] runs.
     pub bloom: BloomSettings,

@@ -23,7 +23,7 @@ use metallic_render::{
     RendererSettings, ShadowSettings, wgpu,
 };
 use support::scenes::{self, Game, Look};
-use support::{gpu, gpu_with, read_back_rgba8};
+use support::{gpu, gpu_with, non_finite, read_back_rgba8, render_raw};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -255,6 +255,25 @@ fn a_pillar_casts_its_shadow_on_the_floor() {
     let unshadowed = render(&context, &mut built.game, ShadowSettings::OFF);
     let (dark, bright) = (level(&unshadowed, shadowed), level(&unshadowed, lit));
     assert!((dark - bright).abs() < bright * 0.08, "{dark} against {bright}");
+}
+
+/// The shadowed scene's shaders write finite values by day and by night, read before the post chain (which would
+/// make the others 0): no pixel is not a number or infinite. (Lavapipe wrote 2 at 16:00, #149.)
+#[test]
+fn shadowed_scenes_write_only_finite_values() {
+    let Some(context) = gpu() else { return };
+    let mut built = shadow_game();
+    for hours in [16.0, 0.0] {
+        built
+            .game
+            .dm
+            .set_by_name(lighting_service(&built.game), "ClockTime", Value::Number(hours))
+            .expect("ClockTime");
+        let pixels = render_raw(&context, &mut built.game, SIZE, |_| {});
+        let bad = non_finite(&pixels, SIZE);
+        eprintln!("{hours}:00: {} pixels not finite {bad:?}", bad.len());
+        assert!(bad.is_empty(), "{hours}:00: pixels not finite {bad:?}");
+    }
 }
 
 #[test]
