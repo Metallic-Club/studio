@@ -1,87 +1,27 @@
 //! What a [`Player`](crate::Player) runs and how.
 
-use std::fmt;
-use std::str::FromStr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use metallic_engine::metallic_platform::WindowConfig;
+pub use metallic_engine::metallic_render::settings::{GraphicsSettings, Preset, UnknownPreset};
 
 use crate::scene::Scene;
 
+/// The Player's name for its per-user folders ([`metallic_engine::metallic_platform::AppId`]), where its graphics
+/// settings live ([`metallic_engine::graphics`]).
+pub const PLAYER_APP_ID: &str = "dev.metallic.Player";
+
 /// The frame cap a player runs with unless told otherwise: a backstop for when vsync does not pace the loop (a
-/// minimised or occluded window presents nothing, and the loop would spin). #84's frame cap and vsync settings
-/// replace it.
+/// minimised or occluded window presents nothing, and the loop would spin). The graphics settings' frame cap
+/// replaces it ([`GraphicsSettings::frame_cap`]).
 pub const DEFAULT_FRAME_CAP: u32 = 240;
 
 /// The frames `--bench` runs before it starts measuring: pipelines are built and the scene is uploaded in the first
 /// frames, which would otherwise dominate the slowest percentiles.
 pub const DEFAULT_WARMUP_FRAMES: u64 = 30;
 
-/// A graphics preset (ADR 0008 §8): how much a frame may cost, never what the game looks like.
-///
-/// Parsed and kept by the Player; nothing applies it until #84 adds the graphics settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Preset {
-    /// Integrated GPUs and phones.
-    Low,
-    /// The mid-range desktop budget (60 fps on a GTX 1650 class GPU).
-    Medium,
-    /// Higher-end desktops.
-    High,
-    /// Everything at its most expensive.
-    Ultra,
-    /// Calibrated on the machine, with dynamic resolution holding the frame time.
-    Auto,
-}
-
-impl Preset {
-    /// Every preset, in the order `--help` lists them.
-    pub const ALL: &[Preset] = &[Preset::Low, Preset::Medium, Preset::High, Preset::Ultra, Preset::Auto];
-
-    /// The name `--preset` takes.
-    pub fn name(self) -> &'static str {
-        match self {
-            Preset::Low => "low",
-            Preset::Medium => "medium",
-            Preset::High => "high",
-            Preset::Ultra => "ultra",
-            Preset::Auto => "auto",
-        }
-    }
-}
-
-impl fmt::Display for Preset {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-/// A `--preset` name that is not a preset.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("unknown preset `{0}` (presets: {names})", names = preset_names())]
-pub struct UnknownPreset(pub String);
-
-fn preset_names() -> String {
-    Preset::ALL
-        .iter()
-        .map(|preset| preset.name())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-impl FromStr for Preset {
-    type Err = UnknownPreset;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        Preset::ALL
-            .iter()
-            .copied()
-            .find(|preset| preset.name().eq_ignore_ascii_case(name))
-            .ok_or_else(|| UnknownPreset(name.to_owned()))
-    }
-}
-
-/// How a [`Player`](crate::Player) is made: the game, the window and when to stop.
+/// How a [`Player`](crate::Player) is made: the game, the window, the graphics settings and when to stop.
 ///
 /// ```
 /// use metallic_player::{PlayerConfig, Preset, Scene};
@@ -93,8 +33,13 @@ impl FromStr for Preset {
 pub struct PlayerConfig {
     /// The game to run. Built-in scenes only until projects load from disk (M4).
     pub scene: Scene,
-    /// The graphics preset asked for. Kept, and reported by `--bench`, until #84 applies it.
+    /// The player's graphics settings (ADR 0008 §8): the preset and its overrides, and Auto's calibration. The
+    /// `metallic_player` binary loads them from the user's settings file; the Auto preset by default.
+    pub graphics: GraphicsSettings,
+    /// A preset for this run only (`--preset`), in place of [`PlayerConfig::graphics`]'s; not saved.
     pub preset: Option<Preset>,
+    /// Where [`PlayerConfig::graphics`] came from: the Player saves Auto's calibration there. `None` saves nothing.
+    pub graphics_file: Option<PathBuf>,
     /// The window [`Player::run`](crate::Player::run) and [`PlayerApp`](crate::PlayerApp) open. A host that
     /// brings its own window ignores it.
     pub window: WindowConfig,
@@ -118,7 +63,9 @@ impl PlayerConfig {
         let (width, height) = scene.window_size();
         Self {
             scene,
+            graphics: GraphicsSettings::default(),
             preset: None,
+            graphics_file: None,
             window: WindowConfig::new("Metallic Player").with_size(width, height),
             frame_cap: Some(DEFAULT_FRAME_CAP),
             max_frames: None,
@@ -138,6 +85,22 @@ impl PlayerConfig {
     pub fn with_preset(mut self, preset: Preset) -> Self {
         self.preset = Some(preset);
         self
+    }
+
+    /// Sets [`PlayerConfig::graphics`].
+    pub fn with_graphics(mut self, graphics: GraphicsSettings) -> Self {
+        self.graphics = graphics;
+        self
+    }
+
+    /// The graphics settings this run applies: [`PlayerConfig::graphics`] with [`PlayerConfig::preset`] in place of
+    /// its preset when there is one.
+    pub fn effective_graphics(&self) -> GraphicsSettings {
+        let mut graphics = self.graphics.clone();
+        if let Some(preset) = self.preset {
+            graphics.preset = preset;
+        }
+        graphics
     }
 
     /// Sets [`PlayerConfig::window`].

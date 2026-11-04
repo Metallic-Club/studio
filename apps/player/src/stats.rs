@@ -3,12 +3,13 @@
 //! The numbers come from the engine's frame-stats collector ([`metallic_engine::perf`]), which the renderer the
 //! Player installs ([`SceneRenderer`](metallic_engine::SceneRenderer)) fills every drawn frame: frame times with
 //! p50 / p99 / 1% low, script, physics and render CPU time, GPU time per pass and the draws per pass. The Player
-//! adds what only it knows: the scene, the preset, the frame counts and the wall time.
+//! adds what only it knows: the scene, the preset, the frame counts and the wall time, and the graphics settings in
+//! effect.
 
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use metallic_engine::perf::{PerfSummary, json_string};
+use metallic_engine::perf::{GraphicsStatus, PerfSummary, json_string};
 
 use crate::config::Preset;
 use crate::scene::Scene;
@@ -18,8 +19,11 @@ use crate::scene::Scene;
 pub struct Report {
     /// The scene that ran.
     pub scene: Scene,
-    /// The preset asked for (not applied until #84).
+    /// The graphics preset the run applied.
     pub preset: Option<Preset>,
+    /// The graphics settings in effect at the end: the tier, Auto's calibration, the render scale and dynamic
+    /// resolution.
+    pub graphics: GraphicsStatus,
     /// Frames run before measuring.
     pub warmup_frames: u64,
     /// Every frame the engine ran, warm-up included.
@@ -59,6 +63,9 @@ impl Report {
             }
             None => out.push_str("\"surface\":null,"),
         }
+        out.push_str("\"graphics\":{");
+        self.graphics.write_json_members(&mut out);
+        out.push_str("},");
         self.summary.write_json_members(&mut out);
         out.push('}');
         out
@@ -80,6 +87,10 @@ mod tests {
         let report = Report {
             scene: Scene::Demo,
             preset: Some(Preset::Low),
+            graphics: GraphicsStatus {
+                preset: Some(Preset::Low),
+                ..GraphicsStatus::default()
+            },
             warmup_frames: 2,
             total_frames: 4,
             wall_time: Duration::from_millis(1500),
@@ -94,6 +105,7 @@ mod tests {
             "\"total_frames\":4,",
             "\"wall_time_s\":1.500,",
             "\"surface\":{\"width\":1280,\"height\":720},",
+            "\"graphics\":{\"preset\":\"low\",\"tier\":null,",
             "\"frames\":2,",
             "\"fps_p50\":62.5,",
             "\"opaque\":4,",

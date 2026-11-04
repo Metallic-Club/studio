@@ -41,7 +41,9 @@ mod player;
 mod scene;
 pub mod stats;
 
-pub use config::{DEFAULT_FRAME_CAP, DEFAULT_WARMUP_FRAMES, PlayerConfig, Preset, UnknownPreset};
+pub use config::{
+    DEFAULT_FRAME_CAP, DEFAULT_WARMUP_FRAMES, GraphicsSettings, PLAYER_APP_ID, PlayerConfig, Preset, UnknownPreset,
+};
 pub use player::{Player, PlayerApp, PlayerError};
 pub use scene::{STRESS_SEED, Scene, UnknownScene};
 pub use stats::Report;
@@ -163,6 +165,34 @@ mod tests {
             "no keys, no orbit: the camera holds still"
         );
         assert_no_errors(&player);
+    }
+
+    #[test]
+    fn the_preset_reaches_scripts_before_they_run() {
+        use metallic_engine::metallic_core::EnumItem;
+
+        let graphics = GraphicsSettings {
+            lod_bias: Some(3.0),
+            ..GraphicsSettings::new(Preset::Auto)
+        };
+        let config = PlayerConfig::new(Scene::Demo)
+            .with_graphics(graphics)
+            .with_preset(Preset::Low);
+        let player = Player::with_output(config, CollectOutput::new()).expect("the demo starts");
+        let dm = player.engine().data_model();
+        let service = dm
+            .service(dm.registry().class_id("UserGameSettings").expect("the class"))
+            .expect("the service");
+        let read = |name: &str| dm.get_by_name(service, name).expect("a property");
+        assert_eq!(
+            read("GraphicsPreset"),
+            Value::Enum(EnumItem::new("GraphicsPreset", "Low")),
+            "--preset in place of the file's"
+        );
+        assert_eq!(read("QualityLevel"), Value::Int(1));
+        assert_eq!(read("RenderScale"), Value::Number(0.75));
+        assert_eq!(read("LodBias"), Value::Number(3.0), "the file's overrides stay");
+        assert_eq!(read("FrameRateCap"), Value::Int(i64::from(DEFAULT_FRAME_CAP)));
     }
 
     #[test]
