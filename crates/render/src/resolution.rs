@@ -222,7 +222,7 @@ impl DynamicResolution {
         }
         self.last_gpu_ms = gpu_ms;
         let target = self.settings.target_ms;
-        if !(target > 0.0) || (gpu_ms - target).abs() <= DEADBAND * target {
+        if target.is_nan() || target <= 0.0 || (gpu_ms - target).abs() <= DEADBAND * target {
             return false;
         }
         let (min, max) = self.settings.range();
