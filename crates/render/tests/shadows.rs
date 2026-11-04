@@ -667,7 +667,9 @@ fn wiggle(frames: &mut Frames, context: &RenderContext, built: &mut FarMover, fr
 fn a_moving_part_beyond_the_dynamic_cascades_casts_a_shadow() {
     let Some(context) = gpu() else { return };
     let mut built = far_mover_game();
-    let camera = CameraReader::new().read(&built.game.dm, built.game.workspace).expect("a camera");
+    let camera = CameraReader::new()
+        .read(&built.game.dm, built.game.workspace)
+        .expect("a camera");
     let forward = camera.rotation * Vec3::NEG_Z;
     for point in [built.shadowed, built.static_shadowed, built.lit] {
         let depth = (point - camera.position).dot(forward);
@@ -679,7 +681,11 @@ fn a_moving_part_beyond_the_dynamic_cascades_casts_a_shadow() {
     eprintln!("far mover: {stats:?}");
     assert_eq!(stats.shadow_cascades, 3);
     assert_eq!(stats.shadow_moving[2], 1, "the far cascade holds the moving cube");
-    assert_eq!(stats.shadow_redrawn & 0b100, 0, "the far cascade's static map was drawn again");
+    assert_eq!(
+        stats.shadow_redrawn & 0b100,
+        0,
+        "the far cascade's static map was drawn again"
+    );
     assert_eq!(stats.shadow_built, 0b100, "the far cascade's map was not built");
     let pixels = frames.pixels(&context);
     let (shadowed, static_shadowed, lit) = (
@@ -715,13 +721,19 @@ fn a_moving_part_beyond_the_dynamic_cascades_casts_a_shadow() {
     let levels_all = [shadowed, static_shadowed, lit].map(|point| level(&reference, point));
     eprintln!("with every cascade dynamic: {levels_all:.1?}");
     for (ours, all) in [dark, dark_static, bright].into_iter().zip(levels_all) {
-        assert!((ours - all).abs() < 2.0, "{ours} against {all} with every cascade dynamic");
+        assert!(
+            (ours - all).abs() < 2.0,
+            "{ours} against {all} with every cascade dynamic"
+        );
     }
 
     // Nothing changes: nothing is drawn or built.
     frames.frame(&context, &mut built.game);
     let still = frames.renderer.draw_stats();
-    assert_eq!((still.shadow_redrawn, still.shadow_built, still.shadow_draws), (0, 0, 0));
+    assert_eq!(
+        (still.shadow_redrawn, still.shadow_built, still.shadow_draws),
+        (0, 0, 0)
+    );
     assert_eq!(still.shadow_moving[2], 1);
 
     // The cube stops casting: the far map is built once more, from the static map alone; then a change that moves
@@ -734,7 +746,10 @@ fn a_moving_part_beyond_the_dynamic_cascades_casts_a_shadow() {
     frames.frame(&context, &mut built.game);
     let gone = frames.renderer.draw_stats();
     assert_eq!((gone.shadow_built, gone.shadow_moving[2]), (0b100, 0), "{gone:?}");
-    assert!(level(&frames.pixels(&context), shadowed) > bright * 0.95, "the shadow stayed");
+    assert!(
+        level(&frames.pixels(&context), shadowed) > bright * 0.95,
+        "the shadow stayed"
+    );
     for frame in 0..3 {
         let gray = 0.2 + 0.1 * frame as f32;
         built

@@ -725,9 +725,7 @@ impl ShadowMaps {
         let block = block as u32 * self.lists.stride;
         for (kind, (&capacity, &offset)) in self.lists.capacities.iter().zip(&self.lists.offsets).enumerate() {
             let kind = MeshKind(kind as u16);
-            let count = u32::try_from(set.opaque(kind).len())
-                .unwrap_or(u32::MAX)
-                .min(capacity);
+            let count = u32::try_from(set.opaque(kind).len()).unwrap_or(u32::MAX).min(capacity);
             let mesh = meshes.range(kind);
             if count == 0 || mesh.index_count == 0 {
                 continue;

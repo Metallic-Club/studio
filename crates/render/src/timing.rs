@@ -391,7 +391,10 @@ mod tests {
             (Some(0.5), Some(0.0), None)
         );
         assert!(timings.cascade_drawn(0) && !timings.cascade_drawn(1));
-        assert_eq!((timings.cascade_build(1), timings.cascade_build(2)), (Some(0.125), None));
+        assert_eq!(
+            (timings.cascade_build(1), timings.cascade_build(2)),
+            (Some(0.125), None)
+        );
         assert!(timings.cascade_built(1) && !timings.cascade_built(0));
         assert!((timings.shadow_ms() - 0.625).abs() < 1e-6);
         assert!((timings.total_ms() - 2.375).abs() < 1e-6);

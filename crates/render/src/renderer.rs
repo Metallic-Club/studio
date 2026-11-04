@@ -675,12 +675,8 @@ impl Renderer {
 /// The shadow passes' names in GPU debuggers.
 const SHADOW_PASS_NAMES: [&str; MAX_CASCADES] = ["shadow_0", "shadow_1", "shadow_2", "shadow_3"];
 /// The passes building cached cascades' maps, likewise.
-const SHADOW_BUILD_NAMES: [&str; MAX_CASCADES] = [
-    "shadow_0_build",
-    "shadow_1_build",
-    "shadow_2_build",
-    "shadow_3_build",
-];
+const SHADOW_BUILD_NAMES: [&str; MAX_CASCADES] =
+    ["shadow_0_build", "shadow_1_build", "shadow_2_build", "shadow_3_build"];
 
 fn color_ops(ops: AttachmentOps, clear: wgpu::Color) -> wgpu::Operations<wgpu::Color> {
     wgpu::Operations {
