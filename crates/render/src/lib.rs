@@ -47,11 +47,14 @@ pub mod lod;
 pub mod overlay;
 pub mod parts;
 mod renderer;
+pub mod resolution;
 pub mod scene;
+pub mod settings;
 pub mod shadow;
 mod surface;
 mod target;
 mod timing;
+mod upscale;
 
 pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
 pub use cull::{Casters, CullSettings, CullStats, CullView, Frustum, VisibleSet};

@@ -275,13 +275,15 @@ impl LocalLights {
 
     /// Selects, fades, clusters and shadows the local lights of `scene` for a frame seen from `camera` on a
     /// `width` × `height` target with the main view's `cull` settings and levels of detail `lod`, and writes what
-    /// changed to the GPU. Run it after [`GpuScene::upload_view`] and before the sun's shadows take the scene's
-    /// shadow-caster changes, every frame.
+    /// changed to the GPU. The scene is drawn at `render` pixels (the target's size, or less with a render scale),
+    /// which the shader's cluster lookup divides. Run it after [`GpuScene::upload_view`] and before the sun's shadows
+    /// take the scene's shadow-caster changes, every frame.
     pub(crate) fn prepare(
         &mut self,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
         (width, height): (u32, u32),
+        render: (u32, u32),
         cull: &CullSettings,
         lod: &LodView,
     ) {
@@ -405,8 +407,8 @@ impl LocalLights {
             );
             self.frame = FrameLights {
                 clusters: [
-                    CLUSTERS_X as f32 / width.max(1) as f32,
-                    CLUSTERS_Y as f32 / height.max(1) as f32,
+                    CLUSTERS_X as f32 / render.0.max(1) as f32,
+                    CLUSTERS_Y as f32 / render.1.max(1) as f32,
                     slicing.scale,
                     slicing.bias,
                 ],
