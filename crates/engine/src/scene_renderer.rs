@@ -7,13 +7,14 @@ use std::time::{Duration, Instant};
 use metallic_classes::services::user_game_settings::{UserGameSettings, set_user_game_settings};
 use metallic_core::{DataModel, Id};
 use metallic_platform::{Size, Window};
+use metallic_render::post::PostSettings;
 use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::settings::{Calibration, CalibrationStep, Calibrator, GraphicsSettings, Quality, Tier};
 use metallic_render::{
-    CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings, LightingReader,
-    LodSettings, RenderContext, RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, ShadowSettings,
-    wgpu,
+    AntiAliasing, CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings,
+    LightingReader, LodSettings, PassId, PassSet, RenderContext, RenderError, RenderSurface, Renderer,
+    RendererSettings, SceneLighting, ShadowSettings, wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
@@ -62,6 +63,10 @@ pub struct SceneRenderer {
     lights: LightSettings,
     lod: LodSettings,
     resolution: ResolutionSettings,
+    post: PostSettings,
+    anti_aliasing: AntiAliasing,
+    merge_scene_passes: bool,
+    post_chain: bool,
     lod_tint: bool,
     present_mode: Option<wgpu::PresentMode>,
     /// The player's graphics settings, once set ([`SceneRenderer::set_graphics`]).
@@ -114,6 +119,10 @@ impl SceneRenderer {
             lights: LightSettings::default(),
             lod: LodSettings::default(),
             resolution: ResolutionSettings::NATIVE,
+            post: PostSettings::default(),
+            anti_aliasing: AntiAliasing::Off,
+            merge_scene_passes: false,
+            post_chain: true,
             lod_tint: false,
             present_mode: None,
             graphics: None,
@@ -230,6 +239,72 @@ impl SceneRenderer {
         self.resolution
     }
 
+    /// Changes how the post chain finishes the image: exposure, grade, bloom's resolution and filter, MLAA's search
+    /// (see [`metallic_render::post`]). The renderer's defaults until graphics settings set the effect quality.
+    /// Applies now and to every later renderer.
+    pub fn set_post(&mut self, post: PostSettings) {
+        self.post = post;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_post(post);
+        }
+    }
+
+    /// How the post chain finishes the image.
+    pub fn post(&self) -> PostSettings {
+        self.post
+    }
+
+    /// Changes the anti-aliasing: off (the default), MLAA, or MSAA, which falls back to the largest sample count the
+    /// device has, or to MLAA without one ([`AntiAliasing::supported`]). Applies now and to every later renderer.
+    pub fn set_anti_aliasing(&mut self, aa: AntiAliasing) {
+        self.anti_aliasing = aa;
+        if let Some(device) = self.device.as_mut() {
+            apply_anti_aliasing(&mut device.renderer, aa);
+        }
+        self.settings_changed = true;
+    }
+
+    /// The anti-aliasing asked for (the renderer's [`Renderer::anti_aliasing`] says what it draws).
+    pub fn anti_aliasing(&self) -> AntiAliasing {
+        self.anti_aliasing
+    }
+
+    /// Records the scene passes as one render pass ([`PassId::Scene`]), so colour and depth stay in tile memory on
+    /// tile-based GPUs. Off by default; the Low preset turns it on, and graphics settings turn it on at every tier
+    /// on tile-based GPUs. Applies now and to every later renderer.
+    pub fn set_merge_scene_passes(&mut self, merge: bool) {
+        self.merge_scene_passes = merge;
+        self.apply_passes();
+    }
+
+    /// Draws the frame without the post chain when `on` is false, as before it existed (#85): the scene straight into
+    /// the window, its passes apart, with no bloom, tone curve or MLAA. For measuring what the chain costs; presets
+    /// never turn it off (it is part of a game's look). On by default. Applies now and to every later renderer.
+    pub fn set_post_chain(&mut self, on: bool) {
+        self.post_chain = on;
+        self.apply_passes();
+    }
+
+    /// The passes a renderer runs, with MLAA when `mlaa`.
+    fn passes(&self, mlaa: bool) -> PassSet {
+        PassSet::default()
+            .with_if(PassId::Post, self.post_chain)
+            .with_if(PassId::Bloom, self.post_chain)
+            .with_if(PassId::Scene, self.merge_scene_passes && self.post_chain)
+            .with_if(PassId::Mlaa, mlaa)
+    }
+
+    /// Gives the renderer its passes again, keeping its anti-aliasing.
+    fn apply_passes(&mut self) {
+        let Some(mlaa) = self.renderer().map(|r| r.anti_aliasing().mlaa()) else {
+            return;
+        };
+        let passes = self.passes(mlaa);
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_passes(passes);
+        }
+    }
+
     /// Applies a player's graphics settings: the settings of every system at the preset's tier with the player's
     /// overrides ([`GraphicsSettings::quality`]), and vsync when the settings say. With Auto and no calibration for
     /// this adapter and driver, calibrates first (at once when attached, otherwise when it attaches). Applies now
@@ -278,6 +353,7 @@ impl SceneRenderer {
             tier: self.tier,
             calibrating: self.calibrating(),
             resolution: self.renderer().map(Renderer::resolution_stats).unwrap_or_default(),
+            post: self.renderer().map(Renderer::post_stats).unwrap_or_default(),
         }
     }
 
@@ -336,6 +412,11 @@ impl SceneRenderer {
         self.set_lights(quality.lights);
         self.set_lod(quality.lod);
         self.set_resolution(quality.resolution);
+        self.set_post(quality.post);
+        self.set_anti_aliasing(quality.anti_aliasing);
+        // Tile-based GPUs keep the scene in tile memory at every tier.
+        let tiled = self.capabilities().is_some_and(|caps| caps.transient_attachments);
+        self.set_merge_scene_passes(quality.merge_scene_passes || tiled);
         self.settings_changed = true;
     }
 
@@ -420,6 +501,15 @@ impl SceneRenderer {
                 )
             }),
             frame_rate_cap: self.frame_cap.unwrap_or(0),
+            // What is drawn: MSAA as the device allows it.
+            anti_aliasing: match self.renderer().map_or(self.anti_aliasing, Renderer::anti_aliasing) {
+                AntiAliasing::Off => "Off",
+                AntiAliasing::Mlaa => "MLAA",
+                AntiAliasing::Msaa(2) => "MSAA2",
+                AntiAliasing::Msaa(4) => "MSAA4",
+                AntiAliasing::Msaa(_) => "MSAA8",
+            },
+            effect_quality_level: graphics.effect_quality.unwrap_or(tier).level(),
         };
         if let Err(error) = set_user_game_settings(dm, &settings) {
             log::warn!("graphics: could not write UserGameSettings: {error}");
@@ -573,6 +663,8 @@ impl RenderHook for SceneRenderer {
             }
             device.renderer.set_overlay_enabled(self.overlay);
             device.renderer.set_lod_tint(self.lod_tint);
+            // A renderer is made without MSAA (its sample counts are known once it exists), then given its own.
+            apply_anti_aliasing(&mut device.renderer, self.anti_aliasing);
             if let Some(mode) = self.present_mode {
                 surface.set_present_mode(&device.context, mode);
             }
@@ -695,8 +787,19 @@ impl SceneRenderer {
             lights: self.lights,
             lod: self.lod,
             resolution: self.resolution,
+            post: self.post,
+            // MLAA works everywhere; MSAA is set once the renderer knows its sample counts.
+            passes: self.passes(self.anti_aliasing.mlaa()),
             ..RendererSettings::new(format, width, height)
         }
+    }
+}
+
+/// Draws with `aa`, MSAA falling back to what `renderer`'s device has.
+fn apply_anti_aliasing(renderer: &mut Renderer, aa: AntiAliasing) {
+    let aa = aa.supported(renderer.msaa_sample_counts());
+    if let Err(error) = renderer.set_anti_aliasing(aa) {
+        log::warn!("graphics: could not draw with {aa}: {error}");
     }
 }
 

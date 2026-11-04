@@ -16,8 +16,8 @@ use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Id, Value};
 use metallic_render::scene::{InstanceBinding, RenderComponents};
 use metallic_render::{
-    CameraReader, ContextOptions, DrawStats, GpuScene, LightingReader, LodSettings, OffscreenTarget, RenderContext,
-    Renderer, RendererSettings, ShadowSettings, wgpu,
+    CameraReader, ContextOptions, DrawStats, GpuScene, LightingReader, LodSettings, OffscreenTarget, PassId, PassSet,
+    RenderContext, Renderer, RendererSettings, ShadowSettings, wgpu,
 };
 use support::scenes::{self, Game, Look};
 use support::{gpu, gpu_with, read_back_rgba8};
@@ -99,6 +99,12 @@ fn render(context: &RenderContext, game: &mut Game, look: Look2) -> (Vec<[u8; 4]
             shadows: look.shadows,
             lod: look.lod,
             gpu_timing: false,
+            // The debug view's colours are told apart by hue, which bloom would mix with their surroundings.
+            passes: if look.tint {
+                PassSet::default().without(PassId::Bloom)
+            } else {
+                PassSet::default()
+            },
             ..RendererSettings::new(FORMAT, WIDTH, HEIGHT)
         },
     )

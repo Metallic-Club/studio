@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use metallic_render::resolution::ResolutionStats;
 use metallic_render::settings::{Preset, Tier};
-use metallic_render::{DrawStats, FrameTimings, MAX_CASCADES, Overlay, PassId};
+use metallic_render::{DrawStats, FrameTimings, MAX_CASCADES, Overlay, PassId, PostStats};
 
 /// The graphics settings in effect, as the overlay and the reports show them
 /// ([`SceneRenderer::graphics_status`](crate::SceneRenderer::graphics_status)).
@@ -32,12 +32,15 @@ pub struct GraphicsStatus {
     pub calibrating: Option<Tier>,
     /// The render scale and dynamic resolution of the last frame.
     pub resolution: ResolutionStats,
+    /// The post chain: the scene colour's format, the anti-aliasing, bloom, and the frame's passes.
+    pub post: PostStats,
 }
 
 impl GraphicsStatus {
     /// The status as the members of a JSON object, without the braces: `preset`, `tier` and `calibrating` (names,
-    /// or `null`), and `resolution` (`scale`, `width`, `height`, `dynamic`, `target_ms`, `min_scale`,
-    /// `max_scale`).
+    /// or `null`), `resolution` (`scale`, `width`, `height`, `dynamic`, `target_ms`, `min_scale`, `max_scale`) and
+    /// `post` (`scene_format`, `finish`, `anti_aliasing`, `bloom_levels`, `render_passes`, `full_screen_passes`, and
+    /// `passes`: the planned passes' names in order, bloom's chain as one).
     pub fn write_json_members(&self, out: &mut String) {
         use std::fmt::Write as _;
         let name = |name: Option<&str>| name.map_or_else(|| "null".to_owned(), json_string);
@@ -57,6 +60,25 @@ impl GraphicsStatus {
             r.min_scale,
             r.max_scale
         );
+        let p = &self.post;
+        let _ = write!(
+            out,
+            ",\"post\":{{\"scene_format\":{},\"finish\":{},\"anti_aliasing\":{},\"bloom_levels\":{},\
+             \"render_passes\":{},\"full_screen_passes\":{},\"passes\":[",
+            json_string(p.format_name()),
+            p.finish,
+            json_string(p.anti_aliasing().name()),
+            p.bloom_levels,
+            p.render_passes,
+            p.full_screen_passes
+        );
+        for (i, pass) in p.passes().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&json_string(pass.name()));
+        }
+        out.push_str("]}");
     }
 }
 
@@ -194,7 +216,7 @@ pub struct PerfSummary {
     /// GPU time per pass (indexed by [`PassId`] as `usize`).
     pub gpu_pass_ms: [Distribution; PassId::COUNT],
     /// Which passes ran in any timed frame (bit `PassId as u8`).
-    pub gpu_passes: u8,
+    pub gpu_passes: u16,
     /// GPU time per shadow cascade, the frames that kept its map counting 0, so the mean is what it costs per frame
     /// and the median shows whether it is drawn in most frames.
     pub gpu_shadow_ms: [Distribution; MAX_CASCADES],
@@ -229,7 +251,7 @@ impl PerfSummary {
 
     /// Whether `pass` ran in any timed frame.
     pub fn gpu_pass_ran(&self, pass: PassId) -> bool {
-        self.gpu_passes & (1 << pass as u8) != 0
+        self.gpu_passes & (1 << pass as u16) != 0
     }
 }
 
@@ -450,7 +472,7 @@ impl<T: Copy> Ring<T> {
 pub struct PerfStats {
     frames: Ring<FrameSample>,
     gpu: Ring<GpuSample>,
-    gpu_passes: u8,
+    gpu_passes: u16,
     /// The most shadow cascades in use in any timed frame.
     gpu_cascades: usize,
     /// The frame index of the newest GPU timings recorded, so each timed frame counts once.
@@ -511,7 +533,7 @@ impl PerfStats {
             if let Some(ms) = timings.pass(pass) {
                 gpu.passes_ms[pass as usize] = ms;
                 gpu.total_ms += ms;
-                self.gpu_passes |= 1 << pass as u8;
+                self.gpu_passes |= 1 << pass as u16;
             }
         }
         for cascade in 0..timings.cascade_count().min(MAX_CASCADES) {
@@ -732,7 +754,7 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
     let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
     // Wide enough for the graph and for the longest line of text (about 74 characters).
     let width = (GRAPH_FRAMES as f32 * BAR).max(76.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
-    let lines = 13.0;
+    let lines = 14.0;
     overlay.rect(x0 - 8.0, y0 - 8.0, width, lines * line + GRAPH_HEIGHT + 24.0, PANEL);
 
     let now = stats.last().copied().unwrap_or_default();
@@ -753,6 +775,22 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
     );
     y += line;
     draw_graphics_line(overlay, x0, y, graphics, summary);
+    y += line;
+    let post = &graphics.post;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!(
+            "POST  {}  AA {}  BLOOM {}  PASSES {} ({} FULL-SCREEN)",
+            post.format_name(),
+            post.anti_aliasing().name(),
+            post.bloom_levels,
+            post.render_passes,
+            post.full_screen_passes
+        ),
+    );
     y += line;
     overlay.text_fmt(
         x0,

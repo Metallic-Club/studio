@@ -27,6 +27,10 @@ pub static ENUMS: &[EnumDesc] = &[
         "A graphics preset: how much a frame may cost, never what the game looks like. Auto measures the machine \
          and holds the frame time with dynamic resolution.",
     ),
+    EnumDesc::new("AntiAliasingMode", &["Off", "MLAA", "MSAA2", "MSAA4", "MSAA8"]).describe(
+        "How edges are smoothed: not at all, by MLAA (a pass over the finished image), or by multisampling with 2, \
+         4 or 8 samples.",
+    ),
 ];
 
 /// The group the properties are listed under in the API dump.
@@ -107,6 +111,19 @@ static PROPS: &[PropMeta] = &[
         .group(GROUP)
         .order(11)
         .desc("The most frames per second; 0 when uncapped."),
+    PropMeta::enumeration("AntiAliasing", "AntiAliasingMode", "MLAA")
+        .flags(SETTING)
+        .group(GROUP)
+        .order(12)
+        .desc("How edges are smoothed, as drawn on this machine."),
+    PropMeta::int("EffectQualityLevel", 2)
+        .flags(SETTING)
+        .group(GROUP)
+        .order(13)
+        .desc(
+            "The post effects' quality, from 1 (Low) to 4 (Ultra): how finely bloom is drawn. Bloom is drawn at \
+             every level.",
+        ),
 ];
 
 /// The graphics settings in effect, as [`set_user_game_settings`] writes them.
@@ -136,6 +153,10 @@ pub struct UserGameSettings {
     pub vsync: bool,
     /// The frame cap; 0 for none.
     pub frame_rate_cap: u32,
+    /// The anti-aliasing's item name (`Off`, `MLAA`, `MSAA2`, `MSAA4`, `MSAA8`).
+    pub anti_aliasing: &'static str,
+    /// The post effects' quality, 1 to 4.
+    pub effect_quality_level: u8,
 }
 
 /// Writes `settings` into the game's `UserGameSettings`, creating the service if the game lacks it. Only the
@@ -162,6 +183,14 @@ pub fn set_user_game_settings(dm: &mut DataModel, settings: &UserGameSettings) -
         ("LodBias", Value::Number(settings.lod_bias)),
         ("VSync", Value::Bool(settings.vsync)),
         ("FrameRateCap", Value::Int(i64::from(settings.frame_rate_cap))),
+        (
+            "AntiAliasing",
+            Value::Enum(EnumItem::new("AntiAliasingMode", settings.anti_aliasing)),
+        ),
+        (
+            "EffectQualityLevel",
+            Value::Int(i64::from(settings.effect_quality_level)),
+        ),
     ];
     for (name, value) in values {
         if dm.get_by_name(service, name).ok().as_ref() != Some(&value) {
@@ -215,8 +244,15 @@ mod tests {
             lod_bias: 2.0,
             vsync: false,
             frame_rate_cap: 0,
+            anti_aliasing: "MSAA4",
+            effect_quality_level: 3,
         };
         set_user_game_settings(&mut dm, &settings).unwrap();
+        assert_eq!(
+            dm.get_by_name(id, "AntiAliasing"),
+            Ok(Value::Enum(EnumItem::new("AntiAliasingMode", "MSAA4")))
+        );
+        assert_eq!(dm.get_by_name(id, "EffectQualityLevel"), Ok(Value::Int(3)));
         assert_eq!(
             dm.get_by_name(id, "GraphicsPreset"),
             Ok(Value::Enum(EnumItem::new("GraphicsPreset", "High")))

@@ -16,7 +16,7 @@ use std::cell::Cell;
 use metallic_engine::perf::{FrameSample, GraphicsStatus, PerfStats, draw_overlay};
 use metallic_render::resolution::ResolutionStats;
 use metallic_render::settings::{Preset, Tier};
-use metallic_render::{DrawStats, Overlay};
+use metallic_render::{AntiAliasing, DrawStats, Overlay, PostStats};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -104,12 +104,21 @@ fn graphics(frame: usize) -> GraphicsStatus {
                 dynamic: false,
                 ..resolution
             },
+            post: PostStats::default(),
         },
         _ => GraphicsStatus {
             preset: Some(Preset::Auto),
             tier: Some(Tier::High),
             calibrating: None,
             resolution,
+            post: PostStats {
+                finish: true,
+                msaa_samples: AntiAliasing::Msaa(4).msaa_samples(),
+                bloom_levels: 5,
+                render_passes: 14,
+                full_screen_passes: 5,
+                ..PostStats::default()
+            },
         },
     }
 }

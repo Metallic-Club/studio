@@ -18,9 +18,10 @@ use std::time::Instant;
 use metallic_platform::{
     AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
+use metallic_render::post::PostSettings;
 use metallic_render::resolution::ResolutionSettings;
 use metallic_render::settings::{GraphicsSettings, Preset};
-use metallic_render::{ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
+use metallic_render::{AntiAliasing, ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
@@ -78,6 +79,15 @@ pub struct BenchOptions {
     /// Switch between the Low and Ultra presets every this many frames, warm-up included (the first switch goes to
     /// the one the run did not start at), to measure what a switch costs.
     pub switch_presets: Option<u32>,
+    /// Draw with the post chain (on by default); off draws the frame as before it (#85), to measure what it costs
+    /// ([`SceneRenderer::set_post_chain`]).
+    pub post_chain: bool,
+    /// The anti-aliasing when there are no graphics settings (none, the renderer's default, when `None`).
+    pub anti_aliasing: Option<AntiAliasing>,
+    /// The post effects' quality when there are no graphics settings (the renderer's defaults, High's, when `None`).
+    pub effects: Option<PostSettings>,
+    /// Record the scene passes as one render pass when there are no graphics settings.
+    pub merge_scene_passes: bool,
 }
 
 impl BenchOptions {
@@ -103,6 +113,10 @@ impl BenchOptions {
             graphics: None,
             resolution: ResolutionSettings::NATIVE,
             switch_presets: None,
+            post_chain: true,
+            anti_aliasing: None,
+            effects: None,
+            merge_scene_passes: false,
         }
     }
 }
@@ -292,9 +306,17 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     renderer.set_lights(options.lights);
     renderer.set_lod(options.lod);
     renderer.set_resolution(options.resolution);
+    if let Some(aa) = options.anti_aliasing {
+        renderer.set_anti_aliasing(aa);
+    }
+    if let Some(effects) = options.effects {
+        renderer.set_post(effects);
+    }
+    renderer.set_merge_scene_passes(options.merge_scene_passes);
     if let Some(graphics) = options.graphics.clone() {
         renderer.set_graphics(graphics);
     }
+    renderer.set_post_chain(options.post_chain);
     renderer.set_lod_tint(options.lod_tint);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo
@@ -475,7 +497,7 @@ mod tests {
         let mut summary = PerfSummary {
             frames: 10,
             gpu_frames: 9,
-            gpu_passes: 1 << PassId::Opaque as u8,
+            gpu_passes: 1 << PassId::Opaque as u16,
             ..PerfSummary::default()
         };
         summary.frame_ms.p50 = 2.0;
@@ -525,6 +547,27 @@ mod tests {
                     max_scale: 1.0,
                     gpu_ms: 2.1,
                 },
+                post: metallic_render::PostStats {
+                    scene_format: metallic_render::wgpu::TextureFormat::Rg11b10Ufloat,
+                    finish: true,
+                    msaa_samples: 4,
+                    mlaa: false,
+                    bloom_levels: 5,
+                    render_passes: 14,
+                    full_screen_passes: 5,
+                    planned: [
+                        Some(PassId::Opaque),
+                        Some(PassId::Sky),
+                        Some(PassId::Transparent),
+                        Some(PassId::Bloom),
+                        Some(PassId::Post),
+                        Some(PassId::Ui),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
+                },
             },
             calibration: Some(("high", 3.25)),
             switches: Some((60, 16)),
@@ -564,8 +607,10 @@ mod tests {
             json.contains(
                 "\"graphics\":{\"preset\":\"auto\",\"tier\":\"high\",\"calibrating\":null,\"resolution\":{\
                  \"scale\":0.7500,\"width\":1440,\"height\":810,\"dynamic\":true,\"target_ms\":2.000,\
-                 \"min_scale\":0.500,\"max_scale\":1.000},\"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\
-                 \"switch_every\":60,\"switches\":16},"
+                 \"min_scale\":0.500,\"max_scale\":1.000},\"post\":{\"scene_format\":\"rg11b10f\",\"finish\":true,\
+                 \"anti_aliasing\":\"msaa4\",\"bloom_levels\":5,\"render_passes\":14,\"full_screen_passes\":5,\
+                 \"passes\":[\"opaque\",\"sky\",\"transparent\",\"bloom\",\"post\",\"ui\"]},\
+                 \"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\"switch_every\":60,\"switches\":16},"
             ),
             "{json}"
         );

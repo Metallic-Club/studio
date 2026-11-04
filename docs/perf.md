@@ -799,7 +799,7 @@ A player's [`GraphicsSettings`](../crates/render/src/settings.rs) (ADR 0008 §8)
 Auto) and any per-setting overrides (render scale, dynamic resolution with its target and range, frame cap and vsync,
 view distance, shadow quality and distance, local-light budget, LOD bias), resolved into the settings of every system
 above (`Quality`). Presets scale cost and never remove a game's look: none turns the sun's shadows or the local
-lights off, and no override can. Anti-aliasing and effect quality join with the post chain (#85).
+lights off, and no override can. Anti-aliasing and effect quality (#85) are in the next section.
 
 | Preset | Render scale | View distance | Culled under | Sun cascades | Local lights a frame (per cluster) | Shadowed lights, atlas / tile | LOD bias |
 | --- | ---: | ---: | ---: | --- | ---: | --- | ---: |
@@ -842,7 +842,8 @@ value, and a `[calibration]` section. The Player makes it with the Auto preset t
 a warning when it cannot be read or understood (leaving the file as it is), applies `--preset` on top for one run, and
 saves Auto's calibration back. **Scripts** read the settings in effect from `game:GetService("UserGameSettings")`
 (`GraphicsPreset`, `QualityLevel` 1 to 4, `RenderScale`, `DynamicResolution`, `TargetFrameTime`, `ViewDistance`,
-`ShadowQualityLevel`, `ShadowDistance`, `LocalLightBudget`, `LodBias`, `VSync`, `FrameRateCap`), each read-only for
+`ShadowQualityLevel`, `ShadowDistance`, `LocalLightBudget`, `LodBias`, `VSync`, `FrameRateCap`, and since #85
+`AntiAliasing` and `EffectQualityLevel`), each read-only for
 scripts and never saved with the game.
 
 **2026-11-04**, same machine as the tables above (Ryzen 5 5500, RX 6650 XT, Windows 11, **DX12**, `AutoNoVsync`,
@@ -927,3 +928,101 @@ Ultra every 30 frames (34 switches in the 1,000 measured frames; frame times in 
 The worst frame of a switch sequence was 2.4 ms on `parts_100k` and 3.8 ms on `many_lights`, at most 0.4 ms over
 the slowest steady Ultra frame: making the textures and culling every cascade's casters again, the far cascade's static
 map included. That is a seventh of a 60 fps frame at worst.
+
+### HDR post chain, anti-aliasing and upscaling (#85)
+
+The scene is drawn into an HDR scene colour and finished into the window by one pass (`metallic_render::post`, ADR
+0008 §7–8):
+
+- **The scene colour** is `Rg11b10Ufloat` (4 bytes a pixel) where the adapter can render, blend and filter it, else
+  `Rgba16Float`, else 8-bit sRGB (no headroom; the chain still runs). Every backend on the dev PC (DX12, Vulkan, GL)
+  takes `Rg11b10Ufloat`; GLES without float colour buffers gets the fallbacks. The format holds green to 1/128 and blue
+  to 1/64 of a value, so flat colours can land a level or two from where 8 bits put them.
+- **One finish pass** (`PassId::Post`) reads it and writes the window: exposure, colour filter, bloom's composite, the
+  tone curve, saturation and contrast, MLAA's neighbourhood blend, the render scale's bilinear upscale (so the
+  upscale pass of #84 is no longer planned beside it), sRGB encoding where the window does not encode, and half a
+  level of dither. **Exposure** is fixed (1, `PostSettings::exposure`); nothing is read back.
+- **The tone curve** is the identity up to 0.85 and rolls off towards 1 above it, per channel. Before #85 the window
+  clamped at 1, so everything below the knee looks as it did: 1.0 now shows as 0.945 (249 of 255 instead of 255),
+  1.5 as 0.996, and highlights keep a little detail instead of clipping.
+- **Bloom** (`PassId::Bloom`): downsampling passes from half (Low: a quarter) of the window's size to a thirty-second,
+  then upsampling passes adding each level onto the next larger (a 3×3 tent), and 10% of the sum mixed into the image
+  with no threshold, so light much brighter than its surroundings glows (`docs/screenshots/85-bloom-night.png`, a crop
+  in `85-bloom-night-crop.png`). Its levels follow the window, not the render scale, so dynamic resolution never
+  changes the glow. Every preset draws it as wide; lower ones skip the finest level and use the 5-tap dual filter
+  instead of the 13-tap one.
+- **MLAA** (`PassId::Mlaa`): one pass finds luma edges, walks them (8, 16 or 32 pixels each way) to their ends and
+  their crossing edges, and writes the areas of MLAA's L, U and Z shapes as blend weights; the finish pass blends with
+  one bilinear tap. **MSAA** resolves inside the last scene pass and discards the multisampled colour (the plan of #77).
+- **An open chain**: the effects run in a `PostChain`'s order and only read the scene colour, so they can be added,
+  removed and reordered; one not in the pass set begins no pass, makes no texture and binds nothing (the finish pass
+  has a variant per combination). **Merged scene passes** (`PassId::Scene`: the Low preset, and every preset on
+  tile-based GPUs) record opaque, sky and transparent as one render pass, depth and the MSAA colour cleared and
+  discarded inside it, so on a tiler they never leave tile memory.
+- Every pipeline is made with the renderer, the scene's for each MSAA count it can switch to, so changing the
+  anti-aliasing or the effect quality makes textures and compiles nothing (`tests/post.rs` switches every frame).
+
+| Preset | Anti-aliasing | Bloom | Passes after the shadows | Render passes | Full-screen passes |
+| --- | --- | --- | --- | ---: | ---: |
+| before #85 (every preset) | none | none | opaque, sky, transparent, (upscale at Low), ui | 4 (5) | 4 (5) |
+| Low | MLAA, 8 px | 4 levels from ¼, 5-tap | scene, mlaa, bloom, post, ui | 11 | 4 |
+| Medium | MLAA, 16 px | 5 levels from ½, 5-tap | opaque, sky, transparent, mlaa, bloom, post, ui | 15 | 6 |
+| High | MSAA 4× | 5 levels from ½, 13-tap | opaque, sky, transparent, bloom, post, ui | 14 | 5 |
+| Ultra | MSAA 8× | as High | as High | 14 | 5 |
+
+"Full-screen" counts the passes that read or write a whole target at the scene's or the window's resolution; bloom's
+passes work at half of it and below and are counted with the render passes. The overlay's `POST` line and the stress
+JSON's `graphics.post` (`scene_format`, `anti_aliasing`, `bloom_levels`, `render_passes`, `full_screen_passes`, and
+the planned `passes` in order) report them; the overlay's GPU line and the JSON's `gpu_ms.passes` time each, bloom's
+chain as one. The stress example's `--aa`, `--effects`, `--merge-scene` and `--no-post` set them by hand.
+
+**2026-11-04**, same machine as the tables above (Ryzen 5 5500, RX 6650 XT, Windows 11, **DX12**, `AutoNoVsync`,
+1,000 frames after 120 of warm-up, seed 1, still cameras), branch `85-post-chain` at `3bee7fb` (measured before rebasing onto `77a0483`, whose changes are in `crates/luau`). Each preset is run as
+it is now and with `--no-post`, which draws that preset's frame as before #85 (no HDR target, bloom, tone curve or
+MLAA, the scene passes apart, the upscale pass at Low; High and Ultra keep their MSAA). Times are p50 in ms, the
+frame's p99 in brackets; one round each.
+
+| Scene | Preset | Frame before → after | Render CPU before → after | GPU before → after | MLAA / bloom / finish pass |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `parts_100k` (1920 × 1080) | Low | 0.773 → 0.874 (1.458) | 0.613 → 0.712 | 0.348 → 0.399 | 0.058 / 0.048 / 0.098 |
+| | Medium | 0.829 → 1.061 (1.825) | 0.660 → 0.883 | 0.445 → 0.720 | 0.094 / 0.109 / 0.089 |
+| | High | 0.859 → 1.102 (3.074) | 0.701 → 0.927 | 0.661 → 0.792 | – / 0.117 / 0.074 |
+| | Ultra | 1.288 → 1.404 (2.100) | 0.960 → 0.986 | 1.161 → 1.271 | – / 0.124 / 0.086 |
+| `many_lights` (1920 × 1080) | Low | 0.695 → 0.842 (1.023) | 0.418 → 0.451 | 0.574 → 0.730 | 0.063 / 0.044 / 0.099 |
+| | Medium | 2.155 → 2.398 (2.661) | 0.597 → 0.718 | 1.920 → 2.239 | 0.114 / 0.117 / 0.107 |
+| | High | 2.864 → 3.004 (3.464) | 0.732 → 0.939 | 2.744 → 2.879 | – / 0.121 / 0.084 |
+| | Ultra | 3.726 → 3.879 (4.423) | 0.800 → 1.012 | 3.598 → 3.724 | – / 0.122 / 0.085 |
+| `mobile` (1280 × 720) | Low | 0.324 → 0.400 (0.716) | 0.248 → 0.325 | 0.123 → 0.191 | 0.030 / 0.039 / 0.042 |
+| | Medium | 0.305 → 0.511 (0.844) | 0.232 → 0.428 | 0.203 → 0.387 | 0.051 / 0.088 / 0.042 |
+| | High | 0.434 → 0.566 (1.083) | 0.285 → 0.442 | 0.352 → 0.471 | – / 0.100 / 0.038 |
+| | Ultra | 0.786 → 0.893 (1.276) | 0.316 → 0.466 | 0.697 → 0.797 | – / 0.101 / 0.041 |
+
+**`mobile` at Low, pass by pass** (the done-when: the bandwidth-heavy passes fused):
+
+| | Passes (GPU p50, ms) | Full-screen passes | GPU |
+| --- | --- | ---: | ---: |
+| before | opaque 0.070, sky 0.005, transparent 0.001, upscale 0.023, ui 0.000 | 5 | 0.123 |
+| after | scene 0.062, mlaa 0.030, bloom 0.039, post 0.042, ui 0.000 | 4 | 0.191 |
+
+The three scene passes became one (0.076 → 0.062 ms: no depth or colour stored and loaded between them), and the
+finish pass does what would otherwise be four full-screen passes over the window (tone mapping, bloom's composite,
+MLAA's blend, the upscale) for 0.019 ms more than the bare upscale it replaces. The same fusion takes `parts_100k` at
+Low from 0.273 ms of scene and upscale passes to a 0.145 ms scene pass.
+
+- **What the chain costs**: bloom is 0.04 ms at Low (from a quarter) and 0.09 to 0.12 ms from half, about the same at
+  720p as at 1080p, so most of it is its nine small passes, not texels; the finish pass is 0.04 ms at 720p and 0.07 to
+  0.10 ms at 1080p; MLAA 0.03 to 0.06 ms at 75% scale and 0.09 to 0.11 ms at 1080p. MSAA (unchanged by #85; High's 4×
+  against #84's High without it) costs about 0.13 ms on `parts_100k` and 0.06 ms on `mobile`, 8× about 0.25 ms.
+- **Render CPU** grows by about 18 µs per render pass the chain adds (wgpu's recording and submit per pass): 0.1 ms at
+  Low, 0.2 ms at Medium and High, inside the High tier's 1.5 ms everywhere (0.94 ms at most, `many_lights` at High).
+  Bloom's chain is most of those passes; fewer, larger passes are the obvious next step.
+- **Allocations**: `tests/no_alloc.rs` holds the default frame, MLAA's, the merged scene's, the scaled ones and every
+  parts frame to the same wgpu calls written out by hand with the chain's passes: equal on Vulkan, DX12 and GL here.
+
+**The look.** The reference images were made again through the chain (`crates/render/tests/reference/`; before,
+after and their difference times eight in `docs/screenshots/85-references.png`, crops of the sun and the parts in
+`85-references-crops.png`). Below the knee nothing moves but for bloom's soft edges and the scene colour's precision
+(the rings in the eightfold difference of the night images are its steps, a level apart); the sun, the neon cube and
+the brightest lit faces lose up to 6 levels to the shoulder and gain a glow. Against the old references the mean
+difference is 1 to 3 levels. `docs/screenshots/85-aa-edges.png` shows the same edges of `parts_10k` with no
+anti-aliasing, MLAA, 4× and 8× MSAA, four times enlarged.

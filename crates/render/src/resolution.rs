@@ -1,19 +1,20 @@
 //! Render scale and dynamic resolution (ADR 0008 §8).
 //!
-//! The scene can be drawn at a **render scale**: into a texture of `scale ×` the target's size, which the upscale
-//! pass ([`crate::PassId::Upscale`]) then draws over the whole target with bilinear filtering, before the UI is
-//! drawn at the target's own resolution. A scale of 1 with dynamic resolution off draws the scene straight into the
-//! target, as without a render scale: no texture, no upscale pass.
+//! The scene can be drawn at a **render scale**: into a scene colour of `scale ×` the target's size, which the
+//! finish pass ([`crate::PassId::Post`], [`crate::post`]) reads with one bilinear tap per output pixel as it finishes
+//! the image, before the UI is drawn at the target's own resolution. Without the finish pass the upscale pass
+//! ([`crate::PassId::Upscale`]) does the stretching on its own. A scale of 1 with dynamic resolution off reads the
+//! scene colour texel for texel (and without the finish pass draws the scene straight into the target).
 //!
 //! **Dynamic resolution** changes the scale from frame to frame to hold the GPU frame time at a target
 //! ([`DynamicResolution`]). The scene textures are made once at [`ResolutionSettings::max_scale`] and a frame draws
-//! into the top-left corner of them (its viewport and scissor), so a new scale never makes a texture; the upscale
-//! pass reads only that corner. The controller reads the GPU timestamps the renderer already takes
-//! ([`crate::FrameTimings`]), which arrive one to three frames late, so it remembers the scale each frame was drawn
-//! at and damps its steps.
+//! into the top-left corner of them (its viewport and scissor), so a new scale never makes a texture; the finish (or
+//! upscale) pass reads only that corner, and bloom's levels follow the target's size, so its glow does not change
+//! with the scale. The controller reads the GPU timestamps the renderer already takes ([`crate::FrameTimings`]),
+//! which arrive one to three frames late, so it remembers the scale each frame was drawn at and damps its steps.
 //!
-//! The upscaler is one pass behind one seam (`upscale.rs`): a better one (FSR 1 class, #85) replaces its shader and
-//! pipeline and nothing else.
+//! The upscale is one bilinear tap behind one seam (`scene_uv` in `post/finish.wgsl`, `upscale.wgsl` without the
+//! finish pass): a better upscaler (FSR 1 class) replaces that tap.
 
 /// How the scene's resolution is chosen: a fixed render scale, or dynamic resolution between two scales.
 #[derive(Clone, Copy, Debug, PartialEq)]

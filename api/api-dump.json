@@ -1485,6 +1485,44 @@
           "description": "The most frames per second; 0 when uncapped.",
           "aliases": [],
           "derived_from": []
+        },
+        {
+          "name": "AntiAliasing",
+          "type": {
+            "Enum": "AntiAliasingMode"
+          },
+          "default": "MLAA",
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "How edges are smoothed, as drawn on this machine.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "EffectQualityLevel",
+          "type": "Int",
+          "default": 2,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Graphics",
+          "description": "The post effects' quality, from 1 (Low) to 4 (Ultra): how finely bloom is drawn. Bloom is drawn at every level.",
+          "aliases": [],
+          "derived_from": []
         }
       ],
       "methods": [],
@@ -3490,6 +3528,32 @@
         },
         {
           "name": "Auto",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "name": "AntiAliasingMode",
+      "description": "How edges are smoothed: not at all, by MLAA (a pass over the finished image), or by multisampling with 2, 4 or 8 samples.",
+      "items": [
+        {
+          "name": "Off",
+          "value": 0
+        },
+        {
+          "name": "MLAA",
+          "value": 1
+        },
+        {
+          "name": "MSAA2",
+          "value": 2
+        },
+        {
+          "name": "MSAA4",
+          "value": 3
+        },
+        {
+          "name": "MSAA8",
           "value": 4
         }
       ]

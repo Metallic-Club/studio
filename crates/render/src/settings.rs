@@ -3,14 +3,14 @@
 //!
 //! A [`GraphicsSettings`] is what a player chooses: a [`Preset`] (Low, Medium, High, Ultra or Auto) and any of the
 //! per-setting overrides (render scale, dynamic resolution and its target, frame cap and vsync, view distance,
-//! shadow quality and distance, local-light budget, LOD bias). [`GraphicsSettings::quality`] resolves them into a
+//! shadow quality and distance, local-light budget, LOD bias, anti-aliasing, effect quality). [`GraphicsSettings::quality`] resolves them into a
 //! [`Quality`]: the settings of every system the presets drive ([`ResolutionSettings`], [`CullSettings`],
-//! [`ShadowSettings`], [`LightSettings`], [`LodSettings`]), which the renderer takes as they are.
+//! [`ShadowSettings`], [`LightSettings`], [`LodSettings`], [`AntiAliasing`], [`PostSettings`]), which the renderer takes as they are.
 //!
 //! **Presets scale cost, never a game's look.** Lower presets draw at a lower resolution, see less far, draw fewer
-//! and coarser shadows, fewer local lights at once and coarser far levels of detail; none turns the sun's shadows
-//! or the local lights off (that is the game's `Lighting.GlobalShadows` and each light's `Enabled`), and no override
-//! can either. Anti-aliasing and effect quality join the presets with the post chain (#85).
+//! and coarser shadows, fewer local lights at once, coarser far levels of detail, cheaper anti-aliasing and bloom from
+//! fewer texels; none turns the sun's shadows, the local lights or bloom off (that is the game's `Lighting.GlobalShadows`
+//! and each light's `Enabled`), and no override can either.
 //!
 //! **Auto** picks a tier on the machine, then holds the frame time with dynamic resolution. The [`Calibrator`]
 //! draws the game's first frames at Ultra, then High, then Medium, timing each on the GPU, and keeps the first tier
@@ -27,6 +27,7 @@ use std::str::FromStr;
 use crate::cull::CullSettings;
 use crate::lights::{LightSettings, MAX_GPU_LIGHTS};
 use crate::lod::LodSettings;
+use crate::post::{AntiAliasing, PostSettings};
 use crate::resolution::{MAX_SCALE, MIN_SCALE, ResolutionSettings};
 use crate::shadow::ShadowSettings;
 
@@ -181,12 +182,21 @@ pub struct Quality {
     pub lights: LightSettings,
     /// The levels of detail's bias.
     pub lod: LodSettings,
+    /// The anti-aliasing: MLAA, or MSAA where the device has the samples ([`AntiAliasing::supported`]).
+    pub anti_aliasing: AntiAliasing,
+    /// The post chain's effect quality: bloom's resolution and filter, MLAA's search ([`crate::post`]). Every tier
+    /// draws bloom; the lower ones from fewer texels.
+    pub post: PostSettings,
+    /// Record the scene passes as one render pass ([`crate::PassId::Scene`]), keeping colour and depth in tile
+    /// memory on tile-based GPUs (the engine also merges them on any tier there).
+    pub merge_scene_passes: bool,
 }
 
 impl Quality {
     /// Low (Intel Iris Xe laptops, mid-range phones; ADR 0008's Low tier): the scene at 75% scale, 512 m of view,
     /// parts under 2 pixels culled, one 1024² sun cascade out to 128 m (as the ADR sets), 32 local lights a frame
-    /// with 2 shadowed in a 1024² atlas, and an LOD bias of 0.5.
+    /// with 2 shadowed in a 1024² atlas, an LOD bias of 0.5, MLAA, bloom from a quarter of the output, and the scene
+    /// passes merged into one.
     pub const LOW: Self = Self {
         tier: Tier::Low,
         resolution: ResolutionSettings {
@@ -209,11 +219,14 @@ impl Quality {
         },
         lights: LightSettings::LOW,
         lod: LodSettings::LOW,
+        anti_aliasing: AntiAliasing::Mlaa,
+        post: PostSettings::LOW,
+        merge_scene_passes: true,
     };
 
     /// Medium (GTX 1650 / RX 6500 class at 60 fps, the Mid tier): full resolution, 1 km of view, parts under 1.5
     /// pixels culled, two 2048² sun cascades out to 192 m (the far one cached), 128 local lights with 8 shadowed in
-    /// a 2048² atlas, and an LOD bias of 1.
+    /// a 2048² atlas, an LOD bias of 1, MLAA and bloom from half the output.
     pub const MEDIUM: Self = Self {
         tier: Tier::Medium,
         resolution: ResolutionSettings::NATIVE,
@@ -232,11 +245,14 @@ impl Quality {
         },
         lights: LightSettings::MEDIUM,
         lod: LodSettings::MEDIUM,
+        anti_aliasing: AntiAliasing::Mlaa,
+        post: PostSettings::MEDIUM,
+        merge_scene_passes: false,
     };
 
     /// High (RTX 3060 Ti class): full resolution, 2 km of view, parts under a pixel culled, three 2048² sun
     /// cascades out to 256 m (the far one cached; the renderer's defaults), 192 local lights with 8 shadowed in a
-    /// 4096² atlas, and an LOD bias of 2.
+    /// 4096² atlas, an LOD bias of 2, 4x MSAA and bloom from half the output with 13-tap downsampling.
     pub const HIGH: Self = Self {
         tier: Tier::High,
         resolution: ResolutionSettings::NATIVE,
@@ -251,10 +267,14 @@ impl Quality {
         },
         lights: LightSettings::HIGH,
         lod: LodSettings::HIGH,
+        anti_aliasing: AntiAliasing::Msaa(4),
+        post: PostSettings::HIGH,
+        merge_scene_passes: false,
     };
 
     /// Ultra: full resolution, no view distance, parts under half a pixel culled, three 3072² sun cascades out to
-    /// 256 m (High's, 1.5 times as sharp), 256 local lights with 10 shadowed, and an LOD bias of 4.
+    /// 256 m (High's, 1.5 times as sharp), 256 local lights with 10 shadowed, an LOD bias of 4, 8x MSAA and High's
+    /// bloom.
     pub const ULTRA: Self = Self {
         tier: Tier::Ultra,
         resolution: ResolutionSettings::NATIVE,
@@ -277,6 +297,9 @@ impl Quality {
             enabled: true,
             bias: 4.0,
         },
+        anti_aliasing: AntiAliasing::Msaa(8),
+        post: PostSettings::HIGH,
+        merge_scene_passes: false,
     };
 
     /// The settings of `tier`.
@@ -333,6 +356,10 @@ pub struct GraphicsSettings {
     pub light_budget: Option<u32>,
     /// The levels of detail's bias (0.25 to 8; higher is finer).
     pub lod_bias: Option<f32>,
+    /// The anti-aliasing (off, MLAA, or MSAA 2x, 4x, 8x; MSAA falls back to what the device has).
+    pub anti_aliasing: Option<AntiAliasing>,
+    /// The post effects' quality of this tier: bloom's resolution and filter, MLAA's search. Bloom is never off.
+    pub effect_quality: Option<Tier>,
     /// What Auto measured, kept with the settings.
     pub calibration: Option<Calibration>,
 }
@@ -413,6 +440,12 @@ impl GraphicsSettings {
         if let Some(bias) = self.lod_bias.filter(|b| b.is_finite()) {
             quality.lod.bias = bias.clamp(0.25, 8.0);
         }
+        if let Some(aa) = self.anti_aliasing {
+            quality.anti_aliasing = aa;
+        }
+        if let Some(effects) = self.effect_quality {
+            quality.post = Quality::for_tier(effects).post;
+        }
         quality
     }
 
@@ -480,6 +513,16 @@ impl GraphicsSettings {
             quality.lights.budget.to_string(),
         );
         line("lod_bias", self.lod_bias.map(number), number(quality.lod.bias));
+        line(
+            "anti_aliasing",
+            self.anti_aliasing.map(|aa| quote(aa.name())),
+            quote(quality.anti_aliasing.name()),
+        );
+        line(
+            "effect_quality",
+            self.effect_quality.map(|t| quote(t.name())),
+            quote(quality.tier.name()),
+        );
         if let Some(calibration) = &self.calibration {
             out.push_str(
                 "\n# What Auto measured on this machine; remove the section to measure again.\n[calibration]\n",
@@ -558,6 +601,17 @@ impl GraphicsSettings {
                     settings.light_budget = Some(value.count().ok_or_else(|| bad("a whole number"))?);
                 }
                 (Section::Main, "lod_bias") => settings.lod_bias = Some(value.number().ok_or_else(|| bad("a number"))?),
+                (Section::Main, "anti_aliasing") => {
+                    settings.anti_aliasing = Some(
+                        value
+                            .text()
+                            .and_then(|name| name.parse().ok())
+                            .ok_or_else(|| bad("off, mlaa, msaa2, msaa4 or msaa8"))?,
+                    );
+                }
+                (Section::Main, "effect_quality") => {
+                    settings.effect_quality = Some(value.tier().ok_or_else(|| bad("low, medium, high or ultra"))?);
+                }
                 (Section::Calibration, "tier") => tier = Some(value.tier().ok_or_else(|| bad("a tier"))?),
                 (Section::Calibration, "gpu_ms") => gpu_ms = Some(value.number().ok_or_else(|| bad("a number"))?),
                 (Section::Calibration, "adapter") => {
@@ -843,7 +897,16 @@ mod tests {
                 assert!(q.lights.budget >= p.lights.budget, "{tier:?}");
                 assert!(q.lights.atlas_resolution >= p.lights.atlas_resolution, "{tier:?}");
                 assert!(q.lod.bias >= p.lod.bias, "{tier:?}");
+                assert!(
+                    q.anti_aliasing.msaa_samples() >= p.anti_aliasing.msaa_samples(),
+                    "{tier:?}"
+                );
+                assert!(q.post.bloom.start.divisor() <= p.post.bloom.start.divisor(), "{tier:?}");
+                assert!(q.post.mlaa.search >= p.post.mlaa.search, "{tier:?}");
             }
+            // Bloom at every tier, as bright and as wide: only its resolution and filter change.
+            assert_eq!(q.post.bloom.intensity, PostSettings::HIGH.bloom.intensity, "{tier:?}");
+            assert_ne!(q.anti_aliasing, AntiAliasing::Off, "{tier:?}");
             previous = Some(q);
         }
         // The shadow atlas holds every shadowed light's tiles (a point light takes six).
@@ -862,9 +925,14 @@ mod tests {
             shadow_distance: Some(90.0),
             light_budget: Some(0),
             lod_bias: Some(100.0),
+            anti_aliasing: Some(AntiAliasing::Off),
+            effect_quality: Some(Tier::Low),
             ..GraphicsSettings::default()
         };
         let q = settings.quality();
+        assert_eq!(q.anti_aliasing, AntiAliasing::Off);
+        assert_eq!(q.post, PostSettings::LOW);
+        assert!(!q.merge_scene_passes, "the tier's, not the effects'");
         assert_eq!(q.tier, Tier::High);
         assert_eq!(q.resolution.range(), (0.6, 0.6));
         assert!(!q.resolution.dynamic);
@@ -914,6 +982,8 @@ mod tests {
             frame_cap: Some(0),
             shadow_quality: Some(Tier::Medium),
             lod_bias: Some(1.5),
+            anti_aliasing: Some(AntiAliasing::Msaa(2)),
+            effect_quality: Some(Tier::Ultra),
             calibration: Some(Calibration {
                 tier: Tier::High,
                 gpu_ms: 4.25,
@@ -926,6 +996,13 @@ mod tests {
         assert!(text.contains("preset = \"auto\"\n"), "{text}");
         assert!(text.contains("render_scale = 0.85\n"), "{text}");
         assert!(text.contains("# view_distance = "), "{text}");
+        assert!(text.contains("anti_aliasing = \"msaa2\"\n"), "{text}");
+        assert!(text.contains("effect_quality = \"ultra\"\n"), "{text}");
+        assert!(
+            GraphicsSettings::new(Preset::Low)
+                .to_text()
+                .contains("# anti_aliasing = \"mlaa\"\n")
+        );
         assert_eq!(GraphicsSettings::from_text(&text), Ok(settings));
         // Every preset with nothing set reads back as itself.
         for preset in Preset::ALL {
@@ -945,6 +1022,8 @@ mod tests {
             ("preset", 1, "expected `key = value`"),
             ("preset = \"high", 1, "closing quote"),
             ("frame_cap = 1.5", 1, "a whole number"),
+            ("anti_aliasing = \"fxaa\"", 1, "off, mlaa"),
+            ("effect_quality = 3", 1, "low, medium"),
             ("\u{0}\u{1}garbage", 1, "expected"),
         ] {
             let error = GraphicsSettings::from_text(text).unwrap_err();

@@ -53,7 +53,11 @@ fn timings_arrive_after_some_frames() {
     );
     assert!(timings.frame() < renderer.frame_index());
     let names: Vec<_> = timings.passes().iter().map(|timing| timing.pass).collect();
-    assert_eq!(names, ["depth_prepass", "opaque", "sky", "transparent", "ui"]);
+    // Bloom's chain of passes is timed as one.
+    assert_eq!(
+        names,
+        ["depth_prepass", "opaque", "sky", "transparent", "bloom", "post", "ui"]
+    );
     for timing in timings.passes() {
         assert!(timing.gpu_ms.is_finite() && timing.gpu_ms >= 0.0, "{timing:?}");
         // An empty pass on a 256x256 target cannot take a second, whatever the adapter.

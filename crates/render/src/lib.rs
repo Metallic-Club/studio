@@ -38,6 +38,9 @@
 //! - Render scale and dynamic resolution ([`resolution`], [`RendererSettings::resolution`]): the scene drawn at a
 //!   fraction of the target's size and upscaled before the UI, or at a scale that follows the GPU timings to hold a
 //!   frame time.
+//! - The HDR post chain ([`post`], [`RendererSettings::post`]): the scene in an `Rg11b10Ufloat` colour target, bloom,
+//!   MLAA or MSAA, and one finish pass (exposure, bloom composite, tone curve, grade, upscale) into the output; an
+//!   open chain whose disabled passes cost nothing ([`PostChain`]).
 //! - Graphics settings ([`settings`]): the Low / Medium / High / Ultra / Auto presets composed from the settings
 //!   above, the player's overrides, their file format, and the Auto preset's calibration (ADR 0008 §8).
 
@@ -51,6 +54,7 @@ pub mod lights;
 pub mod lod;
 pub mod overlay;
 pub mod parts;
+pub mod post;
 mod renderer;
 pub mod resolution;
 pub mod scene;
@@ -64,12 +68,13 @@ mod upscale;
 pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
 pub use cull::{Casters, CullSettings, CullStats, CullView, Frustum, VisibleSet};
 pub use error::RenderError;
-pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
+pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass, PostChain};
 pub use lighting::{LightingReader, SceneLighting};
 pub use lights::{LightSettings, LightStats};
 pub use lod::{LodSettings, MAX_LOD_LEVELS};
 pub use overlay::Overlay;
 pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer};
+pub use post::{AntiAliasing, PostSettings, PostStats};
 pub use renderer::{Renderer, RendererSettings};
 pub use scene::{GpuScene, InstanceScene};
 pub use shadow::{CascadeStats, MAX_CASCADES, ShadowSettings, ShadowStats};

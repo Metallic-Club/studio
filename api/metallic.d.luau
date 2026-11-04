@@ -429,6 +429,17 @@ declare extern type EnumGraphicsPreset_INTERNAL extends Enum with
     function GetEnumItems(self): { EnumGraphicsPreset }
 end
 
+--- How edges are smoothed: not at all, by MLAA (a pass over the finished image), or by multisampling with 2, 4 or 8 samples.
+declare extern type EnumAntiAliasingMode extends EnumItem with end
+declare extern type EnumAntiAliasingMode_INTERNAL extends Enum with
+    read Off: EnumAntiAliasingMode
+    read MLAA: EnumAntiAliasingMode
+    read MSAA2: EnumAntiAliasingMode
+    read MSAA4: EnumAntiAliasingMode
+    read MSAA8: EnumAntiAliasingMode
+    function GetEnumItems(self): { EnumAntiAliasingMode }
+end
+
 --- How the mouse cursor behaves: free (Default), or held so the mouse turns the camera (LockCenter at the middle of the window, LockCurrentPosition where it is). Movement keeps arriving while it is held.
 declare extern type EnumMouseBehavior extends EnumItem with end
 declare extern type EnumMouseBehavior_INTERNAL extends Enum with
@@ -468,6 +479,7 @@ declare Enum: {
     UserInputState: EnumUserInputState_INTERNAL,
     KeyCode: EnumKeyCode_INTERNAL,
     GraphicsPreset: EnumGraphicsPreset_INTERNAL,
+    AntiAliasingMode: EnumAntiAliasingMode_INTERNAL,
     MouseBehavior: EnumMouseBehavior_INTERNAL,
     Material: EnumMaterial_INTERNAL,
     PartShape: EnumPartShape_INTERNAL,
@@ -697,6 +709,10 @@ declare extern type UserGameSettings extends Instance with
     read VSync: boolean
     --- The most frames per second; 0 when uncapped.
     read FrameRateCap: number
+    --- How edges are smoothed, as drawn on this machine.
+    read AntiAliasing: EnumAntiAliasingMode
+    --- The post effects' quality, from 1 (Low) to 4 (Ultra): how finely bloom is drawn. Bloom is drawn at every level.
+    read EffectQualityLevel: number
 end
 
 --- Keyboard, mouse and touch input: events for every key, button, movement and touch, what is held right now, and how the mouse cursor behaves. Input arrives at the start of each frame. Get it with game:GetService("UserInputService").

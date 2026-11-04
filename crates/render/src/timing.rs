@@ -31,7 +31,7 @@ const QUERIES_PER_FRAME: u32 = 2 * MAX_TIMED as u32;
 /// Bytes of resolved timestamps per frame.
 const BYTES_PER_FRAME: u64 = QUERIES_PER_FRAME as u64 * 8;
 /// Each frame's region of the resolve buffer; resolve offsets must be aligned to this.
-const RESOLVE_STRIDE: u64 = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT;
+const RESOLVE_STRIDE: u64 = BYTES_PER_FRAME.next_multiple_of(wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT);
 
 const _: () = assert!(BYTES_PER_FRAME <= RESOLVE_STRIDE);
 
