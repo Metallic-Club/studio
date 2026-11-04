@@ -43,7 +43,7 @@
 //!
 //! - library backtraces, which wgpu-core's debug builds capture on every lock ([`assert_library_backtraces_off`]):
 //!   a constant excess on every runner, growing with the depth of the renderer's stack;
-//! - the Direct3D 12 debug layer's messages, and wgpu-hal's leaking handler for them ([`measuring_gpu`]): WARP's
+//! - the Direct3D 12 debug layer's messages, and wgpu-hal's leaking handler for them ([`debug_output`]): WARP's
 //!   run-to-run swings of up to 40;
 //! - wgpu-core's per-encoder trackers growing with the order of the buffer indices a frame meets
 //!   ([`pad_tracker_indices`]): the ±3 between workloads (lavapipe's 205 against 211 in #125).
@@ -272,25 +272,69 @@ fn report(test: &str, context: &RenderContext, workloads: &[(&str, u64, u64)]) {
 }
 
 /// A device for these tests (see [`support::gpu`]), on the vertex-buffer instance path if `force_vertex_instances`,
-/// with the backend's validation layers off.
-///
-/// The Direct3D 12 debug layer (on by default in debug builds) prints a warning through `OutputDebugString` for
-/// every clear of a texture made without a clear value, on the thread that records the clear: WARP on CI printed two
-/// per parts frame and five per shadowed frame. wgpu-hal's handler for those messages (`auxil/dxgi/exception.rs`,
-/// wgpu 30) turns each into a `String` (two allocations) before filtering, and it is registered once more every
-/// time a process's count of validating devices goes from zero to one, because its removal passes the function
-/// instead of the handle `AddVectoredExceptionHandler` returned. On CI's WARP those allocations came to anything
-/// from 0 to 50 per frame, differing between processes and changing within one as other tests made and dropped
-/// devices: the run-to-run swing of up to 40 allocations of #125, often on one side of a comparison and not the
-/// other (the dev PC has no debug layer installed, so it never saw it). Without validation nothing is printed and
-/// nothing registered. wgpu-core's own validation, which every call goes through, is unaffected.
+/// in a process whose debug output wgpu-hal never sees ([`debug_output::keep_from_wgpu`]) and whose library
+/// backtraces are off ([`assert_library_backtraces_off`]).
 fn measuring_gpu(force_vertex_instances: bool) -> Option<RenderContext> {
     assert_library_backtraces_off();
+    debug_output::keep_from_wgpu();
     support::gpu_with(&metallic_render::ContextOptions {
         force_vertex_instances,
-        validation: Some(false),
         ..metallic_render::ContextOptions::default()
     })
+}
+
+/// Keeps the Direct3D 12 debug layer's messages from wgpu-hal's handler for them.
+///
+/// The debug layer (on in debug builds, where wgpu turns on validation) prints a warning through `OutputDebugString`
+/// for every clear of a texture made without a clear value, on the thread that records the clear: WARP on CI printed
+/// two per parts frame and five per shadowed frame, as many for the renderer as by hand. wgpu-hal's handler for them
+/// (`auxil/dxgi/exception.rs`, wgpu 30) decodes the exception's raw parameters instead of the message, so whether it
+/// allocates (a 120-byte `String`, grown to 240) depends on the addresses in them, and it is registered again every
+/// time a process's count of validating devices goes from zero to one, because its removal passes the function
+/// instead of the handle `AddVectoredExceptionHandler` returned (#128). On CI's WARP that came to anything from 0 to
+/// 50 allocations per frame, different for the renderer and the hand-written frame and from process to process: the
+/// swings of up to 40 in #125 (the dev PC has no debug layer installed, so it never saw them).
+///
+/// Turning validation off instead removes the messages too, but WARP without its debug layer crashed in about one test
+/// process in twelve on CI, on one of its own worker threads (#130). So validation stays on, and a handler that runs
+/// before wgpu-hal's marks every debug-output exception handled, which is what a debugger would do with it: the
+/// messages go nowhere (wgpu-hal never logged them anyway), and everything else the layer checks still runs.
+#[cfg(windows)]
+mod debug_output {
+    use windows_sys::Win32::Foundation::{DBG_PRINTEXCEPTION_C, DBG_PRINTEXCEPTION_WIDE_C};
+    use windows_sys::Win32::System::Diagnostics::Debug::{AddVectoredExceptionHandler, EXCEPTION_POINTERS};
+
+    /// `EXCEPTION_CONTINUE_EXECUTION` and `EXCEPTION_CONTINUE_SEARCH`, a vectored handler's two answers.
+    const HANDLED: i32 = -1;
+    const NOT_MINE: i32 = 0;
+
+    unsafe extern "system" fn swallow(info: *mut EXCEPTION_POINTERS) -> i32 {
+        // SAFETY: the system calls a vectored handler with valid exception pointers and a valid record.
+        let code = unsafe { (*(*info).ExceptionRecord).ExceptionCode };
+        if code == DBG_PRINTEXCEPTION_C || code == DBG_PRINTEXCEPTION_WIDE_C {
+            HANDLED
+        } else {
+            NOT_MINE
+        }
+    }
+
+    /// Puts [`swallow`] first in the process's vectored handlers, once.
+    pub(crate) fn keep_from_wgpu() {
+        static INSTALLED: std::sync::Once = std::sync::Once::new();
+        INSTALLED.call_once(|| {
+            // SAFETY: `swallow` is a valid handler for the life of the process and is never removed; `1` puts it
+            // before every handler already added (wgpu-hal adds its own last).
+            unsafe {
+                AddVectoredExceptionHandler(1, Some(swallow));
+            }
+        });
+    }
+}
+
+/// Only Direct3D 12 prints through debug-output exceptions.
+#[cfg(not(windows))]
+mod debug_output {
+    pub(crate) fn keep_from_wgpu() {}
 }
 
 /// Fails unless library backtraces are off, as `.cargo/config.toml` sets them (`RUST_LIB_BACKTRACE=0`).
@@ -380,7 +424,7 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
     );
     // Per pass: what the default set's extra passes cost the renderer is exactly what they cost by hand, so nothing
     // in the pass loop allocates. (CI's WARP once showed 2 more: the debug layer and library backtraces, see
-    // `measuring_gpu` and `assert_library_backtraces_off`.)
+    // `debug_output` and `assert_library_backtraces_off`.)
     let more = PassSet::default().iter().count() - 1;
     assert!(
         ours.saturating_sub(ours_one) <= floor.saturating_sub(floor_one),
