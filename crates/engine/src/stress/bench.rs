@@ -437,7 +437,7 @@ impl AppHandler for BenchApp {
             self.renderer.borrow_mut().perf_mut().reset();
         }
         if let Some((every, graphics)) = self.switch.as_mut()
-            && frames % *every == 0
+            && frames.is_multiple_of(*every)
             && frames < self.end
         {
             graphics.preset = if graphics.preset == Preset::Low {
