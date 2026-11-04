@@ -502,8 +502,7 @@ impl Grid {
                 if let Some(large) = self.large.get_mut(index) {
                     let item = &mut large.item;
                     if levels && item.class() != 0 {
-                        let level = choose_level(view, item, remember);
-                        out.push_level(item.entry, item.list, level);
+                        push_with_level(view, item, remember, out);
                     } else {
                         out.push(item.entry, item.list);
                     }
@@ -515,21 +514,7 @@ impl Grid {
             };
             let (test_planes, test_size) = (place & TEST_PLANES != 0, place & TEST_SIZE != 0);
             if levels && cell.levels {
-                for item in &mut cell.items {
-                    if !keeps::<MODE>(item) {
-                        continue;
-                    }
-                    if test_planes && !view.frustum.contains_sphere(item.center, item.radius) {
-                        stats.outside_frustum += 1;
-                    } else if test_size && !view.sphere_large_and_near(item.center, item.radius) {
-                        stats.too_far_or_small += 1;
-                    } else if item.class() == 0 {
-                        out.push(item.entry, item.list);
-                    } else {
-                        let level = choose_level(view, item, remember);
-                        out.push_level(item.entry, item.list, level);
-                    }
-                }
+                cull_cell_with_levels::<MODE>(cell, view, (test_planes, test_size), remember, out, &mut stats);
                 continue;
             }
             // A cell that has held no round part: exactly the cull without levels.
@@ -551,11 +536,40 @@ impl Grid {
     }
 }
 
-/// The level `view` draws the round `item` at: a camera's view by its distance from the eye, with the hysteresis of
-/// the level it last drew it at (and notes the new one, with `remember`); a shadow view by its own distance.
+/// The second pass of [`Grid::cull_filtered`] over a cell that holds round parts: as for any cell, and each visible
+/// round item listed at the level `view` draws it at. Out of line, so the loop over the other cells stays as it was
+/// before levels of detail.
+#[inline(never)]
+fn cull_cell_with_levels<const MODE: u8>(
+    cell: &mut Cell,
+    view: &CullView,
+    (test_planes, test_size): (bool, bool),
+    remember: bool,
+    out: &mut VisibleSet,
+    stats: &mut CullStats,
+) {
+    for item in &mut cell.items {
+        if !keeps::<MODE>(item) {
+            continue;
+        }
+        if test_planes && !view.frustum.contains_sphere(item.center, item.radius) {
+            stats.outside_frustum += 1;
+        } else if test_size && !view.sphere_large_and_near(item.center, item.radius) {
+            stats.too_far_or_small += 1;
+        } else if item.class() == 0 {
+            out.push(item.entry, item.list);
+        } else {
+            push_with_level(view, item, remember, out);
+        }
+    }
+}
+
+/// Lists the round `item` at the level `view` draws it at: a camera's view by its distance from the eye, with the
+/// hysteresis of the level it last drew it at (and notes the new one, with `remember`); a shadow view by its own
+/// distance.
 #[inline]
-fn choose_level(view: &CullView, item: &mut Item, remember: bool) -> u8 {
-    if remember {
+fn push_with_level(view: &CullView, item: &mut Item, remember: bool, out: &mut VisibleSet) {
+    let level = if remember {
         let d2 = (item.center - view.eye).length_squared();
         let level = view.lod.choose(item.class(), item.radius * item.radius, d2, item.level);
         // Levels rarely change: leave the item's cache line clean when it keeps its own.
@@ -565,7 +579,8 @@ fn choose_level(view: &CullView, item: &mut Item, remember: bool) -> u8 {
         level
     } else {
         view.lod.choose_caster(item.class(), item.radius)
-    }
+    };
+    out.push_level(item.entry, item.list, level);
 }
 
 /// The cull modes of [`Grid::cull_filtered`]: a camera's view (every instance), or a shadow view keeping the

@@ -256,24 +256,9 @@ fn render_cull(mut state: CullFixture) -> CullFixture {
     state
 }
 
-/// TEMPORARY (#80 diagnosis, to be removed): the cull with nothing left to move, the walk alone.
-fn culling_walk(_: ()) -> CullFixture {
-    let mut state = culling(());
-    state.fixture.scene.cull(&state.view, &mut state.visible);
-    state
-}
-
-#[library_benchmark]
-#[bench::frame(args = (()), setup = culling_walk)]
-fn render_cull_walk(mut state: CullFixture) -> CullFixture {
-    black_box(state.fixture.scene.cull(&state.view, &mut state.visible));
-    black_box(state.visible.len());
-    state
-}
-
 library_benchmark_group!(
     name = workloads,
-    benchmarks = [render_sync_moving, render_sync_scattered, render_cull, render_cull_walk]
+    benchmarks = [render_sync_moving, render_sync_scattered, render_cull]
 );
 
 main!(

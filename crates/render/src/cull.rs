@@ -433,26 +433,35 @@ impl VisibleSet {
         self.order.reserve(places);
     }
 
-    /// Adds a visible instance of `list` (an opaque list index, or the transparent list) at full detail.
-    #[inline]
+    /// Adds a visible instance of `list` (an opaque list index, or the transparent list) at full detail. The cull's
+    /// innermost step for every opaque instance: kept as small as it was before levels of detail, the see-through
+    /// case out of line.
+    #[inline(always)]
     pub(crate) fn push(&mut self, entry: u32, list: u16) {
         if list == crate::scene::TRANSPARENT_LIST {
-            self.transparent.push(entry);
-            self.transparent_levels.push(0);
+            self.push_see_through(entry, 0);
         } else if let Some(out) = self.opaque.get_mut(usize::from(list)) {
             // The capacity was reserved for every entry of the kind: this never allocates.
             out.push(entry);
         }
     }
 
+    /// Adds a visible see-through instance drawn at level `level`.
+    #[inline(never)]
+    fn push_see_through(&mut self, entry: u32, level: u8) {
+        self.transparent.push(entry);
+        self.transparent_levels.push(level);
+    }
+
     /// Adds a visible instance of `list` drawn at level `level`.
     #[inline]
     pub(crate) fn push_level(&mut self, entry: u32, list: u16, level: u8) {
         if list == crate::scene::TRANSPARENT_LIST {
-            self.transparent.push(entry);
-            self.transparent_levels.push(level);
+            self.push_see_through(entry, level);
         } else if level == 0 {
-            self.push(entry, list);
+            if let Some(out) = self.opaque.get_mut(usize::from(list)) {
+                out.push(entry);
+            }
         } else if let Some(out) = self
             .coarse
             .get_mut(usize::from(list))
@@ -464,6 +473,7 @@ impl VisibleSet {
     }
 
     /// Notes whether the see-through entries changed. Returns how many instances are visible.
+    #[inline]
     pub(crate) fn finish(&mut self) -> u32 {
         if self.transparent != self.previous_transparent || self.transparent_levels != self.previous_levels {
             self.transparent_revision = self.transparent_revision.wrapping_add(1);
