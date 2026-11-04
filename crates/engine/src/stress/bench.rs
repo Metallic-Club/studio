@@ -475,7 +475,7 @@ mod tests {
         let mut summary = PerfSummary {
             frames: 10,
             gpu_frames: 9,
-            gpu_passes: 1 << PassId::Opaque as u8,
+            gpu_passes: 1 << PassId::Opaque as u16,
             ..PerfSummary::default()
         };
         summary.frame_ms.p50 = 2.0;
@@ -525,6 +525,27 @@ mod tests {
                     max_scale: 1.0,
                     gpu_ms: 2.1,
                 },
+                post: metallic_render::PostStats {
+                    scene_format: metallic_render::wgpu::TextureFormat::Rg11b10Ufloat,
+                    finish: true,
+                    msaa_samples: 4,
+                    mlaa: false,
+                    bloom_levels: 5,
+                    render_passes: 14,
+                    full_screen_passes: 5,
+                    planned: [
+                        Some(PassId::Opaque),
+                        Some(PassId::Sky),
+                        Some(PassId::Transparent),
+                        Some(PassId::Bloom),
+                        Some(PassId::Post),
+                        Some(PassId::Ui),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
+                },
             },
             calibration: Some(("high", 3.25)),
             switches: Some((60, 16)),
@@ -564,8 +585,10 @@ mod tests {
             json.contains(
                 "\"graphics\":{\"preset\":\"auto\",\"tier\":\"high\",\"calibrating\":null,\"resolution\":{\
                  \"scale\":0.7500,\"width\":1440,\"height\":810,\"dynamic\":true,\"target_ms\":2.000,\
-                 \"min_scale\":0.500,\"max_scale\":1.000},\"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\
-                 \"switch_every\":60,\"switches\":16},"
+                 \"min_scale\":0.500,\"max_scale\":1.000},\"post\":{\"scene_format\":\"rg11b10f\",\"finish\":true,\
+                 \"anti_aliasing\":\"msaa4\",\"bloom_levels\":5,\"render_passes\":14,\"full_screen_passes\":5,\
+                 \"passes\":[\"opaque\",\"sky\",\"transparent\",\"bloom\",\"post\",\"ui\"]},\
+                 \"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\"switch_every\":60,\"switches\":16},"
             ),
             "{json}"
         );

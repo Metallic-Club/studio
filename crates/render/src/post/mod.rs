@@ -38,7 +38,7 @@ pub(crate) use bloom::Bloom;
 pub(crate) use finish::{Finish, FinishParams};
 pub(crate) use mlaa::Mlaa;
 
-use crate::{MsaaSampleCounts, PostChain, RenderContext};
+use crate::{MsaaSampleCounts, PassId, PostChain, RenderContext};
 
 pub use finish::tone_curve;
 
@@ -169,7 +169,7 @@ pub struct BloomSettings {
 impl BloomSettings {
     /// The Low effect quality: from a quarter of the scene's size, 5-tap downsampling.
     pub const LOW: Self = Self {
-        intensity: 0.05,
+        intensity: 0.1,
         threshold: 0.0,
         start: BloomStart::Quarter,
         wide_filter: false,
@@ -305,6 +305,40 @@ pub struct PostStats {
     /// Passes reading or writing a whole target at the scene's or output's resolution
     /// ([`crate::FramePlan::full_screen_passes`]).
     pub full_screen_passes: u32,
+    /// The planned passes in order (bloom's chain as one), then `None`s.
+    pub planned: [Option<PassId>; PassId::COUNT],
+}
+
+impl PostStats {
+    /// The planned passes, in order.
+    pub fn passes(&self) -> impl Iterator<Item = PassId> + '_ {
+        self.planned.iter().map_while(|pass| *pass)
+    }
+
+    /// The anti-aliasing drawn.
+    pub fn anti_aliasing(&self) -> AntiAliasing {
+        if self.msaa_samples > 1 {
+            AntiAliasing::Msaa(self.msaa_samples)
+        } else if self.mlaa {
+            AntiAliasing::Mlaa
+        } else {
+            AntiAliasing::Off
+        }
+    }
+
+    /// The scene colour's format as a short name: `rg11b10f`, `rgba16f`, or the output's (`rgba8`, `bgra8`, with
+    /// `-srgb` when it encodes).
+    pub fn format_name(&self) -> &'static str {
+        match self.scene_format {
+            wgpu::TextureFormat::Rg11b10Ufloat => "rg11b10f",
+            wgpu::TextureFormat::Rgba16Float => "rgba16f",
+            wgpu::TextureFormat::Rgba8Unorm => "rgba8",
+            wgpu::TextureFormat::Rgba8UnormSrgb => "rgba8-srgb",
+            wgpu::TextureFormat::Bgra8Unorm => "bgra8",
+            wgpu::TextureFormat::Bgra8UnormSrgb => "bgra8-srgb",
+            _ => "other",
+        }
+    }
 }
 
 impl Default for PostStats {
@@ -317,6 +351,7 @@ impl Default for PostStats {
             bloom_levels: 0,
             render_passes: 0,
             full_screen_passes: 0,
+            planned: [None; PassId::COUNT],
         }
     }
 }

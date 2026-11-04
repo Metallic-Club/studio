@@ -309,7 +309,12 @@ impl Renderer {
     pub fn post_stats(&self) -> PostStats {
         let bloom_passes = self.post.bloom.passes();
         let planned = self.plan.passes().len();
+        let mut order = [None; PassId::COUNT];
+        for (slot, pass) in order.iter_mut().zip(self.plan.passes()) {
+            *slot = Some(pass.id);
+        }
         PostStats {
+            planned: order,
             scene_format: self.scene_target_format(),
             finish: self.plan.post(),
             msaa_samples: self.plan.msaa_samples(),
