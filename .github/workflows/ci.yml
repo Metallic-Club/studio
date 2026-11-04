@@ -111,12 +111,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS only on the weekly or dispatched run: a macOS minute costs ten Linux minutes. Linux is pinned to
-        # ubuntu-24.04: on the ubuntu-26.04 image (Mesa 26.0.8) the GPU test binaries segfault in libvulkan (#129).
+        # macOS only on the weekly or dispatched run: a macOS minute costs ten Linux minutes.
         os: >-
           ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-              && fromJSON('["ubuntu-24.04", "windows-latest", "macos-latest"]')
-              || fromJSON('["ubuntu-24.04", "windows-latest"]') }}
+              && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]')
+              || fromJSON('["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -131,11 +130,21 @@ jobs:
       # has WARP, Direct3D 12's built-in software adapter. METALLIC_REQUIRE_GPU makes a missing adapter fail the
       # tests instead of skipping them, so the renderer is really tested here. (macOS, weekly only, skips without
       # one.)
+      #
+      # The Vulkan loader sees only lavapipe's driver (VK_DRIVER_FILES). mesa-vulkan-drivers installs eight, and
+      # loader 1.4.341 (ubuntu-26.04's libvulkan1) unloads the ones without a device in vkEnumeratePhysicalDevices,
+      # freeing them while another thread's vkSetDebugUtilsObjectNameEXT walks every instance's driver list: wgpu
+      # names its objects in debug builds, and the tests make devices on several threads, so test binaries crashed
+      # in libvulkan (#129). Fixed upstream in loader 1.4.345 (KhronosGroup/Vulkan-Loader#1866); this can go once the
+      # image ships that. With one driver, which has a device, nothing is unloaded.
       - name: Software GPU (Mesa lavapipe and llvmpipe)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri
+          lavapipe=/usr/share/vulkan/icd.d/lvp_icd.json
+          test -f "$lavapipe" || { echo "::error::no lavapipe driver manifest at $lavapipe"; exit 1; }
+          echo "VK_DRIVER_FILES=$lavapipe" >> "$GITHUB_ENV"
       - name: Require a GPU adapter for the renderer tests
         if: matrix.os != 'macos-latest'
         shell: bash
