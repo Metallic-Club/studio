@@ -56,6 +56,10 @@
 //!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 //!
+//! The heap-growth tests ("nothing accumulates") sample the heap with the GPU idle and over two windows of frames,
+//! so wgpu's bookkeeping for frames in flight and its pools' one-off growth do not decide them; a leak grows in
+//! both windows and still fails them ([`HeapGrowth`], #151).
+//!
 //! Every adapter, software (`DeviceType::Cpu`: WARP, lavapipe) or hardware, is held to the same exact comparison of
 //! the renderer's frames with the hand-written ones. The excess CI's runners used to show (up to 6 allocations on the
 //! software adapters, the "machine noise" of #77 to #82, and 4 to 8 on macOS's Metal) came from three things in the
@@ -920,33 +924,56 @@ fn nothing_accumulates_over_frames() {
         .unwrap_or(1);
     renderer.set_msaa_samples(samples).unwrap();
     let mut pacer = Pacer::new();
-    let mut allocations = Vec::with_capacity(FRAMES);
-    let mut before = 0;
-    for frame in 0..WARM_UP + FRAMES {
-        if frame == WARM_UP {
-            before = live_bytes();
-        }
+    // Room for every frame's count, so recording them allocates nothing in the measured frames.
+    let mut allocations = Vec::with_capacity(4 * (WARM_UP + FRAMES));
+    let mut frame = |_| {
         let (count, submission) = allocations_in(|| renderer.render(target.view()));
-        if frame >= WARM_UP {
-            allocations.push(count);
-        }
+        allocations.push(count);
         pacer.submitted(context.device(), submission);
-    }
-    let grown = live_bytes() - before;
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growth = HeapGrowth::measure(context.device(), WARM_UP, frame);
+    let measured = &allocations[WARM_UP..];
     eprintln!(
-        "{FRAMES} frames (every pass, {samples}x MSAA, timing {}): heap grew {grown} bytes, allocations per frame {}..{} \
-         (median {})",
+        "frames (every pass, {samples}x MSAA, timing {}): {growth}, allocations per frame {}..{} (median {})",
         renderer.gpu_timing_enabled(),
-        allocations.iter().min().unwrap(),
-        allocations.iter().max().unwrap(),
-        median(allocations.clone())
+        measured.iter().min().unwrap(),
+        measured.iter().max().unwrap(),
+        median(measured.to_vec())
     );
     assert!(renderer.gpu_timings().is_some() || !renderer.gpu_timing_enabled());
-    // Slack for the frames still in flight at either end; anything kept per frame would be far beyond this.
+    growth.assert_nothing_accumulates();
+}
+
+/// The heap check still catches a leak (#151): default frames that also grow a `Vec` by 256 bytes each (doubling its
+/// buffer as it fills, so the heap grows in steps) accumulate, and so do frames that each keep a 256-byte box (so it
+/// grows evenly). Every heap-growth test here fails the same way with [`LEAK_VAR`] set to 256.
+#[test]
+fn a_leak_fails_the_heap_check() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    renderer.wait_for_pipelines();
+    let mut pacer = Pacer::new();
+    let mut frame = |_| {
+        let submission = renderer.render(target.view());
+        pacer.submitted(context.device(), submission);
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growing = HeapGrowth::measure_leaking(context.device(), WARM_UP, 256, &mut frame);
+    // After the warm-up and both windows above; room for every box, so only the boxes grow the heap.
+    let first = 2 * (WARM_UP + FRAMES);
+    let mut kept = Vec::with_capacity(first + 2 * FRAMES);
+    let boxed = HeapGrowth::measure_leaking(context.device(), first, 0, |n| {
+        frame(n);
+        kept.push(Box::new([0u8; 256]));
+    });
+    eprintln!("a growing Vec: {growing}; a box per frame: {boxed}");
     assert!(
-        grown.abs() < 16 * 1024,
-        "the heap grew by {grown} bytes over {FRAMES} frames"
+        growing.accumulates(),
+        "a Vec growing 256 bytes per frame went unseen: {growing}"
     );
+    assert!(boxed.accumulates(), "a box kept per frame went unseen: {boxed}");
 }
 
 /// Frames drawn while compiles are pending (#86) keep nothing either: every frame looks for finished compiles, and
@@ -965,25 +992,16 @@ fn nothing_accumulates_while_compiles_are_pending() {
     renderer.set_passes(PassSet::default().without(PassId::Post).without(PassId::Bloom));
     assert!(renderer.pipeline_stats().switch_waiting);
     let mut pacer = Pacer::new();
-    let mut before = 0;
-    for frame in 0..WARM_UP + FRAMES {
-        if frame == WARM_UP {
-            before = live_bytes();
-        }
+    let mut frame = |_| {
         let submission = renderer.render(target.view());
         pacer.submitted(context.device(), submission);
-    }
-    let grown = live_bytes() - before;
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growth = HeapGrowth::measure(context.device(), WARM_UP, frame);
     let stats = renderer.pipeline_stats();
-    eprintln!(
-        "{FRAMES} frames with {} compiles pending: heap grew {grown} bytes",
-        stats.pending
-    );
+    eprintln!("frames with {} compiles pending: {growth}", stats.pending);
     assert!(stats.switch_waiting && stats.pending > 0, "{stats:?}");
-    assert!(
-        grown.abs() < 16 * 1024,
-        "the heap grew by {grown} bytes over {FRAMES} frames"
-    );
+    growth.assert_nothing_accumulates();
 }
 
 /// A hand-written scaled frame: the default passes with the scene drawn into a scene colour of its own size (or into
@@ -1211,19 +1229,16 @@ fn nothing_accumulates_over_dynamic_resolution_frames() {
     .unwrap();
     renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
-    let mut before = 0;
-    let mut scales = Vec::with_capacity(WARM_UP + FRAMES);
-    for frame in 0..WARM_UP + FRAMES {
-        if frame == WARM_UP {
-            before = live_bytes();
-        }
+    let mut scales = Vec::with_capacity(4 * (WARM_UP + FRAMES));
+    let mut frame = |_| {
         let submission = renderer.render(target.view());
         pacer.submitted(context.device(), submission);
         scales.push(renderer.resolution_stats().scale);
-    }
-    let grown = live_bytes() - before;
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growth = HeapGrowth::measure(context.device(), WARM_UP, frame);
     eprintln!(
-        "{FRAMES} dynamic resolution frames: heap grew {grown} bytes, the scale from {:?} to {:?}",
+        "dynamic resolution frames: {growth}, the scale from {:?} to {:?}",
         scales.first(),
         scales.last()
     );
@@ -1238,10 +1253,7 @@ fn nothing_accumulates_over_dynamic_resolution_frames() {
             "the scale stepped"
         );
     }
-    assert!(
-        grown.abs() < 16 * 1024,
-        "the heap grew by {grown} bytes over {FRAMES} frames"
-    );
+    growth.assert_nothing_accumulates();
 }
 
 /// Waits (outside the frames) until at most two frames are in flight, as a window with
@@ -1270,6 +1282,118 @@ impl Pacer {
                 .expect("wait for an earlier frame");
         }
         self.next = (self.next + 1) % self.in_flight.len();
+    }
+}
+
+/// Waits (outside the frames) until the GPU has finished every frame submitted on `device`, and wgpu has retired them.
+fn wait_for_idle(device: &wgpu::Device) {
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("wait for every frame");
+}
+
+/// What a measured frame may keep on average before [`HeapGrowth`] calls it accumulating: 16,000 bytes over 100
+/// frames, the limit these tests have always had.
+const KEPT_PER_FRAME: i64 = 160;
+
+/// Set to a number of bytes, every frame [`HeapGrowth::measure`] measures also grows a `Vec` by that many, kept to
+/// the end: a deliberate leak, to see that every heap-growth test here fails with one (#151). Unset, nothing leaks.
+const LEAK_VAR: &str = "METALLIC_TEST_LEAK_PER_FRAME";
+
+/// How much the heap grew over two consecutive windows of frames, each measured with the GPU idle at both ends.
+///
+/// A single window of 100 frames, measured with frames in flight, failed at random: on lavapipe (19,248 and 19,392
+/// bytes against 16 KiB) and on the dev PC's OpenGL (58 KB on every run), Vulkan and Direct3D 12 (±9 KB) (#151). Two
+/// things grow there, and neither accumulates:
+///
+/// - **wgpu's bookkeeping for frames in flight.** wgpu keeps a submitted frame's command buffers until the frame is
+///   retired: on OpenGL wgpu-hal's recorded command list (58,144 bytes for the dynamic resolution frame), elsewhere
+///   its submission's bookkeeping (8 to 12 KB on the dev PC's Vulkan and Direct3D 12). With two frames in flight
+///   ([`Pacer`]), a sample taken with one more or one fewer frame in flight than the other showed that much growth
+///   or shrinkage. Waiting for the GPU to go idle before both samples leaves none in flight at
+///   either, and that alone took OpenGL to within 24 bytes of zero.
+/// - **High-water marks**, which grow in steps the first time a frame needs more than every frame before it:
+///   gpu-allocator's map of a memory block's free-list chunks (5,184 bytes when it doubles, 72 when a smaller one
+///   does), which `Queue::write_buffer`'s staging buffers fragment; wgpu-core's pool of command encoders (6,624
+///   bytes for a Direct3D 12 frame's two), which grows when the GPU falls a frame further behind; and the scratch
+///   lists each pooled Vulkan encoder keeps for render passes and barriers (10,288 and 1,152 bytes on lavapipe), which
+///   grow the first time that encoder records the largest frame. Which encoder records which frame, how far behind
+///   the GPU falls, and so in which frame a step comes, depend on the GPU's timing: up to 16,368 bytes in one window
+///   on the dev PC's Vulkan, still 300 frames in, and the 19,248 and 19,392 bytes of lavapipe's failures came back
+///   in one window with the GPU idle at both samples. They stop growing, but not at a frame a test could pick in
+///   advance, and letting the warm-up run further ahead of the GPU (on the dev PC's Direct3D 12) did not make them
+///   stop sooner.
+///
+/// A leak grows in every window and a step lands in one, so this calls the frames accumulating only when the heap
+/// grew in both windows by more than [`KEPT_PER_FRAME`] per frame. The second window is as long as every frame
+/// before it, so a buffer that keeps doubling (whose growth comes in steps twice as far apart each time) also grows
+/// in both.
+struct HeapGrowth {
+    /// The frames in each window and how many bytes the heap grew over them. The second window is measured only if
+    /// the heap grew too much in the first: otherwise it could not change the answer.
+    windows: [Option<(usize, i64)>; 2],
+}
+
+impl HeapGrowth {
+    /// Measures `frame`, which draws, submits and paces one frame, numbered from `first` on (the frames before it
+    /// warmed up). A deliberate leak is added if [`LEAK_VAR`] asks for one.
+    fn measure(device: &wgpu::Device, first: usize, frame: impl FnMut(usize)) -> Self {
+        let leak = std::env::var(LEAK_VAR)
+            .ok()
+            .map(|bytes| bytes.parse().expect("a number of bytes"))
+            .unwrap_or(0);
+        Self::measure_leaking(device, first, leak, frame)
+    }
+
+    /// [`HeapGrowth::measure`] with `leak` bytes added to a `Vec` after every frame.
+    fn measure_leaking(device: &wgpu::Device, first: usize, leak: usize, mut frame: impl FnMut(usize)) -> Self {
+        let mut leaked: Vec<u8> = Vec::new();
+        let mut next = first;
+        let mut growth = Self { windows: [None; 2] };
+        for (window, frames) in [FRAMES, first + FRAMES].into_iter().enumerate() {
+            if window > 0 && !growth.accumulates() {
+                break;
+            }
+            wait_for_idle(device);
+            let before = live_bytes();
+            for _ in 0..frames {
+                frame(next);
+                leaked.resize(leaked.len() + leak, 0);
+                next += 1;
+            }
+            wait_for_idle(device);
+            growth.windows[window] = Some((frames, live_bytes() - before));
+        }
+        drop(leaked);
+        growth
+    }
+
+    /// Whether the heap grew in every window measured so far by more than [`KEPT_PER_FRAME`] per frame.
+    fn accumulates(&self) -> bool {
+        self.windows
+            .iter()
+            .flatten()
+            .all(|&(frames, grown)| grown > KEPT_PER_FRAME * signed(frames))
+    }
+
+    fn assert_nothing_accumulates(&self) {
+        assert!(!self.accumulates(), "the heap grew in both windows: {self}");
+    }
+}
+
+impl std::fmt::Display for HeapGrowth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [first, second] = self.windows;
+        if let Some((frames, grown)) = first {
+            write!(f, "heap grew {grown} bytes over {frames} frames")?;
+        }
+        if let Some((frames, grown)) = second {
+            write!(f, ", then {grown} over {frames}")?;
+        }
+        Ok(())
     }
 }
 
@@ -1616,24 +1740,18 @@ fn nothing_accumulates_over_scene_frames() {
     let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
     renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
-    let mut before = 0;
-    for frame in 0..WARM_UP + FRAMES {
+    let mut frame = |frame| {
         game.edit(frame);
-        if frame == WARM_UP {
-            before = live_bytes();
-        }
         scene.sync(&mut game.dm);
         let submission = renderer.render_with(target.view(), |encoder| {
             scene.upload(encoder);
         });
         pacer.submitted(context.device(), submission);
-    }
-    let grown = live_bytes() - before;
-    eprintln!("{FRAMES} frames of sync, upload and render: heap grew {grown} bytes");
-    assert!(
-        grown.abs() < 16 * 1024,
-        "the heap grew by {grown} bytes over {FRAMES} frames"
-    );
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growth = HeapGrowth::measure(context.device(), WARM_UP, frame);
+    eprintln!("frames of sync, upload and render: {growth}");
+    growth.assert_nothing_accumulates();
 }
 
 /// The camera of frame `frame`: circling the grid, so every frame writes the frame uniform and sorts the
@@ -2753,24 +2871,21 @@ fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
     let mut renderer = Renderer::new(context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
     renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
-    let mut before = 0;
-    for frame in 0..WARM_UP + FRAMES {
+    let mut frame = |frame| {
         // 1% of the parts move, the same ones every frame.
         for (i, &id) in parts.iter().step_by(100).enumerate() {
             let place = CFrame::new(Vec3::new(i as f32 * 4.0, 1.0 + frame as f32 * 0.01, 0.0));
             game.dm.set_by_name(id, "CFrame", Value::CFrame(place)).expect("moved");
         }
-        if frame == WARM_UP {
-            before = live_bytes();
-        }
         scene.sync(&mut game.dm);
         let camera = orbiting_camera(frame);
         let submission = renderer.render_scene(target.view(), &mut scene, Some(&camera));
         pacer.submitted(context.device(), submission);
-    }
-    let grown = live_bytes() - before;
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growth = HeapGrowth::measure(context.device(), WARM_UP, frame);
     eprintln!(
-        "{FRAMES} frames on the {:?} path drawing {:?}: heap grew {grown} bytes",
+        "frames on the {:?} path drawing {:?}: {growth}",
         InstanceBinding::for_context(context),
         renderer.draw_stats()
     );
@@ -2778,10 +2893,7 @@ fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
     // With the default shadows: the near cascades follow the camera, so they are drawn every frame.
     assert_eq!(renderer.draw_stats().shadow_cascades, 3);
     assert!(renderer.draw_stats().shadow_draws > 0, "no shadows were drawn");
-    assert!(
-        grown.abs() < 16 * 1024,
-        "the heap grew by {grown} bytes over {FRAMES} frames"
-    );
+    growth.assert_nothing_accumulates();
 }
 
 /// Allocations and heap growth of [`FRAMES`] frames of sync, coalesce and cull (the CPU side of a culled frame,
@@ -3089,21 +3201,15 @@ fn nothing_accumulates_over_overlay_frames() {
     renderer.wait_for_pipelines();
     renderer.set_overlay_enabled(true);
     let mut pacer = Pacer::new();
-    let mut before = 0;
-    for frame in 0..WARM_UP + FRAMES {
-        if frame == WARM_UP {
-            before = live_bytes();
-        }
+    let mut frame = |frame| {
         fill_overlay(renderer.overlay_mut(), frame, PERF_OVERLAY);
         let submission = renderer.render(target.view());
         pacer.submitted(context.device(), submission);
-    }
-    let grown = live_bytes() - before;
-    eprintln!("{FRAMES} overlay frames: heap grew {grown} bytes");
-    assert!(
-        grown.abs() < 16 * 1024,
-        "the heap grew by {grown} bytes over {FRAMES} frames"
-    );
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growth = HeapGrowth::measure(context.device(), WARM_UP, frame);
+    eprintln!("overlay frames: {growth}");
+    growth.assert_nothing_accumulates();
 }
 
 /// Lamps on a grid of parts: 64 neon balls 2 m up, each holding a `PointLight` (every ninth a `SpotLight` pointing
@@ -3355,36 +3461,16 @@ fn nothing_accumulates_over_lit_frames() {
                 "no shadowed light was drawn in {frame} frames: {stats:?}"
             );
         }
-        // Both measurements are taken with every frame finished. With two frames in flight, wgpu still holds a
-        // submission's bookkeeping until it is retired (lavapipe on CI: 14,041 bytes, held at one frame and given
-        // back at the next), so whether a measurement lands before or after that would otherwise decide the
-        // result. What a leak keeps stays after the device is idle.
-        let idle = || {
-            context
-                .device()
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                })
-                .expect("wait for every frame");
-        };
-        idle();
-        let (before, mut redrawn) = (live_bytes(), 0);
-        for _ in 0..FRAMES {
+        let mut redrawn = 0;
+        let growth = HeapGrowth::measure(context.device(), frame, |frame| {
             redrawn += draw(frame).tiles_redrawn;
-            frame += 1;
-        }
-        idle();
-        let grown = live_bytes() - before;
+        });
         eprintln!(
-            "{FRAMES} lit frames on the {:?} path ({:?}, {redrawn} tiles drawn): heap grew {grown} bytes",
+            "lit frames on the {:?} path ({:?}, {redrawn} tiles drawn): {growth}",
             InstanceBinding::for_context(&context),
             renderer.light_stats()
         );
         assert!(redrawn > 0, "no shadow tile was drawn");
-        assert!(
-            grown.abs() < 16 * 1024,
-            "the heap grew by {grown} bytes over {FRAMES} frames"
-        );
+        growth.assert_nothing_accumulates();
     }
 }
