@@ -7,14 +7,17 @@
 //! ```
 //!
 //! The graphics settings are read from `graphics.toml` in the user's config folder (made with the Auto preset the
-//! first time); `--preset` overrides its preset for one run.
+//! first time); `--preset` overrides its preset for one run. Compiled pipelines are kept in the user's cache folder
+//! (`pipelines/`, on Vulkan) so the next start compiles less.
 
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::sync::OnceLock;
 
 use metallic_engine::StdOutput;
-use metallic_engine::graphics::{graphics_settings_path, load_graphics_settings, save_graphics_settings};
+use metallic_engine::graphics::{
+    graphics_settings_path, load_graphics_settings, pipeline_cache_dir, save_graphics_settings,
+};
 use metallic_engine::metallic_platform::AppId;
 use metallic_engine::metallic_script::{OutputSink, OutputSource};
 use metallic_player::{PLAYER_APP_ID, Player, PlayerConfig, Preset, Scene};
@@ -145,6 +148,10 @@ fn main() -> ExitCode {
 /// when there is none (the file is then made, so there is one to edit) or it is damaged (with a warning; the file is
 /// left as it is until the settings are next saved). `--preset` still overrides the file's preset for this run.
 fn load_user_graphics(config: &mut PlayerConfig) {
+    // Compiled pipelines are kept beside the user's other caches (Vulkan only; nothing is written elsewhere).
+    config.pipeline_cache = AppId::parse(PLAYER_APP_ID)
+        .and_then(|app| pipeline_cache_dir(&app))
+        .ok();
     let path = match AppId::parse(PLAYER_APP_ID).and_then(|app| graphics_settings_path(&app)) {
         Ok(path) => path,
         Err(error) => {

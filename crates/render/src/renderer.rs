@@ -6,9 +6,11 @@ use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, 
 use crate::lighting::SceneLighting;
 use crate::lights::{LightSettings, LightStats};
 use crate::lod::{LodSettings, LodView};
-use crate::overlay::{Overlay, OverlayPass};
+use crate::overlay::{Overlay, OverlayPass, overlay_recipe};
 use crate::parts::{Camera, DrawStats, PartRenderer};
-use crate::post::{AntiAliasing, FinishParams, Post, PostSettings, PostStats};
+use crate::pipeline_cache::PipelineCacheStore;
+use crate::pipelines::{Compiler, PartPipeline, PipelineKey, PipelineStats, Recipe};
+use crate::post::{AntiAliasing, Bloom, FinishParams, Post, PostSettings, PostStats};
 use crate::resolution::{DynamicResolution, ResolutionSettings, ResolutionStats, scaled_size};
 use crate::scene::{InstanceBinding, UploadStats};
 use crate::shadow::{MAX_CASCADES, ShadowSettings, ShadowStats};
@@ -81,10 +83,66 @@ struct Attachment {
     view: wgpu::TextureView,
 }
 
+/// The settings that choose pipelines: a change to any of them takes effect once the pipelines it needs are compiled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Switch {
+    passes: PassSet,
+    msaa_samples: u32,
+    post: PostSettings,
+    resolution: ResolutionSettings,
+}
+
+impl Switch {
+    fn of(settings: &RendererSettings) -> Self {
+        Self {
+            passes: settings.passes,
+            msaa_samples: settings.msaa_samples,
+            post: settings.post,
+            resolution: settings.resolution,
+        }
+    }
+
+    /// The frame these settings plan: the upscale pass is the renderer's to plan, from the resolution settings.
+    fn plan(&self) -> FramePlan {
+        let passes = self.passes.without(PassId::Upscale);
+        let passes = if self.resolution.scaled() {
+            passes.with(PassId::Upscale)
+        } else {
+            passes
+        };
+        FramePlan::with_chain(passes, self.post.chain, self.msaa_samples)
+    }
+}
+
+/// The most pipelines one frame's settings need: the scene's five without local lights, the finish pass, bloom's
+/// three and MLAA's, or the upscale pass.
+const MAX_NEEDED: usize = 10;
+
+/// The most pipelines a scene's first frame waits for: its settings' and the lit ones.
+const FIRST_FRAME_KEYS: usize = MAX_NEEDED + PartPipeline::LIT.len();
+
 /// Draws frames: the passes of a [`FramePlan`] into a target view, with per-pass GPU timing.
 ///
 /// A frame allocates nothing on the heap in this crate and never waits for the GPU (ADR 0008 §9). Parts and the
 /// sky are drawn by [`Renderer::render_scene`]; the post and UI systems record into the passes as they arrive.
+///
+/// # Pipelines
+///
+/// Every pipeline is compiled off the frame ([`crate::pipelines`]): [`Renderer::new`] returns once the ones its
+/// settings draw with are compiled (on worker threads, all at once), and the rest (local lights, the overlay, the
+/// post effects not in use, the scene at every other MSAA count) follow in the background. A settings change whose
+/// pipelines are still compiling ([`Renderer::set_anti_aliasing`], [`Renderer::set_passes`], [`Renderer::set_post`],
+/// [`Renderer::set_msaa_samples`], [`Renderer::set_resolution`]) waits for them while frames keep drawing with the
+/// settings before it: [`Renderer::settings`] and the stats say what is drawn, and [`Renderer::pipeline_stats`] what
+/// is pending.
+///
+/// A scene's first frame never shows a setting or a light short: the first [`Renderer::render_scene`] after
+/// [`Renderer::new`] (or [`Renderer::begin_scene`], for a newly loaded place) waits for the pipelines it draws with,
+/// those of the settings asked for (a change still compiling included) and, when the scene has local lights, the
+/// lit ones, prioritized ahead of the rest. Later frames never wait: a light made while the lit pipelines still
+/// compile (only possible in the first second or so) hurries them to the front of the queue, is drawn once they
+/// exist, and fades in over [`crate::LightSettings::fade_time`] rather than popping on.
+/// [`Renderer::wait_for_pipelines`] waits for everything, for tests, tools and loading screens.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -128,10 +186,21 @@ pub struct Renderer {
     shadow_in_use: u8,
     /// The local lights' shadow atlas was drawn this frame (its query follows the cascades').
     atlas_recorded: bool,
+    /// Compiles the pipelines off the frame.
+    compiler: Compiler,
+    /// The pipeline cache, where the device keeps one on disk.
+    pipeline_cache: Option<std::sync::Arc<PipelineCacheStore>>,
+    /// A settings change waiting for its pipelines; until they are compiled, frames draw with `settings`.
+    waiting: Option<Switch>,
+    /// The overlay's pipeline once compiled, kept while the overlay is off.
+    overlay_pipeline: Option<wgpu::RenderPipeline>,
+    /// The next [`Renderer::render_scene`] is a scene's first frame: it waits for the pipelines it draws with.
+    first_scene_frame: bool,
 }
 
 impl Renderer {
-    /// Creates a renderer for targets described by `settings`.
+    /// Creates a renderer for targets described by `settings`. Returns once the pipelines its settings draw with are
+    /// compiled (on worker threads, at once), and compiles the rest in the background (see [`Renderer`]).
     pub fn new(context: &RenderContext, settings: RendererSettings) -> Result<Self, RenderError> {
         check_size(context, settings.width, settings.height)?;
         let hdr_format = crate::post::hdr_format(context);
@@ -139,18 +208,35 @@ impl Renderer {
             .msaa_sample_counts(settings.color_format)
             .intersect(context.msaa_sample_counts(hdr_format))
             .intersect(context.msaa_sample_counts(DEPTH_FORMAT));
+        if settings.msaa_samples != 1 && !msaa_counts.contains(settings.msaa_samples) {
+            return Err(RenderError::UnsupportedTarget {
+                format: settings.color_format,
+                samples: settings.msaa_samples,
+            });
+        }
         let timer = if settings.gpu_timing {
             GpuTimer::new(context.device(), context.queue())
         } else {
             None
         };
-        // Single-sampled until `rebuild`, after the MSAA count is checked.
+        let pipeline_cache = context.pipeline_cache().cloned();
+        // OpenGL compiles on its context's thread: there every compile runs here, before this returns.
+        let gl = context.capabilities().backend == wgpu::Backend::Gl;
+        let mut compiler = Compiler::new(context.device(), pipeline_cache.clone(), gl);
+        let first = Switch::of(&settings).plan();
+        let first_format = if first.post() {
+            hdr_format
+        } else {
+            settings.color_format
+        };
+        // Queues the scene's first pipelines, then makes the shadows' and lights' while they compile.
         let parts = PartRenderer::new(
             context.device(),
             context.queue(),
             InstanceBinding::for_context(context),
-            settings.color_format,
-            1,
+            (first_format, first.msaa_samples()),
+            &mut compiler,
+            pipeline_cache.as_deref().map(PipelineCacheStore::cache),
         );
         let mut renderer = Self {
             device: context.device().clone(),
@@ -164,12 +250,10 @@ impl Renderer {
             msaa_color: None,
             scene_color: None,
             hdr_format,
-            // Every pipeline of the chain is made with the renderer: turning an effect on compiles nothing.
             post: Post::new(context.device(), settings.color_format, hdr_format),
             texture_size: (settings.width, settings.height),
             render_size: (settings.width, settings.height),
             resolution: DynamicResolution::new(settings.resolution),
-            // Made with the renderer even when nothing is scaled: turning a render scale on later compiles nothing.
             upscaler: Upscaler::new(context.device(), settings.color_format),
             timer,
             parts,
@@ -188,21 +272,333 @@ impl Renderer {
             shadow_recorded: 0,
             shadow_in_use: 0,
             atlas_recorded: false,
+            compiler,
+            pipeline_cache,
+            waiting: None,
+            overlay_pipeline: None,
+            first_scene_frame: true,
         };
-        renderer.check_msaa(settings.msaa_samples)?;
-        renderer.rebuild();
-        // The scene's pipelines for every MSAA count the anti-aliasing settings can switch to, so a switch compiles
-        // nothing (ADR 0008 §9).
-        let format = renderer.scene_target_format();
-        for samples in msaa_counts.iter().filter(|&n| n <= 8) {
-            renderer.parts.prewarm(format, samples);
+        // The rest of what the first frame draws (the post chain's passes it runs), all at once on the workers; then
+        // the lit pipelines of the same target behind them, which a scene with lights waits for in its first frame,
+        // so they start now rather than after this returns. This returns when the first frame's alone are done.
+        let switch = Switch::of(&settings);
+        renderer.queue_needed(&switch);
+        let (format, samples) = (first_format, first.msaa_samples());
+        for pipeline in PartPipeline::LIT {
+            renderer.queue(PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            });
         }
+        let (keys, count) = renderer.needed_keys(&switch, false);
+        renderer.wait_for_keys(&keys[..count]);
+        renderer.compiler.first_frame_ready();
+        renderer.rebuild();
         renderer.parts.set_shadows(settings.shadows, renderer.shadow_min_layers);
         renderer.parts.set_lights(settings.lights);
+        renderer.prewarm();
+        renderer.compiler.flush_inline();
         Ok(renderer)
     }
 
-    /// The current settings.
+    /// Queues, in the background, every pipeline the renderer can switch to without a new colour format: first
+    /// what a frame may need at any moment (local lights, the overlay, every post effect and quality, the upscale
+    /// pass), then the scene at every other MSAA count the anti-aliasing settings offer (ADR 0008 §9).
+    fn prewarm(&mut self) {
+        let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
+        for pipeline in PartPipeline::LIT {
+            self.queue(PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            });
+        }
+        self.queue(PipelineKey::Overlay);
+        for key in Post::KEYS {
+            self.queue(key);
+        }
+        self.queue(PipelineKey::Upscale);
+        for other in self.msaa_counts.iter().filter(|&n| n <= 8 && n != samples) {
+            for pipeline in PartPipeline::BASE.into_iter().chain(PartPipeline::LIT) {
+                let key = PipelineKey::Part {
+                    format,
+                    samples: other,
+                    pipeline,
+                };
+                // After the same pipeline at the first count, whose shader stages it reuses.
+                let after = PipelineKey::Part {
+                    format,
+                    samples,
+                    pipeline,
+                };
+                self.queue_after(key, Some(after));
+            }
+        }
+    }
+
+    /// Whether the pipeline `key` is compiled.
+    fn has(&self, key: PipelineKey) -> bool {
+        match key {
+            PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            } => self.parts.has(format, samples, pipeline),
+            PipelineKey::Upscale => self.upscaler.has(),
+            PipelineKey::Overlay => self.overlay_pipeline.is_some(),
+            _ => self.post.has(key),
+        }
+    }
+
+    /// The compile of the pipeline `key`.
+    fn recipe(&mut self, key: PipelineKey) -> Option<Recipe> {
+        match key {
+            PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            } => Some(self.parts.recipe(format, samples, pipeline)),
+            PipelineKey::Upscale => Some(self.upscaler.full_screen().recipe()),
+            PipelineKey::Overlay => Some(overlay_recipe(self.settings.color_format)),
+            _ => self.post.recipe(key),
+        }
+    }
+
+    /// Queues the compile of `key` unless it is compiled or queued; a scene pipeline after the one of its target whose
+    /// shader stages it reuses ([`PartPipeline::shares_stages_of`]).
+    fn queue(&mut self, key: PipelineKey) {
+        let after = match key {
+            PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            } => pipeline.shares_stages_of().map(|pipeline| PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            }),
+            _ => None,
+        };
+        self.queue_after(key, after);
+    }
+
+    /// Queues the compile of `key` unless it is compiled or queued, to start once `after` is compiled.
+    fn queue_after(&mut self, key: PipelineKey, after: Option<PipelineKey>) {
+        if !self.has(key)
+            && !self.compiler.is_queued(key)
+            && let Some(recipe) = self.recipe(key)
+        {
+            self.compiler.submit(key, recipe, after);
+        }
+    }
+
+    /// Calls `f` with every pipeline a frame drawn with `switch` needs, but the local lights' (frames draw without
+    /// them until they are compiled).
+    fn needs(&self, switch: &Switch, mut f: impl FnMut(PipelineKey)) {
+        let plan = switch.plan();
+        let format = if plan.post() {
+            self.hdr_format
+        } else {
+            self.settings.color_format
+        };
+        let samples = plan.msaa_samples();
+        for pipeline in PartPipeline::BASE {
+            f(PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            });
+        }
+        if plan.post() {
+            let (bloom, mlaa) = (plan.contains(PassId::Bloom), plan.contains(PassId::Mlaa));
+            f(PipelineKey::Finish(u8::from(bloom) | u8::from(mlaa) << 1));
+            if bloom {
+                Bloom::keys(&switch.post.bloom).into_iter().for_each(&mut f);
+            }
+            if mlaa {
+                f(PipelineKey::Mlaa);
+            }
+        } else if plan.contains(PassId::Upscale) {
+            f(PipelineKey::Upscale);
+        }
+    }
+
+    /// Whether every pipeline a frame drawn with `switch` needs is compiled.
+    fn ready_for(&self, switch: &Switch) -> bool {
+        let mut ready = true;
+        self.needs(switch, |key| ready &= self.has(key));
+        ready
+    }
+
+    /// Queues every pipeline a frame drawn with `switch` needs and lacks.
+    fn queue_needed(&mut self, switch: &Switch) {
+        let mut keys = [None; MAX_NEEDED];
+        let mut count = 0;
+        self.needs(switch, |key| {
+            if let Some(slot) = keys.get_mut(count) {
+                *slot = Some(key);
+                count += 1;
+            }
+        });
+        for key in keys.into_iter().flatten() {
+            self.queue(key);
+        }
+    }
+
+    /// Takes the compiles that finished and puts their pipelines in place, without waiting; then makes a settings
+    /// change that was waiting for them. Allocates nothing (a pipeline's slot exists from when it was queued).
+    fn take_compiled(&mut self) {
+        let Self {
+            compiler,
+            parts,
+            post,
+            upscaler,
+            overlay_pass,
+            overlay_pipeline,
+            ..
+        } = self;
+        let mut installed = false;
+        compiler.drain(|key, pipeline| {
+            install(parts, post, upscaler, (overlay_pass, overlay_pipeline), key, pipeline);
+            installed = true;
+        });
+        if installed {
+            self.apply_waiting();
+        }
+    }
+
+    /// Waits until no compile is queued or running, putting each pipeline in place as it finishes; then makes a
+    /// settings change that was waiting.
+    fn wait_for_compiles(&mut self) {
+        let Self {
+            compiler,
+            parts,
+            post,
+            upscaler,
+            overlay_pass,
+            overlay_pipeline,
+            ..
+        } = self;
+        compiler.wait(|key, pipeline| {
+            install(parts, post, upscaler, (overlay_pass, overlay_pipeline), key, pipeline);
+        });
+        self.apply_waiting();
+    }
+
+    /// Makes the settings change that was waiting, once its pipelines are compiled.
+    fn apply_waiting(&mut self) {
+        if let Some(next) = self.waiting
+            && self.ready_for(&next)
+        {
+            self.waiting = None;
+            self.apply(next);
+        }
+    }
+
+    /// Makes the next [`Renderer::render_scene`] a scene's first frame, as the first one after [`Renderer::new`] is:
+    /// it waits for exactly the pipelines it draws with (those of the settings asked for, a change still compiling
+    /// included, and the local lights' when the scene has any), so the first frame of a game or a newly loaded place
+    /// already looks as it should. Call it when a new scene is attached; later frames never wait.
+    pub fn begin_scene(&mut self) {
+        self.first_scene_frame = true;
+    }
+
+    /// The first frame of a scene: waits until the pipelines it draws `scene` with are compiled (prioritized, on the
+    /// workers) and makes a settings change that waited for them.
+    fn wait_for_scene(&mut self, scene: &GpuScene) {
+        let lit = self.settings.lights.enabled && scene.scene().light_count() > 0;
+        let (keys, count) = self.needed_keys(&self.wanted(), lit);
+        self.wait_for_keys(&keys[..count]);
+    }
+
+    /// The pipelines a frame drawn with `switch` needs, with the lit ones when `lit`: an array and how much of it
+    /// holds them.
+    fn needed_keys(&self, switch: &Switch, lit: bool) -> ([PipelineKey; FIRST_FRAME_KEYS], usize) {
+        let mut keys = [PipelineKey::Overlay; FIRST_FRAME_KEYS];
+        let mut count = 0;
+        let mut push = |key| {
+            if let Some(slot) = keys.get_mut(count) {
+                *slot = key;
+                count += 1;
+            }
+        };
+        self.needs(switch, &mut push);
+        if lit {
+            let plan = switch.plan();
+            let format = if plan.post() {
+                self.hdr_format
+            } else {
+                self.settings.color_format
+            };
+            for pipeline in PartPipeline::LIT {
+                push(PipelineKey::Part {
+                    format,
+                    samples: plan.msaa_samples(),
+                    pipeline,
+                });
+            }
+        }
+        (keys, count)
+    }
+
+    /// Queues what `keys` lacks, waits for all of it (prioritized), and makes a settings change that waited for it.
+    fn wait_for_keys(&mut self, keys: &[PipelineKey]) {
+        for &key in keys {
+            self.queue(key);
+        }
+        let Self {
+            compiler,
+            parts,
+            post,
+            upscaler,
+            overlay_pass,
+            overlay_pipeline,
+            ..
+        } = self;
+        compiler.wait_for(keys, |key, pipeline| {
+            install(parts, post, upscaler, (overlay_pass, overlay_pipeline), key, pipeline);
+        });
+        self.apply_waiting();
+    }
+
+    /// Moves the lit pipelines of the target drawn into to the front of the compile queue: a frame has local lights
+    /// to draw and draws without them until they exist (a light made while they still compile, #86).
+    fn hurry_lights(&mut self) {
+        let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
+        let keys = PartPipeline::LIT.map(|pipeline| PipelineKey::Part {
+            format,
+            samples,
+            pipeline,
+        });
+        self.compiler.prioritize(&keys);
+    }
+
+    /// Waits for every pipeline compile queued (the background ones included) and makes a settings change that was
+    /// waiting for them. Blocks for as long as the compiles take, on the CPU (it never waits for the GPU): for
+    /// tests, tools and loading screens, never in a game's frame loop. Resumes paused compiles.
+    pub fn wait_for_pipelines(&mut self) {
+        self.wait_for_compiles();
+    }
+
+    /// Stops starting background compiles (those already running finish) until called again with `false`: for a
+    /// game that wants every core to itself for a while, and for tests of the frames drawn while compiles are
+    /// pending.
+    pub fn pause_pipeline_compiles(&mut self, paused: bool) {
+        self.compiler.pause(paused);
+    }
+
+    /// What the pipeline compiles have done and what is pending, for the overlay and reports.
+    pub fn pipeline_stats(&self) -> PipelineStats {
+        PipelineStats {
+            switch_waiting: self.waiting.is_some(),
+            cache_loaded: self.pipeline_cache.as_ref().map(|cache| cache.loaded()),
+            ..self.compiler.stats()
+        }
+    }
+
+    /// The settings frames are drawn with. A change waiting for its pipelines ([`PipelineStats::switch_waiting`]) is
+    /// not in them until it takes effect.
     pub fn settings(&self) -> &RendererSettings {
         &self.settings
     }
@@ -241,22 +637,66 @@ impl Renderer {
         Ok(())
     }
 
-    /// Changes which passes run.
+    /// Changes which passes run, once the pipelines they need are compiled (see [`Renderer`]).
     pub fn set_passes(&mut self, passes: PassSet) {
-        if passes != self.settings.passes {
-            self.settings.passes = passes;
-            self.rebuild();
+        let mut next = self.wanted();
+        next.passes = passes;
+        self.switch(next);
+    }
+
+    /// Changes the scene's MSAA sample count (1 turns MSAA off), once the pipelines it needs are compiled.
+    pub fn set_msaa_samples(&mut self, samples: u32) -> Result<(), RenderError> {
+        self.check_msaa(samples)?;
+        let mut next = self.wanted();
+        next.msaa_samples = samples;
+        self.switch(next);
+        Ok(())
+    }
+
+    /// The settings that choose pipelines, as last asked for: a change waiting for its pipelines, or those drawn.
+    fn wanted(&self) -> Switch {
+        self.waiting.unwrap_or_else(|| Switch::of(&self.settings))
+    }
+
+    /// Draws with `next` from now on when its pipelines are compiled, otherwise queues them and draws as before until
+    /// they are (the first frame after they finish switches).
+    fn switch(&mut self, next: Switch) {
+        if next == Switch::of(&self.settings) {
+            self.waiting = None;
+        } else if self.ready_for(&next) {
+            self.waiting = None;
+            self.apply(next);
+        } else {
+            self.queue_needed(&next);
+            self.waiting = Some(next);
         }
     }
 
-    /// Changes the scene's MSAA sample count (1 turns MSAA off).
-    pub fn set_msaa_samples(&mut self, samples: u32) -> Result<(), RenderError> {
-        self.check_msaa(samples)?;
-        if samples != self.settings.msaa_samples {
-            self.settings.msaa_samples = samples;
-            self.rebuild();
+    /// Draws with `next` from now on (its pipelines are compiled): makes what the change needs again, the attachments
+    /// and the frame plan, or the post effects' textures. A settings change: it waits for nothing.
+    fn apply(&mut self, next: Switch) {
+        let old = Switch::of(&self.settings);
+        self.settings.passes = next.passes;
+        self.settings.msaa_samples = next.msaa_samples;
+        self.settings.post = next.post;
+        self.settings.resolution = next.resolution;
+        let resolution_changed = old.resolution != next.resolution;
+        if resolution_changed {
+            self.resolution.set_settings(next.resolution);
         }
-        Ok(())
+        let (width, height) = (self.settings.width, self.settings.height);
+        let rescaled = resolution_changed
+            && (old.resolution.scaled() != next.resolution.scaled()
+                || self.clamped_texture_size(next.resolution.texture_size(width, height)) != self.texture_size);
+        if old.passes != next.passes
+            || old.msaa_samples != next.msaa_samples
+            || old.post.chain != next.post.chain
+            || rescaled
+        {
+            self.rebuild();
+        } else if old.post.bloom != next.post.bloom || old.post.mlaa != next.post.mlaa {
+            self.rebuild_post();
+        }
     }
 
     /// The MSAA sample counts the scene can be drawn with here (its colour, the output's and depth's formats).
@@ -265,21 +705,20 @@ impl Renderer {
     }
 
     /// Changes the anti-aliasing: MLAA ([`PassId::Mlaa`] in the passes) or MSAA (the sample count), or none. Fails
-    /// for an MSAA count the device lacks ([`AntiAliasing::supported`] picks one it has). A settings change: every
-    /// pipeline it needs was made with the renderer, and the new attachments are made without waiting for the GPU.
+    /// for an MSAA count the device lacks ([`AntiAliasing::supported`] picks one it has). A settings change: its
+    /// pipelines are compiled in the background with the renderer's (until they are, frames keep the anti-aliasing
+    /// before it), and the new attachments are made without waiting for the GPU.
     pub fn set_anti_aliasing(&mut self, aa: AntiAliasing) -> Result<(), RenderError> {
         let samples = aa.msaa_samples();
         self.check_msaa(samples)?;
-        let passes = self.settings.passes.with_if(PassId::Mlaa, aa.mlaa());
-        if (passes, samples) != (self.settings.passes, self.settings.msaa_samples) {
-            self.settings.passes = passes;
-            self.settings.msaa_samples = samples;
-            self.rebuild();
-        }
+        let mut next = self.wanted();
+        next.passes = next.passes.with_if(PassId::Mlaa, aa.mlaa());
+        next.msaa_samples = samples;
+        self.switch(next);
         Ok(())
     }
 
-    /// The anti-aliasing in use: MSAA when the scene has more than one sample, MLAA when it runs, otherwise none.
+    /// The anti-aliasing drawn: MSAA when the scene has more than one sample, MLAA when it runs, otherwise none.
     pub fn anti_aliasing(&self) -> AntiAliasing {
         match (self.settings.msaa_samples, self.plan.contains(PassId::Mlaa)) {
             (samples, _) if samples > 1 => AntiAliasing::Msaa(samples),
@@ -289,19 +728,12 @@ impl Renderer {
     }
 
     /// Changes how the post chain finishes the image ([`crate::post`]): exposure and grade take effect with the next
-    /// frame; a new bloom size or filter makes bloom's textures again (a settings change: nothing waits for the GPU,
-    /// and every pipeline exists).
+    /// frame; a new bloom size or filter makes bloom's textures again (a settings change: nothing waits for the GPU)
+    /// once its pipelines are compiled.
     pub fn set_post(&mut self, post: PostSettings) {
-        if post == self.settings.post {
-            return;
-        }
-        let old = self.settings.post;
-        self.settings.post = post;
-        if old.chain != post.chain {
-            self.rebuild();
-        } else if old.bloom != post.bloom || old.mlaa != post.mlaa {
-            self.rebuild_post();
-        }
+        let mut next = self.wanted();
+        next.post = post;
+        self.switch(next);
     }
 
     /// What the post chain draws with: the scene colour's format, the anti-aliasing, bloom's levels, and how many
@@ -344,19 +776,11 @@ impl Renderer {
     /// Changes the scene's resolution: a render scale, or dynamic resolution ([`crate::resolution`]). Makes the
     /// scene's attachments again when their size changes (a settings change: it waits for nothing, and the textures
     /// in use are freed once the GPU is done with them); a new scale within dynamic resolution's range makes none.
+    /// Without the post chain, a render scale needs the upscale pass's pipeline (compiled in the background).
     pub fn set_resolution(&mut self, resolution: ResolutionSettings) {
-        if resolution == self.settings.resolution {
-            return;
-        }
-        let old = self.settings.resolution;
-        self.settings.resolution = resolution;
-        self.resolution.set_settings(resolution);
-        let (width, height) = (self.settings.width, self.settings.height);
-        if old.scaled() != resolution.scaled()
-            || self.clamped_texture_size(resolution.texture_size(width, height)) != self.texture_size
-        {
-            self.rebuild();
-        }
+        let mut next = self.wanted();
+        next.resolution = resolution;
+        self.switch(next);
     }
 
     /// The scene's resolution this frame: the render scale, the size drawn, and dynamic resolution's state.
@@ -457,13 +881,18 @@ impl Renderer {
     /// passes run without draws (the clear colour). Only what the camera sees is drawn, as
     /// [`RendererSettings::cull`] says ([`Renderer::cull_stats`]).
     ///
-    /// Sync the scene ([`GpuScene::sync`]) first. Never blocks on the GPU; see [`Renderer::render`] about pacing.
+    /// Sync the scene ([`GpuScene::sync`]) first. Never blocks on the GPU; see [`Renderer::render`] about pacing. A
+    /// scene's first frame (the first after [`Renderer::new`] or [`Renderer::begin_scene`]) waits on the CPU for the
+    /// pipelines it draws with, so it looks as every later frame does.
     pub fn render_scene(
         &mut self,
         target: &wgpu::TextureView,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
     ) -> wgpu::SubmissionIndex {
+        if std::mem::take(&mut self.first_scene_frame) {
+            self.wait_for_scene(scene);
+        }
         let (mut encoder, slot) = self.begin_frame();
         let cull = &self.settings.cull;
         let size = (self.settings.width, self.settings.height);
@@ -479,6 +908,9 @@ impl Renderer {
         // render scale changes none of them; only the light clusters' pixels follow the size drawn.
         self.parts
             .prepare_lights(scene, camera, size, self.render_size, &self.settings.cull, &lod);
+        if self.parts.lights_held() {
+            self.hurry_lights();
+        }
         self.parts.prepare_shadows(&mut encoder, scene, camera, size, &lod);
         self.shadow_in_use = u8::try_from(self.parts.shadow_stats().cascades).unwrap_or(0);
         // After the upload, which may have replaced the buffers the bind groups use.
@@ -625,12 +1057,14 @@ impl Renderer {
     }
 
     /// Turns the debug overlay ([`crate::overlay`]) on or off. It is drawn in the UI pass, so only frames whose
-    /// pass set has [`PassId::Ui`] show it. Turning it on the first time makes its pipeline and buffer; this is a
-    /// settings change, not something to do every frame.
+    /// pass set has [`PassId::Ui`] show it. Turning it on makes its buffer (a settings change, not something to do
+    /// every frame); its pipeline is compiled in the background with the renderer's, and it is drawn once that is
+    /// done.
     pub fn set_overlay_enabled(&mut self, enabled: bool) {
         if enabled && self.overlay_pass.is_none() {
             self.overlay.reserve();
-            self.overlay_pass = Some(OverlayPass::new(&self.device, self.settings.color_format));
+            self.overlay_pass = Some(OverlayPass::new(&self.device, self.overlay_pipeline.clone()));
+            self.queue(PipelineKey::Overlay);
         } else if !enabled {
             self.overlay_pass = None;
         }
@@ -659,8 +1093,12 @@ impl Renderer {
         }
     }
 
-    /// Starts a frame: its GPU timing slot, if any, and its encoder.
+    /// Starts a frame: the pipelines compiled since the last (and a settings change that waited for them), its GPU
+    /// timing slot, if any, and its encoder.
     fn begin_frame(&mut self) -> (wgpu::CommandEncoder, Option<usize>) {
+        if self.compiler.busy() {
+            self.take_compiled();
+        }
         self.shadow_recorded = 0;
         self.shadow_in_use = 0;
         self.atlas_recorded = false;
@@ -900,15 +1338,8 @@ impl Renderer {
 
     /// Plans the frame again and recreates the attachments it needs. Runs on settings changes, never per frame.
     fn rebuild(&mut self) {
-        // The upscale pass is the renderer's to plan, from the resolution settings.
         let resolution = self.settings.resolution;
-        let passes = self.settings.passes.without(PassId::Upscale);
-        let passes = if resolution.scaled() {
-            passes.with(PassId::Upscale)
-        } else {
-            passes
-        };
-        self.plan = FramePlan::with_chain(passes, self.settings.post.chain, self.settings.msaa_samples);
+        self.plan = Switch::of(&self.settings).plan();
         let (width, height) = (self.settings.width, self.settings.height);
         self.texture_size = if self.plan.scaled() {
             self.clamped_texture_size(resolution.texture_size(width, height))
@@ -918,9 +1349,6 @@ impl Renderer {
         self.render_size = self.texture_size;
         let scene_format = self.scene_target_format();
         self.parts.set_target(scene_format, self.plan.msaa_samples());
-        if let Some(overlay) = self.overlay_pass.as_mut() {
-            overlay.set_format(&self.device, self.settings.color_format);
-        }
         // An attachment living only inside one pass (cleared, then discarded) is in tile memory only on tile-based
         // GPUs.
         let transient = |within_one_pass: bool| {
@@ -1018,6 +1446,32 @@ impl Renderer {
         Attachment {
             view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
         }
+    }
+}
+
+/// Puts the compiled pipeline `key` where it is drawn from. Allocates nothing.
+fn install(
+    parts: &mut PartRenderer,
+    post: &mut Post,
+    upscaler: &mut Upscaler,
+    (overlay_pass, overlay_pipeline): (&mut Option<OverlayPass>, &mut Option<wgpu::RenderPipeline>),
+    key: PipelineKey,
+    pipeline: wgpu::RenderPipeline,
+) {
+    match key {
+        PipelineKey::Part {
+            format,
+            samples,
+            pipeline: which,
+        } => parts.install(format, samples, which, pipeline),
+        PipelineKey::Upscale => upscaler.install(pipeline),
+        PipelineKey::Overlay => {
+            if let Some(pass) = overlay_pass.as_mut() {
+                pass.set_pipeline(pipeline.clone());
+            }
+            *overlay_pipeline = Some(pipeline);
+        }
+        _ => post.install(key, pipeline),
     }
 }
 

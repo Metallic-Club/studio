@@ -2,8 +2,9 @@
 //! texture, then upsampling passes adding each level onto the next larger (`bloom.wgsl`). Every pass works at half
 //! the output's resolution or below; the chain is timed as one.
 
-use super::{BloomSettings, BloomStart, MAX_BLOOM_LEVELS, full_screen_pipeline, post_texture, sampler_entry};
+use super::{BloomSettings, BloomStart, FullScreen, MAX_BLOOM_LEVELS, post_texture, sampler_entry};
 use super::{texture_entry, uniform_entry, uniform_slice};
+use crate::pipelines::PipelineKey;
 
 /// Bytes of one pass's parameters (`BloomPass` in `bloom.wgsl`).
 const PARAMS_SIZE: u64 = 32;
@@ -46,15 +47,21 @@ struct Levels {
     threshold: f32,
 }
 
-/// Bloom's pipelines (made with the renderer), its parameters, and its levels while it runs.
+/// The first downsample's entry points: dual filter, 13 taps, from a quarter.
+const FIRST_ENTRY_POINTS: [&str; 3] = ["fs_first_dual", "fs_first_wide", "fs_first_quarter"];
+/// The later downsamples' entry points: dual filter, 13 taps.
+const DOWN_ENTRY_POINTS: [&str; 2] = ["fs_down_dual", "fs_down_wide"];
+
+/// Bloom's pipelines (compiled apart, [`crate::pipelines`]), its parameters, and its levels while it runs.
 pub(crate) struct Bloom {
+    module: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
     /// The first downsample from the scene colour: dual filter, 13 taps, a quarter.
-    first: [wgpu::RenderPipeline; 3],
+    first: [Option<wgpu::RenderPipeline>; 3],
     /// Later downsamples: dual filter, 13 taps.
-    down: [wgpu::RenderPipeline; 2],
-    up: wgpu::RenderPipeline,
+    down: [Option<wgpu::RenderPipeline>; 2],
+    up: Option<wgpu::RenderPipeline>,
     /// One slot per pass, [`MAX_BLOOM_LEVELS`] downsamples then as many upsamples, `stride` bytes apart.
     params: wgpu::Buffer,
     stride: u64,
@@ -64,7 +71,7 @@ pub(crate) struct Bloom {
 }
 
 impl Bloom {
-    /// Every pipeline, for levels in `format` (the scene colour's).
+    /// Bloom for levels in `format` (the scene colour's), before any pipeline is compiled.
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("metallic bloom"),
@@ -74,26 +81,12 @@ impl Bloom {
             label: Some("metallic bloom"),
             entries: &[uniform_entry(0, PARAMS_SIZE), texture_entry(1, true), sampler_entry(2)],
         });
-        let pipeline = |entry: &str, blend| {
-            full_screen_pipeline(device, entry, &layout, &module, ("vs_bloom", entry), format, blend)
-        };
-        let add = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent::REPLACE,
-        };
         let stride = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(PARAMS_SIZE);
         Self {
-            first: [
-                pipeline("fs_first_dual", None),
-                pipeline("fs_first_wide", None),
-                pipeline("fs_first_quarter", None),
-            ],
-            down: [pipeline("fs_down_dual", None), pipeline("fs_down_wide", None)],
-            up: pipeline("fs_up", Some(add)),
+            module,
+            first: Default::default(),
+            down: Default::default(),
+            up: None,
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("metallic bloom"),
                 size: stride * 2 * MAX_BLOOM_LEVELS as u64,
@@ -106,6 +99,77 @@ impl Bloom {
             levels: None,
             first_written: None,
         }
+    }
+
+    /// The pipelines bloom draws with as `settings` say: the first downsample's, the later downsamples' and the
+    /// upsample's.
+    pub(crate) fn keys(settings: &BloomSettings) -> [PipelineKey; 3] {
+        let first = match (settings.start, settings.wide_filter) {
+            (BloomStart::Quarter, _) => 2,
+            (BloomStart::Half, true) => 1,
+            (BloomStart::Half, false) => 0,
+        };
+        [
+            PipelineKey::BloomFirst(first),
+            PipelineKey::BloomDown(u8::from(settings.wide_filter)),
+            PipelineKey::BloomUp,
+        ]
+    }
+
+    /// What bloom's pipeline `key` is made from; `None` for a key that is not bloom's.
+    pub(crate) fn full_screen(&self, key: PipelineKey) -> Option<FullScreen> {
+        let (entry, blend) = match key {
+            PipelineKey::BloomFirst(i) => (*FIRST_ENTRY_POINTS.get(usize::from(i))?, None),
+            PipelineKey::BloomDown(i) => (*DOWN_ENTRY_POINTS.get(usize::from(i))?, None),
+            PipelineKey::BloomUp => (
+                "fs_up",
+                Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                }),
+            ),
+            _ => return None,
+        };
+        Some(FullScreen {
+            label: entry,
+            layout: self.layout.clone(),
+            module: self.module.clone(),
+            entry_points: ("vs_bloom", entry),
+            format: self.format,
+            blend,
+        })
+    }
+
+    /// The slot of bloom's pipeline `key`.
+    fn slot(&mut self, key: PipelineKey) -> Option<&mut Option<wgpu::RenderPipeline>> {
+        match key {
+            PipelineKey::BloomFirst(i) => self.first.get_mut(usize::from(i)),
+            PipelineKey::BloomDown(i) => self.down.get_mut(usize::from(i)),
+            PipelineKey::BloomUp => Some(&mut self.up),
+            _ => None,
+        }
+    }
+
+    /// Puts the compiled pipeline `key` in place.
+    pub(crate) fn install(&mut self, key: PipelineKey, pipeline: wgpu::RenderPipeline) {
+        if let Some(slot) = self.slot(key) {
+            *slot = Some(pipeline);
+        }
+    }
+
+    /// Whether bloom's pipeline `key` is compiled.
+    pub(crate) fn has(&self, key: PipelineKey) -> bool {
+        let slot = match key {
+            PipelineKey::BloomFirst(i) => self.first.get(usize::from(i)),
+            PipelineKey::BloomDown(i) => self.down.get(usize::from(i)),
+            PipelineKey::BloomUp => Some(&self.up),
+            _ => None,
+        };
+        slot.is_some_and(Option::is_some)
     }
 
     /// Makes the levels for an output of `size`, reading the scene colour through `scene`, as `settings` say, or drops them when bloom
@@ -261,7 +325,7 @@ impl Bloom {
                         label: &str,
                         view: &wgpu::TextureView,
                         load: wgpu::LoadOp<wgpu::Color>,
-                        pipeline: &wgpu::RenderPipeline,
+                        pipeline: Option<&wgpu::RenderPipeline>,
                         group: &wgpu::BindGroup| {
             let timestamp_writes = timestamps.as_ref().map(|writes| wgpu::RenderPassTimestampWrites {
                 query_set: writes.query_set,
@@ -297,9 +361,13 @@ impl Bloom {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            render_pass.set_pipeline(pipeline);
-            render_pass.set_bind_group(0, group, &[]);
-            render_pass.draw(0..3, 0..1);
+            // The renderer runs bloom only once its pipelines are compiled; the pass stays either way, so the
+            // timestamps keep their places.
+            if let Some(pipeline) = pipeline {
+                render_pass.set_pipeline(pipeline);
+                render_pass.set_bind_group(0, group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
         };
         for (i, (view, group)) in levels.views.iter().zip(&levels.down).enumerate() {
             let filter = if i == 0 { levels.first } else { levels.rest };
@@ -309,7 +377,8 @@ impl Bloom {
                 (0, Filter::Quarter) => &self.first[2],
                 (_, Filter::Wide) => &self.down[1],
                 (_, Filter::Dual | Filter::Quarter) => &self.down[0],
-            };
+            }
+            .as_ref();
             // Every texel is written, so nothing is loaded.
             pass(
                 encoder,
@@ -326,7 +395,7 @@ impl Bloom {
                 UP_NAMES[i],
                 &levels.views[i],
                 wgpu::LoadOp::Load,
-                &self.up,
+                self.up.as_ref(),
                 &levels.up[i],
             );
         }

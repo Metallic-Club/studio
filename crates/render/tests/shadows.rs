@@ -115,7 +115,7 @@ struct Frames {
 impl Frames {
     fn new(context: &RenderContext, game: &mut Game, shadows: ShadowSettings) -> Self {
         let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             context,
             RendererSettings {
                 passes: PassSet::default(),
@@ -125,6 +125,7 @@ impl Frames {
             },
         )
         .expect("a renderer");
+        renderer.wait_for_pipelines();
         let scene = GpuScene::new(
             context,
             &mut game.dm,

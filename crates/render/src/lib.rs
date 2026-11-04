@@ -43,6 +43,10 @@
 //!   open chain whose disabled passes cost nothing ([`PostChain`]).
 //! - Graphics settings ([`settings`]): the Low / Medium / High / Ultra / Auto presets composed from the settings
 //!   above, the player's overrides, their file format, and the Auto preset's calibration (ADR 0008 §8).
+//! - Pipeline compiles off the frame ([`pipelines`], [`Renderer::pipeline_stats`]): on worker threads, what the first
+//!   frame draws before [`Renderer::new`] returns and every other permutation in the background, a settings change
+//!   waiting for its pipelines while frames draw as before; and on Vulkan a pipeline cache kept on disk
+//!   ([`ContextOptions::pipeline_cache_dir`]) (ADR 0008 §9).
 
 mod context;
 pub mod cull;
@@ -54,6 +58,10 @@ pub mod lights;
 pub mod lod;
 pub mod overlay;
 pub mod parts;
+// The one module with `unsafe` (`#![allow(unsafe_code)]` inside, for wgpu's `create_pipeline_cache`, whose data
+// must be what the cache gave before: the file's own length and hash are checked first).
+mod pipeline_cache;
+pub mod pipelines;
 pub mod post;
 mod renderer;
 pub mod resolution;
@@ -74,6 +82,7 @@ pub use lights::{LightSettings, LightStats};
 pub use lod::{LodSettings, MAX_LOD_LEVELS};
 pub use overlay::Overlay;
 pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer};
+pub use pipelines::PipelineStats;
 pub use post::{AntiAliasing, PostSettings, PostStats};
 pub use renderer::{Renderer, RendererSettings};
 pub use scene::{GpuScene, InstanceScene};

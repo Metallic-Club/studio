@@ -20,6 +20,7 @@ fn timings_arrive_after_some_frames() {
         },
     )
     .unwrap();
+    renderer.wait_for_pipelines();
     if !context.capabilities().timestamp_queries {
         assert!(!renderer.gpu_timing_enabled());
         eprintln!(
@@ -86,6 +87,7 @@ fn timing_can_be_turned_off() {
         },
     )
     .unwrap();
+    renderer.wait_for_pipelines();
     let target = OffscreenTarget::new(&context, 16, 16, format).unwrap();
     for _ in 0..10 {
         renderer.render(target.view());

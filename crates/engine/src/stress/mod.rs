@@ -19,7 +19,7 @@
 pub mod bench;
 
 #[cfg(feature = "render")]
-pub use bench::{BenchOptions, BenchReport, run_bench};
+pub use bench::{BenchOptions, BenchReport, TOGGLES, Toggle, run_bench};
 
 use metallic_core::glam::{Quat, Vec3};
 use metallic_core::{CFrame, ClassId, Color3, DataModel, DmError, EnumItem, Id, PropId, Value};

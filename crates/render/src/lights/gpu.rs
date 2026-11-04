@@ -179,13 +179,15 @@ pub(crate) struct LocalLights {
 
 impl LocalLights {
     /// Local lights for `settings` on the instance path `binding`, whose storage-path instance group has
-    /// `instance_layout`. Makes their pipelines; their buffers and textures wait for the first light.
+    /// `instance_layout`. Makes their pipelines (through `cache` where there is one); their buffers and textures wait
+    /// for the first light.
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: LightSettings,
+        cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         Self {
             device: device.clone(),
@@ -194,7 +196,7 @@ impl LocalLights {
             buffers: None,
             lights: Vec::with_capacity(MAX_GPU_LIGHTS),
             uploaded: Vec::with_capacity(MAX_GPU_LIGHTS),
-            atlas: ShadowAtlas::new(device, queue, binding, instance_layout, &settings),
+            atlas: ShadowAtlas::new(device, queue, binding, instance_layout, &settings, cache),
             ranked: Vec::with_capacity(MAX_GPU_LIGHTS),
             drawn: Vec::with_capacity(MAX_GPU_LIGHTS),
             spheres: Vec::with_capacity(MAX_GPU_LIGHTS),
@@ -271,6 +273,17 @@ impl LocalLights {
     /// Records the atlas's tiles into `pass` (see [`ShadowAtlas::draw`]).
     pub(crate) fn draw_atlas(&self, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
         self.atlas.draw(meshes, pass)
+    }
+
+    /// Starts every light's fade, and its shadow's, again from nothing: lights a frame could not draw yet (their
+    /// pipelines were still compiling, #86) fade in over [`LightSettings::fade_time`] from this frame on instead of
+    /// popping on.
+    pub(crate) fn restart_fades(scene: &mut GpuScene) {
+        let (_, runtime) = scene.lights_mut();
+        for state in runtime {
+            state.fade = 0.0;
+            state.shadow_fade = 0.0;
+        }
     }
 
     /// Selects, fades, clusters and shadows the local lights of `scene` for a frame seen from `camera` on a

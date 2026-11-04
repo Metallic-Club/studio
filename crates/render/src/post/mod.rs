@@ -23,9 +23,10 @@
 //! looks as it did, and highlights keep some detail instead of clipping. **Exposure** is fixed
 //! ([`PostSettings::exposure`]), 1 by default; it does not meter the image yet, so nothing is read back from the GPU.
 //!
-//! Every pipeline (the finish pass's four variants, bloom's and MLAA's) is made with the renderer, so turning an
-//! effect on or changing the effect quality compiles nothing; it makes the effect's textures, without waiting for the
-//! GPU (ADR 0008 §9).
+//! Every pipeline (the finish pass's four variants, bloom's and MLAA's) is compiled off the frame
+//! ([`crate::pipelines`]): those the first frame runs with the renderer, the others right after in the background.
+//! Turning an effect on or changing the effect quality compiles nothing on the frame; it makes the effect's textures,
+//! without waiting for the GPU, once the effect's pipelines exist (ADR 0008 §9).
 
 mod bloom;
 mod finish;
@@ -38,6 +39,7 @@ pub(crate) use bloom::Bloom;
 pub(crate) use finish::{Finish, FinishParams};
 pub(crate) use mlaa::Mlaa;
 
+use crate::pipelines::{PipelineKey, Recipe};
 use crate::{MsaaSampleCounts, PassId, PostChain, RenderContext};
 
 pub use finish::tone_curve;
@@ -428,47 +430,58 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// A full-screen pipeline: `module`'s `vertex` and `fragment` entry points drawing one triangle into `format`,
-/// blended with `blend`.
-fn full_screen_pipeline(
-    device: &wgpu::Device,
-    label: &str,
-    layout: &wgpu::BindGroupLayout,
-    module: &wgpu::ShaderModule,
-    (vertex, fragment): (&str, &str),
-    format: wgpu::TextureFormat,
-    blend: Option<wgpu::BlendState>,
-) -> wgpu::RenderPipeline {
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(label),
-        bind_group_layouts: &[Some(layout)],
-        immediate_size: 0,
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module,
-            entry_point: Some(vertex),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module,
-            entry_point: Some(fragment),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
+/// What a full-screen pipeline is made from: `module`'s `entry_points` (vertex, fragment) drawing one triangle into
+/// `format`, blended with `blend`. Owned, so its compile runs on any thread ([`crate::pipelines`]).
+#[derive(Clone, Debug)]
+pub(crate) struct FullScreen {
+    pub(crate) label: &'static str,
+    pub(crate) layout: wgpu::BindGroupLayout,
+    pub(crate) module: wgpu::ShaderModule,
+    pub(crate) entry_points: (&'static str, &'static str),
+    pub(crate) format: wgpu::TextureFormat,
+    pub(crate) blend: Option<wgpu::BlendState>,
+}
+
+impl FullScreen {
+    /// The compile of this pipeline.
+    pub(crate) fn recipe(self) -> Recipe {
+        Box::new(move |device, cache| self.create(device, cache))
+    }
+
+    /// Makes the pipeline now.
+    pub(crate) fn create(&self, device: &wgpu::Device, cache: Option<&wgpu::PipelineCache>) -> wgpu::RenderPipeline {
+        let (vertex, fragment) = self.entry_points;
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(self.label),
+            bind_group_layouts: &[Some(&self.layout)],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(self.label),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &self.module,
+                entry_point: Some(vertex),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &self.module,
+                entry_point: Some(fragment),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.format,
+                    blend: self.blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache,
+        })
+    }
 }
 
 /// The linear, edge-clamped sampler the post passes read with.
@@ -518,7 +531,24 @@ pub(crate) struct Post {
 }
 
 impl Post {
-    /// Every pipeline of the chain: the finish pass writing `output` and the effects reading and writing `scene`.
+    /// Every pipeline of the chain, in the order a frame is likeliest to need them: the finish pass's variants, then
+    /// bloom's, then MLAA's.
+    pub(crate) const KEYS: [PipelineKey; 11] = [
+        PipelineKey::Finish(1),
+        PipelineKey::Finish(0),
+        PipelineKey::Finish(3),
+        PipelineKey::Finish(2),
+        PipelineKey::BloomFirst(1),
+        PipelineKey::BloomDown(1),
+        PipelineKey::BloomUp,
+        PipelineKey::BloomFirst(0),
+        PipelineKey::BloomDown(0),
+        PipelineKey::BloomFirst(2),
+        PipelineKey::Mlaa,
+    ];
+
+    /// The chain for the finish pass writing `output` and the effects reading and writing `scene`. Its pipelines are
+    /// compiled apart ([`Post::recipe`]) and installed as they finish.
     pub(crate) fn new(device: &wgpu::Device, output: wgpu::TextureFormat, scene: wgpu::TextureFormat) -> Self {
         let sampler = linear_sampler(device);
         Self {
@@ -526,6 +556,37 @@ impl Post {
             bloom: Bloom::new(device, scene),
             mlaa: Mlaa::new(device),
             sampler,
+        }
+    }
+
+    /// The compile of the chain's pipeline `key`; `None` for a key that is not the chain's.
+    pub(crate) fn recipe(&self, key: PipelineKey) -> Option<Recipe> {
+        match key {
+            PipelineKey::Finish(variant) => Some(self.finish.full_screen(usize::from(variant)).recipe()),
+            PipelineKey::BloomFirst(_) | PipelineKey::BloomDown(_) | PipelineKey::BloomUp => {
+                self.bloom.full_screen(key).map(FullScreen::recipe)
+            }
+            PipelineKey::Mlaa => Some(self.mlaa.full_screen().recipe()),
+            _ => None,
+        }
+    }
+
+    /// Puts the compiled pipeline `key` in place.
+    pub(crate) fn install(&mut self, key: PipelineKey, pipeline: wgpu::RenderPipeline) {
+        match key {
+            PipelineKey::Finish(variant) => self.finish.install(usize::from(variant), pipeline),
+            PipelineKey::Mlaa => self.mlaa.install(pipeline),
+            _ => self.bloom.install(key, pipeline),
+        }
+    }
+
+    /// Whether the chain's pipeline `key` is compiled (true for a key that is not the chain's).
+    pub(crate) fn has(&self, key: PipelineKey) -> bool {
+        match key {
+            PipelineKey::Finish(variant) => self.finish.has(usize::from(variant)),
+            PipelineKey::BloomFirst(_) | PipelineKey::BloomDown(_) | PipelineKey::BloomUp => self.bloom.has(key),
+            PipelineKey::Mlaa => self.mlaa.has(),
+            _ => true,
         }
     }
 

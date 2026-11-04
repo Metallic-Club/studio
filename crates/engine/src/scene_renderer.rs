@@ -54,7 +54,8 @@ struct Device {
 ///
 /// Switching settings at run time waits for nothing: the shadow maps, the light atlas and the scaled scene textures
 /// are made again without waiting for the GPU (the old ones are freed once it is done with them), and every pipeline
-/// was made with the renderer.
+/// is compiled off the frame, in the background from the renderer's creation: a switch whose pipelines are still
+/// compiling takes effect in the first frame after they are ([`metallic_render::pipelines`]).
 pub struct SceneRenderer {
     options: ContextOptions,
     clear_color: wgpu::Color,
@@ -101,6 +102,10 @@ pub struct SceneRenderer {
     overlay: bool,
     /// When the previous frame's render started: frame time is the time between two.
     frame_start: Option<Instant>,
+    /// When the device was being made (the first attach), until the first frame is presented.
+    attached_at: Option<Instant>,
+    /// Milliseconds from the first attach until the first frame was presented.
+    first_frame_ms: Option<f32>,
 }
 
 impl SceneRenderer {
@@ -146,7 +151,15 @@ impl SceneRenderer {
             since_summary: 0,
             overlay: false,
             frame_start: None,
+            attached_at: None,
+            first_frame_ms: None,
         }
+    }
+
+    /// Milliseconds from the first attach to a window (the device and the renderer made, the first frame's pipelines
+    /// compiled) until the first frame was presented: what a player waits for the first image. `None` before it.
+    pub fn first_frame_ms(&self) -> Option<f32> {
+        self.first_frame_ms
     }
 
     /// Changes the colour frames start from (linear).
@@ -294,9 +307,13 @@ impl SceneRenderer {
             .with_if(PassId::Mlaa, mlaa)
     }
 
-    /// Gives the renderer its passes again, keeping its anti-aliasing.
+    /// Gives the renderer its passes again, keeping its anti-aliasing: the one asked for, as the device draws it (the
+    /// renderer may still be drawing the one before while the new one's pipelines compile).
     fn apply_passes(&mut self) {
-        let Some(mlaa) = self.renderer().map(|r| r.anti_aliasing().mlaa()) else {
+        let Some(mlaa) = self
+            .renderer()
+            .map(|r| self.anti_aliasing.supported(r.msaa_sample_counts()).mlaa())
+        else {
             return;
         };
         let passes = self.passes(mlaa);
@@ -339,9 +356,14 @@ impl SceneRenderer {
     }
 
     /// Tells the renderer the frame cap the app applies (`None`: uncapped), which scripts read in
-    /// `UserGameSettings.FrameRateCap`. The renderer does not pace frames itself.
+    /// `UserGameSettings.FrameRateCap`, and which the spike counter measures against (twice a capped frame is a
+    /// spike; a 60 fps frame's twice when uncapped). The renderer does not pace frames itself.
     pub fn set_frame_cap(&mut self, fps: Option<u32>) {
         self.frame_cap = fps;
+        self.perf.set_frame_target_ms(match fps {
+            Some(fps) if fps > 0 => 1000.0 / fps as f32,
+            _ => crate::perf::DEFAULT_FRAME_TARGET_MS,
+        });
         self.settings_changed = true;
     }
 
@@ -354,6 +376,7 @@ impl SceneRenderer {
             calibrating: self.calibrating(),
             resolution: self.renderer().map(Renderer::resolution_stats).unwrap_or_default(),
             post: self.renderer().map(Renderer::post_stats).unwrap_or_default(),
+            pipelines: self.renderer().map(Renderer::pipeline_stats).unwrap_or_default(),
         }
     }
 
@@ -557,7 +580,9 @@ impl SceneRenderer {
     /// Keeps the statistics of the last `frames` frames ([`crate::perf::DEFAULT_WINDOW`] by default), dropping
     /// what was recorded. A benchmark sizes it to its whole run. Allocates; not for every frame.
     pub fn set_perf_window(&mut self, frames: usize) {
+        let target = self.perf.frame_target_ms();
         self.perf = PerfStats::new(frames);
+        self.perf.set_frame_target_ms(target);
     }
 
     /// What the adapter and device can do (its name, backend, driver), once attached.
@@ -612,6 +637,11 @@ impl SceneRenderer {
             scene.watch(lighting);
         }
         self.scene = Some(scene);
+        // A newly loaded place's first frame waits for the pipelines it draws with (its lights, the settings' AA and
+        // effects): a delayed first present rather than a frame that looks wrong.
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.begin_scene();
+        }
         Ok(())
     }
 
@@ -644,6 +674,9 @@ impl RenderHook for SceneRenderer {
         let (width, height) = (size.width.max(1), size.height.max(1));
         let window = Arc::new(window.clone());
         let created = self.device.is_none();
+        if created {
+            self.attached_at = Some(Instant::now());
+        }
         let mut surface = match self.device.as_ref() {
             Some(device) => device.context.create_surface(window, width, height)?,
             None => {
@@ -744,6 +777,9 @@ impl RenderHook for SceneRenderer {
                 device.renderer.render_scene(image.view(), scene, camera.as_ref());
                 render_cpu = start.elapsed().saturating_sub(acquire);
                 image.present(&device.context);
+                if let Some(attached) = self.attached_at.take() {
+                    self.first_frame_ms = Some(attached.elapsed().as_secs_f32() * 1000.0);
+                }
                 self.last_upload = device.renderer.upload_stats();
                 draws = device.renderer.draw_stats();
                 cull = device.renderer.cull_stats().cpu_time + device.renderer.shadow_stats().cull_time;

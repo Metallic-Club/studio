@@ -175,12 +175,13 @@ pub(crate) struct ShadowMaps {
 
 impl ShadowMaps {
     /// The maps (off until [`ShadowMaps::configure`]) and the caster pipeline for the instance path `binding`, whose
-    /// storage-path instance bind group has `instance_layout`.
+    /// storage-path instance bind group has `instance_layout`, made through `cache` where there is one.
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
+        cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         let cascade_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic shadow cascade"),
@@ -217,7 +218,14 @@ impl ShadowMaps {
                 })
             })
             .collect();
-        let pipeline = caster_pipeline(device, binding, &cascade_layout, instance_layout, CASCADE_CASTER_BIAS);
+        let pipeline = caster_pipeline(
+            device,
+            cache,
+            binding,
+            &cascade_layout,
+            instance_layout,
+            CASCADE_CASTER_BIAS,
+        );
         let entry_size = match binding {
             InstanceBinding::Storage => size_of::<u32>() as u64,
             InstanceBinding::Vertex => GpuInstance::SIZE,
@@ -236,7 +244,7 @@ impl ShadowMaps {
         });
         let limits = device.limits();
         let (sample_view, layer_views) = maps(device, 1, 1, 1);
-        let (copy_layout, copy_pipeline) = copy_pipeline(device);
+        let (copy_layout, copy_pipeline) = copy_pipeline(device, cache);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -867,7 +875,10 @@ fn static_map(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, resolution:
 /// shares the pass that draws the moving casters on top, with no copy command or extra pass on any backend. The
 /// static map is read as an unfilterable float texture (allowed for depth formats) with `textureLoad`, so no
 /// comparison or filtering touches the values: they are copied exactly.
-fn copy_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+fn copy_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("metallic shadow static copy"),
         source: wgpu::ShaderSource::Wgsl(include_str!("copy.wgsl").into()),
@@ -915,7 +926,7 @@ fn copy_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::RenderP
             targets: &[],
         }),
         multiview_mask: None,
-        cache: None,
+        cache,
     });
     (layout, pipeline)
 }
@@ -953,6 +964,7 @@ fn staging_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
 /// front faces.
 pub(crate) fn caster_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     binding: InstanceBinding,
     cascade_layout: &wgpu::BindGroupLayout,
     instance_layout: Option<&wgpu::BindGroupLayout>,
@@ -1012,6 +1024,6 @@ pub(crate) fn caster_pipeline(
         multisample: wgpu::MultisampleState::default(),
         fragment: None,
         multiview_mask: None,
-        cache: None,
+        cache,
     })
 }

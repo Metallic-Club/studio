@@ -48,6 +48,12 @@
 //! passes, the finish pass, with the renderer's own shaders), and the plain frame is also compared with MLAA's pass
 //! added and with the scene passes merged into one. A frame without the finish pass makes the calls it made before.
 //!
+//! Pipelines compiled off the frame (#86) too: every renderer here waits for its background compiles before it is
+//! measured, so the frames compare as before; and the default frame drawn while a settings change waits for
+//! pipelines still compiling (paused, so they stay pending) allocates exactly what the same wgpu calls do by hand,
+//! and keeps nothing over 100 frames. The compiles themselves run on worker threads, whose allocations these
+//! per-thread counters never see.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 //!
 //! Every adapter, software (`DeviceType::Cpu`: WARP, lavapipe) or hardware, is held to the same exact comparison of
@@ -586,6 +592,20 @@ fn renderer_and_floor(
     depth: &wgpu::TextureView,
     post: Option<&HandPost>,
 ) -> (u64, u64) {
+    frames_and_floor(context, passes, hand, (target, depth), post, false)
+}
+
+/// [`renderer_and_floor`], and with `pending` every renderer frame drawn while compiles are pending (#86): the
+/// renderer is asked to drop the post chain, whose frame needs pipelines nothing compiled yet, with its background
+/// compiles paused, so it keeps drawing `passes` while the switch waits.
+fn frames_and_floor(
+    context: &metallic_render::RenderContext,
+    passes: PassSet,
+    hand: &[HandPass],
+    (target, depth): (&OffscreenTarget, &wgpu::TextureView),
+    post: Option<&HandPost>,
+    pending: bool,
+) -> (u64, u64) {
     let (device, queue) = (context.device(), context.queue());
     let mut renderer = Renderer::new(
         context,
@@ -596,6 +616,15 @@ fn renderer_and_floor(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
+    // Where compiles run inline (OpenGL) nothing is ever pending: the plain frame is measured instead.
+    let pending = pending && renderer.pipeline_stats().background;
+    if pending {
+        renderer.pause_pipeline_compiles(true);
+        renderer.set_passes(passes.without(PassId::Post).without(PassId::Bloom));
+        let stats = renderer.pipeline_stats();
+        assert!(stats.switch_waiting && stats.pending > 0, "{stats:?}");
+    }
     let mut pacer = Pacer::new();
     let mut ours = Vec::with_capacity(FRAMES);
     let mut floor = Vec::with_capacity(FRAMES);
@@ -612,9 +641,18 @@ fn renderer_and_floor(
             }
         }
     }
+    if pending {
+        // Still waiting: every measured frame was drawn as before the switch, with compiles pending.
+        let stats = renderer.pipeline_stats();
+        assert!(stats.switch_waiting && stats.pending > 0, "{stats:?}");
+        assert!(renderer.plan().post());
+        renderer.wait_for_pipelines();
+        assert!(!renderer.plan().post() && !renderer.pipeline_stats().switch_waiting);
+    }
     eprintln!(
-        "{passes:?}: allocations per frame over {FRAMES} frames: renderer {}..{} (median {}), the same wgpu calls by \
+        "{passes:?}{}: allocations per frame over {FRAMES} frames: renderer {}..{} (median {}), the same wgpu calls by \
          hand {}..{} (median {})",
+        if pending { " (compiles pending)" } else { "" },
         ours.iter().min().expect("frames"),
         ours.iter().max().expect("frames"),
         median(ours.clone()),
@@ -822,12 +860,22 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
         &depth,
         Some(&post),
     );
+    // The default frame again, drawn while a settings change waits for its pipelines (#86).
+    let (ours_pending, floor_pending) = frames_and_floor(
+        &context,
+        PassSet::default(),
+        &DEFAULT_PASSES,
+        (&target, &depth),
+        Some(&post),
+        true,
+    );
     let workloads = [
         ("UI only", ours_one, floor_one),
         ("four passes", ours_direct, floor_direct),
         ("post chain", ours, floor),
         ("post chain with MLAA", ours_mlaa, floor_mlaa),
         ("merged scene", ours_merged, floor_merged),
+        ("post chain, compiles pending", ours_pending, floor_pending),
     ];
     report("plain frame", &context, &workloads);
     // Per pass: what the extra passes cost the renderer is exactly what they cost by hand, so nothing in the pass
@@ -863,6 +911,7 @@ fn nothing_accumulates_over_frames() {
         },
     )
     .unwrap();
+    renderer.wait_for_pipelines();
     let samples = renderer
         .msaa_sample_counts()
         .iter()
@@ -894,6 +943,43 @@ fn nothing_accumulates_over_frames() {
     );
     assert!(renderer.gpu_timings().is_some() || !renderer.gpu_timing_enabled());
     // Slack for the frames still in flight at either end; anything kept per frame would be far beyond this.
+    assert!(
+        grown.abs() < 16 * 1024,
+        "the heap grew by {grown} bytes over {FRAMES} frames"
+    );
+}
+
+/// Frames drawn while compiles are pending (#86) keep nothing either: every frame looks for finished compiles, and
+/// finding none must leave nothing behind.
+#[test]
+fn nothing_accumulates_while_compiles_are_pending() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    renderer.wait_for_pipelines();
+    if !renderer.pipeline_stats().background {
+        // OpenGL compiles inline: nothing is ever pending.
+        return;
+    }
+    renderer.pause_pipeline_compiles(true);
+    renderer.set_passes(PassSet::default().without(PassId::Post).without(PassId::Bloom));
+    assert!(renderer.pipeline_stats().switch_waiting);
+    let mut pacer = Pacer::new();
+    let mut before = 0;
+    for frame in 0..WARM_UP + FRAMES {
+        if frame == WARM_UP {
+            before = live_bytes();
+        }
+        let submission = renderer.render(target.view());
+        pacer.submitted(context.device(), submission);
+    }
+    let grown = live_bytes() - before;
+    let stats = renderer.pipeline_stats();
+    eprintln!(
+        "{FRAMES} frames with {} compiles pending: heap grew {grown} bytes",
+        stats.pending
+    );
+    assert!(stats.switch_waiting && stats.pending > 0, "{stats:?}");
     assert!(
         grown.abs() < 16 * 1024,
         "the heap grew by {grown} bytes over {FRAMES} frames"
@@ -1024,6 +1110,7 @@ fn scaled_frame_and_floor(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     assert!(renderer.plan().scaled());
     let hand = HandScaled::new(context, texture);
     let mut pacer = Pacer::new();
@@ -1122,6 +1209,7 @@ fn nothing_accumulates_over_dynamic_resolution_frames() {
         },
     )
     .unwrap();
+    renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
     let mut before = 0;
     let mut scales = Vec::with_capacity(WARM_UP + FRAMES);
@@ -1526,6 +1614,7 @@ fn nothing_accumulates_over_scene_frames() {
     let mut scene = scene_on_gpu(&context, &mut game);
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
     let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
     let mut before = 0;
     for frame in 0..WARM_UP + FRAMES {
@@ -2393,6 +2482,7 @@ fn frame_and_floor(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     // The same game culled on the CPU alone, so the hand-written frame makes exactly the calls the renderer makes
     // in the same frame, whichever of the two goes first.
     let mut mirror = InstanceScene::attach(&mut game.dm, Some(game.workspace), &RenderComponents::builtin())
@@ -2661,6 +2751,7 @@ fn parts_frames_do_not_grow_the_heap(context: &RenderContext) {
     .expect("a scene");
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
+    renderer.wait_for_pipelines();
     let mut pacer = Pacer::new();
     let mut before = 0;
     for frame in 0..WARM_UP + FRAMES {
@@ -2920,6 +3011,7 @@ fn overlay_frame_and_floor(context: &RenderContext, work: OverlayWork) -> (u64, 
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     renderer.set_overlay_enabled(true);
     fill_overlay(renderer.overlay_mut(), 0, work);
     let hand = HandOverlay::new(device, renderer.overlay().len());
@@ -2994,6 +3086,7 @@ fn nothing_accumulates_over_overlay_frames() {
     let Some(context) = measuring_gpu(false) else { return };
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
     let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).unwrap();
+    renderer.wait_for_pipelines();
     renderer.set_overlay_enabled(true);
     let mut pacer = Pacer::new();
     let mut before = 0;
@@ -3094,7 +3187,7 @@ fn a_lit_frame_allocates_only_its_writes() {
         metallic_render::LightSettings::OFF,
     ]
     .map(|lights| {
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             &context,
             RendererSettings {
                 gpu_timing: false,
@@ -3103,6 +3196,7 @@ fn a_lit_frame_allocates_only_its_writes() {
             },
         )
         .expect("a renderer");
+        renderer.wait_for_pipelines();
         let mut scene = GpuScene::new(
             &context,
             &mut game.dm,
@@ -3223,6 +3317,7 @@ fn nothing_accumulates_over_lit_frames() {
         .expect("a scene");
         let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
         let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
+        renderer.wait_for_pipelines();
         // Fades by a fixed step, so which lights hold shadows in which frame does not depend on how fast the machine
         // draws.
         renderer.set_light_fade_step(Some(1.0 / 60.0));

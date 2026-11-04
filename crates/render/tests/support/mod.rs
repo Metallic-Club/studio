@@ -98,6 +98,7 @@ pub(crate) fn render_raw(
     settings.passes = settings.passes.without(PassId::Post);
     let target = OffscreenTarget::new(context, size, size, RAW_FORMAT).expect("a target");
     let mut renderer = Renderer::new(context, settings).expect("a renderer");
+    renderer.wait_for_pipelines();
     let mut scene = GpuScene::new(
         context,
         &mut game.dm,

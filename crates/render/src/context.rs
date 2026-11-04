@@ -9,11 +9,13 @@
 //! Backends are tried in tiers: Vulkan, Metal and DX12 first, and only when none of them has an adapter, GL. An
 //! instance only ever enables one tier, so most machines never set up GL at all.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::RenderError;
+use crate::pipeline_cache::PipelineCacheStore;
 use crate::surface::{RenderSurface, SurfaceWindow, WindowDisplay};
 
 /// Held while an instance, surface, adapter or device is created. See the module documentation.
@@ -32,7 +34,9 @@ const WANTED_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
     // The post chain's compact HDR scene colour (`Rg11b10Ufloat`, `crate::post::hdr_format`).
     .union(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
     // MSAA counts (and other format features) beyond WebGPU's guaranteed minimum, such as 2x and 8x.
-    .union(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+    .union(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+    // Compiled pipelines kept on disk between runs (Vulkan; `crate::pipeline_cache`).
+    .union(wgpu::Features::PIPELINE_CACHE);
 
 /// How [`RenderContext`] looks for an adapter.
 #[derive(Clone, Debug)]
@@ -47,6 +51,14 @@ pub struct ContextOptions {
     /// Use the vertex-buffer instance path (GLES's) even where vertex shaders can read storage buffers, by
     /// reporting [`Capabilities::vertex_storage`] as false. For tests of that path on any backend.
     pub force_vertex_instances: bool,
+    /// The folder compiled pipelines are kept in between runs, where the backend can keep them (Vulkan): the user's
+    /// cache folder from `metallic_platform`. `None` (the default) keeps nothing.
+    pub pipeline_cache_dir: Option<PathBuf>,
+    /// The DX12 backend's shader compiler. The default, FXC, ships with Windows; DXC compiles about three times as
+    /// fast but needs `dxcompiler.dll` shipped beside the executable (`wgpu::Dx12Compiler::DynamicDxc`), or a build
+    /// with wgpu's `static-dxc` feature, which downloads a prebuilt DXC while building (docs/perf.md, #86). The
+    /// `WGPU_DX12_COMPILER` environment variable (`fxc`, `dxc`, `staticdxc`, `auto`) overrides it.
+    pub dx12_compiler: wgpu::Dx12Compiler,
 }
 
 impl Default for ContextOptions {
@@ -55,6 +67,8 @@ impl Default for ContextOptions {
             backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_vertex_instances: false,
+            pipeline_cache_dir: None,
+            dx12_compiler: wgpu::Dx12Compiler::Fxc,
         }
     }
 }
@@ -195,6 +209,8 @@ pub struct RenderContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
     capabilities: Arc<Capabilities>,
+    /// The device's pipeline cache and its file, where there is one ([`ContextOptions::pipeline_cache_dir`]).
+    pipeline_cache: Option<Arc<PipelineCacheStore>>,
 }
 
 impl RenderContext {
@@ -202,7 +218,7 @@ impl RenderContext {
     pub fn new_offscreen(options: &ContextOptions) -> Result<Self, RenderError> {
         for tier in backend_tiers(options.backends) {
             let _setup = setup_lock();
-            let instance = new_instance(tier, None);
+            let instance = new_instance(tier, None, options);
             if let Some(adapter) = request_adapter(&instance, options, None) {
                 return Self::from_adapter(instance, adapter, options);
             }
@@ -232,7 +248,7 @@ impl RenderContext {
             let display = tier
                 .contains(wgpu::Backends::GL)
                 .then(|| WindowDisplay(Arc::clone(&window)));
-            let instance = new_instance(tier, display);
+            let instance = new_instance(tier, display, options);
             let surface = instance.create_surface(wgpu::SurfaceTarget::from(Arc::clone(&window)))?;
             if let Some(adapter) = request_adapter(&instance, options, Some(&surface)) {
                 let context = Self::from_adapter(instance, adapter, options)?;
@@ -283,12 +299,18 @@ impl RenderContext {
         let mut capabilities = Capabilities::new(&adapter, &device);
         capabilities.vertex_storage &= !options.force_vertex_instances;
         let capabilities = Arc::new(capabilities);
+        let pipeline_cache = options
+            .pipeline_cache_dir
+            .as_deref()
+            .and_then(|dir| PipelineCacheStore::open(&adapter, &device, dir))
+            .map(Arc::new);
         Ok(Self {
             instance,
             adapter,
             device,
             queue,
             capabilities,
+            pipeline_cache,
         })
     }
 
@@ -315,6 +337,18 @@ impl RenderContext {
     /// What the adapter and device can do.
     pub fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// The device's pipeline cache, where it keeps one on disk.
+    pub(crate) fn pipeline_cache(&self) -> Option<&Arc<PipelineCacheStore>> {
+        self.pipeline_cache.as_ref()
+    }
+
+    /// Bytes of compiled pipelines loaded from disk when the device was made: `None` without a pipeline cache (every
+    /// backend but Vulkan, or no [`ContextOptions::pipeline_cache_dir`]), 0 when there was no usable file (a first
+    /// run, or a new driver).
+    pub fn pipeline_cache_loaded(&self) -> Option<u64> {
+        self.pipeline_cache.as_ref().map(|cache| cache.loaded())
     }
 
     /// The MSAA counts `format` can be rendered with on this adapter.
@@ -358,10 +392,12 @@ fn backend_tiers(allowed: wgpu::Backends) -> impl Iterator<Item = wgpu::Backends
         .filter(|tier| !tier.is_empty())
 }
 
-fn new_instance(backends: wgpu::Backends, display: Option<WindowDisplay>) -> wgpu::Instance {
+fn new_instance(backends: wgpu::Backends, display: Option<WindowDisplay>, options: &ContextOptions) -> wgpu::Instance {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = backends;
-    // `WGPU_DEBUG`, `WGPU_VALIDATION` and the backend options may still be tuned from the environment.
+    descriptor.backend_options.dx12.shader_compiler = options.dx12_compiler.clone();
+    // `WGPU_DEBUG`, `WGPU_VALIDATION` and the backend options (`WGPU_DX12_COMPILER` among them) may still be tuned
+    // from the environment.
     descriptor.flags = descriptor.flags.with_env();
     descriptor.backend_options = descriptor.backend_options.with_env();
     if let Some(display) = display {

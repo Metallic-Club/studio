@@ -20,7 +20,7 @@ use metallic_platform::{
 };
 use metallic_render::post::PostSettings;
 use metallic_render::resolution::ResolutionSettings;
-use metallic_render::settings::{GraphicsSettings, Preset};
+use metallic_render::settings::{GraphicsSettings, Preset, Quality, Tier};
 use metallic_render::{AntiAliasing, ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
@@ -88,6 +88,83 @@ pub struct BenchOptions {
     pub effects: Option<PostSettings>,
     /// Record the scene passes as one render pass when there are no graphics settings.
     pub merge_scene_passes: bool,
+    /// Toggle the next effect of [`TOGGLES`] every this many frames, warm-up included (from the first frame, while
+    /// the renderer still compiles its pipelines in the background), to show that no switch hitches (#86).
+    pub toggle_effects: Option<u32>,
+    /// The frame time frames should take, which the spike counter measures against (a frame over twice it, after
+    /// the first 2 s, is a spike); a 60 fps frame by default.
+    pub frame_target_ms: Option<f32>,
+}
+
+/// One step of the effect-toggle cycle ([`BenchOptions::toggle_effects`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Toggle {
+    /// A graphics preset, with its own anti-aliasing and effect quality.
+    Preset(Preset),
+    /// Anti-aliasing (MSAA falls back to what the device has).
+    AntiAliasing(AntiAliasing),
+    /// The post effects' quality.
+    Effects(Tier),
+    /// Point and spot lights on (the preset's settings) or off.
+    Lights(bool),
+    /// The sun's shadows on (the preset's settings) or off.
+    Shadows(bool),
+    /// The performance overlay on or off.
+    Overlay(bool),
+}
+
+/// The effect-toggle cycle: every preset, every anti-aliasing, every effect quality, and lights, shadows and the
+/// overlay off and on again.
+pub const TOGGLES: [Toggle; 20] = [
+    Toggle::Preset(Preset::Low),
+    Toggle::AntiAliasing(AntiAliasing::Off),
+    Toggle::AntiAliasing(AntiAliasing::Mlaa),
+    Toggle::AntiAliasing(AntiAliasing::Msaa(2)),
+    Toggle::AntiAliasing(AntiAliasing::Msaa(4)),
+    Toggle::AntiAliasing(AntiAliasing::Msaa(8)),
+    Toggle::Effects(Tier::Low),
+    Toggle::Effects(Tier::Medium),
+    Toggle::Effects(Tier::High),
+    Toggle::Effects(Tier::Ultra),
+    Toggle::Lights(false),
+    Toggle::Lights(true),
+    Toggle::Shadows(false),
+    Toggle::Shadows(true),
+    Toggle::Overlay(true),
+    Toggle::Overlay(false),
+    Toggle::Preset(Preset::Medium),
+    Toggle::Preset(Preset::High),
+    Toggle::Preset(Preset::Ultra),
+    Toggle::AntiAliasing(AntiAliasing::Mlaa),
+];
+
+impl Toggle {
+    /// Applies the toggle to `renderer`; `graphics` is the preset in effect, whose lights and shadows a toggle
+    /// turns back on.
+    fn apply(self, renderer: &mut SceneRenderer, graphics: &mut GraphicsSettings) {
+        match self {
+            Toggle::Preset(preset) => {
+                *graphics = GraphicsSettings {
+                    vsync: graphics.vsync,
+                    ..GraphicsSettings::new(preset)
+                };
+                renderer.set_graphics(graphics.clone());
+            }
+            Toggle::AntiAliasing(aa) => renderer.set_anti_aliasing(aa),
+            Toggle::Effects(tier) => renderer.set_post(Quality::for_tier(tier).post),
+            Toggle::Lights(on) => renderer.set_lights(if on {
+                graphics.quality().lights
+            } else {
+                LightSettings::OFF
+            }),
+            Toggle::Shadows(on) => renderer.set_shadows(if on {
+                graphics.quality().shadows
+            } else {
+                ShadowSettings::OFF
+            }),
+            Toggle::Overlay(on) => renderer.set_overlay(on),
+        }
+    }
 }
 
 impl BenchOptions {
@@ -117,6 +194,8 @@ impl BenchOptions {
             anti_aliasing: None,
             effects: None,
             merge_scene_passes: false,
+            toggle_effects: None,
+            frame_target_ms: None,
         }
     }
 }
@@ -172,6 +251,9 @@ pub struct BenchReport {
     pub moving_camera: bool,
     /// How long building the scene took, in milliseconds.
     pub build_ms: f32,
+    /// Milliseconds from making the device until the first frame was presented
+    /// ([`SceneRenderer::first_frame_ms`]).
+    pub first_frame_ms: Option<f32>,
     /// The graphics settings in effect at the end of the run.
     pub graphics: GraphicsStatus,
     /// Auto's calibration, when it ran: the tier chosen and the median GPU frame time it measured.
@@ -179,6 +261,9 @@ pub struct BenchReport {
     /// The frames between preset switches ([`BenchOptions::switch_presets`]), and how many switches the measured
     /// frames saw.
     pub switches: Option<(u32, u32)>,
+    /// The frames between effect toggles ([`BenchOptions::toggle_effects`]), how many toggles the run made (warm-up
+    /// included), and the most pipelines pending in any frame.
+    pub toggles: Option<(u32, u32, u32)>,
     /// The measured frames.
     pub summary: PerfSummary,
 }
@@ -222,6 +307,10 @@ impl BenchReport {
              \"build_ms\":{:.1},",
             self.parts, self.see_through, self.lights, self.moving, self.in_view, self.field_of_view, self.build_ms
         )?;
+        match self.first_frame_ms {
+            Some(ms) => write!(out, "\"first_frame_ms\":{ms:.1},")?,
+            None => out.push_str("\"first_frame_ms\":null,"),
+        }
         let cull = &self.cull;
         write!(
             out,
@@ -275,8 +364,15 @@ impl BenchReport {
             None => out.push_str(",\"calibration\":null"),
         }
         match self.switches {
-            Some((every, count)) => write!(out, ",\"switch_every\":{every},\"switches\":{count}}},")?,
-            None => out.push_str(",\"switch_every\":null,\"switches\":0},"),
+            Some((every, count)) => write!(out, ",\"switch_every\":{every},\"switches\":{count}")?,
+            None => out.push_str(",\"switch_every\":null,\"switches\":0"),
+        }
+        match self.toggles {
+            Some((every, count, pending)) => write!(
+                out,
+                ",\"toggle_every\":{every},\"toggles\":{count},\"max_pending_pipelines\":{pending}}},"
+            )?,
+            None => out.push_str(",\"toggle_every\":null,\"toggles\":0,\"max_pending_pipelines\":0},"),
         }
         self.summary.write_json_members(out);
         out.push('}');
@@ -300,6 +396,9 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
 
     let mut renderer = SceneRenderer::new(options.context.clone());
     renderer.set_perf_window(options.frames.max(1) as usize);
+    if let Some(target) = options.frame_target_ms {
+        renderer.perf_mut().set_frame_target_ms(target);
+    }
     renderer.set_overlay(options.overlay);
     renderer.set_cull(options.cull);
     renderer.set_shadows(options.shadows);
@@ -342,6 +441,12 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
             (u64::from(every), graphics)
         }),
         switches: 0,
+        toggle: options.toggle_effects.filter(|&every| every > 0).map(|every| {
+            let graphics = options.graphics.clone().unwrap_or_default();
+            (u64::from(every), graphics)
+        }),
+        toggles: 0,
+        max_pending: 0,
         summary: None,
         present_mode: None,
         error: None,
@@ -382,12 +487,17 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         lod: renderer.lod(),
         moving_camera: options.moving_camera,
         build_ms,
+        first_frame_ms: renderer.first_frame_ms(),
         graphics: renderer.graphics_status(),
         calibration: renderer
             .graphics()
             .and_then(|graphics| graphics.calibration.as_ref())
             .map(|calibration| (calibration.tier.name(), calibration.gpu_ms)),
         switches: app.switch.as_ref().map(|(every, _)| (*every as u32, app.switches)),
+        toggles: app
+            .toggle
+            .as_ref()
+            .map(|(every, _)| (*every as u32, app.toggles, app.max_pending)),
         summary,
     })
 }
@@ -404,6 +514,12 @@ struct BenchApp {
     switch: Option<(u64, GraphicsSettings)>,
     /// Switches made in the measured frames.
     switches: u32,
+    /// Every how many frames the next effect of [`TOGGLES`] is toggled, and the graphics settings in effect.
+    toggle: Option<(u64, GraphicsSettings)>,
+    /// Toggles made (warm-up included).
+    toggles: u32,
+    /// The most pipelines pending after any frame.
+    max_pending: u32,
     summary: Option<PerfSummary>,
     present_mode: Option<wgpu::PresentMode>,
     error: Option<EngineError>,
@@ -472,6 +588,31 @@ impl AppHandler for BenchApp {
                 self.switches += 1;
             }
         }
+        {
+            let mut renderer = self.renderer.borrow_mut();
+            let pending = renderer.graphics_status().pipelines.pending;
+            self.max_pending = self.max_pending.max(pending);
+            if std::env::var_os("METALLIC_TRACE_SPIKES").is_some()
+                && let Some(last) = renderer.perf().last()
+                && last.frame_ms > 2.0 * renderer.perf().frame_target_ms()
+            {
+                let every = self.toggle.as_ref().map_or(1, |(every, _)| *every);
+                eprintln!(
+                    "frame {frames}: {:.2} ms (render {:.2}), after {:?}",
+                    last.frame_ms,
+                    last.render_ms,
+                    TOGGLES[((frames - 1) / every) as usize % TOGGLES.len()]
+                );
+            }
+            if let Some((every, graphics)) = self.toggle.as_mut()
+                && frames.is_multiple_of(*every)
+                && frames < self.end
+            {
+                let step = (frames / *every) as usize % TOGGLES.len();
+                TOGGLES[step].apply(&mut renderer, graphics);
+                self.toggles += 1;
+            }
+        }
         if frames >= self.end {
             let mut renderer = self.renderer.borrow_mut();
             self.summary = Some(renderer.perf_mut().summary());
@@ -533,6 +674,7 @@ mod tests {
             lod: LodSettings::default(),
             moving_camera: false,
             build_ms: 12.5,
+            first_frame_ms: Some(141.3),
             graphics: GraphicsStatus {
                 preset: Some(Preset::Auto),
                 tier: Some(metallic_render::settings::Tier::High),
@@ -568,9 +710,19 @@ mod tests {
                         None,
                     ],
                 },
+                pipelines: metallic_render::PipelineStats {
+                    pending: 3,
+                    compiled: 54,
+                    workers: 8,
+                    first_frame_ms: 141.0,
+                    compile_ms: 2500.0,
+                    cache_loaded: Some(1024),
+                    ..metallic_render::PipelineStats::default()
+                },
             },
             calibration: Some(("high", 3.25)),
             switches: Some((60, 16)),
+            toggles: Some((30, 40, 48)),
             summary,
         };
         let json = report.to_json();
@@ -578,6 +730,7 @@ mod tests {
         assert!(json.ends_with("}}"), "{json}");
         assert!(json.contains("\"adapter\":\"GPU \\\"X\\\"\""), "{json}");
         assert!(json.contains("\"fps_p50\":500.0"), "{json}");
+        assert!(json.contains("\"build_ms\":12.5,\"first_frame_ms\":141.3,"), "{json}");
         assert!(json.contains("\"passes\":{\"opaque\":{"), "{json}");
         assert!(json.contains("\"opaque\":4"), "{json}");
         assert!(
@@ -610,8 +763,15 @@ mod tests {
                  \"min_scale\":0.500,\"max_scale\":1.000},\"post\":{\"scene_format\":\"rg11b10f\",\"finish\":true,\
                  \"anti_aliasing\":\"msaa4\",\"bloom_levels\":5,\"render_passes\":14,\"full_screen_passes\":5,\
                  \"passes\":[\"opaque\",\"sky\",\"transparent\",\"bloom\",\"post\",\"ui\"]},\
-                 \"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\"switch_every\":60,\"switches\":16},"
+                 \"pipelines\":{\"compiled\":54,\"pending\":3,\"failed\":0,\"workers\":8,\"first_frame_ms\":141.0,\
+                 \"all_ms\":null,\"compile_ms\":2500.0,\"switch_waiting\":false,\"cache_loaded\":1024},\
+                 \"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\"switch_every\":60,\"switches\":16,\
+                 \"toggle_every\":30,\"toggles\":40,\"max_pending_pipelines\":48},"
             ),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"spikes\":{\"count\":0,\"over_ms\":0.000,\"worst_ms\":0.0000},"),
             "{json}"
         );
         assert!(json.contains("\"render_scale\":{\"mean\":"), "{json}");

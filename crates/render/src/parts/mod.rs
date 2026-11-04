@@ -70,8 +70,10 @@
 //! frame uniform as `camera − scene origin`, so positions reach the projection relative to the camera (ADR 0008
 //! §11). Without a camera nothing is drawn.
 //!
-//! Every pipeline (shadow casters, depth prepass, opaque, opaque after a prepass, sky, transparent) is created up
-//! front, when the renderer is made or its colour format or MSAA count change, never during a frame (ADR 0008 §9).
+//! Every pipeline (shadow casters, depth prepass, opaque, opaque after a prepass, sky, transparent) is compiled off
+//! the frame (ADR 0008 §9, [`crate::pipelines`]): the shadow casters with the renderer, the rest on compile workers,
+//! for every colour format and MSAA count the renderer can switch to. A scene's first frame waits for the lit ones
+//! when it has local lights; a light made later, while they still compile, is drawn once they are and fades in.
 
 mod camera;
 mod material;
@@ -81,6 +83,8 @@ mod transparent;
 pub use camera::{Camera, CameraReader};
 pub use material::{MAX_MATERIAL_ROWS, MaterialParams, MaterialTable};
 pub use mesh::{MeshData, MeshPool, MeshRange, MeshVertex};
+
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
@@ -92,6 +96,7 @@ use crate::lights::{
     FrameLights, LightBindings, LightSettings, LightStats, LocalLights, MAX_GPU_LIGHTS, MAX_SHADOW_TILES,
 };
 use crate::lod::{LodView, MAX_LOD_LEVELS};
+use crate::pipelines::{Compiler, PartPipeline, PipelineKey, Recipe};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
 use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, ShadowStats};
 use crate::{GpuScene, PassId};
@@ -301,37 +306,57 @@ struct KindDraw {
     count: u32,
 }
 
-/// The render pipelines for one colour format and sample count.
+/// The render pipelines for one colour format and sample count, as their compiles finish ([`crate::pipelines`]),
+/// indexed by [`PartPipeline::index`]: the depth prepass, the sky, and opaque, opaque after a prepass (testing depth
+/// with `GreaterEqual` without writing it) and transparent for each [`Lights`] variant.
+///
+/// The variant without local lights (lights_off.wgsl, the frame group without the lights' entries) is for frames that
+/// draw none: the light loop would cost every pixel even when it runs no iteration, and such a frame binds exactly
+/// what it did before local lights existed. The one with local lights but without their shadows (`LOCAL_SHADOWS`
+/// off) is for frames whose drawn lights have none.
 #[derive(Debug)]
-struct Pipelines {
+struct Target {
     format: wgpu::TextureFormat,
     samples: u32,
-    prepass: wgpu::RenderPipeline,
-    opaque: wgpu::RenderPipeline,
-    /// Opaque after a depth prepass: tests depth (`GreaterEqual`) without writing it.
-    opaque_tested: wgpu::RenderPipeline,
-    transparent: wgpu::RenderPipeline,
-    /// The full-screen sky triangle at the far plane.
-    sky: wgpu::RenderPipeline,
-    /// `opaque`, `opaque_tested` and `transparent` made without local lights (lights_off.wgsl, the frame group
-    /// without the lights' entries), for frames that draw none: the light loop would cost every pixel even when it
-    /// runs no iteration, and such a frame binds exactly what it did before local lights existed.
-    unlit: [wgpu::RenderPipeline; 3],
-    /// The same with local lights but without their shadows (`LOCAL_SHADOWS` off), for frames whose drawn lights
-    /// have none.
-    unshadowed: [wgpu::RenderPipeline; 3],
+    pipelines: [Option<wgpu::RenderPipeline>; PartPipeline::COUNT],
+}
+
+impl Target {
+    fn new(format: wgpu::TextureFormat, samples: u32) -> Self {
+        Self {
+            format,
+            samples,
+            pipelines: Default::default(),
+        }
+    }
+
+    fn get(&self, pipeline: PartPipeline) -> Option<&wgpu::RenderPipeline> {
+        self.pipelines[pipeline.index()].as_ref()
+    }
+
+    /// Whether `lights`' opaque, opaque-after-prepass and transparent pipelines are all compiled.
+    fn has_lights(&self, lights: Lights) -> bool {
+        let l = lights as u8;
+        [
+            PartPipeline::Opaque(l),
+            PartPipeline::Tested(l),
+            PartPipeline::Transparent(l),
+        ]
+        .iter()
+        .all(|&p| self.get(p).is_some())
+    }
 }
 
 /// Which variant of the part pipelines a frame uses: made without local lights (lights_off.wgsl), or with them and
-/// `LOCAL_SHADOWS` (lights.wgsl) off or on.
+/// `LOCAL_SHADOWS` (lights.wgsl) off or on. The value is the variant's number in [`PartPipeline`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lights {
     /// No local light is drawn.
-    None,
+    None = 0,
     /// Local lights without shadows.
-    Unshadowed,
+    Unshadowed = 1,
     /// Local lights, some with shadows.
-    Shadowed,
+    Shadowed = 2,
 }
 
 /// `LOCAL_SHADOWS` (lights.wgsl) off and on.
@@ -339,6 +364,15 @@ const UNSHADOWED: [(&str, f64); 1] = [("LOCAL_SHADOWS", 0.0)];
 const SHADOWED: [(&str, f64); 1] = [("LOCAL_SHADOWS", 1.0)];
 
 impl Lights {
+    /// The variant numbered `n` in [`PartPipeline`].
+    fn from_number(n: u8) -> Self {
+        match n {
+            0 => Lights::None,
+            1 => Lights::Unshadowed,
+            _ => Lights::Shadowed,
+        }
+    }
+
     /// The variant's pipeline constants: none for the module without local lights (lights_off.wgsl).
     fn constants(self) -> &'static [(&'static str, f64)] {
         match self {
@@ -347,22 +381,22 @@ impl Lights {
             Lights::Shadowed => &SHADOWED,
         }
     }
-}
 
-impl Pipelines {
-    /// `[opaque, opaque after a prepass, transparent]` for frames with `lights`.
-    fn lit(&self, lights: Lights) -> [&wgpu::RenderPipeline; 3] {
-        match lights {
-            Lights::Shadowed => [&self.opaque, &self.opaque_tested, &self.transparent],
-            Lights::Unshadowed => self.unshadowed.each_ref(),
-            Lights::None => self.unlit.each_ref(),
+    /// The variant's name in pipeline labels.
+    fn name(self) -> &'static str {
+        match self {
+            Lights::None => "no local lights",
+            Lights::Unshadowed => "local lights",
+            Lights::Shadowed => "local lights and shadows",
         }
     }
 }
 
-/// What the pipelines are made from.
+/// What the pipelines are made from, shared with every compile.
 #[derive(Debug)]
 struct Shaders {
+    /// The instance path the pipelines are for.
+    binding: InstanceBinding,
     /// The parts' layout: the frame group, and on the storage path the instance group.
     parts_layout: wgpu::PipelineLayout,
     parts: wgpu::ShaderModule,
@@ -411,10 +445,12 @@ pub struct PartRenderer {
     shadows: ShadowMaps,
     /// The point and spot lights, which the frame group reads.
     lights: LocalLights,
-    shaders: Shaders,
-    pipelines: Pipelines,
-    /// Pipelines for other formats or sample counts, made before and kept for a switch back.
-    spare_pipelines: Vec<Pipelines>,
+    shaders: Arc<Shaders>,
+    /// The pipelines of every colour format and sample count compiled or compiling, never removed (a switch back
+    /// compiles nothing).
+    targets: Vec<Target>,
+    /// The target drawn into: an index into `targets`.
+    current: usize,
     opaque_group: Option<InstanceGroup>,
     transparent_group: Option<InstanceGroup>,
     transparent: TransparentList,
@@ -423,19 +459,23 @@ pub struct PartRenderer {
     visible: bool,
     /// Colour parts by level of detail (a debug view).
     lod_tint: bool,
+    /// A frame had local lights to draw while their pipelines were compiling: they fade in once they exist.
+    lights_held: bool,
     stats: DrawStats,
 }
 
 impl PartRenderer {
-    /// Creates the meshes, the material table and every pipeline for targets in `format` with `samples` samples,
-    /// on the instance path `binding` (which must be the one the scenes it draws use:
-    /// [`InstanceBinding::for_context`]).
-    pub fn new(
+    /// Creates the meshes, the material table, the shadows and lights, and the shaders, on the instance path
+    /// `binding` (which must be the one the scenes it draws use: [`InstanceBinding::for_context`]). The pipelines
+    /// a frame without local lights draws with into `format` at `samples` are queued on `compiler` first, so they
+    /// compile while the rest is made; the renderer installs them ([`PartRenderer::install`]).
+    pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         binding: InstanceBinding,
-        format: wgpu::TextureFormat,
-        samples: u32,
+        (format, samples): (wgpu::TextureFormat, u32),
+        compiler: &mut Compiler,
+        cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         let (source, unlit_source) = match binding {
             InstanceBinding::Storage => (
@@ -583,14 +623,26 @@ impl PartRenderer {
             bind_group_layouts: &[Some(&sun_layout)],
             immediate_size: 0,
         });
-        let shaders = Shaders {
+        let shaders = Arc::new(Shaders {
+            binding,
             parts_layout: pipeline_layout,
             parts: module,
             unlit_layout,
             unlit: unlit_module,
             sky_layout,
             sky,
+        });
+        // Queued before the shadows' and lights' pipelines are made here, so the workers start at once.
+        let key = |pipeline| PipelineKey::Part {
+            format,
+            samples,
+            pipeline,
         };
+        for pipeline in PartPipeline::BASE {
+            let recipe = part_recipe(&shaders, format, samples, pipeline);
+            compiler.submit(key(pipeline), recipe, pipeline.shares_stages_of().map(key));
+        }
+        let first = Target::new(format, samples);
         let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic parts frame"),
             size: size_of::<FrameUniforms>() as u64,
@@ -599,17 +651,17 @@ impl PartRenderer {
         });
         let materials = MaterialTable::new(device);
         debug_assert_eq!(materials.buffer().size(), MATERIAL_TABLE_SIZE);
-        let shadows = ShadowMaps::new(device, queue, binding, instance_layout.as_ref());
+        let shadows = ShadowMaps::new(device, queue, binding, instance_layout.as_ref(), cache);
         let lights = LocalLights::new(
             device,
             queue,
             binding,
             instance_layout.as_ref(),
             LightSettings::default(),
+            cache,
         );
         let sun_group = frame_group_without_lights(device, &sun_layout, &frame_buffer, &materials, &shadows);
         let frame_group_lights = lights.revision();
-        let pipelines = create_pipelines(device, &shaders, binding, format, samples);
         let lighting = SceneLighting::default();
         Self {
             device: device.clone(),
@@ -630,14 +682,15 @@ impl PartRenderer {
             shadows,
             lights,
             shaders,
-            pipelines,
-            spare_pipelines: Vec::new(),
+            targets: vec![first],
+            current: 0,
             opaque_group: None,
             transparent_group: None,
             transparent: TransparentList::new(device, binding),
             draws: Vec::new(),
             visible: false,
             lod_tint: false,
+            lights_held: false,
             stats: DrawStats::default(),
         }
     }
@@ -658,32 +711,52 @@ impl PartRenderer {
         self.binding
     }
 
-    /// Uses the pipelines for another colour format or sample count (a settings change, never per frame): ones made
-    /// before ([`PartRenderer::prewarm`]) when there are, otherwise new ones.
+    /// Draws into `format` at `samples` from now on (a settings change, never per frame). The renderer switches only
+    /// once the pipelines a frame without local lights needs are compiled ([`PartRenderer::has`]).
     pub(crate) fn set_target(&mut self, format: wgpu::TextureFormat, samples: u32) {
-        if (format, samples) == (self.pipelines.format, self.pipelines.samples) {
-            return;
-        }
-        let next = match self
-            .spare_pipelines
-            .iter()
-            .position(|p| (p.format, p.samples) == (format, samples))
-        {
-            Some(index) => self.spare_pipelines.swap_remove(index),
-            None => create_pipelines(&self.device, &self.shaders, self.binding, format, samples),
-        };
-        let previous = std::mem::replace(&mut self.pipelines, next);
-        self.spare_pipelines.push(previous);
+        self.current = self.target_index(format, samples);
     }
 
-    /// Makes the pipelines for `format` at `samples` now, unless they exist, so that switching to them later
-    /// ([`PartRenderer::set_target`]: a new anti-aliasing setting) compiles nothing (ADR 0008 §9).
-    pub(crate) fn prewarm(&mut self, format: wgpu::TextureFormat, samples: u32) {
-        let made = |p: &Pipelines| (p.format, p.samples) == (format, samples);
-        if !made(&self.pipelines) && !self.spare_pipelines.iter().any(made) {
-            let pipelines = create_pipelines(&self.device, &self.shaders, self.binding, format, samples);
-            self.spare_pipelines.push(pipelines);
+    /// The index of the target for `format` at `samples` in `targets`, made (empty) if there is none yet.
+    fn target_index(&mut self, format: wgpu::TextureFormat, samples: u32) -> usize {
+        match self
+            .targets
+            .iter()
+            .position(|t| (t.format, t.samples) == (format, samples))
+        {
+            Some(index) => index,
+            None => {
+                self.targets.push(Target::new(format, samples));
+                self.targets.len() - 1
+            }
         }
+    }
+
+    /// The compile of `pipeline` for `format` at `samples`. Makes the target's slots now, so installing the result
+    /// later allocates nothing.
+    pub(crate) fn recipe(&mut self, format: wgpu::TextureFormat, samples: u32, pipeline: PartPipeline) -> Recipe {
+        self.target_index(format, samples);
+        part_recipe(&self.shaders, format, samples, pipeline)
+    }
+
+    /// Puts a compiled pipeline in its target's slot.
+    pub(crate) fn install(
+        &mut self,
+        format: wgpu::TextureFormat,
+        samples: u32,
+        pipeline: PartPipeline,
+        compiled: wgpu::RenderPipeline,
+    ) {
+        let index = self.target_index(format, samples);
+        self.targets[index].pipelines[pipeline.index()] = Some(compiled);
+    }
+
+    /// Whether `pipeline` exists for `format` at `samples`.
+    pub(crate) fn has(&self, format: wgpu::TextureFormat, samples: u32, pipeline: PartPipeline) -> bool {
+        self.targets
+            .iter()
+            .find(|t| (t.format, t.samples) == (format, samples))
+            .is_some_and(|t| t.get(pipeline).is_some())
     }
 
     /// The material table. Rows changed here are uploaded with the next frame.
@@ -782,8 +855,27 @@ impl PartRenderer {
         cull: &CullSettings,
         lod: &LodView,
     ) {
+        // Lights a frame wanted while their pipelines were compiling were not drawn: now that they can be, they fade
+        // in rather than pop on (#86).
+        let lit_ready = {
+            let target = &self.targets[self.current];
+            target.has_lights(Lights::Unshadowed) && target.has_lights(Lights::Shadowed)
+        };
+        if self.lights_held && lit_ready {
+            LocalLights::restart_fades(scene);
+            self.lights_held = false;
+        }
         self.lights.prepare(scene, camera, size, render, cull, lod);
         self.refresh_light_group();
+        if !lit_ready && self.wanted_light_variant() != Lights::None {
+            self.lights_held = true;
+        }
+    }
+
+    /// Whether this frame has local lights to draw whose pipelines are still compiling (so it draws without them, and
+    /// they fade in once the pipelines exist).
+    pub(crate) fn lights_held(&self) -> bool {
+        self.lights_held
     }
 
     /// Makes the frame group with the local lights' resources when they first exist, or again when one of them was
@@ -986,18 +1078,22 @@ impl PartRenderer {
         if !self.visible {
             return;
         }
+        let target = &self.targets[self.current];
         match pass {
             PassId::DepthPrepass | PassId::Opaque => {
                 if self.draws.is_empty() {
                     return;
                 }
                 let variant = self.light_variant();
-                let [opaque, opaque_tested, _] = self.pipelines.lit(variant);
+                let l = variant as u8;
                 // The prepass writes depth only, with the pipeline made without local lights.
                 let (pipeline, variant) = match (pass, prepass) {
-                    (PassId::DepthPrepass, _) => (&self.pipelines.prepass, Lights::None),
-                    (_, true) => (opaque_tested, variant),
-                    (_, false) => (opaque, variant),
+                    (PassId::DepthPrepass, _) => (PartPipeline::Prepass, Lights::None),
+                    (_, true) => (PartPipeline::Tested(l), variant),
+                    (_, false) => (PartPipeline::Opaque(l), variant),
+                };
+                let Some(pipeline) = target.get(pipeline) else {
+                    return;
                 };
                 render_pass.set_pipeline(pipeline);
                 self.bind(render_pass, variant, self.opaque_group.as_ref(), scene.list_buffer());
@@ -1016,7 +1112,10 @@ impl PartRenderer {
                     return;
                 }
                 let variant = self.light_variant();
-                render_pass.set_pipeline(self.pipelines.lit(variant)[2]);
+                let Some(pipeline) = target.get(PartPipeline::Transparent(variant as u8)) else {
+                    return;
+                };
+                render_pass.set_pipeline(pipeline);
                 self.bind(
                     render_pass,
                     variant,
@@ -1034,7 +1133,10 @@ impl PartRenderer {
                 }
             }
             PassId::Sky => {
-                render_pass.set_pipeline(&self.pipelines.sky);
+                let Some(pipeline) = target.get(PartPipeline::Sky) else {
+                    return;
+                };
+                render_pass.set_pipeline(pipeline);
                 render_pass.set_bind_group(0, &self.sun_group, &[]);
                 render_pass.draw(0..3, 0..1);
                 self.stats.sky_draws += 1;
@@ -1044,8 +1146,19 @@ impl PartRenderer {
     }
 
     /// Which variant of the lit pipelines this frame draws with: none when no local light is drawn, without shadows
-    /// when no drawn light has one.
+    /// when no drawn light has one. Until the variant's pipelines are compiled (in the background, after the first
+    /// frame's), the frame draws without local lights, as it did before they appeared.
     fn light_variant(&self) -> Lights {
+        let wanted = self.wanted_light_variant();
+        if wanted == Lights::None || self.targets[self.current].has_lights(wanted) {
+            wanted
+        } else {
+            Lights::None
+        }
+    }
+
+    /// Which variant of the lit pipelines this frame's lights call for, compiled or not.
+    fn wanted_light_variant(&self) -> Lights {
         let frame = self.lights.frame();
         if frame.local[0] <= 0.0 || self.frame_group.is_none() {
             Lights::None
@@ -1189,14 +1302,23 @@ fn refresh_group(
     });
 }
 
-fn create_pipelines(
+/// The compile of `pipeline` for `format` at `samples`, made from `shaders` on any thread.
+fn part_recipe(shaders: &Arc<Shaders>, format: wgpu::TextureFormat, samples: u32, pipeline: PartPipeline) -> Recipe {
+    let shaders = Arc::clone(shaders);
+    Box::new(move |device, cache| create_pipeline(device, cache, &shaders, format, samples, pipeline))
+}
+
+/// Makes the scene's `pipeline` for `format` at `samples`.
+fn create_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     shaders: &Shaders,
-    binding: InstanceBinding,
     format: wgpu::TextureFormat,
     samples: u32,
-) -> Pipelines {
+    pipeline: PartPipeline,
+) -> wgpu::RenderPipeline {
     let (layout, module) = (&shaders.parts_layout, &shaders.parts);
+    let binding = shaders.binding;
     let instance_attributes = GpuInstance::vertex_attributes(2);
     let all_buffers = [
         Some(MeshVertex::layout()),
@@ -1256,56 +1378,52 @@ fn create_pipelines(
                 targets: &targets,
             }),
             multiview_mask: None,
-            cache: None,
+            cache,
         })
     };
     let transparent_blend = Some(("fs_transparent", Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)));
-    let tested = wgpu::DepthStencilState {
-        depth_write_enabled: Some(false),
-        depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-        ..depth_stencil_state(false)
-    };
     debug_assert_eq!(depth_stencil_state(true).depth_compare, Some(DEPTH_COMPARE));
     debug_assert_eq!(depth_stencil_state(true).format, DEPTH_FORMAT);
-    // Opaque, opaque after a prepass, and transparent, for frames with `lights`.
-    let lit = |lights: Lights, name: &str| {
-        [
-            variant(
-                &format!("metallic parts opaque ({name})"),
-                depth_stencil_state(true),
-                Some(("fs_opaque", None)),
-                lights,
-            ),
-            variant(
-                &format!("metallic parts opaque after prepass ({name})"),
-                tested.clone(),
-                Some(("fs_opaque", None)),
-                lights,
-            ),
-            variant(
-                &format!("metallic parts transparent ({name})"),
-                depth_stencil_state(false),
-                transparent_blend,
-                lights,
-            ),
-        ]
-    };
-    let [opaque, opaque_tested, transparent] = lit(Lights::Shadowed, "local lights and shadows");
-    Pipelines {
-        format,
-        samples,
-        prepass: variant(
+    match pipeline {
+        PartPipeline::Prepass => variant(
             "metallic parts depth prepass",
             depth_stencil_state(true),
             None,
             Lights::None,
         ),
-        opaque,
-        opaque_tested,
-        transparent,
-        sky: sky_pipeline(device, shaders, format, samples),
-        unlit: lit(Lights::None, "no local lights"),
-        unshadowed: lit(Lights::Unshadowed, "local lights"),
+        PartPipeline::Sky => sky_pipeline(device, cache, shaders, format, samples),
+        PartPipeline::Opaque(lights) => {
+            let lights = Lights::from_number(lights);
+            variant(
+                &format!("metallic parts opaque ({})", lights.name()),
+                depth_stencil_state(true),
+                Some(("fs_opaque", None)),
+                lights,
+            )
+        }
+        PartPipeline::Tested(lights) => {
+            let lights = Lights::from_number(lights);
+            let tested = wgpu::DepthStencilState {
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                ..depth_stencil_state(false)
+            };
+            variant(
+                &format!("metallic parts opaque after prepass ({})", lights.name()),
+                tested,
+                Some(("fs_opaque", None)),
+                lights,
+            )
+        }
+        PartPipeline::Transparent(lights) => {
+            let lights = Lights::from_number(lights);
+            variant(
+                &format!("metallic parts transparent ({})", lights.name()),
+                depth_stencil_state(false),
+                transparent_blend,
+                lights,
+            )
+        }
     }
 }
 
@@ -1313,6 +1431,7 @@ fn create_pipelines(
 /// passes only where it is still the clear value) and never writing it.
 fn sky_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     shaders: &Shaders,
     format: wgpu::TextureFormat,
     samples: u32,
@@ -1347,6 +1466,6 @@ fn sky_pipeline(
             })],
         }),
         multiview_mask: None,
-        cache: None,
+        cache,
     })
 }

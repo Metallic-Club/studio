@@ -146,6 +146,7 @@ fn render_with(
         },
     )
     .expect("a renderer");
+    renderer.wait_for_pipelines();
     let mut scene = GpuScene::new(
         context,
         &mut game.dm,

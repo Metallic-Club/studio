@@ -1,7 +1,7 @@
 //! The finish pass ([`crate::PassId::Post`]): the HDR scene colour into the output, with bloom, MLAA's blend and the
 //! render scale's upscale fused in (`finish.wgsl`).
 
-use super::{full_screen_pipeline, sampler_entry, texture_entry, uniform_entry};
+use super::{FullScreen, sampler_entry, texture_entry, uniform_entry};
 
 /// The tone curve the finish pass applies to each channel after exposure (`tone` in `finish.wgsl`): the identity up
 /// to 0.85, then a shoulder with the same slope there that approaches 1, so values the output used to clip keep a
@@ -51,11 +51,13 @@ const PARAMS_SIZE: u64 = 80;
 /// The entry points of the four variants: plain, with bloom, with MLAA, with both.
 const ENTRY_POINTS: [&str; 4] = ["fs_finish", "fs_finish_bloom", "fs_finish_mlaa", "fs_finish_bloom_mlaa"];
 
-/// The finish pass: a pipeline and bind group layout per variant (made with the renderer), its parameters, and the
-/// bind group of the variant in use.
+/// The finish pass: a pipeline (compiled apart, [`crate::pipelines`]) and bind group layout per variant, its
+/// parameters, and the bind group of the variant in use.
 pub(crate) struct Finish {
+    module: wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
     layouts: [wgpu::BindGroupLayout; 4],
-    pipelines: [wgpu::RenderPipeline; 4],
+    pipelines: [Option<wgpu::RenderPipeline>; 4],
     params: wgpu::Buffer,
     written: Option<FinishParams>,
     /// The variant in use and its bind group, while there is a scene colour.
@@ -63,7 +65,7 @@ pub(crate) struct Finish {
 }
 
 impl Finish {
-    /// Every variant of the pass, writing outputs in `format`.
+    /// The pass writing outputs in `format`, before any variant's pipeline is compiled.
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("metallic finish"),
@@ -83,17 +85,6 @@ impl Finish {
                 entries: &entries,
             })
         });
-        let pipelines = std::array::from_fn(|variant| {
-            full_screen_pipeline(
-                device,
-                ENTRY_POINTS[variant],
-                &layouts[variant],
-                &module,
-                ("vs_finish", ENTRY_POINTS[variant]),
-                format,
-                None,
-            )
-        });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic finish"),
             size: PARAMS_SIZE,
@@ -101,12 +92,39 @@ impl Finish {
             mapped_at_creation: false,
         });
         Self {
+            module,
+            format,
             layouts,
-            pipelines,
+            pipelines: Default::default(),
             params,
             written: None,
             group: None,
         }
+    }
+
+    /// What variant `variant`'s pipeline is made from (bit 0: bloom, bit 1: MLAA).
+    pub(crate) fn full_screen(&self, variant: usize) -> FullScreen {
+        let variant = variant.min(3);
+        FullScreen {
+            label: ENTRY_POINTS[variant],
+            layout: self.layouts[variant].clone(),
+            module: self.module.clone(),
+            entry_points: ("vs_finish", ENTRY_POINTS[variant]),
+            format: self.format,
+            blend: None,
+        }
+    }
+
+    /// Puts variant `variant`'s compiled pipeline in place.
+    pub(crate) fn install(&mut self, variant: usize, pipeline: wgpu::RenderPipeline) {
+        if let Some(slot) = self.pipelines.get_mut(variant) {
+            *slot = Some(pipeline);
+        }
+    }
+
+    /// Whether variant `variant`'s pipeline is compiled.
+    pub(crate) fn has(&self, variant: usize) -> bool {
+        self.pipelines.get(variant).is_some_and(Option::is_some)
     }
 
     /// Reads `scene` from now on, with `bloom` and MLAA's `weights` when they run, or nothing. A settings change,
@@ -166,8 +184,10 @@ impl Finish {
 
     /// Records the pass's draw: one triangle over the output. Nothing without a scene colour.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if let Some((variant, group)) = self.group.as_ref() {
-            pass.set_pipeline(&self.pipelines[*variant]);
+        if let Some((variant, group)) = self.group.as_ref()
+            && let Some(pipeline) = self.pipelines[*variant].as_ref()
+        {
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, group, &[]);
             pass.draw(0..3, 0..1);
         }
