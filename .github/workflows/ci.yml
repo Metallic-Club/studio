@@ -163,6 +163,15 @@ jobs:
         run: >-
           cargo test -p metallic_render --test parts --test shadows --test lights --test post --test resolution
           --test sky --test lod --test overlay --test gpu_scene --test timings
+      # An image test that differs from its reference writes what it drew to target/tmp; keep it to look at.
+      - name: Keep the images that differ
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differing-images-${{ matrix.os }}
+          path: target/tmp/*.png
+          if-no-files-found: ignore
+          retention-days: 7
       # Script errors are C++ exceptions unwinding through Rust frames, which only works with the panic strategy of
       # the profile that ships (`dist`); tests use the default and cannot see it. This runs every Luau error path in
       # `dist` and fails on an abort (crates/luau/src/ffi.rs). LTO is turned down to keep it cheap; the panic
