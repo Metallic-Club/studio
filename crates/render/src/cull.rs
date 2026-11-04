@@ -3,9 +3,9 @@
 //! The scene keeps every drawn instance in a loose grid of bounding spheres ([`crate::scene`]), updated from the
 //! same dirty slots its uploads come from, so a moving part costs O(1) and nothing is rebuilt. A **view**
 //! ([`CullView`]) is a frustum plus the settings that apply to it; [`crate::InstanceScene::cull`] walks the grid
-//! once for it and writes the visible entries into a [`VisibleSet`], in the draw lists' format (one list per mesh
-//! kind plus the see-through instances), which [`crate::GpuScene`] uploads into its list segments in place of every
-//! live entry. Nothing on the GPU is compacted or moved: only the lists say what is drawn.
+//! once for it and writes the visible entries into a [`VisibleSet`], in the draw lists' format (per mesh kind one
+//! list per level of detail, plus the see-through instances), which [`crate::GpuScene`] uploads into its list
+//! segments in place of every live entry. Nothing on the GPU is compacted or moved: only the lists say what is drawn.
 //!
 //! An instance is culled when its bounding sphere is
 //!
@@ -17,6 +17,9 @@
 //! Views are built from any clip matrix ([`Frustum::from_clip`]), so shadow cascades and local-light shadows
 //! (#82, #83) cull against the same grid with their own frusta ([`CullView::from_frustum`]), each into its own
 //! [`VisibleSet`].
+//!
+//! The cull also chooses each visible round part's **level of detail** ([`crate::lod`], [`CullView::lod`]): it
+//! already has the part's distance, so the visible entries of a kind come out in one list per level.
 //!
 //! # Order
 //!
@@ -34,7 +37,9 @@ use std::time::Duration;
 
 use metallic_core::glam::{Mat4, Vec3, Vec4};
 
+use crate::lod::{self, LodSettings, LodView, MAX_LOD_LEVELS};
 use crate::parts::Camera;
+use crate::scene::MeshKind;
 
 /// The culling settings of a view, which graphics presets (#84) drive. The defaults cull what cannot be seen and
 /// nothing that can: the frustum, and parts smaller than a pixel.
@@ -171,11 +176,16 @@ pub struct CullView {
     pub size_scale: f32,
     /// Instances projecting smaller than this many pixels across are culled.
     pub min_screen_size: f32,
+    /// How the view chooses levels of detail ([`crate::lod`]): a camera's view by each instance's projected size,
+    /// remembering the level it drew it at; a shadow view as the camera would at the farthest point that looks it up;
+    /// [`LodView::OFF`] at full detail.
+    pub lod: LodView,
 }
 
 impl CullView {
     /// The main view of `camera` on a `width` × `height` target, for a scene whose instances are relative to
-    /// `origin`, with `settings`' thresholds.
+    /// `origin`, with `settings`' thresholds and the default levels of detail ([`LodSettings::default`]; see
+    /// [`CullView::with_lod`]).
     pub fn for_camera(camera: &Camera, origin: Vec3, width: u32, height: u32, settings: &CullSettings) -> Self {
         let aspect = width as f32 / height.max(1) as f32;
         let eye = camera.position - origin;
@@ -185,6 +195,7 @@ impl CullView {
         // The projection's vertical scale, `1 / tan(fov_y / 2)`, maps a slope to normalised device coordinates,
         // which span 2 over the target's height: a sphere of radius r at distance d covers r / d × scale × height.
         let projection_scale = 1.0 / (camera.fov_y.clamp(1e-3, 3.1) * 0.5).tan();
+        let size_scale = projection_scale * height as f32;
         Self {
             frustum: Frustum::from_clip(clip),
             eye,
@@ -194,12 +205,22 @@ impl CullView {
             } else {
                 f32::INFINITY
             },
-            size_scale: projection_scale * height as f32,
+            size_scale,
             min_screen_size: settings.min_screen_size.max(0.0),
+            lod: LodView::for_camera(size_scale, &LodSettings::default()),
         }
     }
 
-    /// A view that culls against `frustum` only, measuring depth from `eye` along `forward` (shadow views).
+    /// The same camera view choosing levels of detail with `settings` ([`LodSettings::OFF`]: full detail).
+    pub fn with_lod(self, settings: &LodSettings) -> Self {
+        Self {
+            lod: LodView::for_camera(self.size_scale, settings),
+            ..self
+        }
+    }
+
+    /// A view that culls against `frustum` only, measuring depth from `eye` along `forward` (shadow views). It
+    /// draws at full detail; see [`CullView::with_caster_lod`].
     pub fn from_frustum(frustum: Frustum, eye: Vec3, forward: Vec3) -> Self {
         Self {
             frustum,
@@ -208,6 +229,17 @@ impl CullView {
             max_distance: f32::INFINITY,
             size_scale: 0.0,
             min_screen_size: 0.0,
+            lod: LodView::OFF,
+        }
+    }
+
+    /// The same shadow view choosing its casters' levels for a map looked up by points at most `distance` metres
+    /// from the camera whose view chooses with `camera`: each caster at the coarsest level the camera could draw it
+    /// at there, so a shadow is never finer than the surface receiving it (see [`crate::lod`]).
+    pub fn with_caster_lod(self, camera: &LodView, distance: f32) -> Self {
+        Self {
+            lod: camera.for_shadow(distance),
+            ..self
         }
     }
 
@@ -277,15 +309,21 @@ impl CullStats {
     }
 }
 
-/// The instances one view draws, in the draw lists' format: one list of entries per mesh kind (front to back),
-/// and the see-through instances (unsorted). Reused frame to frame: once its vectors have grown to the scene's
-/// size, a cull allocates nothing.
+/// The instances one view draws, in the draw lists' format: per mesh kind one list of entries per level of detail
+/// ([`crate::lod`]), each front to back, and the see-through instances (unsorted) with their levels. Reused frame
+/// to frame: once its vectors have grown to the scene's size, a cull allocates nothing.
 #[derive(Debug, Default)]
 pub struct VisibleSet {
+    /// Each kind's full-detail entries.
     pub(crate) opaque: Vec<Vec<u32>>,
+    /// Each kind's entries at levels 1 and up.
+    pub(crate) coarse: Vec<[Vec<u32>; MAX_LOD_LEVELS - 1]>,
     pub(crate) transparent: Vec<u32>,
-    /// The last cull's see-through entries before this one's, to tell whether they changed.
+    /// The level of each see-through entry.
+    pub(crate) transparent_levels: Vec<u8>,
+    /// The last cull's see-through entries and levels before this one's, to tell whether they changed.
     pub(crate) previous_transparent: Vec<u32>,
+    pub(crate) previous_levels: Vec<u8>,
     /// Changes whenever the visible see-through entries do.
     pub(crate) transparent_revision: u64,
     pub(crate) stats: CullStats,
@@ -299,12 +337,26 @@ impl VisibleSet {
         Self::default()
     }
 
-    /// The visible opaque entries of mesh kind `kind`, roughly front to back.
-    pub fn opaque(&self, kind: crate::scene::MeshKind) -> &[u32] {
-        self.opaque.get(usize::from(kind.0)).map_or(&[], Vec::as_slice)
+    /// The visible opaque entries of mesh kind `kind` drawn at level `level` (0: full detail), roughly front to
+    /// back.
+    pub fn opaque(&self, kind: MeshKind, level: usize) -> &[u32] {
+        let kind = usize::from(kind.0);
+        if level == 0 {
+            self.opaque.get(kind).map_or(&[], Vec::as_slice)
+        } else {
+            self.coarse
+                .get(kind)
+                .and_then(|levels| levels.get(level - 1))
+                .map_or(&[], Vec::as_slice)
+        }
     }
 
-    /// How many opaque lists there are (one per mesh kind up to the highest drawn).
+    /// How many visible opaque entries mesh kind `kind` has, at every level.
+    pub fn opaque_len(&self, kind: MeshKind) -> usize {
+        (0..MAX_LOD_LEVELS).map(|level| self.opaque(kind, level).len()).sum()
+    }
+
+    /// How many opaque kinds there are (one per mesh kind up to the highest drawn).
     pub fn opaque_count(&self) -> usize {
         self.opaque.len()
     }
@@ -312,6 +364,11 @@ impl VisibleSet {
     /// The visible see-through entries, in no particular order.
     pub fn transparent(&self) -> &[u32] {
         &self.transparent
+    }
+
+    /// The level each of [`VisibleSet::transparent`]'s entries is drawn at.
+    pub fn transparent_levels(&self) -> &[u8] {
+        &self.transparent_levels
     }
 
     /// Changes whenever [`VisibleSet::transparent`] does.
@@ -326,7 +383,9 @@ impl VisibleSet {
 
     /// Every visible entry, opaque and see-through.
     pub fn len(&self) -> usize {
-        self.opaque.iter().map(Vec::len).sum::<usize>() + self.transparent.len()
+        self.opaque.iter().map(Vec::len).sum::<usize>()
+            + self.coarse.iter().flatten().map(Vec::len).sum::<usize>()
+            + self.transparent.len()
     }
 
     /// Whether nothing is visible.
@@ -336,44 +395,87 @@ impl VisibleSet {
 
     /// Empties the lists for a new cull, keeping their memory. `capacities` gives each opaque list's full length,
     /// `transparent` the see-through list's and `places` how many cells and large items there are, so nothing
-    /// grows during the cull.
+    /// grows during the cull. With `levels` the kinds with levels of detail get room at every level too.
     pub(crate) fn begin(
         &mut self,
         capacities: impl ExactSizeIterator<Item = usize>,
         transparent: usize,
         places: usize,
+        levels: bool,
     ) {
         let lists = capacities.len();
         if self.opaque.len() < lists {
             // Only when a mesh kind is drawn for the first time.
             self.opaque.resize_with(lists, Vec::new);
+            self.coarse.resize_with(lists, Default::default);
         }
-        for (list, capacity) in self.opaque.iter_mut().zip(capacities) {
+        for (kind, ((list, coarse), capacity)) in
+            self.opaque.iter_mut().zip(&mut self.coarse).zip(capacities).enumerate()
+        {
             list.clear();
             list.reserve(capacity);
+            let kind_levels = lod::levels(MeshKind(u16::try_from(kind).unwrap_or(u16::MAX)));
+            for (level, list) in (1..).zip(coarse.iter_mut()) {
+                list.clear();
+                if levels && level < kind_levels {
+                    list.reserve(capacity);
+                }
+            }
         }
         std::mem::swap(&mut self.transparent, &mut self.previous_transparent);
+        std::mem::swap(&mut self.transparent_levels, &mut self.previous_levels);
         self.transparent.clear();
+        self.transparent_levels.clear();
         // (The previous entries are only compared with, never pushed to.)
         self.transparent.reserve(transparent);
+        self.transparent_levels.reserve(transparent);
         self.order.clear();
         self.order.reserve(places);
     }
 
-    /// Adds a visible instance of `list` (an opaque list index, or the transparent list).
-    #[inline]
+    /// Adds a visible instance of `list` (an opaque list index, or the transparent list) at full detail. The cull's
+    /// innermost step for every opaque instance: kept as small as it was before levels of detail, the see-through
+    /// case out of line.
+    #[inline(always)]
     pub(crate) fn push(&mut self, entry: u32, list: u16) {
         if list == crate::scene::TRANSPARENT_LIST {
-            self.transparent.push(entry);
+            self.push_see_through(entry, 0);
         } else if let Some(out) = self.opaque.get_mut(usize::from(list)) {
             // The capacity was reserved for every entry of the kind: this never allocates.
             out.push(entry);
         }
     }
 
+    /// Adds a visible see-through instance drawn at level `level`.
+    #[inline(never)]
+    fn push_see_through(&mut self, entry: u32, level: u8) {
+        self.transparent.push(entry);
+        self.transparent_levels.push(level);
+    }
+
+    /// Adds a visible instance of `list` drawn at level `level`.
+    #[inline]
+    pub(crate) fn push_level(&mut self, entry: u32, list: u16, level: u8) {
+        if list == crate::scene::TRANSPARENT_LIST {
+            self.push_see_through(entry, level);
+        } else if level == 0 {
+            if let Some(out) = self.opaque.get_mut(usize::from(list)) {
+                out.push(entry);
+            }
+        } else if let Some(out) = self
+            .coarse
+            .get_mut(usize::from(list))
+            .and_then(|levels| levels.get_mut(usize::from(level) - 1))
+        {
+            // Reserved like the full-detail lists for every kind with levels.
+            out.push(entry);
+        }
+    }
+
     /// Notes whether the see-through entries changed. Returns how many instances are visible.
+    #[inline]
     pub(crate) fn finish(&mut self) -> u32 {
-        if self.transparent != self.previous_transparent {
+        if self.transparent != self.previous_transparent || self.transparent_levels != self.previous_levels {
             self.transparent_revision = self.transparent_revision.wrapping_add(1);
         }
         u32::try_from(self.len()).unwrap_or(u32::MAX)
@@ -527,23 +629,63 @@ mod tests {
     #[test]
     fn a_visible_set_lists_entries_by_kind_and_notes_see_through_changes() {
         let mut set = VisibleSet::new();
-        set.begin([4usize, 2].into_iter(), 1, 0);
+        set.begin([4usize, 2].into_iter(), 1, 0, true);
         for (entry, list) in [(10, 0), (20, 1), (11, 0), (30, crate::scene::TRANSPARENT_LIST), (21, 1)] {
             set.push(entry, list);
         }
-        assert_eq!(set.finish(), 5);
+        // Kind 1 is the Ball, which has levels.
+        set.push_level(22, 1, 2);
+        assert_eq!(set.finish(), 6);
         assert_eq!(set.opaque[0], [10, 11]);
         assert_eq!(set.opaque[1], [20, 21]);
+        assert_eq!(set.opaque(MeshKind::BALL, 2), [22]);
+        assert_eq!(set.opaque_len(MeshKind::BALL), 3);
         assert_eq!(set.transparent(), [30]);
+        assert_eq!(set.transparent_levels(), [0]);
         let revision = set.transparent_revision();
-        // The same see-through entries again: same revision; different ones: a new one.
-        set.begin([4usize, 2].into_iter(), 1, 0);
+        // The same see-through entries again: same revision; different ones, or the same at another level: a new
+        // one.
+        set.begin([4usize, 2].into_iter(), 1, 0, true);
         set.push(30, crate::scene::TRANSPARENT_LIST);
         set.finish();
         assert_eq!(set.transparent_revision(), revision);
         assert!(set.opaque[0].is_empty());
-        set.begin([4usize, 2].into_iter(), 1, 0);
+        assert!(set.opaque(MeshKind::BALL, 2).is_empty());
+        set.begin([4usize, 2].into_iter(), 1, 0, true);
+        set.push_level(30, crate::scene::TRANSPARENT_LIST, 1);
         set.finish();
-        assert_ne!(set.transparent_revision(), revision);
+        let other_level = set.transparent_revision();
+        assert_ne!(other_level, revision);
+        set.begin([4usize, 2].into_iter(), 1, 0, true);
+        set.finish();
+        assert_ne!(set.transparent_revision(), other_level);
+    }
+
+    #[test]
+    fn camera_views_choose_levels_and_shadow_views_follow_them() {
+        let camera = camera_at(Vec3::ZERO, Vec3::NEG_Z, 90.0);
+        let view = CullView::for_camera(&camera, Vec3::ZERO, 1000, 1000, &CullSettings::default())
+            .with_lod(&LodSettings::MEDIUM);
+        assert!(
+            CullView::for_camera(&camera, Vec3::ZERO, 1000, 1000, &CullSettings::default())
+                .lod
+                .enabled(),
+            "levels are on by default"
+        );
+        assert_eq!(view.lod.distance(), 0.0);
+        let off = view.with_lod(&LodSettings::OFF);
+        assert!(!off.lod.enabled());
+        let shadow = CullView::from_frustum(view.frustum, Vec3::ZERO, Vec3::NEG_Z);
+        assert!(!shadow.lod.enabled(), "full detail unless asked");
+        let shadow = shadow.with_caster_lod(&view.lod, 50.0);
+        assert_eq!(shadow.lod.distance(), 50.0);
+        // A 1 m ball (bounding radius √3/2) 50 m from a 1000-pixel camera is 17 pixels across: level 2.
+        assert_eq!(lod::caster_level(&shadow, MeshKind::BALL, 0.866), 2);
+        assert_eq!(lod::caster_level(&shadow, MeshKind::BLOCK, 0.866), 0);
+        assert_eq!(lod::caster_level(&view, MeshKind::BALL, 0.866), 0, "not a shadow view");
+        assert_eq!(
+            lod::caster_level(&shadow.with_caster_lod(&off.lod, 50.0), MeshKind::BALL, 0.866),
+            0
+        );
     }
 }

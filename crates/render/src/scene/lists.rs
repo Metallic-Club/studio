@@ -16,7 +16,7 @@
 //! be indexed indirectly), so there a changed instance also marks its position ([`DrawLists::set_gather`]).
 //!
 //! Culling (#79) replaces "every live slot of the kind" with "every visible slot of the kind" in the same format:
-//! a list of entries per mesh kind, drawn as one instanced draw each.
+//! a list of entries per mesh kind, split by level of detail (#80), drawn as one instanced draw per level.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

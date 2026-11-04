@@ -9,6 +9,7 @@ use super::instance::{GpuInstance, MeshKind};
 use super::sync::InstanceScene;
 use super::{MAX_UPLOAD_GAP, Region, RenderComponents, SyncStats};
 use crate::cull::{Casters, CullStats, CullView, VisibleSet};
+use crate::lod::MAX_LOD_LEVELS;
 use crate::{RenderContext, RenderError};
 
 /// The fewest slots a region's buffer has, so small scenes do not grow it frame after frame.
@@ -66,12 +67,36 @@ pub struct UploadStats {
 /// Where one mesh kind's draw list sits in [`GpuScene::list_buffer`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ListSegment {
-    /// The position of the list's first entry: the first instance of the kind's draw.
+    /// The position of the list's first entry: the first instance of the kind's draws.
     pub first: u32,
-    /// How many entries the list has: the instance count of the kind's draw.
+    /// How many entries the list has: the instances of the kind's draws.
     pub len: u32,
     /// How many entries fit before the next segment.
     pub capacity: u32,
+    /// How many of the entries are drawn at each level of detail ([`crate::lod`]), level after level from `first`:
+    /// one draw per level with entries. They add up to `len`; every entry is at full detail when no view chose levels.
+    pub levels: [u32; MAX_LOD_LEVELS],
+}
+
+impl ListSegment {
+    /// The instances drawn at `level`: a range of the list buffer, empty when none are.
+    pub fn level_range(&self, level: usize) -> std::ops::Range<u32> {
+        let before: u32 = self.levels.iter().take(level).sum();
+        let count = self.levels.get(level).copied().unwrap_or(0);
+        let first = self.first + before;
+        first..first + count
+    }
+}
+
+/// The see-through instances an upload draws ([`GpuScene::transparent_entries`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TransparentEntries<'a> {
+    /// Their entries, unsorted.
+    pub(crate) entries: &'a [u32],
+    /// The level each is drawn at; empty when all are at full detail.
+    pub(crate) levels: &'a [u8],
+    /// Changes whenever the entries or their levels could have.
+    pub(crate) revision: u64,
 }
 
 /// The fewest entries a list segment holds, so small scenes do not lay the lists out again frame after frame.
@@ -404,13 +429,22 @@ impl GpuScene {
         self.lists.holds_visible.then_some(&self.visible)
     }
 
-    /// The see-through entries the last upload draws, unsorted, and a revision that changes whenever they could
-    /// have (with the scene's [`InstanceScene::transparent_revision`]).
-    pub(crate) fn transparent_entries(&self) -> (&[u32], u64) {
+    /// The see-through entries the last upload draws, unsorted, the level each is drawn at (empty: all at full
+    /// detail), and a revision that changes whenever they could have (with the scene's
+    /// [`InstanceScene::transparent_revision`]).
+    pub(crate) fn transparent_entries(&self) -> TransparentEntries<'_> {
         if self.lists.holds_visible {
-            (self.visible.transparent(), self.visible.transparent_revision())
+            TransparentEntries {
+                entries: self.visible.transparent(),
+                levels: self.visible.transparent_levels(),
+                revision: self.visible.transparent_revision(),
+            }
         } else {
-            (self.scene.transparent_list(), u64::MAX)
+            TransparentEntries {
+                entries: self.scene.transparent_list(),
+                levels: &[],
+                revision: u64::MAX,
+            }
         }
     }
 
@@ -541,18 +575,27 @@ impl GpuScene {
         }
         for (segment, list) in lists.segments.iter_mut().zip(&draw_lists.opaque) {
             segment.len = u32::try_from(list.entries.len()).unwrap_or(u32::MAX);
+            segment.levels = [0; MAX_LOD_LEVELS];
+            segment.levels[0] = segment.len;
         }
     }
 
-    /// This upload's list ranges for a view: every visible list whole.
+    /// This upload's list ranges for a view: every visible list whole, a kind's levels one after another in its
+    /// segment (one range, so one copy, per kind).
     fn list_ranges_visible(&mut self) {
         let lists = &mut self.lists;
         lists.source = ListSource::Visible;
         lists.ranges.clear();
         for (index, segment) in lists.segments.iter_mut().enumerate() {
-            let entries = self.visible.opaque.get(index).map_or(&[][..], Vec::as_slice);
+            let kind = MeshKind(u16::try_from(index).unwrap_or(u16::MAX));
             // Never more than the kind's live entries, which the segment holds.
-            let len = u32::try_from(entries.len()).unwrap_or(u32::MAX).min(segment.capacity);
+            let mut room = segment.capacity;
+            for (level, count) in segment.levels.iter_mut().enumerate() {
+                let len = u32::try_from(self.visible.opaque(kind, level).len()).unwrap_or(u32::MAX);
+                *count = len.min(room);
+                room -= *count;
+            }
+            let len = segment.capacity - room;
             segment.len = len;
             if len > 0 {
                 lists.ranges.push((index, 0, len));
@@ -581,15 +624,9 @@ impl GpuScene {
         };
         let mut offset = 0usize;
         let scene = &self.scene;
-        for &(index, first, count) in &lists.ranges {
-            let list = match lists.source {
-                ListSource::Live => scene.draw_list(MeshKind(u16::try_from(index).unwrap_or(u16::MAX))),
-                ListSource::Visible => self.visible.opaque.get(index).map_or(&[][..], Vec::as_slice),
-            };
-            let Some(entries) = list.get(first as usize..(first + count) as usize) else {
-                continue;
-            };
-            if lists.gather {
+        let gather = lists.gather;
+        let mut write = |entries: &[u32]| {
+            if gather {
                 for &entry in entries {
                     let instance = scene.entry_instance(entry).unwrap_or(&GpuInstance::FREE);
                     let bytes = bytemuck::bytes_of(instance);
@@ -600,6 +637,27 @@ impl GpuScene {
                 let bytes: &[u8] = bytemuck::cast_slice(entries);
                 view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
                 offset += bytes.len();
+            }
+        };
+        for &(index, first, count) in &lists.ranges {
+            let kind = MeshKind(u16::try_from(index).unwrap_or(u16::MAX));
+            match lists.source {
+                ListSource::Live => {
+                    if let Some(entries) = scene.draw_list(kind).get(first as usize..(first + count) as usize) {
+                        write(entries);
+                    }
+                }
+                ListSource::Visible => {
+                    // The kind's levels back to back, as many of each as its segment counts.
+                    let Some(segment) = lists.segments.get(index) else {
+                        continue;
+                    };
+                    for (level, &n) in segment.levels.iter().enumerate() {
+                        if let Some(entries) = self.visible.opaque(kind, level).get(..n as usize) {
+                            write(entries);
+                        }
+                    }
+                }
             }
         }
         drop(view);
@@ -624,10 +682,10 @@ impl GpuScene {
 
     /// The draw lists on the GPU: every mesh kind's opaque list in its own segment ([`GpuScene::list_segments`]),
     /// as entries (`u32`, see [`super::entry`]) where the instance buffers are storage buffers, or as copies of
-    /// the instances ([`GpuInstance`], a per-instance vertex buffer) on the vertex-buffer fallback. A draw of a
-    /// kind's list is instances `first .. first + len` of its segment. After an upload with a view the segments hold
-    /// only the entries it sees ([`GpuScene::upload_view`]). Replaced when it grows
-    /// ([`GpuScene::list_revision`]).
+    /// the instances ([`GpuInstance`], a per-instance vertex buffer) on the vertex-buffer fallback. A kind's list is
+    /// instances `first .. first + len` of its segment, drawn one draw per level of detail
+    /// ([`ListSegment::level_range`]). After an upload with a view the segments hold only the entries it sees, level
+    /// by level ([`GpuScene::upload_view`]). Replaced when it grows ([`GpuScene::list_revision`]).
     pub fn list_buffer(&self) -> &wgpu::Buffer {
         &self.lists.buffer
     }

@@ -1,5 +1,6 @@
 //! CPU time of the GPU scene (#76, ADR 0008 §2) on 100,000 parts: a frame's sync with 1% of the parts changing
-//! (target ≤ 0.5 ms on the dev PC), the same with its upload on a real device, a full rebuild, and a cull (#79).
+//! (target ≤ 0.5 ms on the dev PC), the same with its upload on a real device, a full rebuild, and a cull (#79), of
+//! blocks and of the stress city's mix of shapes with and without levels of detail (#80).
 //!
 //! ```text
 //! cargo bench -p metallic_render --bench gpu_scene
@@ -20,7 +21,8 @@ use metallic_core::glam::Vec3;
 use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::scene::{GpuInstance, RenderComponents, SCATTER_MIN_RANGES};
 use metallic_render::{
-    Camera, ContextOptions, CullSettings, CullView, GpuScene, InstanceScene, RenderContext, VisibleSet, wgpu,
+    Camera, ContextOptions, CullSettings, CullView, GpuScene, InstanceScene, LodSettings, RenderContext, VisibleSet,
+    wgpu,
 };
 
 const PARTS: usize = 100_000;
@@ -171,6 +173,29 @@ fn cull(c: &mut Criterion) {
         let eye = Vec3::new(600.0, 6.0, 668.0);
         let camera = Camera::from_cframe(CFrame::look_at(eye, eye + Vec3::X, Vec3::Y), fov);
         let view = CullView::for_camera(&camera, scene.origin(), 1920, 1080, &CullSettings::default());
+        let stats = scene.cull(&view, &mut visible);
+        eprintln!("cull/{name}: {stats:?}");
+        group.bench_function(name, |b| b.iter(|| black_box(scene.cull(&view, &mut visible))));
+    }
+    // The stress city's mix of shapes (#80): 70% blocks and 10% each balls, cylinders and wedges, so most grid cells
+    // hold round parts and the cull chooses their levels of detail; and the same cull with levels off.
+    let shapes = ["Ball", "Cylinder", "Wedge"];
+    for (i, &id) in game.parts.iter().enumerate() {
+        if let Some(shape) = shapes.get(i % 10) {
+            let shape = metallic_core::EnumItem::new("PartShape", shape);
+            game.dm.set_by_name(id, "Shape", Value::Enum(shape)).expect("a shape");
+        }
+    }
+    scene.sync(&mut game.dm);
+    scene.coalesce();
+    let eye = Vec3::new(600.0, 6.0, 668.0);
+    let camera = Camera::from_cframe(CFrame::look_at(eye, eye + Vec3::X, Vec3::Y), 70.0);
+    let view = CullView::for_camera(&camera, scene.origin(), 1920, 1080, &CullSettings::default());
+    for (name, lod) in [
+        ("100k_30pct_shapes", LodSettings::default()),
+        ("100k_30pct_shapes_no_lod", LodSettings::OFF),
+    ] {
+        let view = view.with_lod(&lod);
         let stats = scene.cull(&view, &mut visible);
         eprintln!("cull/{name}: {stats:?}");
         group.bench_function(name, |b| b.iter(|| black_box(scene.cull(&view, &mut visible))));

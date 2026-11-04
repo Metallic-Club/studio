@@ -5,6 +5,7 @@ use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet};
 use crate::lighting::SceneLighting;
 use crate::lights::{LightSettings, LightStats};
+use crate::lod::{LodSettings, LodView};
 use crate::overlay::{Overlay, OverlayPass};
 use crate::parts::{Camera, DrawStats, PartRenderer};
 use crate::scene::{InstanceBinding, UploadStats};
@@ -37,11 +38,14 @@ pub struct RendererSettings {
     pub shadows: ShadowSettings,
     /// How point and spot lights are drawn: their budget and their shadow atlas ([`crate::lights`]).
     pub lights: LightSettings,
+    /// How the main view chooses the round parts' levels of detail: the LOD bias ([`crate::lod`]). Levels are chosen
+    /// by the cull, so with [`CullSettings::enabled`] off every part is drawn at full detail.
+    pub lod: LodSettings,
 }
 
 impl RendererSettings {
     /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes, GPU timing on, a
-    /// black clear colour, the default culling, shadows and local lights.
+    /// black clear colour, the default culling, shadows, local lights and levels of detail.
     pub fn new(color_format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         Self {
             color_format,
@@ -54,6 +58,7 @@ impl RendererSettings {
             cull: CullSettings::default(),
             shadows: ShadowSettings::default(),
             lights: LightSettings::default(),
+            lod: LodSettings::default(),
         }
     }
 }
@@ -220,6 +225,23 @@ impl Renderer {
         self.settings.cull = cull;
     }
 
+    /// Changes how the round parts' levels of detail are chosen ([`crate::lod`]). Takes effect with the next frame;
+    /// a new bias draws the sun's shadow maps again, whose casters' levels follow the camera's.
+    pub fn set_lod(&mut self, lod: LodSettings) {
+        self.settings.lod = lod;
+    }
+
+    /// Colours every part by the level of detail it is drawn at, a debug view: the Ball and the Cylinder from green
+    /// (full detail) through yellow and orange to red (the coarsest level), every other kind grey. Off by default.
+    pub fn set_lod_tint(&mut self, on: bool) {
+        self.parts.set_lod_tint(on);
+    }
+
+    /// Whether parts are coloured by level of detail ([`Renderer::set_lod_tint`]).
+    pub fn lod_tint(&self) -> bool {
+        self.parts.lod_tint()
+    }
+
     /// Changes how the sun's shadows are drawn ([`crate::shadow`]). A settings change, not for every frame: a new
     /// size or cascade count makes the maps again, and every map is drawn again next frame.
     pub fn set_shadows(&mut self, shadows: ShadowSettings) {
@@ -296,28 +318,19 @@ impl Renderer {
     ) -> wgpu::SubmissionIndex {
         let (mut encoder, slot) = self.begin_frame();
         let cull = &self.settings.cull;
+        let size = (self.settings.width, self.settings.height);
         let view = camera.filter(|_| cull.enabled).map(|camera| {
-            CullView::for_camera(
-                camera,
-                scene.scene().origin(),
-                self.settings.width,
-                self.settings.height,
-                cull,
-            )
+            CullView::for_camera(camera, scene.scene().origin(), size.0, size.1, cull).with_lod(&self.settings.lod)
         });
+        // Shadows follow the levels the camera draws (none without a cull: every part at full detail).
+        let lod = view.map_or(LodView::OFF, |view| view.lod);
         self.last_upload = scene.upload_view(&mut encoder, view.as_ref());
         self.last_cull = scene.cull_stats();
         // After the upload (the casters are culled from what its coalesce left), before the sun's shadows take the
         // scene's caster changes.
-        self.parts.prepare_lights(
-            scene,
-            camera,
-            self.settings.width,
-            self.settings.height,
-            &self.settings.cull,
-        );
         self.parts
-            .prepare_shadows(&mut encoder, scene, camera, self.settings.width, self.settings.height);
+            .prepare_lights(scene, camera, size, &self.settings.cull, &lod);
+        self.parts.prepare_shadows(&mut encoder, scene, camera, size, &lod);
         self.shadow_in_use = u8::try_from(self.parts.shadow_stats().cascades).unwrap_or(0);
         // After the upload, which may have replaced the buffers the bind groups use.
         self.parts.prepare(

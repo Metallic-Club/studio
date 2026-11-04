@@ -24,7 +24,8 @@
 //!    [`LightSettings::shadowed_lights`], get tiles of the **shadow atlas**: one depth texture of
 //!    [`LightSettings::atlas_resolution`]² cut into tiles of [`LightSettings::tile_resolution`]². A spot light
 //!    takes one tile, a point light six (a cube's faces). Each tile culls its casters with the scene's culling grid
-//!    and draws them into its square of the atlas, in one pass for the whole atlas. A light's shadow fades in when it
+//!    and draws them into its square of the atlas (one draw per mesh kind and level of detail), in one pass for the
+//!    whole atlas. A light's shadow fades in when it
 //!    gets its tiles and out when it loses them, like the light itself.
 //!
 //! Selection and clustering run on the CPU every frame: a few hundred lights take a fraction of a millisecond
@@ -53,6 +54,8 @@
 //! **Static caching**: a tile is drawn again only when
 //!
 //! - it is new to its light, or its light moved, turned or changed range or angle;
+//! - the camera's distance from the light plus the light's range crossed a power of two, which is what its round
+//!   casters' levels of detail follow ([`crate::lod`]: a tile's shadow is never finer than what receives it);
 //! - a static caster changed inside it ([`crate::InstanceScene::shadow_changes`]) or the scene was rebased or rebuilt
 //!   ([`crate::InstanceScene::shadow_epoch`]);
 //! - the scene changed and a moving caster (one in the dynamic region) is inside it now or was at its last drawing.

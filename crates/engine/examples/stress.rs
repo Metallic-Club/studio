@@ -15,7 +15,9 @@
 //! the scene instead of keeping it still), `--no-shadows`, `--shadow-cascades <n>`, `--shadow-resolution <texels>`,
 //! `--shadow-distance <m>` and `--dynamic-cascades <n>` (the sun's shadows; 3, 2048, 256 and 2 by default),
 //! `--lights <low|medium|high|off>` (the point and spot lights' settings as the presets will set them; medium by
-//! default), `--light-budget <n>`, `--lights-per-cluster <n>`, `--shadowed-lights <n>` and `--no-light-shadows`.
+//! default), `--light-budget <n>`, `--lights-per-cluster <n>`, `--shadowed-lights <n>` and `--no-light-shadows`,
+//! `--lod <low|medium|high|off>` (the levels of detail's preset, high by default; off draws every part at full
+//! detail), `--lod-bias <x>` and `--lod-tint` (colour the parts by level of detail).
 //! `WGPU_BACKEND=dx12` (or `vulkan`, `gl`) picks the backend.
 //!
 //! `--scene all` runs every scene, each in its own process (the event loop can only be made once per process), and
@@ -25,7 +27,7 @@ use std::error::Error;
 use std::process::{Command, ExitCode};
 
 use metallic_engine::stress::{BenchOptions, StressKind, run_bench};
-use metallic_render::{CullSettings, LightSettings};
+use metallic_render::{CullSettings, LightSettings, LodSettings};
 
 fn usage() -> String {
     format!(
@@ -34,6 +36,7 @@ fn usage() -> String {
          \x20             [--no-shadows] [--shadow-cascades N] [--shadow-resolution N] [--shadow-distance M]\n\
          \x20             [--dynamic-cascades N] [--lights low|medium|high|off] [--light-budget N]\n\
          \x20             [--lights-per-cluster N] [--shadowed-lights N] [--no-light-shadows]\n\
+         \x20             [--lod low|medium|high|off] [--lod-bias X] [--lod-tint]\n\
          scenes: {}",
         StressKind::names().join(", ")
     )
@@ -126,6 +129,17 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
                 options.lights.per_cluster =
                     u32::try_from(number(it.next(), "--lights-per-cluster")?).map_err(|e| e.to_string())?;
             }
+            "--lod" => {
+                options.lod = match it.next().map(String::as_str) {
+                    Some("low") => LodSettings::LOW,
+                    Some("medium") => LodSettings::MEDIUM,
+                    Some("high") => LodSettings::HIGH,
+                    Some("off") => LodSettings::OFF,
+                    _ => return Err("--lod needs low, medium, high or off".into()),
+                };
+            }
+            "--lod-bias" => options.lod.bias = decimal(it.next(), "--lod-bias")?,
+            "--lod-tint" => options.lod_tint = true,
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}
             other => return Err(format!("unknown argument {other:?}")),

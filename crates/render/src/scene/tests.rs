@@ -507,8 +507,22 @@ fn only_transparent_changes_move_the_transparent_revision() {
     assert_ne!(scene.transparent_revision(), revision, "the see-through part moved");
 }
 
+/// Whether `level` is a level `view` may draw `instance` at: between the levels its projected size gives at the two
+/// edges of the hysteresis band (crate::lod), and 0 for kinds without levels.
+fn level_allowed(view: &crate::cull::CullView, instance: &GpuInstance, level: usize) -> bool {
+    let class = crate::lod::lod_class(instance.mesh());
+    if class == 0 || !view.lod.enabled() {
+        return level == 0;
+    }
+    let (center, radius) = grid::bounding_sphere(instance);
+    let d2 = (center - view.eye).length_squared();
+    let finest = view.lod.choose(class, radius * radius, d2, 0);
+    let coarsest = view.lod.choose(class, radius * radius, d2, crate::lod::COARSEST);
+    (usize::from(finest)..=usize::from(coarsest)).contains(&level)
+}
+
 /// Checks a cull of `scene` against testing every listed instance's bounding sphere on its own: the same entries
-/// in every list, and each opaque list in front-to-back bucket order.
+/// in every list, each opaque level list in front-to-back bucket order, and every level one its size allows.
 fn assert_cull_matches_brute_force(scene: &mut InstanceScene, view: &crate::cull::CullView) -> crate::cull::CullStats {
     let mut set = crate::cull::VisibleSet::new();
     let stats = scene.cull(view, &mut set);
@@ -521,29 +535,48 @@ fn assert_cull_matches_brute_force(scene: &mut InstanceScene, view: &crate::cull
     for kind in 0..scene.draw_list_count() {
         let kind = MeshKind(kind as u16);
         let mut want: Vec<u32> = scene.draw_list(kind).iter().copied().filter(visible).collect();
-        let have = set.opaque(kind);
-        // Front to back a grid cell (or large item) at a time: by the depth of the cell's box.
-        let keys: Vec<u32> = have
-            .iter()
-            .map(|e| {
-                let instance = scene.entry_instance(*e).expect("listed");
-                let (center, radius) = grid::bounding_sphere(instance);
-                if radius > grid::LARGE_RADIUS {
-                    view.box_key(center, grid::half_extents(instance))
-                } else {
-                    let cell = (grid::key_of(center).as_vec3() + 0.5) * grid::CELL_SIZE;
-                    view.box_key(cell, Vec3::splat(grid::CELL_SIZE / 2.0))
-                }
-            })
-            .collect();
-        assert!(keys.is_sorted(), "kind {kind:?} is not front to back: {keys:?}");
-        let mut have = have.to_vec();
+        let mut have = Vec::new();
+        for level in 0..crate::lod::MAX_LOD_LEVELS {
+            let listed = set.opaque(kind, level);
+            // Front to back a grid cell (or large item) at a time: by the depth of the cell's box.
+            let keys: Vec<u32> = listed
+                .iter()
+                .map(|e| {
+                    let instance = scene.entry_instance(*e).expect("listed");
+                    assert!(
+                        level_allowed(view, instance, level),
+                        "kind {kind:?} drawn at level {level}"
+                    );
+                    let (center, radius) = grid::bounding_sphere(instance);
+                    if radius > grid::LARGE_RADIUS {
+                        view.box_key(center, grid::half_extents(instance))
+                    } else {
+                        let cell = (grid::key_of(center).as_vec3() + 0.5) * grid::CELL_SIZE;
+                        view.box_key(cell, Vec3::splat(grid::CELL_SIZE / 2.0))
+                    }
+                })
+                .collect();
+            assert!(
+                keys.is_sorted(),
+                "kind {kind:?} level {level} is not front to back: {keys:?}"
+            );
+            have.extend_from_slice(listed);
+        }
+        assert_eq!(have.len(), set.opaque_len(kind));
         have.sort_unstable();
         want.sort_unstable();
         assert_eq!(have, want, "the visible entries of kind {kind:?}");
         total += have.len();
     }
     let mut want: Vec<u32> = scene.transparent_list().iter().copied().filter(visible).collect();
+    assert_eq!(set.transparent().len(), set.transparent_levels().len());
+    for (&e, &level) in set.transparent().iter().zip(set.transparent_levels()) {
+        let instance = scene.entry_instance(e).expect("listed");
+        assert!(
+            level_allowed(view, instance, usize::from(level)),
+            "see-through {e} at level {level}"
+        );
+    }
     let mut have = set.transparent().to_vec();
     have.sort_unstable();
     want.sort_unstable();
@@ -645,6 +678,164 @@ fn a_cull_matches_testing_every_part_through_every_kind_of_change() {
     frame(&mut scene, &mut game.dm);
     for view in &views {
         assert_cull_matches_brute_force(&mut scene, view);
+    }
+}
+
+/// The level `set` lists the opaque `entry` of `kind` at, if it lists it.
+fn listed_level(set: &crate::cull::VisibleSet, kind: MeshKind, entry: u32) -> Option<usize> {
+    (0..crate::lod::MAX_LOD_LEVELS).find(|&level| set.opaque(kind, level).contains(&entry))
+}
+
+/// A camera on the X axis `distance` metres from the origin, looking at it.
+fn camera_at(distance: f32) -> crate::cull::CullView {
+    camera_towards(0.0, distance)
+}
+
+/// A camera on the X axis `distance` metres past `x`, looking back at `x`.
+fn camera_towards(x: f32, distance: f32) -> crate::cull::CullView {
+    let target = Vec3::new(x, 0.0, 0.0);
+    let camera = crate::parts::Camera::from_cframe(CFrame::look_at(target + Vec3::X * distance, target, Vec3::Y), 70.0);
+    crate::cull::CullView::for_camera(&camera, Vec3::ZERO, 1920, 1080, &crate::cull::CullSettings::default())
+        .with_lod(&crate::lod::LodSettings::MEDIUM)
+}
+
+#[test]
+fn a_ball_slowly_crossing_a_threshold_switches_once() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let ball = game.part();
+    game.dm
+        .set_by_name(ball, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
+        .unwrap();
+    game.dm
+        .set_by_name(ball, "Size", Value::Vector3(Vec3::splat(2.0)))
+        .unwrap();
+    frame(&mut scene, &mut game.dm);
+    let slot = scene.slot_of(ball).unwrap();
+    let e = entry(slot.region, slot.slot);
+    let (_, radius) = grid::bounding_sphere(&instance(&scene, ball));
+    // Where the band between full detail and level 1 lies: a ball at full detail goes coarser past `coarser`, one at
+    // level 1 comes back nearer than `finer`; the threshold is between.
+    let view = camera_at(1.0);
+    let edge = |previous: u8| {
+        let (mut near, mut far) = (1.0f32, 10_000.0f32);
+        for _ in 0..60 {
+            let mid = (near + far) / 2.0;
+            if view.lod.choose(1, radius * radius, mid * mid, previous) == 0 {
+                near = mid;
+            } else {
+                far = mid;
+            }
+        }
+        near
+    };
+    let (finer, coarser) = (edge(1), edge(0));
+    assert!(finer < coarser);
+    let threshold = (finer * coarser).sqrt();
+    // 600 frames: the camera drifts from 5% inside the band's near edge to 5% past its far edge, shaking by 4% on
+    // the way, so the threshold is crossed again and again.
+    let mut set = crate::cull::VisibleSet::new();
+    let (mut levels, mut crossings, mut last_side) = (Vec::new(), 0, None);
+    for frame_index in 0..600 {
+        let t = frame_index as f32 / 600.0;
+        let shake = 1.0 + 0.04 * (frame_index as f32 * 0.9).sin();
+        let d = (finer * 0.95 + (coarser * 1.05 - finer * 0.95) * t) * shake;
+        scene.cull(&camera_at(d), &mut set);
+        levels.push(listed_level(&set, MeshKind::BALL, e).expect("in view"));
+        let side = d < threshold;
+        if last_side.is_some_and(|s| s != side) {
+            crossings += 1;
+        }
+        last_side = Some(side);
+    }
+    let switches = levels.windows(2).filter(|w| w[0] != w[1]).count();
+    assert_eq!((levels[0], levels[599]), (0, 1));
+    assert_eq!(switches, 1, "{levels:?}");
+    assert!(crossings > 10, "the drift crosses the threshold {crossings} times");
+}
+
+#[test]
+fn a_moved_part_keeps_its_level() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let ball = game.part();
+    game.dm
+        .set_by_name(ball, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
+        .unwrap();
+    frame(&mut scene, &mut game.dm);
+    let mut set = crate::cull::VisibleSet::new();
+    let level_of = |scene: &mut InstanceScene, set: &mut crate::cull::VisibleSet, id: Id, (x, d): (f32, f32)| {
+        scene.cull(&camera_towards(x, d), set);
+        let slot = scene.slot_of(id).unwrap();
+        listed_level(set, MeshKind::BALL, entry(slot.region, slot.slot))
+    };
+    // Walk in from far until the ball is drawn at full detail: that happens 10% past the threshold.
+    assert_eq!(level_of(&mut scene, &mut set, ball, (0.0, 400.0)), Some(3));
+    let mut d = 400.0;
+    while level_of(&mut scene, &mut set, ball, (0.0, d)) != Some(0) {
+        d *= 0.995;
+    }
+    // Stepping back out by 15% is past the plain threshold but inside the band: still full detail.
+    let back = d * 1.15;
+    let (_, radius) = grid::bounding_sphere(&instance(&scene, ball));
+    let lod = camera_at(back).lod;
+    assert_eq!(
+        lod.choose(1, radius * radius, back * back, 1),
+        1,
+        "inside the band: a ball at level 1 would stay there"
+    );
+    assert_eq!(level_of(&mut scene, &mut set, ball, (0.0, back)), Some(0));
+    // Moving the ball a little (inside its cell, then into another cell, which also promotes it to the dynamic
+    // region: a new slot) keeps the level it was drawn at.
+    game.move_to(ball, 0.25);
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(level_of(&mut scene, &mut set, ball, (0.25, back)), Some(0));
+    game.move_to(ball, -40.0);
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.slot_of(ball).unwrap().region, Region::Dynamic);
+    assert_eq!(level_of(&mut scene, &mut set, ball, (-40.0, back)), Some(0));
+    // A new ball at the same place starts at the coarse side of the band.
+    let other = game.part();
+    game.dm
+        .set_by_name(other, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
+        .unwrap();
+    game.move_to(other, -40.0);
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(level_of(&mut scene, &mut set, other, (-40.0, back)), Some(1));
+    assert_eq!(level_of(&mut scene, &mut set, ball, (-40.0, back)), Some(0));
+}
+
+#[test]
+fn levels_off_draw_everything_at_full_detail() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let shapes = ["Block", "Ball", "Cylinder", "Wedge"];
+    for i in 0..40 {
+        let id = game.part();
+        game.dm
+            .set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", shapes[i % 4])))
+            .unwrap();
+        game.move_to(id, i as f32 * -30.0);
+    }
+    frame(&mut scene, &mut game.dm);
+    let view = camera_at(20.0);
+    let mut set = crate::cull::VisibleSet::new();
+    scene.cull(&view, &mut set);
+    let coarse: usize = (1..crate::lod::MAX_LOD_LEVELS)
+        .map(|level| set.opaque(MeshKind::BALL, level).len() + set.opaque(MeshKind::CYLINDER, level).len())
+        .sum();
+    assert!(coarse > 0, "far balls and cylinders are coarser");
+    assert!(
+        !set.opaque(MeshKind::BALL, 3).is_empty(),
+        "the farthest balls at the coarsest level"
+    );
+    let visible = set.len();
+    scene.cull(&view.with_lod(&crate::lod::LodSettings::OFF), &mut set);
+    assert_eq!(set.len(), visible, "the same parts");
+    for kind in 0..4 {
+        for level in 1..crate::lod::MAX_LOD_LEVELS {
+            assert!(set.opaque(MeshKind(kind), level).is_empty());
+        }
     }
 }
 

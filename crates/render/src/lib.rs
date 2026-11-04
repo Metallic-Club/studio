@@ -20,11 +20,13 @@
 //!   ([`FrameTimings`]). Nothing in a frame waits for the GPU.
 //! - The GPU-resident scene ([`scene`]): every renderable instance keeps a slot in an instance buffer, and only
 //!   what the data model's change tracking names is repacked and uploaded ([`GpuScene`], [`InstanceScene`]).
-//! - Drawing parts ([`parts`], [`Renderer::render_scene`]): one instanced draw per mesh kind over the scene's draw
-//!   lists, a material table, PBR-lite shading, a sorted transparent pass, and the camera from
+//! - Drawing parts ([`parts`], [`Renderer::render_scene`]): one instanced draw per mesh kind and level of detail over
+//!   the scene's draw lists, a material table, PBR-lite shading, a sorted transparent pass, and the camera from
 //!   `Workspace.CurrentCamera` ([`CameraReader`]).
 //! - Culling ([`cull`], [`RendererSettings::cull`]): a loose grid of every drawn instance's bounding sphere, culled
 //!   per view by frustum, distance and screen size into the same draw lists, opaque instances front to back.
+//! - Levels of detail ([`lod`], [`RendererSettings::lod`]): balls and cylinders far away drawn with fewer triangles,
+//!   chosen by projected size in the cull with hysteresis, and shadows never finer than what receives them.
 //! - Lighting and the sky ([`lighting`], [`Renderer::set_lighting`]): the sun or moon, a hemisphere ambient and an
 //!   analytic sky drawn last at the far plane, from the `Lighting` service ([`LightingReader`]).
 //! - Sun shadows ([`shadow`], [`RendererSettings::shadows`]): texel-snapped cascaded shadow maps, each culling its
@@ -41,6 +43,7 @@ mod error;
 mod graph;
 pub mod lighting;
 pub mod lights;
+pub mod lod;
 pub mod overlay;
 pub mod parts;
 mod renderer;
@@ -56,6 +59,7 @@ pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
 pub use lighting::{LightingReader, SceneLighting};
 pub use lights::{LightSettings, LightStats};
+pub use lod::{LodSettings, MAX_LOD_LEVELS};
 pub use overlay::Overlay;
 pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer};
 pub use renderer::{Renderer, RendererSettings};

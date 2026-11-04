@@ -9,13 +9,13 @@
 //! - The **draw lists** say which slots each draw covers: one list of entries (slot ids, [`entry`]) per mesh kind,
 //!   plus one of partly see-through instances, updated in [`InstanceScene::coalesce`] from the same dirty slots
 //!   ([`InstanceScene::draw_list`]). [`GpuScene`] uploads their changed entries into one buffer with a segment
-//!   per kind ([`GpuScene::list_buffer`]), which the renderer draws one instanced draw per kind from
-//!   ([`crate::parts`]).
+//!   per kind ([`GpuScene::list_buffer`]), which the renderer draws one instanced draw per kind and level of detail
+//!   from ([`crate::parts`]).
 //! - **Culling** ([`crate::cull`]): every listed instance's bounding sphere is also in a loose grid, kept current
 //!   from the scene's changes (list changes in [`InstanceScene::coalesce`], moves queued for the next cull).
 //!   [`InstanceScene::cull`] walks it for a view and
-//!   writes the visible entries in the lists' format; [`GpuScene::upload_view`] uploads those into the same
-//!   segments instead of every live entry.
+//!   writes the visible entries in the lists' format, each kind's split by level of detail ([`crate::lod`]);
+//!   [`GpuScene::upload_view`] uploads those into the same segments, level after level, instead of every live entry.
 //!
 //! # Slots and regions
 //!
@@ -69,6 +69,7 @@ mod sync;
 mod tests;
 
 pub use components::{LightComponent, MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
+pub(crate) use gpu::TransparentEntries;
 pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};
 pub use grid::CELL_SIZE;
 pub(crate) use grid::bounding_sphere;

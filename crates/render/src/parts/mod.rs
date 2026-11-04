@@ -2,15 +2,17 @@
 //!
 //! # A constant number of draws
 //!
-//! Parts are drawn with **one instanced draw per mesh kind per shading model**, so the draw count depends on how
-//! many kinds and models there are, never on how many parts. There is one shading model for now (PBR-lite, below),
-//! so the opaque pass makes at most one draw per mesh kind: four for the built-in primitives. The material of each
-//! instance comes from the material table ([`MaterialTable`]) through the instance's material row, so materials
-//! cost no draws either.
+//! Parts are drawn with **one instanced draw per mesh kind and level of detail per shading model**, so the draw
+//! count depends on how many kinds, levels and models there are, never on how many parts. There is one shading model
+//! for now (PBR-lite, below), so the opaque pass makes at most one draw per mesh kind and level ([`crate::lod`]):
+//! nine for the built-in primitives (the Block and the Wedge have one level, the Ball four and the Cylinder three).
+//! The material of each instance comes from the material table ([`MaterialTable`]) through the instance's material
+//! row, so materials cost no draws either.
 //!
 //! Which slots a draw covers comes from the scene's **draw lists** ([`crate::scene`]): one list of entries per
 //! mesh kind, kept current from the dirty slots alone, laid out in one buffer with a segment per kind
-//! ([`crate::GpuScene::list_segments`]). A kind's draw is instances `first .. first + len` of its segment:
+//! ([`crate::GpuScene::list_segments`]). A kind's draws are instances `first .. first + len` of its segment, one
+//! draw per level of detail over that level's part of it ([`crate::scene::ListSegment::level_range`]):
 //!
 //! - **Storage path** (every backend whose vertex shaders read storage buffers): the instance index selects an
 //!   entry, and the entry names the slot whose packed instance the shader reads from the region buffers. No
@@ -30,7 +32,8 @@
 //! Partly see-through instances are drawn in the transparent pass, after opaque and the sky, with the depth test
 //! on and depth writes off, blended with premultiplied alpha. They are **sorted back to front per instance**
 //! (by distance from the camera to the instance's centre) whenever the camera moves or one of them changes, and
-//! drawn as one draw per run of consecutive instances with the same mesh, so the order is exact across mesh kinds.
+//! drawn as one draw per run of consecutive instances with the same mesh and level, so the order is exact across mesh
+//! kinds.
 //! Fully transparent instances are not drawn at all.
 //!
 //! # Shading
@@ -88,6 +91,7 @@ use crate::lighting::{ResolvedLighting, SceneLighting};
 use crate::lights::{
     FrameLights, LightBindings, LightSettings, LightStats, LocalLights, MAX_GPU_LIGHTS, MAX_SHADOW_TILES,
 };
+use crate::lod::{LodView, MAX_LOD_LEVELS};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
 use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, ShadowStats};
 use crate::{GpuScene, PassId};
@@ -97,11 +101,11 @@ use transparent::TransparentList;
 /// What the last frame drew.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DrawStats {
-    /// Draws in the depth prepass (one per mesh kind with instances; 0 without a prepass).
+    /// Draws in the depth prepass (one per mesh kind and level with instances; 0 without a prepass).
     pub prepass_draws: u32,
-    /// Draws in the opaque pass: one per mesh kind with instances, whatever the part count.
+    /// Draws in the opaque pass: one per mesh kind and level of detail with instances, whatever the part count.
     pub opaque_draws: u32,
-    /// Draws in the transparent pass: one per run of same-mesh instances in back-to-front order.
+    /// Draws in the transparent pass: one per run of same-mesh, same-level instances in back-to-front order.
     pub transparent_draws: u32,
     /// Draws in the sky pass: one full-screen triangle when there is a camera and the pass runs.
     pub sky_draws: u32,
@@ -119,6 +123,9 @@ pub struct DrawStats {
     pub transparent_triangles: u64,
     /// Instances culled from the frame (outside the view, too far or too small; see [`crate::cull`]).
     pub culled_instances: u32,
+    /// Instances of the opaque and transparent passes drawn at each level of detail ([`crate::lod`]; index 0: full
+    /// detail, which includes every Block and Wedge).
+    pub level_instances: [u32; MAX_LOD_LEVELS],
     /// Sun shadow cascades in use ([`crate::shadow`]; 0 without shadows).
     pub shadow_cascades: u32,
     /// Bit `i` set when cascade `i`'s casters were drawn this frame (a cached cascade's: its static map), otherwise
@@ -221,9 +228,24 @@ fn vec4w(v: Vec3, w: f32) -> [f32; 4] {
     [v.x, v.y, v.z, w]
 }
 
+/// How the parts are written (`output` in frame.wgsl): whether the shader encodes sRGB itself, and for the debug view
+/// of [`crate::Renderer::set_lod_tint`] where levels 1, 2 and 3 start in the vertex pool (exact in f32 below 2²⁴
+/// vertices; 0 when the view is off).
+#[derive(Clone, Copy, Debug)]
+struct Output([f32; 4]);
+
+impl Output {
+    /// For a target that is `srgb` or not, with `tint` the first vertex of each level in the mesh pool.
+    fn new(srgb: bool, tint: Option<[u32; MAX_LOD_LEVELS]>) -> Self {
+        let [_, l1, l2, l3] = tint.map_or([0.0; MAX_LOD_LEVELS], |starts| starts.map(|s| s as f32));
+        Self([if srgb { 0.0 } else { 1.0 }, l1, l2, l3])
+    }
+}
+
 impl FrameUniforms {
     /// The uniform for `camera` on a target `aspect` (width / height) wide, `offset` (camera − scene origin) from
-    /// the scene origin, lit by `light` with `shadow`'s cascades and the local lights `local`.
+    /// the scene origin, lit by `light` with `shadow`'s cascades and the local lights `local`, written as `output`
+    /// says.
     fn new(
         camera: &Camera,
         aspect: f32,
@@ -231,7 +253,7 @@ impl FrameUniforms {
         light: &ResolvedLighting,
         shadow: &FrameShadow,
         local: &FrameLights,
-        srgb: bool,
+        output: Output,
     ) -> Self {
         let aspect = if aspect.is_finite() && aspect > 0.0 {
             aspect
@@ -247,7 +269,7 @@ impl FrameUniforms {
             light_color: vec4(light.light_color),
             sky_ambient: vec4(light.sky_ambient),
             ground_ambient: vec4(light.ground_ambient),
-            output: [if srgb { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0],
+            output: output.0,
             view_right: vec4(camera.rotation * Vec3::X * (tan_half * aspect)),
             view_up: vec4(camera.rotation * Vec3::Y * tan_half),
             view_forward: vec4(camera.rotation * Vec3::NEG_Z),
@@ -271,7 +293,7 @@ impl FrameUniforms {
     }
 }
 
-/// One opaque draw: a mesh kind's index range over its list segment.
+/// One opaque draw: a mesh kind's index range at one level over that level's part of its list segment.
 #[derive(Clone, Copy, Debug, Default)]
 struct KindDraw {
     mesh: MeshRange,
@@ -397,6 +419,8 @@ pub struct PartRenderer {
     draws: Vec<KindDraw>,
     /// Whether this frame has a camera (and so draws anything).
     visible: bool,
+    /// Colour parts by level of detail (a debug view).
+    lod_tint: bool,
     stats: DrawStats,
 }
 
@@ -610,8 +634,20 @@ impl PartRenderer {
             transparent: TransparentList::new(device, binding),
             draws: Vec::new(),
             visible: false,
+            lod_tint: false,
             stats: DrawStats::default(),
         }
+    }
+
+    /// Colours every part by the level of detail it is drawn at, from the next frame (see
+    /// [`crate::Renderer::set_lod_tint`]).
+    pub(crate) fn set_lod_tint(&mut self, on: bool) {
+        self.lod_tint = on;
+    }
+
+    /// Whether parts are coloured by level of detail.
+    pub(crate) fn lod_tint(&self) -> bool {
+        self.lod_tint
     }
 
     /// The instance path the pipelines were made for.
@@ -709,17 +745,18 @@ impl PartRenderer {
     }
 
     /// Selects, clusters and shadows the local lights for a frame of `scene` seen from `camera` (see
-    /// [`crate::lights`]). Call it after [`GpuScene::upload_view`] and before [`PartRenderer::prepare_shadows`], which
-    /// takes the scene's shadow-caster changes the atlas also reads.
+    /// [`crate::lights`]), the casters at levels of detail no finer than `lod` (the camera view's) draws what
+    /// receives their shadows. Call it after [`GpuScene::upload_view`] and before [`PartRenderer::prepare_shadows`],
+    /// which takes the scene's shadow-caster changes the atlas also reads.
     pub(crate) fn prepare_lights(
         &mut self,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
         cull: &CullSettings,
+        lod: &LodView,
     ) {
-        self.lights.prepare(scene, camera, width, height, cull);
+        self.lights.prepare(scene, camera, (width, height), cull, lod);
         self.refresh_light_group();
     }
 
@@ -759,6 +796,7 @@ impl PartRenderer {
     }
 
     /// Fits and culls the shadow cascades for a frame of `scene` seen from `camera` on a `width` × `height` target,
+    /// with the casters at levels of detail no finer than `lod` (the camera view's) draws what receives their shadows,
     /// and records the upload of the casters' lists into `encoder`. Call it after [`GpuScene::upload_view`] and
     /// before [`PartRenderer::prepare`], every frame (see [`crate::shadow`]).
     pub(crate) fn prepare_shadows(
@@ -766,13 +804,13 @@ impl PartRenderer {
         encoder: &mut wgpu::CommandEncoder,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
+        lod: &LodView,
     ) {
         let lit = self.lighting.global_shadows && self.resolved.light_color.max_element() > 0.0;
         let aspect = width as f32 / height.max(1) as f32;
-        self.shadows
-            .prepare(encoder, scene, camera, aspect, self.resolved.light_direction, lit);
+        let light = lit.then_some(self.resolved.light_direction);
+        self.shadows.prepare(encoder, scene, camera, aspect, light, lod);
     }
 
     /// Where shadow cascade `cascade`'s casters are drawn when they are this frame: its map, or a cached cascade's
@@ -839,7 +877,7 @@ impl PartRenderer {
             &self.resolved,
             self.shadows.frame(),
             self.lights.frame(),
-            srgb,
+            Output::new(srgb, self.lod_tint.then(|| self.meshes.level_starts())),
         );
         self.stats.lights = self.lights.stats();
         let shadow = self.shadows.stats();
@@ -855,17 +893,23 @@ impl PartRenderer {
         }
 
         for (kind, segment) in scene.list_segments().iter().enumerate() {
-            let mesh = self.meshes.range(MeshKind(u16::try_from(kind).unwrap_or(u16::MAX)));
-            if segment.len == 0 || mesh.index_count == 0 {
-                continue;
+            let kind = MeshKind(u16::try_from(kind).unwrap_or(u16::MAX));
+            for level in 0..MAX_LOD_LEVELS {
+                let instances = segment.level_range(level);
+                let mesh = self.meshes.range(kind, level);
+                if instances.is_empty() || mesh.index_count == 0 {
+                    continue;
+                }
+                let count = instances.end - instances.start;
+                self.draws.push(KindDraw {
+                    mesh,
+                    first: instances.start,
+                    count,
+                });
+                self.stats.opaque_instances += count;
+                self.stats.opaque_triangles += u64::from(count) * u64::from(mesh.index_count / 3);
+                self.stats.level_instances[level] += count;
             }
-            self.draws.push(KindDraw {
-                mesh,
-                first: segment.first,
-                count: segment.len,
-            });
-            self.stats.opaque_instances += segment.len;
-            self.stats.opaque_triangles += u64::from(segment.len) * u64::from(mesh.index_count / 3);
         }
         self.transparent.update(
             &self.device,
@@ -876,9 +920,12 @@ impl PartRenderer {
         );
         self.stats.culled_instances = scene.cull_stats().culled();
         for run in self.transparent.runs() {
-            let mesh = self.meshes.range(run.kind);
+            let mesh = self.meshes.range(run.kind, usize::from(run.level));
             self.stats.transparent_instances += run.count;
             self.stats.transparent_triangles += u64::from(run.count) * u64::from(mesh.index_count / 3);
+            if let Some(n) = self.stats.level_instances.get_mut(usize::from(run.level)) {
+                *n += run.count;
+            }
         }
         self.stats.instances = self.stats.opaque_instances + self.stats.transparent_instances;
         self.stats.triangles = self.stats.opaque_triangles + self.stats.transparent_triangles;
@@ -951,7 +998,7 @@ impl PartRenderer {
                     self.transparent.buffer(),
                 );
                 for run in self.transparent.runs() {
-                    let mesh = self.meshes.range(run.kind);
+                    let mesh = self.meshes.range(run.kind, usize::from(run.level));
                     if mesh.index_count == 0 {
                         continue;
                     }

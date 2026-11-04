@@ -18,7 +18,7 @@ use std::time::Instant;
 use metallic_platform::{
     AppHandler, DeviceEvent, EventLoopContext, GamepadEvent, Platform, WindowConfig, WindowEvent, WindowId,
 };
-use metallic_render::{ContextOptions, CullSettings, LightSettings, ShadowSettings, wgpu};
+use metallic_render::{ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
 use crate::config::{EngineConfig, EngineMode};
@@ -61,13 +61,18 @@ pub struct BenchOptions {
     /// How point and spot lights are drawn (the renderer's defaults, the Medium preset's, unless changed;
     /// [`LightSettings::OFF`] draws none).
     pub lights: LightSettings,
+    /// How the round parts' levels of detail are chosen (the renderer's defaults, the High preset's, unless
+    /// changed; [`LodSettings::OFF`] draws every part at full detail).
+    pub lod: LodSettings,
+    /// Colour the parts by level of detail ([`metallic_render::Renderer::set_lod_tint`]).
+    pub lod_tint: bool,
     /// Walk the camera through the scene ([`StressScene::move_camera`]) instead of keeping it still.
     pub moving_camera: bool,
 }
 
 impl BenchOptions {
     /// 1,000 measured frames after 120 of warm-up, seed 1, the scene's window size and camera (still), no vsync, no
-    /// overlay, the default culling, shadows and lights.
+    /// overlay, the default culling, shadows, lights and levels of detail.
     pub fn new(scene: StressKind) -> Self {
         Self {
             scene,
@@ -82,6 +87,8 @@ impl BenchOptions {
             field_of_view: None,
             shadows: ShadowSettings::default(),
             lights: LightSettings::default(),
+            lod: LodSettings::default(),
+            lod_tint: false,
             moving_camera: false,
         }
     }
@@ -132,6 +139,8 @@ pub struct BenchReport {
     pub shadows: ShadowSettings,
     /// How point and spot lights were drawn.
     pub light_settings: LightSettings,
+    /// How the levels of detail were chosen.
+    pub lod: LodSettings,
     /// Whether the camera walked ([`BenchOptions::moving_camera`]).
     pub moving_camera: bool,
     /// How long building the scene took, in milliseconds.
@@ -216,6 +225,11 @@ impl BenchReport {
             lights.atlas_resolution,
             lights.tile_resolution
         )?;
+        write!(
+            out,
+            "\"lod\":{{\"enabled\":{},\"bias\":{:.2}}},",
+            self.lod.enabled, self.lod.bias
+        )?;
         self.summary.write_json_members(out);
         out.push('}');
         Ok(())
@@ -242,6 +256,8 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     renderer.set_cull(options.cull);
     renderer.set_shadows(options.shadows);
     renderer.set_lights(options.lights);
+    renderer.set_lod(options.lod);
+    renderer.set_lod_tint(options.lod_tint);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo
     } else {
@@ -298,6 +314,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         cull: options.cull,
         shadows: options.shadows,
         light_settings: options.lights,
+        lod: options.lod,
         moving_camera: options.moving_camera,
         build_ms,
         summary,
@@ -424,6 +441,7 @@ mod tests {
             cull: CullSettings::default(),
             shadows: ShadowSettings::default(),
             light_settings: LightSettings::default(),
+            lod: LodSettings::default(),
             moving_camera: false,
             build_ms: 12.5,
             summary,
@@ -456,6 +474,8 @@ mod tests {
         );
         assert!(json.contains("\"lights\":{\"in_scene\":0,"), "{json}");
         assert!(json.contains("\"light_shadows\":{\"mean\":"), "{json}");
+        assert!(json.contains("\"lod\":{\"enabled\":true,\"bias\":2.00}"), "{json}");
+        assert!(json.contains("\"culled\":0,\"levels\":[0,0,0,0]}"), "{json}");
         // Balanced braces.
         let open = json.matches('{').count();
         assert_eq!(open, json.matches('}').count(), "{json}");

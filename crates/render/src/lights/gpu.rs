@@ -15,6 +15,7 @@ use super::select::{SelectView, influence, select};
 use super::{LIGHT_INTENSITY, LightSettings, LightStats, MAX_GPU_LIGHTS, MAX_SHADOW_TILES, SPOT_SOFTNESS};
 use crate::GpuScene;
 use crate::cull::{CullSettings, CullView};
+use crate::lod::LodView;
 use crate::parts::{Camera, MeshPool};
 use crate::scene::{InstanceBinding, LightKind, SceneLight};
 use crate::shadow::SHADOW_FORMAT;
@@ -273,16 +274,16 @@ impl LocalLights {
     }
 
     /// Selects, fades, clusters and shadows the local lights of `scene` for a frame seen from `camera` on a
-    /// `width` × `height` target with the main view's `cull` settings, and writes what changed to the GPU. Run it
-    /// after [`GpuScene::upload_view`] and before the sun's shadows take the scene's shadow-caster changes, every
-    /// frame.
+    /// `width` × `height` target with the main view's `cull` settings and levels of detail `lod`, and writes what
+    /// changed to the GPU. Run it after [`GpuScene::upload_view`] and before the sun's shadows take the scene's
+    /// shadow-caster changes, every frame.
     pub(crate) fn prepare(
         &mut self,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
         cull: &CullSettings,
+        lod: &LodView,
     ) {
         let start = Instant::now();
         let dt = match (self.fixed_step, self.last) {
@@ -299,7 +300,7 @@ impl LocalLights {
         self.lights.clear();
         let camera = camera.filter(|_| self.settings.enabled && self.stats.in_scene > 0);
         let Some(camera) = camera else {
-            self.atlas.prepare(scene, &[], &mut [], Vec3::ZERO, None);
+            self.atlas.prepare(scene, &[], &mut [], (Vec3::ZERO, lod), None);
             self.stats.gpu_bytes = self.gpu_bytes();
             return;
         };
@@ -366,7 +367,7 @@ impl LocalLights {
             scene,
             &self.shadowed,
             &mut self.bases,
-            camera.position - origin,
+            (camera.position - origin, lod),
             self.buffers.as_ref().map(|b| &b.tile_buffer),
         );
         let mut any_shadow = false;

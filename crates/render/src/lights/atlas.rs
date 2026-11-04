@@ -10,6 +10,7 @@ use metallic_core::glam::{Mat4, Vec3, Vec4};
 use super::{LightRuntime, LightSettings, MAX_SHADOW_TILES};
 use crate::GpuScene;
 use crate::cull::{Casters, CullView, Frustum, VisibleSet};
+use crate::lod::{LodView, MAX_LOD_LEVELS};
 use crate::parts::MeshPool;
 use crate::scene::{
     DYNAMIC_ENTRY, GpuInstance, InstanceBinding, InstanceScene, LightKind, MeshKind, Region, SceneLight,
@@ -140,22 +141,32 @@ pub(crate) struct GpuTile {
     params: [f32; 4],
 }
 
-/// What a tile's drawing was made for: its light, face and view.
+/// What a tile's drawing was made for: its light, face and view, and the distance its casters' levels of detail
+/// were chosen at ([`lod_distance`]; 0 at full detail).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TileKey {
     light: (u32, u32),
     face: u8,
     clip: [u32; 16],
+    lod: u32,
 }
 
 impl TileKey {
-    fn new(light: Id, face: usize, view: &TileView) -> Self {
+    fn new(light: Id, face: usize, view: &TileView, lod: &LodView) -> Self {
         Self {
             light: (light.index(), light.generation()),
             face: face as u8,
             clip: view.clip.to_cols_array().map(f32::to_bits),
+            lod: lod.distance().to_bits(),
         }
     }
+}
+
+/// The distance a light's tiles choose their casters' levels of detail at ([`crate::lod`]): a point the light
+/// reaches is at most its distance from the camera plus its range from the camera, rounded up to a power of two so a
+/// moving camera draws a kept tile again only when that doubles or halves.
+fn lod_distance(light_to_camera: f32, range: f32) -> f32 {
+    (light_to_camera + range).max(1.0).log2().ceil().exp2()
 }
 
 /// What a tile's map holds.
@@ -187,6 +198,8 @@ struct Job {
     tile: u16,
     key: TileKey,
     view: TileView,
+    /// How its casters' levels of detail are chosen.
+    lod: LodView,
     /// The part the light sits in, which casts no shadow for it.
     host: Option<u32>,
     /// The light, origin-relative, and its range.
@@ -255,10 +268,10 @@ pub(crate) struct ShadowAtlas {
     /// Per drawn light: it is one of the frame's shadowed lights.
     targets: Vec<bool>,
     jobs: Vec<Job>,
-    /// This frame's caster entries, every job's in turn, and the draws over them: (job, kind, first, count).
+    /// This frame's caster entries, every job's in turn, and the draws over them: (job, kind, level, first, count).
     list: Vec<u32>,
     gathered: Vec<GpuInstance>,
-    ranges: Vec<(u16, u16, u32, u32)>,
+    ranges: Vec<(u16, u16, u8, u32, u32)>,
     /// The casters' lists on the GPU, made with the first tile drawn.
     list_buffer: Option<wgpu::Buffer>,
     visible: VisibleSet,
@@ -582,14 +595,15 @@ impl ShadowAtlas {
     /// Works out this frame's tiles for `shadowed` (the drawn lights holding tiles with some shadow, each with its
     /// first entry in the tile table written to `bases`), decides which tiles to draw again, culls their casters in
     /// `scene` and uploads their lists, matrices and the tile table (into `table_buffer`, which exists whenever there
-    /// are drawn lights). `camera_offset` is the camera − the scene origin. The atlas's memory is made here, the first
-    /// time `shadowed` is not empty.
+    /// are drawn lights). `camera_offset` is the camera − the scene origin, and `lod` the camera view's levels of
+    /// detail, which the casters' follow ([`lod_distance`]). The atlas's memory is made here, the first time `shadowed`
+    /// is not empty.
     pub(crate) fn prepare(
         &mut self,
         scene: &mut GpuScene,
         shadowed: &[ShadowedLight],
         bases: &mut [f32],
-        camera_offset: Vec3,
+        (camera_offset, lod): (Vec3, &LodView),
         table_buffer: Option<&wgpu::Buffer>,
     ) {
         self.jobs.clear();
@@ -644,6 +658,7 @@ impl ShadowAtlas {
                     .map(|slot| entry(slot.region, slot.slot));
                 let reach = light.range;
                 let center = light.position - origin;
+                let tile_lod = lod.for_shadow(lod_distance(center.distance(camera_offset), reach));
                 for (face, view) in views.iter().take(n).enumerate() {
                     let tile = shadowed.tiles[face];
                     let (x, y) = (u32::from(tile) % self.per_row, u32::from(tile) / self.per_row);
@@ -658,7 +673,7 @@ impl ShadowAtlas {
                         params: [view.depth_scale, view.texel_angle, 0.0, 0.0],
                     });
                     self.stats.tiles += 1;
-                    let key = TileKey::new(light.id, face, view);
+                    let key = TileKey::new(light.id, face, view, &tile_lod);
                     let Some(cache) = self.caches.get(usize::from(tile)) else {
                         continue;
                     };
@@ -674,6 +689,7 @@ impl ShadowAtlas {
                             tile,
                             key,
                             view: *view,
+                            lod: tile_lod,
                             host,
                             center,
                             reach,
@@ -710,22 +726,27 @@ impl ShadowAtlas {
         let start = Instant::now();
         let (epoch, revision) = (scene.scene().shadow_epoch(), scene.scene().revision());
         for (index, job) in self.jobs.iter().enumerate() {
-            let view = CullView::from_frustum(Frustum::from_clip(job.view.clip), job.view.eye, job.view.forward);
+            let view = CullView {
+                lod: job.lod,
+                ..CullView::from_frustum(Frustum::from_clip(job.view.clip), job.view.eye, job.view.forward)
+            };
             scene.cull_casters(&view, Casters::All, &mut self.visible);
             let mut dynamic = false;
             for kind in 0..self.visible.opaque_count() {
-                let first = self.list.len();
-                for &e in self.visible.opaque(MeshKind(kind as u16)) {
-                    if Some(e) == job.host {
-                        continue;
+                for level in 0..MAX_LOD_LEVELS {
+                    let first = self.list.len();
+                    for &e in self.visible.opaque(MeshKind(kind as u16), level) {
+                        if Some(e) == job.host {
+                            continue;
+                        }
+                        dynamic |= e & DYNAMIC_ENTRY != 0;
+                        self.list.push(e);
                     }
-                    dynamic |= e & DYNAMIC_ENTRY != 0;
-                    self.list.push(e);
-                }
-                let count = self.list.len() - first;
-                if count > 0 {
-                    self.ranges
-                        .push((index as u16, kind as u16, first as u32, count as u32));
+                    let count = self.list.len() - first;
+                    if count > 0 {
+                        self.ranges
+                            .push((index as u16, kind as u16, level as u8, first as u32, count as u32));
+                    }
                 }
             }
             if let Some(cache) = self.caches.get_mut(usize::from(job.tile)) {
@@ -812,8 +833,8 @@ impl ShadowAtlas {
     }
 
     /// Records the frame's tiles into `pass` (a depth pass into [`ShadowAtlas::target`] that loads the atlas): each
-    /// tile is cleared and its casters drawn, one instanced draw per mesh kind. Returns the draws, instances and
-    /// triangles.
+    /// tile is cleared and its casters drawn, one instanced draw per mesh kind and level of detail. Returns the draws,
+    /// instances and triangles.
     pub(crate) fn draw(&self, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
         let (mut draws, mut instances, mut triangles) = (0, 0, 0u64);
         let (Some(gpu), Some(list)) = (self.gpu.as_ref(), self.list_buffer.as_ref()) else {
@@ -839,12 +860,12 @@ impl ShadowAtlas {
                 }
                 InstanceBinding::Vertex => pass.set_vertex_buffer(1, list.slice(..)),
             }
-            while let Some(&&(job_index, kind, first, count)) = ranges.peek() {
+            while let Some(&&(job_index, kind, level, first, count)) = ranges.peek() {
                 if usize::from(job_index) != index {
                     break;
                 }
                 ranges.next();
-                let mesh = meshes.range(MeshKind(kind));
+                let mesh = meshes.range(MeshKind(kind), usize::from(level));
                 if mesh.index_count == 0 {
                     continue;
                 }
