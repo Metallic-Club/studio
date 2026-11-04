@@ -25,7 +25,7 @@ use metallic_core::{Args as MethodArgs, DataModel, DmError, Id, MethodCall};
 use metallic_script::{SignalRef, YieldReason};
 
 use crate::convert::{read_script, read_value};
-use crate::ffi::{Args, Call, Kind, Out, Push, Raise, Ret, SignalHandle, lua_fn, with_ctx};
+use crate::ffi::{Args, Call, Kind, MemberName, Out, Push, Raise, Ret, SignalHandle, lua_fn, with_ctx};
 use crate::shared::{GET_PROPERTY_CHANGED_SIGNAL, Member, Shared};
 
 lua_fn!(pub(crate) index => index_body);
@@ -44,10 +44,11 @@ fn not_member(dm: &DataModel, id: Id, key: &str) -> Raise {
 }
 
 /// The instance at `idx`, or an error saying the member was not called on one.
-fn this(args: &Args<'_>, idx: c_int, member: &str) -> Result<Id, Raise> {
+fn this(args: &Args<'_>, idx: c_int, member: MemberName<'_>) -> Result<Id, Raise> {
     args.payload::<Id>(idx).ok_or_else(|| {
         Raise(format!(
-            "Expected ':' not '.' calling member function {member} (got {})",
+            "Expected ':' not '.' calling member function {} (got {})",
+            member.text(),
             args.type_name(idx)
         ))
     })
@@ -60,13 +61,13 @@ fn index_body(call: &Call<'_>) -> Ret {
     let Some(id) = args.payload::<Id>(1) else {
         return Err(Raise::from("attempt to index a non-instance"));
     };
-    let Some((atom, key)) = args.str_atom(2) else {
+    let Some(name) = args.str_atom(2) else {
         return Err(Raise(format!("invalid member key of type {}", args.type_name(2))));
     };
     call.with_ctx(|ctx| {
         let dm = &*ctx.dm;
         let class = dm.class_of(id)?;
-        let member = shared.member(class, atom, key);
+        let member = shared.member(class, name);
         let push = match member {
             Member::Prop(prop) if prop.computed => Push::Value(dm.get(id, prop.id)?),
             Member::Prop(prop) => Push::Value(dm.get_ref(id, prop.id)?.clone()),
@@ -82,9 +83,9 @@ fn index_body(call: &Call<'_>) -> Ret {
                     "{name} is a callback member of {class}; you can only set the callback value, get is not available"
                 )));
             }
-            Member::Missing | Member::Unresolved => match dm.find_first_child(id, key, false)? {
+            Member::Missing | Member::Unresolved => match dm.find_first_child(id, name.text(), false)? {
                 Some(child) => Push::Instance(child),
-                None => return Err(not_member(dm, id, key)),
+                None => return Err(not_member(dm, id, name.text())),
             },
         };
         Ok(Out::One(push))
@@ -98,21 +99,24 @@ fn new_index_body(call: &Call<'_>) -> Ret {
     let Some(id) = args.payload::<Id>(1) else {
         return Err(Raise::from("attempt to index a non-instance"));
     };
-    let Some((atom, key)) = args.str_atom(2) else {
+    let Some(name) = args.str_atom(2) else {
         return Err(Raise(format!("invalid member key of type {}", args.type_name(2))));
     };
+    // Only read on errors: the text of a cached member's name is never needed.
+    let key = || name.text();
     call.with_ctx(|ctx| {
         let class = ctx.dm.class_of(id)?;
-        match shared.member(class, atom, key) {
-            Member::Prop(prop) if prop.read_only => {
-                Err(Raise(format!("Unable to assign property {key}. Property is read only")))
-            }
+        match shared.member(class, name) {
+            Member::Prop(prop) if prop.read_only => Err(Raise(format!(
+                "Unable to assign property {}. Property is read only",
+                key()
+            ))),
             Member::Prop(prop) => {
                 let value = read_value(args, 3, &prop.ty, shared)
-                    .map_err(|e| Raise(format!("Unable to assign property {key}. {}", e.0)))?;
+                    .map_err(|e| Raise(format!("Unable to assign property {}. {}", key(), e.0)))?;
                 ctx.dm.set(id, prop.id, value).map_err(|e| match e {
-                    DmError::Destroyed(_) => Raise(format!("cannot set {key}: {e}")),
-                    e => Raise(format!("Unable to assign property {key}. {e}")),
+                    DmError::Destroyed(_) => Raise(format!("cannot set {}: {e}", key())),
+                    e => Raise(format!("Unable to assign property {}. {e}", key())),
                 })?;
                 Ok(Out::None)
             }
@@ -126,43 +130,47 @@ fn new_index_body(call: &Call<'_>) -> Ret {
                     Ok(Out::None)
                 }
                 _ => Err(Raise(format!(
-                    "Unable to assign {key}. Expected a function or nil, got {}",
+                    "Unable to assign {}. Expected a function or nil, got {}",
+                    key(),
                     args.type_name(3)
                 ))),
             },
-            Member::Missing | Member::Unresolved => Err(not_member(ctx.dm, id, key)),
-            Member::Method(_) | Member::Signal(_) | Member::GetPropertyChangedSignal => {
-                Err(Raise(format!("Unable to assign property {key}. It is not a property")))
-            }
+            Member::Missing | Member::Unresolved => Err(not_member(ctx.dm, id, key())),
+            Member::Method(_) | Member::Signal(_) | Member::GetPropertyChangedSignal => Err(Raise(format!(
+                "Unable to assign property {}. It is not a property",
+                key()
+            ))),
         }
     })?
 }
 
 /// `instance:Method(...)`.
 fn namecall_body(call: &Call<'_>) -> Ret {
-    let Some((atom, name)) = call.args.namecall() else {
+    let Some(name) = call.args.namecall() else {
         return Err(Raise::from("no method name"));
     };
     let id = this(&call.args, 1, name)?;
-    invoke(call, id, atom, name)
+    invoke(call, id, name)
 }
 
 /// `instance.Method(instance, ...)`, through a method fetched as a value; its name is the closure's upvalue.
 fn method_value_body(call: &Call<'_>) -> Ret {
-    let Some((atom, name)) = call.args.upvalue_str_atom(1) else {
+    let Some(name) = call.args.upvalue_str_atom(1) else {
         return Err(Raise::from("no method name"));
     };
     let id = this(&call.args, 1, name)?;
-    invoke(call, id, atom, name)
+    invoke(call, id, name)
 }
 
-/// Calls method `name` of `id` with arguments 2.. of the call.
-fn invoke(call: &Call<'_>, id: Id, atom: i32, name: &str) -> Ret {
+/// Calls method `member` of `id` with arguments 2.. of the call.
+fn invoke(call: &Call<'_>, id: Id, member: MemberName<'_>) -> Ret {
     let args = &call.args;
     let shared = call.shared()?;
+    // Only read on errors and for `GetPropertyChangedSignal`: a cached method's name is never needed as text.
+    let name = || member.text();
     call.with_ctx(|ctx| {
         let class = ctx.dm.class_of(id)?;
-        match shared.member(class, atom, name) {
+        match shared.member(class, member) {
             Member::Method(method) => {
                 let values = method_args(args, shared)?;
                 if let Some(callback) = method.invokes {
@@ -189,7 +197,8 @@ fn invoke(call: &Call<'_>, id: Id, atom: i32, name: &str) -> Ret {
             Member::GetPropertyChangedSignal => {
                 let Some(prop_name) = args.str(2) else {
                     return Err(Raise(format!(
-                        "bad argument #1 to '{name}' (string expected, got {})",
+                        "bad argument #1 to '{}' (string expected, got {})",
+                        name(),
                         args.type_name(2)
                     )));
                 };
@@ -201,9 +210,9 @@ fn invoke(call: &Call<'_>, id: Id, atom: i32, name: &str) -> Ret {
             }
             Member::Prop(_) | Member::Signal(_) | Member::Callback(_) => {
                 let class = ctx.dm.class_name(id).unwrap_or("Instance");
-                Err(Raise(format!("{name} of {class} is not a method")))
+                Err(Raise(format!("{} of {class} is not a method", name())))
             }
-            Member::Missing | Member::Unresolved => Err(not_member(ctx.dm, id, name)),
+            Member::Missing | Member::Unresolved => Err(not_member(ctx.dm, id, name())),
         }
     })?
 }
