@@ -8,12 +8,13 @@ use crate::lights::{LightSettings, LightStats};
 use crate::lod::{LodSettings, LodView};
 use crate::overlay::{Overlay, OverlayPass};
 use crate::parts::{Camera, DrawStats, PartRenderer};
+use crate::post::{AntiAliasing, FinishParams, Post, PostSettings, PostStats};
 use crate::resolution::{DynamicResolution, ResolutionSettings, ResolutionStats, scaled_size};
 use crate::scene::{InstanceBinding, UploadStats};
 use crate::shadow::{MAX_CASCADES, ShadowSettings, ShadowStats};
 use crate::target::check_size;
 use crate::timing::{GpuTimer, Timed};
-use crate::upscale::Upscaler;
+use crate::upscale::{Upscaler, upscale_params};
 use crate::{FrameTimings, GpuScene, MsaaSampleCounts, RenderContext, RenderError};
 
 /// What a [`Renderer`] draws into and how.
@@ -25,11 +26,15 @@ pub struct RendererSettings {
     pub width: u32,
     /// Target height in pixels.
     pub height: u32,
-    /// Samples per pixel for the scene (1: no MSAA). Must be in [`RenderContext::msaa_sample_counts`] for both the
-    /// colour format and the depth format.
+    /// Samples per pixel for the scene (1: no MSAA). Must be in [`RenderContext::msaa_sample_counts`] for the colour
+    /// format, the depth format and the scene colour's ([`crate::post::hdr_format`]); [`Renderer::msaa_sample_counts`]
+    /// says which are.
     pub msaa_samples: u32,
-    /// Which passes run.
+    /// Which passes run: the default draws the scene into an HDR colour target, blooms and finishes it
+    /// ([`crate::post`]); MLAA is [`PassId::Mlaa`].
     pub passes: PassSet,
+    /// How the post chain finishes the image: exposure, grade, bloom and MLAA ([`crate::post`]).
+    pub post: PostSettings,
     /// Measure each pass's GPU time where the device has timestamp queries.
     pub gpu_timing: bool,
     /// The colour the frame starts from (linear).
@@ -49,9 +54,9 @@ pub struct RendererSettings {
 }
 
 impl RendererSettings {
-    /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes, GPU timing on, a
-    /// black clear colour, the default culling, shadows, local lights and levels of detail, at the target's own
-    /// resolution.
+    /// Settings for a `width` × `height` target in `color_format`: no MSAA, the default passes (the scene, bloom,
+    /// the finish pass and UI), GPU timing on, a black clear colour, the default post chain, culling, shadows, local
+    /// lights and levels of detail, at the target's own resolution.
     pub fn new(color_format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         Self {
             color_format,
@@ -59,6 +64,7 @@ impl RendererSettings {
             height,
             msaa_samples: 1,
             passes: PassSet::default(),
+            post: PostSettings::default(),
             gpu_timing: true,
             clear_color: wgpu::Color::BLACK,
             cull: CullSettings::default(),
@@ -90,8 +96,13 @@ pub struct Renderer {
     transient_attachments: bool,
     depth: Option<Attachment>,
     msaa_color: Option<Attachment>,
-    /// The scene colour at the render scale, while the scene is drawn at one ([`FramePlan::scaled`]).
+    /// The scene colour, while the scene is drawn into one ([`FramePlan::uses_scene_color`]): the HDR target the
+    /// finish pass reads, or without it the texture at the render scale the upscale pass reads.
     scene_color: Option<Attachment>,
+    /// The scene colour's format with the post chain ([`crate::post::hdr_format`]).
+    hdr_format: wgpu::TextureFormat,
+    /// The post chain's pipelines and textures.
+    post: Post,
     /// The size of the scene's attachments (depth, MSAA colour, scene colour): the target's, or with a render scale
     /// its highest scale's.
     texture_size: (u32, u32),
@@ -123,8 +134,10 @@ impl Renderer {
     /// Creates a renderer for targets described by `settings`.
     pub fn new(context: &RenderContext, settings: RendererSettings) -> Result<Self, RenderError> {
         check_size(context, settings.width, settings.height)?;
+        let hdr_format = crate::post::hdr_format(context);
         let msaa_counts = context
             .msaa_sample_counts(settings.color_format)
+            .intersect(context.msaa_sample_counts(hdr_format))
             .intersect(context.msaa_sample_counts(DEPTH_FORMAT));
         let timer = if settings.gpu_timing {
             GpuTimer::new(context.device(), context.queue())
@@ -150,6 +163,9 @@ impl Renderer {
             depth: None,
             msaa_color: None,
             scene_color: None,
+            hdr_format,
+            // Every pipeline of the chain is made with the renderer: turning an effect on compiles nothing.
+            post: Post::new(context.device(), settings.color_format, hdr_format),
             texture_size: (settings.width, settings.height),
             render_size: (settings.width, settings.height),
             resolution: DynamicResolution::new(settings.resolution),
@@ -175,6 +191,12 @@ impl Renderer {
         };
         renderer.check_msaa(settings.msaa_samples)?;
         renderer.rebuild();
+        // The scene's pipelines for every MSAA count the anti-aliasing settings can switch to, so a switch compiles
+        // nothing (ADR 0008 §9).
+        let format = renderer.scene_target_format();
+        for samples in msaa_counts.iter().filter(|&n| n <= 8) {
+            renderer.parts.prewarm(format, samples);
+        }
         renderer.parts.set_shadows(settings.shadows, renderer.shadow_min_layers);
         renderer.parts.set_lights(settings.lights);
         Ok(renderer)
@@ -235,6 +257,67 @@ impl Renderer {
             self.rebuild();
         }
         Ok(())
+    }
+
+    /// The MSAA sample counts the scene can be drawn with here (its colour, the output's and depth's formats).
+    pub fn msaa_sample_counts(&self) -> MsaaSampleCounts {
+        self.msaa_counts
+    }
+
+    /// Changes the anti-aliasing: MLAA ([`PassId::Mlaa`] in the passes) or MSAA (the sample count), or none. Fails
+    /// for an MSAA count the device lacks ([`AntiAliasing::supported`] picks one it has). A settings change: every
+    /// pipeline it needs was made with the renderer, and the new attachments are made without waiting for the GPU.
+    pub fn set_anti_aliasing(&mut self, aa: AntiAliasing) -> Result<(), RenderError> {
+        let samples = aa.msaa_samples();
+        self.check_msaa(samples)?;
+        let passes = self.settings.passes.with_if(PassId::Mlaa, aa.mlaa());
+        if (passes, samples) != (self.settings.passes, self.settings.msaa_samples) {
+            self.settings.passes = passes;
+            self.settings.msaa_samples = samples;
+            self.rebuild();
+        }
+        Ok(())
+    }
+
+    /// The anti-aliasing in use: MSAA when the scene has more than one sample, MLAA when it runs, otherwise none.
+    pub fn anti_aliasing(&self) -> AntiAliasing {
+        match (self.settings.msaa_samples, self.plan.contains(PassId::Mlaa)) {
+            (samples, _) if samples > 1 => AntiAliasing::Msaa(samples),
+            (_, true) => AntiAliasing::Mlaa,
+            _ => AntiAliasing::Off,
+        }
+    }
+
+    /// Changes how the post chain finishes the image ([`crate::post`]): exposure and grade take effect with the next
+    /// frame; a new bloom size or filter makes bloom's textures again (a settings change: nothing waits for the GPU,
+    /// and every pipeline exists).
+    pub fn set_post(&mut self, post: PostSettings) {
+        if post == self.settings.post {
+            return;
+        }
+        let old = self.settings.post;
+        self.settings.post = post;
+        if old.chain != post.chain {
+            self.rebuild();
+        } else if old.bloom != post.bloom || old.mlaa != post.mlaa {
+            self.rebuild_post();
+        }
+    }
+
+    /// What the post chain draws with: the scene colour's format, the anti-aliasing, bloom's levels, and how many
+    /// passes and full-screen passes a frame has.
+    pub fn post_stats(&self) -> PostStats {
+        let bloom_passes = self.post.bloom.passes();
+        let planned = self.plan.passes().len();
+        PostStats {
+            scene_format: self.scene_target_format(),
+            finish: self.plan.post(),
+            msaa_samples: self.plan.msaa_samples(),
+            mlaa: self.plan.contains(PassId::Mlaa),
+            bloom_levels: self.post.bloom.levels() as u32,
+            render_passes: (planned + bloom_passes.saturating_sub(1)) as u32,
+            full_screen_passes: self.plan.full_screen_passes() as u32,
+        }
     }
 
     /// Changes the colour the frame starts from (linear).
@@ -399,7 +482,8 @@ impl Renderer {
             camera,
             self.settings.width,
             self.settings.height,
-            self.settings.color_format.is_srgb(),
+            // The scene's shaders write linear light into an HDR or sRGB target, and encode only for a plain one.
+            self.scene_target_format().is_srgb() || crate::post::is_hdr(self.scene_target_format()),
         );
         self.prepare_overlay();
         self.record_shadow_passes(&mut encoder, slot);
@@ -591,6 +675,7 @@ impl Renderer {
     fn update_resolution(&mut self) {
         if !self.plan.scaled() {
             self.render_size = (self.settings.width, self.settings.height);
+            self.prepare_post();
             return;
         }
         if self.settings.resolution.dynamic
@@ -605,7 +690,55 @@ impl Renderer {
         self.resolution.drawing(self.frame);
         let (width, height) = scaled_size(self.settings.width, self.settings.height, self.resolution.scale());
         self.render_size = (width.min(self.texture_size.0), height.min(self.texture_size.1));
-        self.upscaler.prepare(&self.queue, self.render_size, self.texture_size);
+        if self.plan.post() {
+            self.prepare_post();
+        } else {
+            self.upscaler.prepare(&self.queue, self.render_size, self.texture_size);
+        }
+    }
+
+    /// Writes the post chain's parameters for this frame's render size and settings, where they changed (usually
+    /// nothing is written).
+    fn prepare_post(&mut self) {
+        if !self.plan.post() {
+            return;
+        }
+        let post = &self.settings.post;
+        let (render, texture) = (self.render_size, self.texture_size);
+        let exposure = if post.exposure.is_finite() {
+            post.exposure.max(0.0)
+        } else {
+            1.0
+        };
+        let bloom_levels = self.post.bloom.levels();
+        let bloom_share = if bloom_levels > 0 {
+            post.bloom.intensity.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let format = self.settings.color_format;
+        // Half an output level of dither where the output has 8-bit channels.
+        let dither = match format.remove_srgb_suffix() {
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm => 1.0 / 255.0,
+            wgpu::TextureFormat::Rgb10a2Unorm => 1.0 / 1023.0,
+            _ => 0.0,
+        };
+        let [r, g, b] = post.tint;
+        let params = FinishParams {
+            rect: upscale_params(render, texture),
+            params: [exposure, bloom_share, f32::from(u8::from(!format.is_srgb())), dither],
+            tint: [r, g, b, 1.0 / bloom_levels.max(1) as f32],
+            grade: [post.saturation, post.contrast, 0.0, 0.0],
+            texel: [
+                1.0 / texture.0.max(1) as f32,
+                1.0 / texture.1.max(1) as f32,
+                render.0 as f32,
+                render.1 as f32,
+            ],
+        };
+        self.post.finish.prepare(&self.queue, params);
+        self.post.bloom.prepare(&self.queue, render, texture, exposure);
+        self.post.mlaa.prepare(&self.queue, render, &post.mlaa, exposure);
     }
 
     /// Records every planned pass into `encoder`, with `scene`'s draws when there is one.
@@ -621,12 +754,35 @@ impl Renderer {
         let msaa_view = self.msaa_color.as_ref().map(|attachment| &attachment.view);
         let depth_view = self.depth.as_ref().map(|attachment| &attachment.view);
         let scene_view = self.scene_color.as_ref().map(|attachment| &attachment.view);
-        // Where the scene ends up: the target, or with a render scale the scene colour the upscale pass reads.
-        let scene_output = if self.plan.scaled() { scene_view } else { Some(target) };
+        // Where the scene ends up: the target, or the scene colour the finish (or upscale) pass reads.
+        let scene_output = if self.plan.uses_scene_color() {
+            scene_view
+        } else {
+            Some(target)
+        };
         // A frame drawn below the attachments' size draws into their top-left corner.
         let corner = (self.plan.scaled() && self.render_size != self.texture_size).then_some(self.render_size);
 
         for (index, pass) in self.plan.passes().iter().enumerate() {
+            let timestamp_writes = match (self.timer.as_ref(), slot) {
+                // The shadow passes recorded before took the first queries.
+                (Some(timer), Some(slot)) => {
+                    Some(timer.pass_writes(slot, self.shadow_recorded + usize::from(self.atlas_recorded) + index))
+                }
+                _ => None,
+            };
+            // The effects begin passes of their own, into their own textures.
+            match pass.id {
+                PassId::Mlaa => {
+                    self.post.mlaa.record(encoder, timestamp_writes, corner);
+                    continue;
+                }
+                PassId::Bloom => {
+                    self.post.bloom.record(encoder, timestamp_writes);
+                    continue;
+                }
+                _ => {}
+            }
             let color = pass.color.and_then(|color| match color {
                 ColorAttachment::Output(ops) => Some(wgpu::RenderPassColorAttachment {
                     view: target,
@@ -670,13 +826,6 @@ impl Renderer {
                 // Only possible if an attachment is missing, which `rebuild` rules out.
                 continue;
             }
-            let timestamp_writes = match (self.timer.as_ref(), slot) {
-                // The shadow passes recorded before took the first queries.
-                (Some(timer), Some(slot)) => {
-                    Some(timer.pass_writes(slot, self.shadow_recorded + usize::from(self.atlas_recorded) + index))
-                }
-                _ => None,
-            };
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(pass.id.name()),
                 color_attachments: &colors[..has_color],
@@ -686,17 +835,21 @@ impl Renderer {
                 multiview_mask: None,
             });
             if let Some((width, height)) = corner
-                && !matches!(pass.id, PassId::Upscale | PassId::Ui)
+                && pass.id.is_scene()
             {
                 render_pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
                 render_pass.set_scissor_rect(0, 0, width, height);
             }
-            // The post system adds its draws here when it arrives.
             if let Some(scene) = scene {
-                self.parts.draw(pass.id, prepass, scene, &mut render_pass);
+                // A merged scene pass draws each of the passes it stands for, in order.
+                for id in pass.runs.iter() {
+                    self.parts.draw(id, prepass, scene, &mut render_pass);
+                }
             }
-            if pass.id == PassId::Upscale {
-                self.upscaler.draw(&mut render_pass);
+            match pass.id {
+                PassId::Post => self.post.finish.draw(&mut render_pass),
+                PassId::Upscale => self.upscaler.draw(&mut render_pass),
+                _ => {}
             }
             if pass.id == PassId::Ui
                 && let Some(overlay) = self.overlay_pass.as_ref()
@@ -750,7 +903,7 @@ impl Renderer {
         } else {
             passes
         };
-        self.plan = FramePlan::new(passes, self.settings.msaa_samples);
+        self.plan = FramePlan::with_chain(passes, self.settings.post.chain, self.settings.msaa_samples);
         let (width, height) = (self.settings.width, self.settings.height);
         self.texture_size = if self.plan.scaled() {
             self.clamped_texture_size(resolution.texture_size(width, height))
@@ -758,8 +911,8 @@ impl Renderer {
             (width, height)
         };
         self.render_size = self.texture_size;
-        self.parts
-            .set_target(self.settings.color_format, self.plan.msaa_samples());
+        let scene_format = self.scene_target_format();
+        self.parts.set_target(scene_format, self.plan.msaa_samples());
         if let Some(overlay) = self.overlay_pass.as_mut() {
             overlay.set_format(&self.device, self.settings.color_format);
         }
@@ -782,20 +935,50 @@ impl Renderer {
         self.msaa_color = self
             .plan
             .uses_msaa_color()
-            .then(|| self.attachment("metallic msaa colour", self.settings.color_format, samples, msaa_usage));
-        // The upscale pass samples it.
-        self.scene_color = self.plan.scaled().then(|| {
+            .then(|| self.attachment("metallic msaa colour", scene_format, samples, msaa_usage));
+        // The finish pass (or the upscale pass) samples it.
+        self.scene_color = self.plan.uses_scene_color().then(|| {
             self.attachment(
                 "metallic scene colour",
-                self.settings.color_format,
+                scene_format,
                 1,
                 wgpu::TextureUsages::TEXTURE_BINDING,
             )
         });
-        self.upscaler.set_source(
+        let scene_view = self.scene_color.as_ref().map(|attachment| &attachment.view);
+        self.upscaler
+            .set_source(&self.device, scene_view.filter(|_| !self.plan.post()));
+        self.rebuild_post();
+    }
+
+    /// Makes the post effects' textures for the plan and binds the finish pass's sources again. Part of a rebuild,
+    /// or of a change to bloom's size or filter.
+    fn rebuild_post(&mut self) {
+        let scene_view = self
+            .scene_color
+            .as_ref()
+            .map(|attachment| &attachment.view)
+            .filter(|_| self.plan.post());
+        let bloom = self.plan.contains(PassId::Bloom).then_some(&self.settings.post.bloom);
+        self.post.rebuild(
             &self.device,
-            self.scene_color.as_ref().map(|attachment| &attachment.view),
+            &self.queue,
+            scene_view,
+            (self.texture_size, (self.settings.width, self.settings.height)),
+            bloom,
+            self.plan.contains(PassId::Mlaa),
         );
+        // The new textures' parameters are written with the next frame.
+        self.prepare_post();
+    }
+
+    /// The format the scene passes draw in: the HDR scene colour's with the finish pass, otherwise the output's.
+    fn scene_target_format(&self) -> wgpu::TextureFormat {
+        if self.plan.post() {
+            self.hdr_format
+        } else {
+            self.settings.color_format
+        }
     }
 
     /// `size` within the device's largest texture.

@@ -1,10 +1,16 @@
 //! Offscreen rendering on a real adapter: clear colours read back, every pass layout, MSAA, resizing, and device
 //! setup from many threads at once. Skips when the machine has no adapter (see `support::gpu`).
+//!
+//! The clear colour is linear light. A frame with the finish pass ([`PassId::Post`], the default) clears the HDR
+//! scene colour with it and finishes it like any other light, so an 8-bit UNORM target gets it sRGB-encoded (the
+//! finish pass encodes for targets that do not). A frame without it clears the target itself, which stores the
+//! values as they are, as before the post chain.
 
 mod support;
 
 use metallic_render::{
-    ContextOptions, OffscreenTarget, PassId, PassSet, RenderContext, RenderError, Renderer, RendererSettings, wgpu,
+    ContextOptions, FramePlan, OffscreenTarget, PassId, PassSet, RenderContext, RenderError, Renderer,
+    RendererSettings, wgpu,
 };
 use support::{assert_all_pixels, gpu, gpu_with, read_back_rgba8};
 
@@ -14,8 +20,19 @@ const CLEAR: wgpu::Color = wgpu::Color {
     b: 0.75,
     a: 1.0,
 };
-/// `CLEAR` in an 8-bit UNORM target.
+/// `CLEAR` stored as it is in an 8-bit UNORM target.
 const CLEAR_UNORM: [u8; 4] = [64, 128, 191, 255];
+/// `CLEAR` encoded with the sRGB curve: in an sRGB target, or finished into a UNORM one.
+const CLEAR_ENCODED: [u8; 4] = [137, 188, 225, 255];
+
+/// What `CLEAR` reads back as from a UNORM target drawn with `passes`.
+fn clear_in_unorm(passes: PassSet) -> [u8; 4] {
+    if FramePlan::new(passes, 1).post() {
+        CLEAR_ENCODED
+    } else {
+        CLEAR_UNORM
+    }
+}
 
 fn render_once(context: &RenderContext, settings: RendererSettings) -> Vec<[u8; 4]> {
     let target = OffscreenTarget::new(context, settings.width, settings.height, settings.color_format)
@@ -42,6 +59,16 @@ fn clears_to_a_colour_and_reads_it_back() {
     );
     let pixels = render_once(&context, settings(wgpu::TextureFormat::Rgba8Unorm));
     assert_eq!(pixels.len(), 64 * 48);
+    assert_all_pixels(&pixels, CLEAR_ENCODED, 1);
+    // Without the finish pass the target is cleared directly.
+    let direct = PassSet::default().without(PassId::Post);
+    let pixels = render_once(
+        &context,
+        RendererSettings {
+            passes: direct,
+            ..settings(wgpu::TextureFormat::Rgba8Unorm)
+        },
+    );
     assert_all_pixels(&pixels, CLEAR_UNORM, 1);
 }
 
@@ -50,9 +77,9 @@ fn srgb_targets_encode_the_linear_clear_colour() {
     let Some(context) = gpu() else { return };
     let pixels = render_once(&context, settings(wgpu::TextureFormat::Rgba8UnormSrgb));
     // Linear 0.25 / 0.5 / 0.75 encoded with the sRGB curve.
-    assert_all_pixels(&pixels, [137, 188, 225, 255], 1);
+    assert_all_pixels(&pixels, CLEAR_ENCODED, 1);
     let pixels = render_once(&context, settings(wgpu::TextureFormat::Bgra8UnormSrgb));
-    assert_all_pixels(&pixels, [137, 188, 225, 255], 1);
+    assert_all_pixels(&pixels, CLEAR_ENCODED, 1);
 }
 
 #[test]
@@ -62,6 +89,10 @@ fn every_pass_layout_produces_the_clear_colour() {
         PassSet::default(),
         PassSet::ALL,
         PassSet::default().with(PassId::DepthPrepass),
+        PassSet::default().with(PassId::Mlaa),
+        PassSet::default().with(PassId::Scene),
+        PassSet::default().without(PassId::Bloom),
+        PassSet::default().without(PassId::Post),
         PassSet::EMPTY.with(PassId::Opaque),
         PassSet::EMPTY.with(PassId::Sky).with(PassId::Transparent),
         PassSet::EMPTY.with(PassId::Ui),
@@ -74,7 +105,7 @@ fn every_pass_layout_produces_the_clear_colour() {
                 ..settings(wgpu::TextureFormat::Rgba8Unorm)
             },
         );
-        assert_all_pixels(&pixels, CLEAR_UNORM, 1);
+        assert_all_pixels(&pixels, clear_in_unorm(passes), 1);
     }
 }
 
@@ -84,18 +115,24 @@ fn msaa_resolves_into_the_target() {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let counts = context
         .msaa_sample_counts(format)
+        .intersect(context.msaa_sample_counts(metallic_render::post::hdr_format(&context)))
         .intersect(context.msaa_sample_counts(metallic_render::depth::DEPTH_FORMAT));
     for samples in counts.iter().filter(|&samples| samples > 1) {
-        for passes in [PassSet::default(), PassSet::EMPTY.with(PassId::Opaque)] {
-            let pixels = render_once(
-                &context,
-                RendererSettings {
-                    msaa_samples: samples,
-                    passes,
-                    ..settings(format)
-                },
-            );
-            assert_all_pixels(&pixels, CLEAR_UNORM, 1);
+        for passes in [
+            PassSet::default(),
+            PassSet::default().with(PassId::Scene),
+            PassSet::default().without(PassId::Post),
+            PassSet::EMPTY.with(PassId::Opaque),
+        ] {
+            let settings = RendererSettings {
+                msaa_samples: samples,
+                passes,
+                ..settings(format)
+            };
+            let renderer = Renderer::new(&context, settings).expect("a renderer");
+            assert_eq!(renderer.msaa_sample_counts(), counts);
+            let pixels = render_once(&context, settings);
+            assert_all_pixels(&pixels, clear_in_unorm(passes), 1);
         }
     }
 }
@@ -131,7 +168,14 @@ fn resizing_recreates_the_attachments() {
     let large = OffscreenTarget::new(&context, 200, 120, format).unwrap();
     renderer.set_clear_color(wgpu::Color::RED);
     renderer.render(large.view());
-    assert_all_pixels(&read_back_rgba8(&context, large.texture()), [255, 0, 0, 255], 0);
+    // Full red through the tone curve, encoded.
+    let red = metallic_render::post::tone_curve(1.0);
+    let red = (1.055 * red.powf(1.0 / 2.4) - 0.055) * 255.0;
+    assert_all_pixels(
+        &read_back_rgba8(&context, large.texture()),
+        [red.round() as u8, 0, 0, 255],
+        1,
+    );
     assert_eq!(renderer.frame_index(), 2);
 }
 
@@ -189,7 +233,7 @@ fn devices_set_up_on_many_threads_at_once() {
                     for _ in 0..3 {
                         let context = RenderContext::new_offscreen(&options).unwrap();
                         let pixels = render_once(&context, settings(wgpu::TextureFormat::Rgba8Unorm));
-                        assert_all_pixels(&pixels, CLEAR_UNORM, 1);
+                        assert_all_pixels(&pixels, CLEAR_ENCODED, 1);
                     }
                 })
             })

@@ -413,6 +413,8 @@ pub struct PartRenderer {
     lights: LocalLights,
     shaders: Shaders,
     pipelines: Pipelines,
+    /// Pipelines for other formats or sample counts, made before and kept for a switch back.
+    spare_pipelines: Vec<Pipelines>,
     opaque_group: Option<InstanceGroup>,
     transparent_group: Option<InstanceGroup>,
     transparent: TransparentList,
@@ -629,6 +631,7 @@ impl PartRenderer {
             lights,
             shaders,
             pipelines,
+            spare_pipelines: Vec::new(),
             opaque_group: None,
             transparent_group: None,
             transparent: TransparentList::new(device, binding),
@@ -655,10 +658,31 @@ impl PartRenderer {
         self.binding
     }
 
-    /// Recreates the pipelines for another colour format or sample count (a settings change, never per frame).
+    /// Uses the pipelines for another colour format or sample count (a settings change, never per frame): ones made
+    /// before ([`PartRenderer::prewarm`]) when there are, otherwise new ones.
     pub(crate) fn set_target(&mut self, format: wgpu::TextureFormat, samples: u32) {
-        if (format, samples) != (self.pipelines.format, self.pipelines.samples) {
-            self.pipelines = create_pipelines(&self.device, &self.shaders, self.binding, format, samples);
+        if (format, samples) == (self.pipelines.format, self.pipelines.samples) {
+            return;
+        }
+        let next = match self
+            .spare_pipelines
+            .iter()
+            .position(|p| (p.format, p.samples) == (format, samples))
+        {
+            Some(index) => self.spare_pipelines.swap_remove(index),
+            None => create_pipelines(&self.device, &self.shaders, self.binding, format, samples),
+        };
+        let previous = std::mem::replace(&mut self.pipelines, next);
+        self.spare_pipelines.push(previous);
+    }
+
+    /// Makes the pipelines for `format` at `samples` now, unless they exist, so that switching to them later
+    /// ([`PartRenderer::set_target`]: a new anti-aliasing setting) compiles nothing (ADR 0008 §9).
+    pub(crate) fn prewarm(&mut self, format: wgpu::TextureFormat, samples: u32) {
+        let made = |p: &Pipelines| (p.format, p.samples) == (format, samples);
+        if !made(&self.pipelines) && !self.spare_pipelines.iter().any(made) {
+            let pipelines = create_pipelines(&self.device, &self.shaders, self.binding, format, samples);
+            self.spare_pipelines.push(pipelines);
         }
     }
 
@@ -1015,7 +1039,7 @@ impl PartRenderer {
                 render_pass.draw(0..3, 0..1);
                 self.stats.sky_draws += 1;
             }
-            PassId::Post | PassId::Upscale | PassId::Ui => {}
+            PassId::Scene | PassId::Mlaa | PassId::Bloom | PassId::Post | PassId::Upscale | PassId::Ui => {}
         }
     }
 

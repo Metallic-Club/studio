@@ -29,6 +29,8 @@ const WANTED_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
     .union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)
     .union(wgpu::Features::INDIRECT_FIRST_INSTANCE)
     .union(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
+    // The post chain's compact HDR scene colour (`Rg11b10Ufloat`, `crate::post::hdr_format`).
+    .union(wgpu::Features::RG11B10UFLOAT_RENDERABLE)
     // MSAA counts (and other format features) beyond WebGPU's guaranteed minimum, such as 2x and 8x.
     .union(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
 
@@ -70,6 +72,17 @@ impl MsaaSampleCounts {
         let mut bits = 0;
         for (i, &count) in Self::ALL.iter().enumerate() {
             if flags.sample_count_supported(count) {
+                bits |= 1 << i;
+            }
+        }
+        Self(bits)
+    }
+
+    /// The set of `counts` (powers of two up to 16; anything else is ignored).
+    pub fn from_counts(counts: &[u32]) -> Self {
+        let mut bits = 0;
+        for (i, count) in Self::ALL.iter().enumerate() {
+            if counts.contains(count) {
                 bits |= 1 << i;
             }
         }
