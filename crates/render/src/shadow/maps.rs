@@ -1,5 +1,5 @@
-//! The GPU side of the sun's shadows: the cascade maps, the casters' lists and the caster pipeline (see the
-//! [module documentation](super)).
+//! The GPU side of the sun's shadows: the cascade maps, the cached cascades' static maps and their copy, the
+//! casters' lists and the caster pipeline (see the [module documentation](super)).
 
 use std::time::{Duration, Instant};
 
@@ -67,7 +67,7 @@ struct CascadeState {
     moving: VisibleSet,
     moving_count: u32,
     /// A cached cascade's map is built this frame: its static map copied in, the moving casters drawn on top.
-    compose: bool,
+    build: bool,
     /// What a cached cascade's map holds, `None` when not known (never built, or made again).
     built: Option<Built>,
 }
@@ -348,7 +348,7 @@ impl ShadowMaps {
 
     /// Cached cascade `cascade`'s map when it is built this frame ([`ShadowMaps::build`]).
     pub(crate) fn build_target(&self, cascade: usize) -> Option<&wgpu::TextureView> {
-        if cascade < self.active && self.cascades[cascade].compose {
+        if cascade < self.active && self.cascades[cascade].build {
             self.layer_views.get(cascade)
         } else {
             None
@@ -370,7 +370,7 @@ impl ShadowMaps {
     ) {
         for cascade in &mut self.cascades {
             cascade.redraw = false;
-            cascade.compose = false;
+            cascade.build = false;
             cascade.moving_count = 0;
         }
         self.stats = ShadowStats::default();
@@ -455,7 +455,7 @@ impl ShadowMaps {
                 redrawn: cascade.redraw,
                 cached: i >= dynamic,
                 moving: cascade.moving_count,
-                built: cascade.compose,
+                built: cascade.build,
             };
         }
         self.frame = frame;
@@ -507,7 +507,7 @@ impl ShadowMaps {
                 drawing: cascade.drawings,
                 moving: (moving > 0).then_some(revision),
             };
-            cascade.compose = cascade.built != Some(built);
+            cascade.build = cascade.built != Some(built);
             cascade.built = Some(built);
         }
     }
@@ -561,7 +561,7 @@ impl ShadowMaps {
         for (index, cascade) in self.cascades.iter().enumerate().take(self.active) {
             let sets = [
                 (cascade.redraw, &cascade.visible, Block::Casters(index)),
-                (cascade.compose, &cascade.moving, Block::Moving(index)),
+                (cascade.build, &cascade.moving, Block::Moving(index)),
             ];
             for (drawn, set, block) in sets {
                 if !drawn {

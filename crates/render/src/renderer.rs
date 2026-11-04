@@ -369,27 +369,26 @@ impl Renderer {
     /// cached cascade whose map is built (from its static map, just drawn or not, and its moving casters).
     fn record_shadow_passes(&mut self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>) {
         for cascade in 0..MAX_CASCADES {
-            if self.parts.shadow_target(cascade).is_some() {
-                self.record_shadow_pass(encoder, slot, Timed::Cascade(cascade as u8));
-            }
-            if self.parts.shadow_build_target(cascade).is_some() {
-                self.record_shadow_pass(encoder, slot, Timed::Built(cascade as u8));
-            }
+            self.record_shadow_pass(encoder, slot, cascade, false);
+            self.record_shadow_pass(encoder, slot, cascade, true);
         }
     }
 
-    /// Records one shadow pass: cleared, then drawn (`Timed::Cascade`) or built (`Timed::Built`).
-    fn record_shadow_pass(&mut self, encoder: &mut wgpu::CommandEncoder, slot: Option<usize>, pass: Timed) {
-        let (view, label) = match pass {
-            Timed::Cascade(cascade) => (
-                self.parts.shadow_target(usize::from(cascade)),
-                SHADOW_PASS_NAMES[usize::from(cascade) % MAX_CASCADES],
-            ),
-            Timed::Built(cascade) => (
-                self.parts.shadow_build_target(usize::from(cascade)),
-                SHADOW_BUILD_NAMES[usize::from(cascade) % MAX_CASCADES],
-            ),
-            _ => (None, ""),
+    /// Records cascade `cascade`'s shadow pass when there is one this frame, cleared, then its casters drawn, or
+    /// with `build` its map built.
+    fn record_shadow_pass(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        slot: Option<usize>,
+        cascade: usize,
+        build: bool,
+    ) {
+        let (view, label, pass) = if build {
+            let view = self.parts.shadow_build_target(cascade);
+            (view, SHADOW_BUILD_NAMES[cascade], Timed::Built(cascade as u8))
+        } else {
+            let view = self.parts.shadow_target(cascade);
+            (view, SHADOW_PASS_NAMES[cascade], Timed::Cascade(cascade as u8))
         };
         let Some(view) = view else {
             return;
@@ -413,10 +412,10 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        match pass {
-            Timed::Cascade(cascade) => self.parts.draw_shadow(usize::from(cascade), &mut render_pass),
-            Timed::Built(cascade) => self.parts.build_shadow(usize::from(cascade), &mut render_pass),
-            _ => {}
+        if build {
+            self.parts.build_shadow(cascade, &mut render_pass);
+        } else {
+            self.parts.draw_shadow(cascade, &mut render_pass);
         }
         drop(render_pass);
         if let Some(recorded) = self.shadow_passes.get_mut(self.shadow_recorded) {

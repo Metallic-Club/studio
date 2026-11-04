@@ -1,9 +1,10 @@
 //! Sun shadows on a real adapter (#82): a pillar's shadow on the floor against a committed reference image,
 //! `CastShadow` and `Lighting.GlobalShadows` turning shadows off, the same image from the vertex-buffer fallback,
 //! and the caching of the far cascade: a frame in which nothing static changed and the camera and sun stayed draws
-//! only the near cascades, which hold the moving parts; and a cube resting on the floor under a low sun, shadowed
-//! right up to its foot with no acne on the lit surfaces (#126). Skips when the machine has no adapter (see
-//! `support::gpu`).
+//! the near cascades' casters and keeps the far cascade's static map, and a moving part beyond the near cascades
+//! still casts its shadow, drawn on a copy of that static map (#121); and a cube resting on the floor under a low
+//! sun, shadowed right up to its foot with no acne on the lit surfaces (#126). Skips when the machine has no adapter
+//! (see `support::gpu`).
 //!
 //! The reference is `tests/reference/shadows.png`, compared with the tolerance of `tests/parts.rs`. To make a new
 //! one (after a deliberate change to how shadows look), run with `METALLIC_UPDATE_REFERENCES=1` and look at it.
@@ -487,8 +488,9 @@ fn move_to(game: &mut Game, id: Id, at: Vec3) {
 }
 
 /// The far cascade is cached: with the camera and the sun still, frames in which only a moving part moves draw the
-/// two near cascades (which hold it) and keep the far one; a static part moving inside the far cascade draws it
-/// once; the sun turning draws everything. The far cascade never holds the moving part.
+/// two near cascades' casters (which hold it) and keep the far one's static map, building the far map from it and
+/// the moving part; a static part moving inside the far cascade draws its static map once; the sun turning draws
+/// everything. The far cascade's static map never holds the moving part.
 #[test]
 fn a_static_frame_does_not_redraw_the_far_cascade() {
     let Some(context) = gpu() else { return };

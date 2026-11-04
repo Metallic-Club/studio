@@ -28,7 +28,7 @@
 //! - Lighting and the sky ([`lighting`], [`Renderer::set_lighting`]): the sun or moon, a hemisphere ambient and an
 //!   analytic sky drawn last at the far plane, from the `Lighting` service ([`LightingReader`]).
 //! - Sun shadows ([`shadow`], [`RendererSettings::shadows`]): texel-snapped cascaded shadow maps, each culling its
-//!   own casters, the far cascades cached while their static casters stay.
+//!   own casters, the far cascades' static casters cached while they stay, with the moving ones drawn on top.
 //! - Point and spot lights ([`lights`], [`RendererSettings::lights`]): clustered forward lighting with a per-frame
 //!   budget that fades lights in and out by importance, and a cached shadow atlas for lights with `Shadows`.
 //! - The debug overlay ([`overlay`], [`Renderer::set_overlay_enabled`]): rectangles and bitmap-font text in the UI

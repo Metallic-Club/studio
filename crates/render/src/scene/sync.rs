@@ -698,7 +698,7 @@ impl InstanceScene {
         if from.region == Region::Static
             && let Some(instance) = self.regions[from.region.index()].instances.get(from.slot as usize)
         {
-            // Promoted: its shadow leaves the cached cascades, which hold the static region only.
+            // Promoted: its shadow leaves the cached cascades' static maps, which hold the static region only.
             self.shadow.note(instance);
         }
         self.regions[from.region.index()].release(from.slot);
@@ -731,7 +731,7 @@ impl InstanceScene {
         if slot.region == Region::Static
             && let Some(instance) = self.regions[slot.region.index()].instances.get(slot.slot as usize)
         {
-            // Its shadow leaves the cached cascades (removed, or promoted to the dynamic region).
+            // Its shadow leaves the cached cascades' static maps (removed, or promoted to the dynamic region).
             self.shadow.note(instance);
         }
         self.regions[slot.region.index()].release(slot.slot);
