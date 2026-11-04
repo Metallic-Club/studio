@@ -977,7 +977,7 @@ the planned `passes` in order) report them; the overlay's GPU line and the JSON'
 chain as one. The stress example's `--aa`, `--effects`, `--merge-scene` and `--no-post` set them by hand.
 
 **2026-11-04**, same machine as the tables above (Ryzen 5 5500, RX 6650 XT, Windows 11, **DX12**, `AutoNoVsync`,
-1,000 frames after 120 of warm-up, seed 1, still cameras), branch `85-post-chain` at `3635d1c`. Each preset is run as
+1,000 frames after 120 of warm-up, seed 1, still cameras), branch `85-post-chain` at `3bee7fb` (measured before rebasing onto `77a0483`, whose changes are in `crates/luau`). Each preset is run as
 it is now and with `--no-post`, which draws that preset's frame as before #85 (no HDR target, bloom, tone curve or
 MLAA, the scene passes apart, the upscale pass at Low; High and Ultra keep their MSAA). Times are p50 in ms, the
 frame's p99 in brackets; one round each.
