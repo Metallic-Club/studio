@@ -117,7 +117,8 @@ fn finish_color(scene: vec3<f32>, bloomed: vec3<f32>, pixel: vec2<f32>) -> vec4<
     let luma = dot(color, LUMA);
     color = max(mix(vec3<f32>(luma), color, finish.grade.x), vec3<f32>(0.0));
     if finish.grade.y != 1.0 {
-        color = 0.18 * pow(color / 0.18, vec3<f32>(finish.grade.y));
+        // pow(0, c) is not a number for c ≤ 0 (black under a contrast of 0), so the contrast stays above 0.
+        color = 0.18 * pow(color / 0.18, vec3<f32>(max(finish.grade.y, 1e-3)));
     }
     color = min(color, vec3<f32>(1.0));
     // Half an output level of noise, from the pixel's position, so smooth gradients do not band.

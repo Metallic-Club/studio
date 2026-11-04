@@ -22,7 +22,7 @@ use metallic_render::{
     RendererSettings, wgpu,
 };
 use support::scenes::{self, Game, Look};
-use support::{gpu, gpu_with, read_back_rgba8};
+use support::{gpu, gpu_with, non_finite, read_back_rgba8, render_raw};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -853,4 +853,24 @@ fn light_memory_is_made_when_first_needed() {
         unshadowed + atlas
     );
     eprintln!("light GPU memory: none, {unshadowed} with a light, {shadowed} with a shadow");
+}
+
+/// Every night scene's shaders write finite values, read before the post chain (which would make the others 0): no
+/// pixel is not a number or infinite, with and without local lights, shadowed or not. (On lavapipe the moon's shadow
+/// lookup was 0 / 0 in two pixels on the first cascade split, #149.)
+#[test]
+fn night_scenes_write_only_finite_values() {
+    let Some(context) = gpu() else { return };
+    let scenes = [
+        ("night floor", night_floor as fn() -> Game),
+        ("point", || point_game().0),
+        ("spot", || spot_game().0),
+        ("shadowed point", || shadow_game().0),
+    ];
+    for (name, make) in scenes {
+        let pixels = render_raw(&context, &mut make(), SIZE, |_| {});
+        let bad = non_finite(&pixels, SIZE);
+        eprintln!("{name}: {} pixels not finite {bad:?}", bad.len());
+        assert!(bad.is_empty(), "{name}: pixels not finite {bad:?}");
+    }
 }

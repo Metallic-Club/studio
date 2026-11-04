@@ -156,9 +156,11 @@ fn local_lighting(
             attenuation *= mix(1.0, local_visibility(light, p, n, n_dot_l, -to_light, d), light.params.w);
         }
         let radiance = light.color.rgb * (attenuation * n_dot_l);
-        let h = normalize(l + v);
-        let n_dot_h = max(dot(n, h), 0.0);
-        let v_dot_h = max(dot(v, h), 0.0);
+        // As in `shade`: l + v is 0 when the light is straight behind the point on the view ray (n·l > 0 with an
+        // interpolated normal turned from the camera), and the cosines stay within 0..1 for pow.
+        let h = unit_or_zero(l + v);
+        let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
+        let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
         let d_denominator = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
         let distribution = a2 / (PI * d_denominator * d_denominator);
         let visibility = 0.5 / max(

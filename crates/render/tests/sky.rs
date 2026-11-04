@@ -19,7 +19,7 @@ use metallic_render::{
     RendererSettings, wgpu,
 };
 use support::scenes::{self, Game, Look};
-use support::{gpu, read_back_rgba8};
+use support::{gpu, non_finite, read_back_rgba8, render_raw};
 
 const SIZE: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -304,4 +304,19 @@ fn night_is_darker_but_readable() {
     // The night sky is dark blue.
     let top = pixel(&night, SIZE / 2, 2);
     assert!(top[2] >= top[0] && top[2] < 80, "{top:?}");
+}
+
+/// The sky and the parts under it write finite values at every time of day, read before the post chain (which
+/// would make the others 0): no pixel is not a number or infinite. (Lavapipe wrote 9 at midnight, #149.)
+#[test]
+fn the_sky_writes_only_finite_values() {
+    let Some(context) = gpu() else { return };
+    let mut game = sunset_game();
+    for hours in [0.0, 6.0, 12.0, 17.0, 18.0] {
+        set_clock_time(&mut game, hours);
+        let pixels = render_raw(&context, &mut game, SIZE, |s| s.clear_color = CLEAR);
+        let bad = non_finite(&pixels, SIZE);
+        eprintln!("{hours}:00: {} pixels not finite {bad:?}", bad.len());
+        assert!(bad.is_empty(), "{hours}:00: pixels not finite {bad:?}");
+    }
 }

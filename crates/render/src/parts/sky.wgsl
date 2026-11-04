@@ -31,7 +31,9 @@ fn disc(view: vec3<f32>, centre: vec3<f32>, cos_radius: f32) -> f32 {
 
 fn sky_color(view: vec3<f32>) -> vec3<f32> {
     let sun = frame.sun.xyz;
-    let up = view.y;
+    // Clamped: rounding takes a unit vector's y a little past ±1 straight up or down, and pow of the negative
+    // 1 − up below is not a number on drivers that take it as exp2(y × log2(x)).
+    let up = clamp(view.y, -1.0, 1.0);
 
     // Overhead to horizon: the horizon colour holds near the horizon and gives way to the zenith higher up.
     let above = mix(frame.sky_zenith.rgb, frame.sky_horizon.rgb, pow(1.0 - max(up, 0.0), 3.0));

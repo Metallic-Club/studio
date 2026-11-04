@@ -118,19 +118,20 @@ fn hemisphere(direction_y: f32) -> vec3<f32> {
 // the point moves along its normal by the cascade's offset, scaled by 1 − N·L (only grazing receivers need it), and
 // is compared with its bias, through a tent of bilinear comparison taps (`shadow_params.y` texels each way). Past
 // the last cascade there is no shadow, faded in over the last tenth.
+//
+// The cascade is counted without a loop: the splits grow, so it is how many of the cascades in use end at or before
+// the point. With a search loop, which neighbouring pixels on either side of a split leave at different steps,
+// lavapipe (llvmpipe, LLVM 21) ran the filter loop after it zero times for a few pixels just before the first split
+// (#149): no tap, a total weight of 0, and 0 / 0. The total is also the tent's, (reach + 1)⁴, rather than a sum in
+// the loop, so it is never 0 whatever a driver does with the loop.
 fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
     let count = u32(frame.shadow_params.x);
     if count == 0u {
         return 1.0;
     }
     let depth = dot(position, frame.view_forward.xyz);
-    var cascade = 0u;
-    loop {
-        if cascade >= count || depth < frame.shadow_splits[cascade] {
-            break;
-        }
-        cascade += 1u;
-    }
+    let ended = (vec4<f32>(depth) >= frame.shadow_splits) & (vec4<u32>(0u, 1u, 2u, 3u) < vec4<u32>(count));
+    let cascade = u32(ended.x) + u32(ended.y) + u32(ended.z) + u32(ended.w);
     if cascade >= count {
         return 1.0;
     }
@@ -141,17 +142,22 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
     let texel = frame.shadow_params.z;
     let reach = i32(frame.shadow_params.y);
     var lit = 0.0;
-    var total = 0.0;
     for (var y = -reach; y <= reach; y += 1) {
         for (var x = -reach; x <= reach; x += 1) {
             let weight = f32(reach + 1 - abs(x)) * f32(reach + 1 - abs(y));
             let at = uv + vec2<f32>(f32(x), f32(y)) * texel;
             lit += weight * textureSampleCompareLevel(shadow_maps, shadow_sampler, at, cascade, reference);
-            total += weight;
         }
     }
+    let side = f32(max(reach, 0) + 1);
+    let total = side * side * side * side;
     let fade = smoothstep(frame.shadow_params.w, frame.shadow_splits[count - 1u], depth);
     return mix(lit / total, 1.0, fade);
+}
+
+// `v` scaled to unit length, or 0 when it has none (where `normalize` divides 0 by 0).
+fn unit_or_zero(v: vec3<f32>) -> vec3<f32> {
+    return v * inverseSqrt(max(dot(v, v), 1e-30));
 }
 
 struct Shaded {
@@ -174,9 +180,12 @@ fn shade(in: VertexOut) -> Shaded {
     let diffuse = albedo * (1.0 - metalness);
     let n_dot_l = max(dot(n, l), 0.0);
     let n_dot_v = max(dot(n, v), 1e-4);
-    let h = normalize(l + v);
-    let n_dot_h = max(dot(n, h), 0.0);
-    let v_dot_h = max(dot(v, h), 0.0);
+    // l + v is 0 where the view ray points straight at the light: a surface seen against the sun's disc. The cosines
+    // are clamped to 1 as well as 0: rounding takes them a little past 1 where h meets n or v, and pow(1 − v·h, 5)
+    // is not a number for a negative base on drivers that take it as exp2(5 × log2(1 − v·h)).
+    let h = unit_or_zero(l + v);
+    let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
+    let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
 
     // GGX distribution, height-correlated Smith visibility, Schlick Fresnel.
     let a = roughness * roughness;
