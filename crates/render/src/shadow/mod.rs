@@ -43,11 +43,13 @@
 //!
 //! # Receiving
 //!
-//! Parts look their cascade up by view depth, offset the point along its normal by
-//! [`ShadowSettings::normal_offset`] texels and compare with a depth bias of [`ShadowSettings::depth_bias`] texels
-//! (against acne), filtered by a tent of bilinear comparison taps ([`ShadowSettings::filter_radius`]: 3 × 3 taps
-//! by default, a smooth edge about 4 texels wide). Casters are drawn with their front faces culled, which keeps lit
-//! surfaces off their own depth; shadows fade out over the last tenth of the distance.
+//! A map holds its casters' faces **towards the light** (back faces culled), pushed away from the light by a
+//! slope-scaled rasterizer bias of 3 texels of their depth slope, so a part resting on another shadows it right up to
+//! where they touch (#126). Parts look their cascade up by view depth, offset the point along its normal by
+//! [`ShadowSettings::normal_offset`] texels scaled by `1 − N·L` and compare with a depth bias of
+//! [`ShadowSettings::depth_bias`] texels (at most [`MAX_RECEIVER_OFFSET`]), filtered by a tent of bilinear
+//! comparison taps ([`ShadowSettings::filter_radius`]: 3 × 3 taps by default, a smooth edge about 4 texels wide);
+//! shadows fade out over the last tenth of the distance.
 //!
 //! # Both instance paths
 //!
@@ -71,6 +73,14 @@ use crate::parts::Camera;
 
 /// The most cascades a renderer draws.
 pub const MAX_CASCADES: usize = 4;
+
+/// The most a receiving point's depth bias reaches, in metres, in the sun's cascades and the local lights' atlas, and
+/// the most its normal offset reaches in the atlas. Both are set in texels, which grow with a coarse cascade or with
+/// the distance from a local light (a 256² tile's texel is 8 cm 10 m from a point light): uncapped, they could move a
+/// lookup tens of centimetres, past any caster thinner than that, and light would leak under a thin part resting on
+/// another. Capped, only a caster thinner than 5 cm can be looked past. The sun's normal offset has no cap: see
+/// [`ShadowSettings::depth_bias`].
+pub const MAX_RECEIVER_OFFSET: f32 = 0.05;
 
 /// The cull views of the cascades `settings` fits to `camera` on a target `aspect` (width / height) wide, in a
 /// scene whose instances are relative to `origin`, for a light towards `towards_light`
@@ -116,10 +126,24 @@ pub struct ShadowSettings {
     /// The comparison filter's reach in texels: 0 is one bilinear tap (hard edges), 1 a 3 × 3 tent of taps, 2 a
     /// 5 × 5 one.
     pub filter_radius: u32,
-    /// The depth bias of a receiving point, in texels of its cascade (against shadow acne).
+    /// The depth bias of a receiving point, in texels of its cascade, at most [`MAX_RECEIVER_OFFSET`] metres
+    /// (against shadow acne).
+    ///
+    /// 0.5 by default, with [`ShadowSettings::normal_offset`] 1.5. The maps hold the casters' faces towards the
+    /// light, drawn with a slope-scaled rasterizer bias of 3 texels of their depth slope: the 3 × 3 tent's bilinear
+    /// taps compare a point with depths up to 2 texels away, and on a sloped surface those differ from its own by 2
+    /// texels of slope. With that bias the default cascades show no acne on a cube's top, a ramp the sun meets at 15°
+    /// or the floor it meets at 17° (`tests/shadows.rs`), and the receivers' offsets are a margin: half a texel of
+    /// depth for depth precision, capped so a coarse cascade cannot look past a thin caster lit from above, and a
+    /// texel and a half along the normal for grazing surfaces near a part's edge, where the taps reach the texels of
+    /// the edge's other face. Measured on one 1024² cascade (ADR 0008's Low, about 30 cm a texel): capping the
+    /// normal offset at 5 or 15 cm brought acne back on the cube's top (7.7 and 6.0 levels of 255), so it has no
+    /// cap; scaled by `1 − N·L` it is nothing on surfaces facing the sun. The offsets used to be 1 and 1 texels
+    /// against the back faces the maps held then, which lit a band where a part rests on another (#126).
     pub depth_bias: f32,
-    /// How far a receiving point is moved along its normal before the lookup, in texels of its cascade (against
-    /// acne on surfaces at a grazing angle to the light).
+    /// How far a receiving point is moved along its normal before the lookup, in texels of its cascade, scaled by
+    /// `1 − N·L` (against acne on surfaces at a grazing angle to the light). See [`ShadowSettings::depth_bias`] for
+    /// the values.
     pub normal_offset: f32,
 }
 
@@ -133,8 +157,8 @@ impl ShadowSettings {
         split_lambda: 0.75,
         dynamic_cascades: 2,
         filter_radius: 1,
-        depth_bias: 1.0,
-        normal_offset: 1.0,
+        depth_bias: 0.5,
+        normal_offset: 1.5,
     };
 
     /// How many cascades are drawn: 0 when off.
@@ -198,5 +222,18 @@ impl ShadowStats {
             .enumerate()
             .filter(|(_, c)| c.redrawn)
             .fold(0, |mask, (i, _)| mask | 1 << i)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MAX_RECEIVER_OFFSET;
+
+    /// lights.wgsl caps the local lights' offsets with its own copy of the constant.
+    #[test]
+    fn the_light_shader_caps_receiver_offsets_alike() {
+        let wgsl = include_str!("../parts/lights.wgsl");
+        let line = format!("const MAX_RECEIVER_OFFSET: f32 = {MAX_RECEIVER_OFFSET:?};");
+        assert!(wgsl.contains(&line), "lights.wgsl has no `{line}`");
     }
 }

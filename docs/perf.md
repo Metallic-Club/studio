@@ -617,3 +617,29 @@ A second pair of runs (off, Medium) agreed within 3% (render CPU p99 within 0.2 
   read through one out-of-line call to `DataModel::get`. Timed on the dev PC with a throwaway copy of the two
   workloads (not committed; Callgrind needs Linux): `main` 6.92 / 7.58 µs a sync, the first version 7.58 / 8.33,
   with the light code compiled out 6.70 / 7.42, and now 6.81 / 7.37.
+
+### Contact shadows (#126)
+
+The shadow maps and the atlas now hold their casters' faces towards the light (back faces culled) with a
+slope-scaled rasterizer bias, and the receivers' offsets are smaller, scaled by `1 − N·L` and capped (the reasoning is
+in the docs of `LightSettings::depth_bias` and `ShadowSettings::depth_bias`). The caster passes draw the same
+number of triangles (parts are closed, so culling the other half of them leaves as many), and the light loop gains a
+few multiplies and two `min`s per shadowed light, no texture tap.
+
+**2026-11-04**, same machine and settings as the tables above (DX12, `AutoNoVsync`, 1,000 frames after 120, seed
+1), `main` at `6fd85f4` against branch `126-contact-shadows`; `many_lights` at Medium and `parts_100k`, both still
+cameras. Times are p50 in ms, except the shadow passes: their mean over the measured frames.
+
+| Scene | Build | Frame | Render CPU (p99) | GPU | Opaque pass | Cascade 0 | Cascade 1 | Atlas |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `many_lights` | `main` | 2.201 | 0.513 (0.643) | 2.053 | 1.870 | 0.040 | 0.125 | 0.0009 |
+| `many_lights` | #126 | 2.198 | 0.514 (0.638) | 2.049 | 1.866 | 0.041 | 0.124 | 0.0007 |
+| `parts_100k` | `main` | 0.714 | 0.560 (0.744) | 0.582 | 0.441 | 0.034 | 0.083 | |
+| `parts_100k` | #126 | 0.704 | 0.554 (0.754) | 0.586 | 0.444 | 0.034 | 0.084 | |
+
+- **No cost**: every difference is within the run-to-run noise of these scenes (about 1%). The far cascade is
+  cached in both (drawn in none of the frames), and the atlas draws one tile a frame (a moving lamp; 4 draws, 66
+  casters, 16,180 triangles), as before.
+- **What it buys**: under the image tests' cube resting on a plate, the floor 3 to 12 cm out from the cube's foot
+  was 103% (spot light), 46% (point light), 107% (point light 12 m away) and 12% (sun at 17°) of the way from the
+  shadow's brightness to the lit floor's; it is now 0% under all four (`tests/lights.rs`, `tests/shadows.rs`).

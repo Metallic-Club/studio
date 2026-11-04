@@ -556,6 +556,257 @@ fn the_budget_fades_lights_in_and_out() {
     }
 }
 
+/// A 2 m cube resting exactly on the night floor at the origin (its bottom on the floor's top), a ramp tilted 30°
+/// towards +X beside it, and the camera on the cube's +X side looking back at its foot. The lights of the contact
+/// tests stand on the −X side, so the cube's shadow falls towards +X, onto the floor in front of the camera.
+fn contact_floor() -> Game {
+    let mut game = night_floor();
+    game.part(
+        Look::new("Block", "Plastic", [163, 162, 165]),
+        Vec3::splat(2.0),
+        CFrame::new(Vec3::new(0.0, 1.0, 0.0)),
+    );
+    game.part(
+        Look::new("Block", "Plastic", [163, 162, 165]),
+        Vec3::new(2.4, 0.4, 2.4),
+        CFrame::from_parts(RAMP_CENTRE, Quat::from_rotation_z(-30f32.to_radians())),
+    );
+    game.set_camera(
+        CFrame::look_at(Vec3::new(5.0, 4.5, 3.5), Vec3::new(0.0, 0.4, -1.0), Vec3::Y),
+        60.0,
+    );
+    game
+}
+
+/// The contact tests' ramp: beside the cube on the light's side, away from its shadow.
+const RAMP_CENTRE: Vec3 = Vec3::new(-1.5, 1.0, -3.5);
+
+/// Floor points along the +X foot of the contact tests' cube: from 3 to 12 cm out, the band the leak lit.
+fn contact_band() -> Vec<Vec3> {
+    grid_points(&[1.03, 1.06, 1.09, 1.12], &[-0.7, -0.35, 0.0, 0.35, 0.7], |x, z| {
+        Vec3::new(x, 0.0, z)
+    })
+}
+
+/// Floor points well inside the cube's shadow, 0.5 to 0.8 m out from its foot.
+fn contact_interior() -> Vec<Vec3> {
+    grid_points(&[1.5, 1.6, 1.7, 1.8], &[-0.7, -0.35, 0.0, 0.35, 0.7], |x, z| {
+        Vec3::new(x, 0.0, z)
+    })
+}
+
+/// Floor points as far from the cube's foot, lit beside its shadow.
+fn contact_lit() -> Vec<Vec3> {
+    grid_points(&[1.06, 1.3, 1.6], &[2.3, 2.5, 2.7], |x, z| Vec3::new(x, 0.0, z))
+}
+
+/// Points on the lit surfaces the acne check looks at: the cube's top, the ramp's top and the open floor.
+fn lit_surfaces() -> Vec<Vec3> {
+    let ramp = Quat::from_rotation_z(-30f32.to_radians());
+    let mut points = grid_points(
+        &[-0.7, -0.35, 0.0, 0.35, 0.7],
+        &[-0.7, -0.35, 0.0, 0.35, 0.7],
+        |x, z| Vec3::new(x, 2.0, z),
+    );
+    points.extend(grid_points(
+        &[-0.9, -0.45, 0.0, 0.45, 0.9],
+        &[-0.9, -0.45, 0.0, 0.45, 0.9],
+        |x, z| RAMP_CENTRE + ramp * Vec3::new(x, 0.2, z),
+    ));
+    points.extend(contact_lit());
+    points
+}
+
+/// `point(a, b)` for every `a` in `xs` and `b` in `zs`.
+fn grid_points(xs: &[f32], zs: &[f32], point: impl Fn(f32, f32) -> Vec3) -> Vec<Vec3> {
+    xs.iter()
+        .flat_map(|&x| zs.iter().map(move |&z| (x, z)))
+        .map(|(x, z)| point(x, z))
+        .collect()
+}
+
+/// The pixel world point `point` lands on (one pixel, so a speckle is not averaged away), as the mean of its
+/// channels.
+fn pixel_level(game: &Game, pixels: &[[u8; 4]], point: Vec3) -> f32 {
+    let (x, y) = project(game, point);
+    let p = pixels[(y * SIZE + x) as usize];
+    (f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])) / 3.0
+}
+
+fn mean_level(game: &Game, pixels: &[[u8; 4]], points: &[Vec3]) -> f32 {
+    points.iter().map(|&p| pixel_level(game, pixels, p)).sum::<f32>() / points.len() as f32
+}
+
+/// How a light's shadow meets the foot of the contact tests' cube, in sRGB levels (0 to 255).
+#[derive(Clone, Copy, Debug)]
+struct ContactMeasure {
+    /// The floor 3 to 12 cm out from the foot, in the shadow.
+    band: f32,
+    /// The floor deep in the shadow.
+    interior: f32,
+    /// The floor beside the shadow, in the light.
+    lit: f32,
+}
+
+impl ContactMeasure {
+    fn of(game: &Game, pixels: &[[u8; 4]]) -> Self {
+        Self {
+            band: mean_level(game, pixels, &contact_band()),
+            interior: mean_level(game, pixels, &contact_interior()),
+            lit: mean_level(game, pixels, &contact_lit()),
+        }
+    }
+
+    /// How much of the light leaks into the band: 0 when it is as dark as the shadow's interior, 1 when as bright as
+    /// the lit floor.
+    fn leak(&self) -> f32 {
+        (self.band - self.interior) / (self.lit - self.interior).max(1.0)
+    }
+}
+
+/// Saves `pixels` to the test's temporary folder as `name`.png when `METALLIC_SAVE_IMAGES=1`, for looking at.
+fn save_image(name: &str, pixels: &[[u8; 4]]) {
+    if std::env::var("METALLIC_SAVE_IMAGES").is_ok_and(|v| v == "1") {
+        let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
+        scenes::write_png(&out, SIZE, SIZE, pixels);
+        eprintln!("wrote {}", out.display());
+    }
+}
+
+/// The contact scene with the light `make` adds, its `Shadows` as `shadows`, rendered with `settings`.
+fn render_contact(
+    context: &RenderContext,
+    make: fn(&mut Game) -> Id,
+    settings: LightSettings,
+    shadows: bool,
+) -> (Game, Vec<[u8; 4]>) {
+    let mut game = contact_floor();
+    let id = make(&mut game);
+    game.dm
+        .set_by_name(id, "Shadows", Value::Bool(shadows))
+        .expect("Shadows");
+    let mut frames = Frames::new(context, &mut game, settings);
+    // Whole fades in one frame: the image does not depend on how fast the machine draws.
+    frames.renderer.set_light_fade_step(Some(settings.fade_time));
+    for _ in 0..2 {
+        frames.frame(context, &mut game);
+    }
+    assert_eq!(frames.renderer.light_stats().shadowed, u32::from(shadows));
+    let pixels = frames.pixels(context);
+    (game, pixels)
+}
+
+/// Renders the contact scene with the light `make` adds (shadowed), and again with its `Shadows` off, at each
+/// preset; checks the contact band against the shadow's interior and the lit surfaces against the unshadowed image
+/// (no acne). The vertex-buffer fallback must draw the same.
+fn check_contact(name: &str, make: fn(&mut Game) -> Id) {
+    let Some(context) = gpu() else { return };
+    let presets = [
+        ("medium", LightSettings::MEDIUM),
+        ("low", LightSettings::LOW),
+        ("high", LightSettings::HIGH),
+    ];
+    for (preset, settings) in presets {
+        let (game, shadowed) = render_contact(&context, make, settings, true);
+        let (_, unshadowed) = render_contact(&context, make, settings, false);
+        if settings == LightSettings::default() {
+            save_image(name, &shadowed);
+        }
+        let contact = ContactMeasure::of(&game, &shadowed);
+        eprintln!("{name}, {preset}: {contact:?}, leak {:.1}%", contact.leak() * 100.0);
+        // Acne: no lit point is darker than without the shadow (one pixel each, so a speckle shows).
+        let (mut worst, mut at) = (0.0f32, Vec3::ZERO);
+        for point in lit_surfaces() {
+            let drop = pixel_level(&game, &unshadowed, point) - pixel_level(&game, &shadowed, point);
+            if drop > worst {
+                (worst, at) = (drop, point);
+            }
+        }
+        eprintln!("{name}, {preset}: the lit surfaces' largest drop with the shadow on: {worst:.1} levels at {at}");
+        assert!(
+            contact.lit > contact.interior + 40.0,
+            "{name}, {preset}: the cube casts no clear shadow: {contact:?}"
+        );
+        assert!(
+            contact.leak() < 0.05,
+            "{name}, {preset}: light leaks under the cube's foot: the band 3 to 12 cm out is {:.1}% of the way from \
+             the shadow to the light ({contact:?})",
+            contact.leak() * 100.0
+        );
+        assert!(
+            worst <= 3.0,
+            "{name}, {preset}: shadow acne on a lit surface: {worst:.1} levels darker at {at}"
+        );
+    }
+    if let Some(fallback) = fallback() {
+        let (_, storage) = render_contact(&context, make, LightSettings::default(), true);
+        let (_, vertex) = render_contact(&fallback, make, LightSettings::default(), true);
+        let diff = scenes::compare(&vertex, &storage, 1);
+        eprintln!("{name}: fallback against storage: {diff:?}");
+        assert!(diff.max <= 2, "{diff:?}");
+    }
+}
+
+/// A spot light 6 m up, 2.5 m to the side of the cube, pointing straight down.
+fn contact_spot(game: &mut Game) -> Id {
+    let ws = game.workspace;
+    let down = CFrame::from_parts(
+        Vec3::new(-2.5, 6.0, 0.0),
+        Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+    );
+    let id = light(game, "SpotLight", ws, down, [255, 255, 255], 6.0, 20.0);
+    game.dm.set_by_name(id, "Angle", Value::Number(100.0)).expect("Angle");
+    id
+}
+
+/// A point light 4 m up, above and to the side of the cube.
+fn contact_point(game: &mut Game) -> Id {
+    let ws = game.workspace;
+    light(
+        game,
+        "PointLight",
+        ws,
+        CFrame::new(Vec3::new(-2.5, 4.0, 1.0)),
+        [255, 255, 255],
+        3.0,
+        16.0,
+    )
+}
+
+/// A point light 12 m away and 4 m up, meeting the cube's top at about 15°: its tiles' texels are some 10 cm
+/// across there, where the receivers' offsets reach their cap.
+fn contact_far_point(game: &mut Game) -> Id {
+    let ws = game.workspace;
+    light(
+        game,
+        "PointLight",
+        ws,
+        CFrame::new(Vec3::new(-12.0, 4.0, 0.0)),
+        [255, 255, 255],
+        40.0,
+        30.0,
+    )
+}
+
+/// The same under a far point light, whose tiles are coarse at the cube.
+#[test]
+fn a_far_point_light_shadow_meets_the_foot_of_a_resting_cube() {
+    check_contact("contact_far_point", contact_far_point);
+}
+
+/// A cube resting on a plate under a spot light pointing straight down: its shadow reaches its foot, with no lit
+/// band between them (#126), and the lit surfaces have no acne.
+#[test]
+fn a_spot_light_shadow_meets_the_foot_of_a_resting_cube() {
+    check_contact("contact_spot", contact_spot);
+}
+
+/// The same under a point light above and to the side.
+#[test]
+fn a_point_light_shadow_meets_the_foot_of_a_resting_cube() {
+    check_contact("contact_point", contact_point);
+}
+
 /// A scene without local lights holds none of their GPU memory; the first light makes its buffers and the cluster
 /// texture, and only the first shadow makes the atlas, at the size the settings say then.
 #[test]

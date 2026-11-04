@@ -12,7 +12,7 @@ mod support;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use metallic_core::glam::{Vec3, Vec4};
+use metallic_core::glam::{Quat, Vec3, Vec4};
 use metallic_core::{CFrame, Id, Value};
 use metallic_render::scene::{InstanceBinding, RenderComponents};
 use metallic_render::{
@@ -306,6 +306,171 @@ fn the_vertex_buffer_fallback_draws_the_same_shadows() {
     let diff = scenes::compare(&vertex, &storage, 1);
     eprintln!("fallback against storage: {diff:?}");
     assert!(diff.max <= 2, "{diff:?}");
+}
+
+/// The contact scene's layout on the floor: the horizontal direction the sun's shadows fall in and the one across
+/// it.
+struct ContactLayout {
+    down_sun: Vec3,
+    across: Vec3,
+}
+
+impl ContactLayout {
+    /// A floor point `out` metres from the cube's down-sun foot (the cube is 2 m wide, centred on the origin) and
+    /// `side` metres across.
+    fn floor(&self, out: f32, side: f32) -> Vec3 {
+        self.down_sun * (1.0 + out) + self.across * side
+    }
+
+    /// The ramp's centre and turn: beside the cube on the sun's side, tilted 30° across the sun (towards the
+    /// camera), so the low sun meets it at about 15°.
+    fn ramp(&self) -> CFrame {
+        let tilt = Quat::from_axis_angle(self.down_sun, -30f32.to_radians());
+        CFrame::from_parts(
+            self.across * 3.5 - self.down_sun * 0.5 + Vec3::Y * 0.6,
+            tilt * self.cube_turn(),
+        )
+    }
+
+    /// Turns the cube so one face looks down-sun.
+    fn cube_turn(&self) -> Quat {
+        Quat::from_rotation_y(f32::atan2(-self.down_sun.z, self.down_sun.x))
+    }
+}
+
+/// A 2 m cube resting exactly on the floor at the origin (its bottom on the floor's top) under a low sun (16:30,
+/// about 17° up), turned so a face looks down-sun, a ramp tilted 30° beside it, and the camera down-sun of the
+/// cube looking back at its foot.
+fn contact_game() -> (Game, ContactLayout) {
+    let mut game = Game::new();
+    let lighting = lighting_service(&game);
+    game.dm
+        .set_by_name(lighting, "ClockTime", Value::Number(16.5))
+        .expect("ClockTime");
+    let towards = sun(&game);
+    let down_sun = Vec3::new(-towards.x, 0.0, -towards.z).normalize();
+    let layout = ContactLayout {
+        down_sun,
+        across: Vec3::Y.cross(down_sun),
+    };
+    game.part(
+        Look::new("Block", "Concrete", [160, 158, 150]),
+        Vec3::new(200.0, 1.0, 200.0),
+        CFrame::new(Vec3::new(0.0, -0.5, 0.0)),
+    );
+    game.part(
+        Look::new("Block", "Plastic", [163, 162, 165]),
+        Vec3::splat(2.0),
+        CFrame::from_parts(Vec3::new(0.0, 1.0, 0.0), layout.cube_turn()),
+    );
+    game.part(
+        Look::new("Block", "Plastic", [163, 162, 165]),
+        Vec3::new(2.4, 0.4, 2.4),
+        layout.ramp(),
+    );
+    let eye = layout.down_sun * 6.0 + layout.across * 3.0 + Vec3::Y * 4.5;
+    let target = layout.down_sun * 1.0 + layout.across * 1.0 + Vec3::Y * 0.4;
+    game.set_camera(CFrame::look_at(eye, target, Vec3::Y), 60.0);
+    (game, layout)
+}
+
+/// The mean of the three channels of the one pixel world point `point` lands on (one pixel, so a speckle is not
+/// averaged away).
+fn pixel_level(game: &Game, pixels: &[[u8; 4]], point: Vec3) -> f32 {
+    let (x, y) = project(game, point);
+    let p = pixels[(y * SIZE + x) as usize];
+    (f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])) / 3.0
+}
+
+fn mean_level(game: &Game, pixels: &[[u8; 4]], points: &[Vec3]) -> f32 {
+    points.iter().map(|&p| pixel_level(game, pixels, p)).sum::<f32>() / points.len() as f32
+}
+
+/// `point(a, b)` for every `a` in `xs` and `b` in `zs`.
+fn grid_points(xs: &[f32], zs: &[f32], point: impl Fn(f32, f32) -> Vec3) -> Vec<Vec3> {
+    xs.iter()
+        .flat_map(|&x| zs.iter().map(move |&z| (x, z)))
+        .map(|(x, z)| point(x, z))
+        .collect()
+}
+
+/// A cube resting on a plate under a low sun: its shadow reaches its foot, with no lit band between them (#126),
+/// and the lit surfaces (the cube's top, a ramp the sun meets at about 15° and the floor it meets at 17°) have no
+/// acne. With the default cascades, and with ADR 0008's Low (one 1024² cascade, about 30 cm a texel), where the
+/// receivers' offsets reach their cap.
+#[test]
+fn the_sun_shadow_meets_the_foot_of_a_resting_cube() {
+    let Some(context) = gpu() else { return };
+    let (mut game, layout) = contact_game();
+    let coarse = ShadowSettings {
+        cascades: 1,
+        resolution: 1024,
+        ..ShadowSettings::default()
+    };
+    let wide = ShadowSettings {
+        filter_radius: 2,
+        ..ShadowSettings::default()
+    };
+    let unshadowed = render(&context, &mut game, ShadowSettings::OFF);
+    let settings = [
+        ("default", ShadowSettings::default()),
+        ("one 1024² cascade", coarse),
+        ("5 × 5 filter", wide),
+    ];
+    for (name, settings) in settings {
+        let shadowed = render(&context, &mut game, settings);
+        if settings == ShadowSettings::default() && std::env::var("METALLIC_SAVE_IMAGES").is_ok_and(|v| v == "1") {
+            let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("contact_sun.png");
+            scenes::write_png(&out, SIZE, SIZE, &shadowed);
+            eprintln!("wrote {}", out.display());
+        }
+        let sides = [-0.7, -0.35, 0.0, 0.35, 0.7];
+        let band = grid_points(&[0.03, 0.06, 0.09, 0.12], &sides, |out, side| layout.floor(out, side));
+        let interior = grid_points(&[0.5, 0.6, 0.7, 0.8], &sides, |out, side| layout.floor(out, side));
+        let lit = grid_points(&[0.06, 0.3, 0.6], &[-2.3, -2.5, -2.7], |out, side| {
+            layout.floor(out, side)
+        });
+        let (band, interior, lit_level) = (
+            mean_level(&game, &shadowed, &band),
+            mean_level(&game, &shadowed, &interior),
+            mean_level(&game, &shadowed, &lit),
+        );
+        let leak = (band - interior) / (lit_level - interior).max(1.0);
+        eprintln!(
+            "contact_sun, {name}: band {band:.1}, interior {interior:.1}, lit {lit_level:.1}, leak {:.1}%",
+            leak * 100.0
+        );
+        // Acne: no lit point is darker than without shadows.
+        let ramp = layout.ramp();
+        let turn = layout.cube_turn();
+        let mut surfaces = grid_points(&sides, &sides, |x, z| turn * Vec3::new(x, 2.0, z));
+        surfaces.extend(grid_points(
+            &[-0.9, -0.45, 0.0, 0.45, 0.9],
+            &[-0.9, -0.45, 0.0, 0.45, 0.9],
+            |x, z| ramp * Vec3::new(x, 0.2, z),
+        ));
+        surfaces.extend(lit);
+        let (mut worst, mut at) = (0.0f32, Vec3::ZERO);
+        for point in surfaces {
+            let drop = pixel_level(&game, &unshadowed, point) - pixel_level(&game, &shadowed, point);
+            if drop > worst {
+                (worst, at) = (drop, point);
+            }
+        }
+        eprintln!("contact_sun, {name}: the lit surfaces' largest drop with shadows on: {worst:.1} levels at {at}");
+        // The low sun meets the floor at 17°, so the sky's light is most of the lit floor's.
+        assert!(lit_level > interior + 15.0, "{name}: the cube casts no clear shadow");
+        assert!(
+            leak < 0.05,
+            "{name}: light leaks under the cube's foot: the band 3 to 12 cm out is {:.1}% of the way from the shadow \
+             to the light",
+            leak * 100.0
+        );
+        assert!(
+            worst <= 3.0,
+            "{name}: shadow acne on a lit surface: {worst:.1} levels darker at {at}"
+        );
+    }
 }
 
 /// The cascades a frame drew, as a bit mask.

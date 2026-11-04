@@ -44,9 +44,11 @@
 //!
 //! Each tile is a perspective view from the light, slightly wider than its face (or cone) so that the filter's taps
 //! near an edge stay inside the tile; the parts look the tile up by the major axis of the light-to-point direction
-//! (point lights) and compare through a 3 × 3 tent of bilinear comparison taps, with a normal offset and a depth
-//! bias that grow with the distance from the light. The part a light sits in casts no shadow for it (a bulb inside a
-//! lamp shines through its glass).
+//! (point lights) and compare through a 3 × 3 tent of bilinear comparison taps. A tile holds its casters' faces
+//! towards the light, pushed back by a slope-scaled rasterizer bias, so a part resting on another shadows it right up
+//! to where they touch (#126); the receivers add a small normal offset and depth bias that grow with the distance
+//! from the light, at most [`crate::shadow::MAX_RECEIVER_OFFSET`] (see [`LightSettings::depth_bias`]). The part a
+//! light sits in casts no shadow for it (a bulb inside a lamp shines through its glass).
 //!
 //! **Static caching**: a tile is drawn again only when
 //!
@@ -138,9 +140,22 @@ pub struct LightSettings {
     pub tile_resolution: u32,
     /// The comparison filter's reach in texels: 0 is one bilinear tap, 1 a 3 × 3 tent of taps.
     pub filter_radius: u32,
-    /// The depth bias of a receiving point, in texels of its tile at its distance (against shadow acne).
+    /// The depth bias of a receiving point, in texels of its tile at its distance, at most
+    /// [`crate::shadow::MAX_RECEIVER_OFFSET`] metres (against shadow acne).
+    ///
+    /// Every preset uses 0.5, with [`LightSettings::normal_offset`] 1. The atlas holds the casters' faces towards
+    /// the light, drawn with a slope-scaled rasterizer bias of 2 texels of their depth slope (the shadow taps reach
+    /// 1.5 texels from the point, so a lit surface is never compared with its own depth more than 1.5 texels of
+    /// slope away), and that bias alone keeps every lit surface of the image tests clear of acne at all three
+    /// presets (`tests/lights.rs`: a cube's top, a 30° ramp, the floor, under a spot, a near point light and a far
+    /// one). The receivers' offsets are the margin on top: half a texel of depth for depth precision, a texel along
+    /// the normal for grazing surfaces. They used to be 1.5 and 1.5 against the back faces the atlas held then;
+    /// those offsets moved a lookup 15 to 25 cm a few metres from a light with 256² tiles and lit a band where a part
+    /// rests on another (#126). High's 512² tiles halve every one of these lengths; Low and Medium share 256² tiles.
     pub depth_bias: f32,
-    /// How far a receiving point moves along its normal before the lookup, in texels of its tile at its distance.
+    /// How far a receiving point moves along its normal before the lookup, in texels of its tile at its distance,
+    /// scaled by `1 − N·L` (a surface facing the light needs none, a grazing one all of it) and at most
+    /// [`crate::shadow::MAX_RECEIVER_OFFSET`] metres. See [`LightSettings::depth_bias`] for the values.
     pub normal_offset: f32,
 }
 
@@ -157,8 +172,8 @@ impl LightSettings {
         atlas_resolution: 1024,
         tile_resolution: 256,
         filter_radius: 1,
-        depth_bias: 1.5,
-        normal_offset: 1.5,
+        depth_bias: 0.5,
+        normal_offset: 1.0,
     };
 
     /// Medium (GTX 1650 / RX 6500 class at 60 fps, the Mid tier of ADR 0008): 128 lights a frame, at most 48 per

@@ -10,6 +10,8 @@ const CLUSTER_COUNT: u32 = 3456u;
 const CLUSTER_TEXTURE_WIDTH: u32 = 1024u;
 // MIN_DISTANCE² in lights/mod.rs.
 const MIN_DISTANCE_SQUARED: f32 = 0.01;
+// MAX_RECEIVER_OFFSET in shadow/mod.rs.
+const MAX_RECEIVER_OFFSET: f32 = 0.05;
 
 // A constant per pipeline (parts/mod.rs makes the variants and picks one per frame): whether it shades the local
 // lights' shadows. Code that is there costs every pixel registers, and so occupancy, even in frames that never run
@@ -60,10 +62,10 @@ fn cluster_index(frag: vec2<f32>, depth: f32) -> u32 {
     return (z * CLUSTERS_Y + y) * CLUSTERS_X + x;
 }
 
-// How much of a shadowed light reaches `p` (camera-relative, unit normal `n`), `from_light` from the light at
-// distance `d`: 1 lit, 0 in shadow. A point light's tile is the cube face of `from_light`'s major axis, in the
-// order +X, −X, +Y, −Y, +Z, −Z (`FACES` in lights/atlas.rs).
-fn local_visibility(light: LocalLight, p: vec3<f32>, n: vec3<f32>, from_light: vec3<f32>, d: f32) -> f32 {
+// How much of a shadowed light reaches `p` (camera-relative, unit normal `n` at `n_dot_l` to the light),
+// `from_light` from the light at distance `d`: 1 lit, 0 in shadow. A point light's tile is the cube face of
+// `from_light`'s major axis, in the order +X, −X, +Y, −Y, +Z, −Z (`FACES` in lights/atlas.rs).
+fn local_visibility(light: LocalLight, p: vec3<f32>, n: vec3<f32>, n_dot_l: f32, from_light: vec3<f32>, d: f32) -> f32 {
     var index = u32(light.params.z);
     if light.direction.w < -1.5 {
         let a = abs(from_light);
@@ -76,14 +78,18 @@ fn local_visibility(light: LocalLight, p: vec3<f32>, n: vec3<f32>, from_light: v
         }
     }
     let tile = shadow_tiles[min(index, 63u)];
+    // The offsets are in texels of the tile at this distance, at most MAX_RECEIVER_OFFSET metres however coarse the
+    // tile; the normal offset only for receivers at a grazing angle to the light (LightSettings in lights/mod.rs).
     let texel_size = tile.params.y * d;
-    let clip = tile.clip * vec4<f32>(p + n * (frame.lights_local.z * texel_size), 1.0);
+    let offset = min(frame.lights_local.z * texel_size * (1.0 - n_dot_l), MAX_RECEIVER_OFFSET);
+    let clip = tile.clip * vec4<f32>(p + n * offset, 1.0);
     if clip.w <= 0.0 {
         return 1.0;
     }
     let ndc = clip.xyz / clip.w;
     // The depth bias in metres at this depth, in depth units.
-    let reference = ndc.z - frame.lights_local.w * tile.params.y * tile.params.x / clip.w;
+    let bias = min(frame.lights_local.w * texel_size, MAX_RECEIVER_OFFSET);
+    let reference = ndc.z - bias * tile.params.x / (clip.w * clip.w);
     let texel = frame.lights_atlas.x;
     let low = tile.rect.xy + vec2<f32>(texel);
     let high = tile.rect.xy + vec2<f32>(tile.rect.z - texel);
@@ -147,7 +153,7 @@ fn local_lighting(
             continue;
         }
         if LOCAL_SHADOWS && light.params.w > 0.0 {
-            attenuation *= mix(1.0, local_visibility(light, p, n, -to_light, d), light.params.w);
+            attenuation *= mix(1.0, local_visibility(light, p, n, n_dot_l, -to_light, d), light.params.w);
         }
         let radiance = light.color.rgb * (attenuation * n_dot_l);
         let h = normalize(l + v);
