@@ -15,7 +15,8 @@ struct Frame {
     sky_ambient: vec4<f32>,
     // rgb: ambient light from below.
     ground_ambient: vec4<f32>,
-    // x: 1 when the target is not an sRGB format and the shader must encode.
+    // x: 1 when the target is not an sRGB format and the shader must encode. yzw: the level-of-detail debug view
+    // (`lod_tint` in parts.wgsl), where levels 1, 2 and 3 start in the mesh pool; 0 when it is off.
     output: vec4<f32>,
     // The camera's view rays: right and up scaled to the edges of the screen (NDC ±1), and forward.
     view_right: vec4<f32>,

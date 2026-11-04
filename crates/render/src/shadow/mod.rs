@@ -15,8 +15,11 @@
 //! # Casters
 //!
 //! Each cascade culls its casters with the scene's culling grid ([`crate::InstanceScene::cull_casters`]) against its
-//! own volume, into its own [`VisibleSet`], and draws them with one instanced draw per mesh kind from its own segment
-//! of a shadow list buffer, like the camera's draws ([`crate::parts`]). A caster is an opaque part with `CastShadow`
+//! own volume, into its own [`VisibleSet`], and draws them with one instanced draw per mesh kind and level of detail
+//! from its own segment of a shadow list buffer, like the camera's draws ([`crate::parts`]). Its round casters take
+//! the coarsest level the camera could draw them at anywhere the cascade is looked up (its slice's far corner): never
+//! finer than the surface receiving the shadow, so levels cause no acne, and independent of where the camera stands,
+//! so a cached cascade stays valid (the reasoning is in [`crate::lod`]). A caster is an opaque part with `CastShadow`
 //! on ([`crate::scene::is_shadow_caster`]). See-through parts cast no shadow yet. Sun shadows as a whole follow
 //! `Lighting.GlobalShadows` ([`crate::SceneLighting::global_shadows`]); `Light.Shadows` is the switch of local
 //! lights' shadows, which are drawn into a shadow atlas ([`crate::lights`]).
@@ -29,7 +32,8 @@
 //! ([`crate::scene::Region`]) are drawn into a static map of the cascade's own, drawn again only when
 //!
 //! - the light's direction changes,
-//! - the cascade's snapped placement changes (the camera moved far enough), or
+//! - the cascade's snapped placement changes (the camera moved far enough),
+//! - the camera's levels of detail change (its field of view, the target's height or the LOD bias), or
 //! - a static caster changed inside it ([`crate::InstanceScene::shadow_changes`]: moved, resized, appeared,
 //!   disappeared, started or stopped casting, or moved between regions);
 //!
@@ -74,6 +78,7 @@ pub(crate) use maps::{FrameShadow, SHADOW_FORMAT, ShadowMaps, caster_pipeline};
 #[cfg(doc)]
 use crate::VisibleSet;
 use crate::cull::{Casters, CullView};
+use crate::lod::LodView;
 use crate::parts::Camera;
 
 /// The most cascades a renderer draws.
@@ -89,19 +94,21 @@ pub const MAX_RECEIVER_OFFSET: f32 = 0.05;
 
 /// The cull views of the cascades `settings` fits to `camera` on a target `aspect` (width / height) wide, in a
 /// scene whose instances are relative to `origin`, for a light towards `towards_light`
-/// ([`crate::SceneLighting::light_direction`]), with which casters each culls; and how many there are. These are
-/// the views the renderer culls each cascade's casters with ([`crate::InstanceScene::cull_casters`]), for tools and
-/// tests that mirror it. A cached cascade culls its static casters (into its static map); its moving casters are
-/// those of the dynamic region whose bounding sphere its view holds.
+/// ([`crate::SceneLighting::light_direction`]), whose casters' levels of detail follow `lod` (the camera view's,
+/// [`CullView::lod`]), with which casters each culls; and how many there are. These are the views the renderer culls
+/// each cascade's casters with ([`crate::InstanceScene::cull_casters`]), for tools and tests that mirror it. A cached
+/// cascade culls its static casters (into its static map); its moving casters are those of the dynamic region whose
+/// bounding sphere its view holds, each at [`crate::lod::caster_level`] for the view.
 pub fn cascade_views(
     settings: &ShadowSettings,
     camera: &Camera,
     aspect: f32,
     origin: Vec3,
     towards_light: Vec3,
+    lod: &LodView,
 ) -> ([(CullView, Casters); MAX_CASCADES], usize) {
     let mut fits = [cascade::CascadeFit::default(); MAX_CASCADES];
-    let count = cascade::fit_cascades(camera, aspect, origin, towards_light, settings, &mut fits);
+    let count = cascade::fit_cascades(camera, aspect, origin, towards_light, settings, lod, &mut fits);
     let dynamic = settings.dynamic_count();
     let mut views = [(fits[0].cull_view(), Casters::All); MAX_CASCADES];
     for (i, (view, fit)) in views.iter_mut().zip(&fits).enumerate() {

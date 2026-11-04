@@ -9,7 +9,8 @@ use metallic_platform::{Size, Window};
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::{
     CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings, LightingReader,
-    RenderContext, RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, ShadowSettings, wgpu,
+    LodSettings, RenderContext, RenderError, RenderSurface, Renderer, RendererSettings, SceneLighting, ShadowSettings,
+    wgpu,
 };
 
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
@@ -41,6 +42,8 @@ pub struct SceneRenderer {
     cull: CullSettings,
     shadows: ShadowSettings,
     lights: LightSettings,
+    lod: LodSettings,
+    lod_tint: bool,
     present_mode: Option<wgpu::PresentMode>,
     device: Option<Device>,
     surface: Option<RenderSurface>,
@@ -78,6 +81,8 @@ impl SceneRenderer {
             cull: CullSettings::default(),
             shadows: ShadowSettings::default(),
             lights: LightSettings::default(),
+            lod: LodSettings::default(),
+            lod_tint: false,
             present_mode: None,
             device: None,
             surface: None,
@@ -147,6 +152,29 @@ impl SceneRenderer {
     /// How point and spot lights are drawn.
     pub fn lights(&self) -> LightSettings {
         self.lights
+    }
+
+    /// Changes how the round parts' levels of detail are chosen (the LOD bias; see [`metallic_render::lod`]). The
+    /// Medium preset's by default; graphics presets (#84) set it. Applies now and to every later renderer.
+    pub fn set_lod(&mut self, lod: LodSettings) {
+        self.lod = lod;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_lod(lod);
+        }
+    }
+
+    /// How the round parts' levels of detail are chosen.
+    pub fn lod(&self) -> LodSettings {
+        self.lod
+    }
+
+    /// Colours every part by the level of detail it is drawn at, a debug view
+    /// ([`metallic_render::Renderer::set_lod_tint`]). Off by default. Applies now and to every later renderer.
+    pub fn set_lod_tint(&mut self, on: bool) {
+        self.lod_tint = on;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_lod_tint(on);
+        }
     }
 
     /// Asks for a present mode (for example `AutoNoVsync` for an uncapped frame rate in benchmarks); the surface
@@ -294,6 +322,7 @@ impl RenderHook for SceneRenderer {
                 device.renderer.set_lighting(self.lighting);
             }
             device.renderer.set_overlay_enabled(self.overlay);
+            device.renderer.set_lod_tint(self.lod_tint);
             if let Some(mode) = self.present_mode {
                 surface.set_present_mode(&device.context, mode);
             }
@@ -407,6 +436,7 @@ impl SceneRenderer {
             cull: self.cull,
             shadows: self.shadows,
             lights: self.lights,
+            lod: self.lod,
             ..RendererSettings::new(format, width, height)
         }
     }

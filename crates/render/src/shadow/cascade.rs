@@ -6,6 +6,7 @@ use metallic_core::glam::{Mat4, Vec3, Vec4};
 
 use super::{MAX_CASCADES, ShadowSettings};
 use crate::cull::{CullView, Frustum};
+use crate::lod::LodView;
 use crate::parts::Camera;
 
 /// How far towards the light beyond a cascade's receivers casters are still drawn into it, in metres: a part up to
@@ -83,12 +84,18 @@ pub(crate) struct CascadeFit {
     pub(crate) texel: f32,
     /// The depth range of the map in metres (depth 0 to 1).
     pub(crate) depth_range: f32,
+    /// How the cascade chooses its casters' levels of detail ([`crate::lod`]): as the camera would for a receiver
+    /// as far from it as a point that looks this cascade up can be, the slice's far corner.
+    pub(crate) lod: LodView,
 }
 
 impl CascadeFit {
     /// The view that culls this cascade's casters.
     pub(crate) fn cull_view(&self) -> CullView {
-        CullView::from_frustum(self.frustum, self.eye, self.forward)
+        CullView {
+            lod: self.lod,
+            ..CullView::from_frustum(self.frustum, self.eye, self.forward)
+        }
     }
 }
 
@@ -103,12 +110,14 @@ impl Default for CascadeFit {
             split_far: 0.0,
             texel: 0.0,
             depth_range: 1.0,
+            lod: LodView::OFF,
         }
     }
 }
 
 /// Fits `settings.cascades` cascades to `camera` (on a target `aspect` wide, in a scene whose instances are
-/// relative to `origin`) for a light towards `towards_light`, into `out`. Returns how many it fitted.
+/// relative to `origin`) for a light towards `towards_light`, into `out`, their casters' levels of detail following
+/// `lod`, the camera view's ([`crate::cull::CullView::lod`]). Returns how many it fitted.
 ///
 /// Each cascade covers the bounding sphere of its slice of the view, whose size does not depend on where the camera
 /// looks, so the map's texels keep their world size. The sphere's centre is snapped in light space to whole texels
@@ -120,6 +129,7 @@ pub(crate) fn fit_cascades(
     origin: Vec3,
     towards_light: Vec3,
     settings: &ShadowSettings,
+    lod: &LodView,
     out: &mut [CascadeFit; MAX_CASCADES],
 ) -> usize {
     let count = settings.cascade_count();
@@ -198,6 +208,9 @@ pub(crate) fn fit_cascades(
             split_far: b,
             texel,
             depth_range,
+            // A point looks this cascade up while its view depth is below `b`, so it is at most `b` over the cosine
+            // of the view's corner angle from the camera: the far corner of the slice.
+            lod: lod.for_shadow(around_camera),
         };
     }
     count
@@ -278,7 +291,7 @@ mod tests {
     fn fit(camera: &Camera, settings: &ShadowSettings) -> ([CascadeFit; MAX_CASCADES], usize) {
         let mut out = [CascadeFit::default(); MAX_CASCADES];
         let sun = Vec3::new(-0.5, 0.65, 0.58).normalize();
-        let n = fit_cascades(camera, 16.0 / 9.0, Vec3::ZERO, sun, settings, &mut out);
+        let n = fit_cascades(camera, 16.0 / 9.0, Vec3::ZERO, sun, settings, &LodView::OFF, &mut out);
         (out, n)
     }
 
@@ -435,6 +448,7 @@ mod tests {
             Vec3::ZERO,
             Vec3::new(-0.5, 0.66, 0.58),
             &settings,
+            &LodView::OFF,
             &mut turned,
         );
         assert!(far.needs_redraw(&turned[2], false, &scene));

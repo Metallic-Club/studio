@@ -182,7 +182,8 @@ impl PerfSummary {
     /// Writes the summary as the members of a JSON object, without the braces, so a report can put its own
     /// members around them (times in milliseconds): `frames`, `frame_ms`, `fps_p50`, `low_1pct_ms`,
     /// `low_1pct_fps`, `cpu_ms` (`script`, `physics`, `render`, `cull`, `lights`), `gpu_ms` (`frames`, `total`,
-    /// `passes` by name, `shadow` and `shadow_build` per cascade, `light_shadows`), `draws` (with `culled`), `shadow`
+    /// `passes` by name, `shadow` and `shadow_build` per cascade, `light_shadows`), `draws` (with `culled`, and
+    /// `levels`: the instances drawn at each level of detail, full detail first), `shadow`
     /// (the last frame's `cascades`, `casters` and `moving` per cascade, `draws`, `instances` and `triangles`, and per
     /// cascade the summarised frames its casters were drawn in, `redraws`, and its map built in, `builds`) and
     /// `lights` (the last frame's light counts, clusters and atlas, and over the
@@ -255,7 +256,8 @@ impl PerfSummary {
         write!(
             out,
             "\"draws\":{{\"prepass\":{},\"opaque\":{},\"transparent\":{},\"opaque_instances\":{},\
-             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{},\"culled\":{}}},",
+             \"opaque_triangles\":{},\"transparent_instances\":{},\"transparent_triangles\":{},\"culled\":{},\
+             \"levels\":[{},{},{},{}]}},",
             d.prepass_draws,
             d.opaque_draws,
             d.transparent_draws,
@@ -263,7 +265,11 @@ impl PerfSummary {
             d.opaque_triangles,
             d.transparent_instances,
             d.transparent_triangles,
-            d.culled_instances
+            d.culled_instances,
+            d.level_instances[0],
+            d.level_instances[1],
+            d.level_instances[2],
+            d.level_instances[3]
         )?;
         let cascades = d.shadow_cascades as usize;
         let list = |values: &[u32]| values.iter().map(u32::to_string).collect::<Vec<_>>().join(",");

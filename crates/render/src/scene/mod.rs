@@ -69,6 +69,7 @@ mod sync;
 mod tests;
 
 pub use components::{LightComponent, MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
+pub(crate) use gpu::TransparentEntries;
 pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};
 pub use grid::CELL_SIZE;
 pub(crate) use grid::bounding_sphere;

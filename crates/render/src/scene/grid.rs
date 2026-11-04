@@ -24,6 +24,11 @@
 //! first: every item of a cell inside the frustum passes the planes, the items of a cell crossing one are tested
 //! one by one, and distance and size are only tested where even the cell's smallest item at its farthest corner
 //! would not pass.
+//!
+//! Each item of a round kind (Ball, Cylinder) also keeps the **level of detail** the camera's view last drew it at
+//! ([`crate::lod`]), so the next cull chooses with hysteresis; moving the item keeps it. A cell notes whether it has
+//! held such an item since it was last empty, and a cell that has not is culled exactly as without levels, so a scene
+//! of blocks pays nothing for them.
 
 use std::collections::HashMap;
 
@@ -33,6 +38,7 @@ use super::Region;
 use super::instance::GpuInstance;
 use super::lists::{DYNAMIC_ENTRY, NOT_LISTED, TRANSPARENT_LIST, entry, entry_slot};
 use crate::cull::{Casters, Containment, CullStats, CullView, VisibleSet};
+use crate::lod::{self, NEW};
 
 /// The side of a grid cell, in metres. Parts are mostly a few metres across; a cell holds a few dozen of them in a
 /// dense scene, few enough to test one by one when the cell crosses the view's edge, and the cells of a 1.6 km city
@@ -67,16 +73,37 @@ impl Place {
     };
 }
 
-/// One drawn instance as culling sees it: its bounding sphere, its entry, its list, and whether it casts a sun
-/// shadow ([`super::is_shadow_caster`]), which shadow views ([`Casters`]) cull on.
+/// One drawn instance as culling sees it: its bounding sphere, its entry, its list, whether it casts a sun shadow
+/// ([`super::is_shadow_caster`]), which shadow views ([`Casters`]) cull on, its shape's class of levels of detail
+/// ([`lod::lod_class`]; 0 for kinds with one level), and the level the camera's view last drew it at
+/// ([`lod::NEW`] before the first). 24 bytes, as before levels: the class and the caster share a byte.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Item {
     pub(crate) center: Vec3,
     pub(crate) radius: f32,
     pub(crate) entry: u32,
     pub(crate) list: u16,
-    pub(crate) caster: bool,
+    /// [`CASTER`], and the class of levels from bit 1 up.
+    pub(crate) flags: u8,
+    pub(crate) level: u8,
 }
+
+/// [`Item::flags`]: the instance casts a sun shadow.
+const CASTER: u8 = 1;
+
+impl Item {
+    #[inline]
+    fn caster(&self) -> bool {
+        self.flags & CASTER != 0
+    }
+
+    #[inline]
+    fn class(&self) -> u8 {
+        self.flags >> 1
+    }
+}
+
+const _: () = assert!(size_of::<Item>() == 24);
 
 /// A large item, with the half extents of its axis-aligned box (much tighter than the sphere for a wall or floor).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,6 +119,8 @@ struct Cell {
     reach: f32,
     /// No item the cell holds is smaller than this (the smallest since it was last empty; removals leave it).
     smallest: f32,
+    /// The cell has held an item with levels of detail since it was last empty (removals leave it).
+    levels: bool,
     items: Vec<Item>,
 }
 
@@ -144,6 +173,7 @@ impl Grid {
             cell.items.clear();
             cell.reach = 0.0;
             cell.smallest = f32::INFINITY;
+            cell.levels = false;
         }
         self.large.clear();
         for places in &mut self.places {
@@ -182,11 +212,23 @@ impl Grid {
         self.cells.iter().map(|c| c.items.len()).sum::<usize>() + self.large.len()
     }
 
+    /// [`Grid::update`] for an item that starts from no level of detail.
+    #[cfg(test)]
+    pub(crate) fn update_new(&mut self, region: Region, slot: u32, instance: &GpuInstance, list: u16) {
+        self.update(region, slot, instance, list, NEW);
+    }
+
+    /// The level of detail the camera's view last drew `slot`'s item at ([`NEW`] when it has none).
+    pub(crate) fn level(&self, region: Region, slot: u32) -> u8 {
+        self.level_at(self.place(region, slot))
+    }
+
     /// Brings `slot`'s item in line with its packed `instance` and the draw `list` it is on ([`NOT_LISTED`]
-    /// takes it out).
+    /// takes it out). An item that enters the grid starts at level of detail `level` ([`NEW`], or the level of the
+    /// slot it came from in another region); one already in it keeps its own.
     // Kept out of line: the sync calls it only when a slot changes list, and inlined it would bloat that hot path.
     #[inline(never)]
-    pub(crate) fn update(&mut self, region: Region, slot: u32, instance: &GpuInstance, list: u16) {
+    pub(crate) fn update(&mut self, region: Region, slot: u32, instance: &GpuInstance, list: u16, level: u8) {
         let place = self.place(region, slot);
         if list == NOT_LISTED {
             if place.cell != Place::NONE {
@@ -196,12 +238,15 @@ impl Grid {
             return;
         }
         let (center, radius) = bounding_sphere(instance);
-        let item = Item {
+        let class = lod::lod_class(instance.mesh());
+        let caster = list != TRANSPARENT_LIST && super::is_shadow_caster(instance);
+        let mut item = Item {
             center,
             radius,
             entry: entry(region, slot),
             list,
-            caster: list != TRANSPARENT_LIST && super::is_shadow_caster(instance),
+            flags: u8::from(caster) | (class << 1),
+            level: NEW,
         };
         // The common case for a moving part: still in its cell. Its own box is tested without working out a key,
         // and a sphere that is not finite fails the test and takes the long way.
@@ -217,12 +262,22 @@ impl Grid {
                 if radius < cell.smallest {
                     cell.smallest = radius;
                 }
+                if class != 0 {
+                    cell.levels = true;
+                }
                 if let Some(target) = cell.items.get_mut(place.pos as usize) {
+                    // The level it was drawn at stays, for the hysteresis.
+                    item.level = target.level;
                     *target = item;
                 }
                 return;
             }
         }
+        item.level = if place.cell == Place::NONE {
+            level
+        } else {
+            self.level_at(place)
+        };
         let large = !(radius <= LARGE_RADIUS && center.is_finite());
         if large {
             let large_item = Large {
@@ -258,6 +313,7 @@ impl Grid {
         {
             cell.reach = cell.reach.max(radius);
             cell.smallest = cell.smallest.min(radius);
+            cell.levels |= class != 0;
             if let Some(target) = cell.items.get_mut(place.pos as usize) {
                 *target = item;
             }
@@ -275,6 +331,7 @@ impl Grid {
                     key,
                     reach: 0.0,
                     smallest: f32::INFINITY,
+                    levels: false,
                     items: Vec::new(),
                 });
                 self.index.insert(key, index);
@@ -286,9 +343,22 @@ impl Grid {
         };
         cell.reach = cell.reach.max(radius);
         cell.smallest = cell.smallest.min(radius);
+        cell.levels |= class != 0;
         let pos = u32::try_from(cell.items.len()).unwrap_or(u32::MAX);
         cell.items.push(item);
         self.set_place(region, slot, Place { cell: index, pos });
+    }
+
+    /// The level the item at `place` was last drawn at; [`NEW`] when there is none.
+    fn level_at(&self, place: Place) -> u8 {
+        let item = if place.cell == Place::LARGE {
+            self.large.get(place.pos as usize).map(|l| &l.item)
+        } else {
+            self.cells
+                .get(place.cell as usize)
+                .and_then(|cell| cell.items.get(place.pos as usize))
+        };
+        item.map_or(NEW, |item| item.level)
     }
 
     fn place(&self, region: Region, slot: u32) -> Place {
@@ -321,6 +391,7 @@ impl Grid {
             if cell.items.is_empty() {
                 cell.reach = 0.0;
                 cell.smallest = f32::INFINITY;
+                cell.levels = false;
             }
             moved
         };
@@ -332,9 +403,10 @@ impl Grid {
 
     /// Writes what `view` sees into `out` (see [`crate::cull`]), returning what the cull did (without its time).
     /// `capacities` is each opaque list's full length and `transparent` the see-through list's, so `out` never
-    /// grows during the cull.
+    /// grows during the cull. A camera's view notes the level it draws each round item at, for the next cull's
+    /// hysteresis ([`crate::lod`]).
     pub(crate) fn cull(
-        &self,
+        &mut self,
         view: &CullView,
         capacities: impl ExactSizeIterator<Item = usize>,
         transparent: usize,
@@ -344,9 +416,10 @@ impl Grid {
     }
 
     /// Like [`Grid::cull`], for a shadow view: only the opaque instances that cast shadows, of both regions or of
-    /// the static region alone (see [`Casters`]). The see-through list stays empty.
+    /// the static region alone (see [`Casters`]). The see-through list stays empty. A shadow view's levels need no
+    /// memory ([`crate::lod`]), so it changes none.
     pub(crate) fn cull_casters(
-        &self,
+        &mut self,
         view: &CullView,
         casters: Casters,
         capacities: impl ExactSizeIterator<Item = usize>,
@@ -361,14 +434,17 @@ impl Grid {
     /// The cull of [`Grid::cull`] and [`Grid::cull_casters`]: `MODE` is [`VIEW`] (every instance) or which casters
     /// a shadow view keeps. A constant, so the camera's cull compiles to the same code as before shadows.
     fn cull_filtered<const MODE: u8>(
-        &self,
+        &mut self,
         view: &CullView,
         capacities: impl ExactSizeIterator<Item = usize>,
         transparent: usize,
         out: &mut VisibleSet,
     ) -> CullStats {
         let mut stats = CullStats::default();
-        out.begin(capacities, transparent, self.cells.len() + self.large.len());
+        let levels = view.lod.enabled();
+        // A camera's view remembers the levels it chose; a shadow view's follow from its own distance.
+        let remember = view.lod.distance() == 0.0;
+        out.begin(capacities, transparent, self.cells.len() + self.large.len(), levels);
         let half_cell = Vec3::splat(CELL_SIZE * 0.5);
         // First the cells and large items in view, with their depth...
         for (index, cell) in (0u32..).zip(&self.cells) {
@@ -423,15 +499,40 @@ impl Grid {
             let (_, place) = out.order[i];
             let index = (place & INDEX) as usize;
             if place & LARGE != 0 {
-                if let Some(large) = self.large.get(index) {
-                    out.push(large.item.entry, large.item.list);
+                if let Some(large) = self.large.get_mut(index) {
+                    let item = &mut large.item;
+                    if levels && item.class() != 0 {
+                        let level = choose_level(view, item, remember);
+                        out.push_level(item.entry, item.list, level);
+                    } else {
+                        out.push(item.entry, item.list);
+                    }
                 }
                 continue;
             }
-            let Some(cell) = self.cells.get(index) else {
+            let Some(cell) = self.cells.get_mut(index) else {
                 continue;
             };
             let (test_planes, test_size) = (place & TEST_PLANES != 0, place & TEST_SIZE != 0);
+            if levels && cell.levels {
+                for item in &mut cell.items {
+                    if !keeps::<MODE>(item) {
+                        continue;
+                    }
+                    if test_planes && !view.frustum.contains_sphere(item.center, item.radius) {
+                        stats.outside_frustum += 1;
+                    } else if test_size && !view.sphere_large_and_near(item.center, item.radius) {
+                        stats.too_far_or_small += 1;
+                    } else if item.class() == 0 {
+                        out.push(item.entry, item.list);
+                    } else {
+                        let level = choose_level(view, item, remember);
+                        out.push_level(item.entry, item.list, level);
+                    }
+                }
+                continue;
+            }
+            // A cell that has held no round part: exactly the cull without levels.
             for item in &cell.items {
                 if !keeps::<MODE>(item) {
                     continue;
@@ -450,6 +551,20 @@ impl Grid {
     }
 }
 
+/// The level `view` draws the round `item` at: a camera's view by its distance from the eye, with the hysteresis of
+/// the level it last drew it at (and notes the new one, with `remember`); a shadow view by its own distance.
+#[inline]
+fn choose_level(view: &CullView, item: &mut Item, remember: bool) -> u8 {
+    if remember {
+        let d2 = (item.center - view.eye).length_squared();
+        let level = view.lod.choose(item.class(), item.radius * item.radius, d2, item.level);
+        item.level = level;
+        level
+    } else {
+        view.lod.choose_caster(item.class(), item.radius)
+    }
+}
+
 /// The cull modes of [`Grid::cull_filtered`]: a camera's view (every instance), or a shadow view keeping the
 /// casters of both regions or of the static region only.
 const VIEW: u8 = 0;
@@ -461,8 +576,8 @@ const STATIC_CASTERS: u8 = 2;
 fn keeps<const MODE: u8>(item: &Item) -> bool {
     match MODE {
         VIEW => true,
-        ALL_CASTERS => item.caster,
-        _ => item.caster && item.entry & DYNAMIC_ENTRY == 0,
+        ALL_CASTERS => item.caster(),
+        _ => item.caster() && item.entry & DYNAMIC_ENTRY == 0,
     }
 }
 
@@ -498,7 +613,7 @@ mod tests {
         CullView::for_camera(&camera, Vec3::ZERO, 100, 100, &CullSettings::default())
     }
 
-    fn cull(grid: &Grid, view: &CullView) -> (VisibleSet, CullStats) {
+    fn cull(grid: &mut Grid, view: &CullView) -> (VisibleSet, CullStats) {
         let mut set = VisibleSet::new();
         let stats = grid.cull(view, [16usize].into_iter(), 16, &mut set);
         (set, stats)
@@ -527,29 +642,29 @@ mod tests {
     #[test]
     fn items_follow_their_slots_between_cells() {
         let mut grid = Grid::default();
-        grid.update(Region::Static, 0, &instance(Vec3::new(1.0, 1.0, 1.0), Vec3::ONE), 0);
-        grid.update(Region::Static, 1, &instance(Vec3::new(2.0, 1.0, 1.0), Vec3::ONE), 0);
-        grid.update(Region::Dynamic, 0, &instance(Vec3::new(100.0, 1.0, 1.0), Vec3::ONE), 0);
+        grid.update_new(Region::Static, 0, &instance(Vec3::new(1.0, 1.0, 1.0), Vec3::ONE), 0);
+        grid.update_new(Region::Static, 1, &instance(Vec3::new(2.0, 1.0, 1.0), Vec3::ONE), 0);
+        grid.update_new(Region::Dynamic, 0, &instance(Vec3::new(100.0, 1.0, 1.0), Vec3::ONE), 0);
         assert_eq!((grid.cells.len(), grid.len()), (2, 3));
         // Moving within a cell rewrites the item; moving out takes it to another cell.
-        grid.update(Region::Static, 0, &instance(Vec3::new(3.0, 1.0, 1.0), Vec3::ONE), 0);
+        grid.update_new(Region::Static, 0, &instance(Vec3::new(3.0, 1.0, 1.0), Vec3::ONE), 0);
         assert_eq!(grid.cells[0].items[0].center.x, 3.0);
-        grid.update(Region::Static, 0, &instance(Vec3::new(101.0, 1.0, 1.0), Vec3::ONE), 0);
+        grid.update_new(Region::Static, 0, &instance(Vec3::new(101.0, 1.0, 1.0), Vec3::ONE), 0);
         assert_eq!(grid.cells[0].items.len(), 1);
         assert_eq!(grid.cells[1].items.len(), 2);
         // Slot 1 was swapped into position 0 of the first cell: removing it still finds it.
-        grid.update(Region::Static, 1, &GpuInstance::FREE, NOT_LISTED);
+        grid.update_new(Region::Static, 1, &GpuInstance::FREE, NOT_LISTED);
         assert!(grid.cells[0].items.is_empty());
         assert_eq!(grid.cells[0].reach, 0.0);
         // A large item goes on the large list, and comes back when it shrinks.
-        grid.update(
+        grid.update_new(
             Region::Static,
             0,
             &instance(Vec3::ZERO, Vec3::new(500.0, 1.0, 500.0)),
             0,
         );
         assert_eq!((grid.large.len(), grid.cells[1].items.len()), (1, 1));
-        grid.update(Region::Static, 0, &instance(Vec3::ZERO, Vec3::ONE), 0);
+        grid.update_new(Region::Static, 0, &instance(Vec3::ZERO, Vec3::ONE), 0);
         assert!(grid.large.is_empty());
         assert_eq!(grid.len(), 2);
         grid.clear();
@@ -562,14 +677,14 @@ mod tests {
         // A row of blocks along −Z every 10 m, a row behind the eye, and one off to the side.
         let mut slot = 0;
         for i in 1..=8 {
-            grid.update(
+            grid.update_new(
                 Region::Static,
                 slot,
                 &instance(Vec3::new(0.0, 0.0, -10.0 * i as f32), Vec3::ONE),
                 0,
             );
             slot += 1;
-            grid.update(
+            grid.update_new(
                 Region::Static,
                 slot,
                 &instance(Vec3::new(0.0, 0.0, 10.0 * i as f32), Vec3::ONE),
@@ -577,27 +692,27 @@ mod tests {
             );
             slot += 1;
         }
-        grid.update(
+        grid.update_new(
             Region::Static,
             slot,
             &instance(Vec3::new(500.0, 0.0, -10.0), Vec3::ONE),
             0,
         );
-        grid.update(
+        grid.update_new(
             Region::Dynamic,
             0,
             &instance(Vec3::new(0.0, 0.0, -5.0), Vec3::ONE),
             TRANSPARENT_LIST,
         );
         // A floor under everything: large, and crossing the view.
-        grid.update(
+        grid.update_new(
             Region::Dynamic,
             1,
             &instance(Vec3::new(0.0, -2.0, 0.0), Vec3::new(400.0, 1.0, 400.0)),
             0,
         );
         let v = view(Vec3::ZERO, Vec3::NEG_Z);
-        let (set, stats) = cull(&grid, &v);
+        let (set, stats) = cull(&mut grid, &v);
         assert_eq!(stats.candidates, 19);
         assert_eq!(stats.visible, 10, "{stats:?}");
         assert_eq!(stats.outside_frustum, 9);
@@ -610,7 +725,7 @@ mod tests {
         let row: Vec<u32> = set.opaque[0].iter().copied().filter(|&e| e != floor).collect();
         assert_eq!(row, ahead);
         // Turned round, the other row; and every cell behind is skipped whole.
-        let (set, stats) = cull(&grid, &view(Vec3::ZERO, Vec3::Z));
+        let (set, stats) = cull(&mut grid, &view(Vec3::ZERO, Vec3::Z));
         assert_eq!(set.opaque[0].len(), 9);
         assert!(stats.cells_outside > 0, "{stats:?}");
     }
@@ -620,7 +735,7 @@ mod tests {
         let mut grid = Grid::default();
         for i in 0..10 {
             let at = Vec3::new(0.0, 0.0, -100.0 * (i + 1) as f32);
-            grid.update(Region::Static, i, &instance(at, Vec3::ONE), 0);
+            grid.update_new(Region::Static, i, &instance(at, Vec3::ONE), 0);
         }
         let camera = Camera::from_cframe(CFrame::look_at(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y), 90.0);
         let near = CullView::for_camera(
@@ -634,7 +749,7 @@ mod tests {
                 ..CullSettings::default()
             },
         );
-        let (set, stats) = cull(&grid, &near);
+        let (set, stats) = cull(&mut grid, &near);
         assert_eq!(set.opaque[0].len(), 3);
         assert_eq!(stats.too_far_or_small, 7);
         // A unit cube (radius 0.87) on a 1000-pixel target at 90°: 2 pixels across at about 433 m.
@@ -648,7 +763,7 @@ mod tests {
                 ..CullSettings::default()
             },
         );
-        let (set, _) = cull(&grid, &small);
+        let (set, _) = cull(&mut grid, &small);
         assert_eq!(set.opaque[0].len(), 4);
     }
 }

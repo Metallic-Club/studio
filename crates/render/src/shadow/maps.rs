@@ -8,6 +8,7 @@ use metallic_core::glam::{Mat4, Vec3};
 use super::cascade::{CascadeCache, CascadeFit, SceneState, fit_cascades};
 use super::{CascadeStats, MAX_CASCADES, MAX_RECEIVER_OFFSET, ShadowSettings, ShadowStats};
 use crate::cull::{Casters, VisibleSet};
+use crate::lod::{self, LodView, MAX_LOD_LEVELS};
 use crate::parts::{Camera, MeshPool, MeshVertex};
 use crate::scene::{GpuInstance, InstanceBinding, MeshKind, Region, bounding_sphere, entry, is_shadow_caster};
 use crate::{GpuScene, InstanceScene};
@@ -80,12 +81,13 @@ struct Built {
     moving: Option<u64>,
 }
 
-/// A moving caster (in the dynamic region), as the cached cascades test it: its entry, its mesh kind and its
-/// bounding sphere, origin-relative.
+/// A moving caster (in the dynamic region), as the cached cascades test it: its entry, its mesh kind (and its class
+/// of levels of detail) and its bounding sphere, origin-relative.
 #[derive(Clone, Copy, Debug)]
 struct Mover {
     entry: u32,
     kind: u16,
+    class: u8,
     center: Vec3,
     radius: f32,
 }
@@ -165,6 +167,8 @@ pub(crate) struct ShadowMaps {
     cascades: [CascadeState; MAX_CASCADES],
     /// Cascades in use this frame.
     active: usize,
+    /// The camera's levels of detail the maps were drawn for: when they change, every map is drawn again.
+    lod: LodView,
     frame: FrameShadow,
     stats: ShadowStats,
 }
@@ -269,6 +273,7 @@ impl ShadowMaps {
             },
             cascades: Default::default(),
             active: 0,
+            lod: LodView::OFF,
             frame: FrameShadow::default(),
             stats: ShadowStats::default(),
         }
@@ -355,19 +360,28 @@ impl ShadowMaps {
         }
     }
 
-    /// Fits the cascades to `camera` for a light towards `light` (`lit` false when there is none, or no shadows are
-    /// wanted), decides which maps to draw again, culls their casters and records the upload of their lists into
-    /// `encoder`. Run it after [`GpuScene::upload_view`] (the coalesce it runs is what the culls see), every frame:
-    /// it also takes the scene's shadow-caster changes ([`crate::InstanceScene::clear_shadow_changes`]).
+    /// Fits the cascades to `camera` for a light towards `light` (`None` when there is none, or no shadows are
+    /// wanted), decides which maps to draw again, culls their casters (at levels of detail that follow `lod`, the
+    /// camera view's) and records the upload of their lists into `encoder`. Run it after [`GpuScene::upload_view`]
+    /// (the coalesce it runs is what the culls see), every frame: it also takes the scene's shadow-caster changes
+    /// ([`crate::InstanceScene::clear_shadow_changes`]).
     pub(crate) fn prepare(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         scene: &mut GpuScene,
         camera: Option<&Camera>,
         aspect: f32,
-        light: Vec3,
-        lit: bool,
+        light: Option<Vec3>,
+        lod: &LodView,
     ) {
+        if *lod != self.lod {
+            // The casters' levels follow the camera's: a map drawn for other levels could be finer than what now
+            // receives it.
+            self.lod = *lod;
+            for cascade in &mut self.cascades {
+                cascade.cache = CascadeCache::default();
+            }
+        }
         for cascade in &mut self.cascades {
             cascade.redraw = false;
             cascade.build = false;
@@ -375,8 +389,10 @@ impl ShadowMaps {
         }
         self.stats = ShadowStats::default();
         self.frame = FrameShadow::default();
-        let camera = camera.filter(|_| lit && self.count > 0 && scene.binding() == self.binding);
-        let Some(camera) = camera else {
+        let drawn = camera
+            .zip(light)
+            .filter(|_| self.count > 0 && scene.binding() == self.binding);
+        let Some((camera, light)) = drawn else {
             // Nothing is drawn, so nothing kept can be trusted afterwards either.
             self.active = 0;
             for cascade in &mut self.cascades {
@@ -387,7 +403,7 @@ impl ShadowMaps {
         };
         let origin = scene.scene().origin();
         let mut fits = [CascadeFit::default(); MAX_CASCADES];
-        let count = fit_cascades(camera, aspect, origin, light, &self.settings, &mut fits).min(self.count);
+        let count = fit_cascades(camera, aspect, origin, light, &self.settings, lod, &mut fits).min(self.count);
         self.active = count;
         self.layout_lists(scene);
         let dynamic = self.settings.dynamic_count();
@@ -483,6 +499,7 @@ impl ShadowMaps {
                         Mover {
                             entry: entry(Region::Dynamic, slot),
                             kind: instance.mesh().0,
+                            class: lod::lod_class(instance.mesh()),
                             center,
                             radius,
                         }
@@ -493,12 +510,19 @@ impl ShadowMaps {
         let kinds = self.lists.capacities.len();
         for cascade in self.cascades.iter_mut().take(count).skip(dynamic) {
             let set = &mut cascade.moving;
+            let levels = cascade.fit.lod;
             // Every kind's list has room for every mover, so the pushes never allocate.
-            set.begin(std::iter::repeat_n(self.movers.len(), kinds), 0, 0);
+            set.begin(std::iter::repeat_n(self.movers.len(), kinds), 0, 0, levels.enabled());
             let mut moving = 0u32;
             for mover in &self.movers {
                 if usize::from(mover.kind) < kinds && cascade.fit.frustum.contains_sphere(mover.center, mover.radius) {
-                    set.push(mover.entry, mover.kind);
+                    // At the level the cascade's static casters take (crate::lod).
+                    let level = if mover.class != 0 && levels.enabled() {
+                        levels.choose_caster(mover.class, mover.radius)
+                    } else {
+                        0
+                    };
+                    set.push_level(mover.entry, mover.kind, level);
                     moving += 1;
                 }
             }
@@ -553,7 +577,7 @@ impl ShadowMaps {
     }
 
     /// Uploads the lists of the cascades drawn this frame and of the moving casters of the cached cascades built
-    /// this frame: one staging write, then a copy per list and kind.
+    /// this frame: one staging write, then a copy per list and kind (its levels back to back).
     fn upload_lists(&mut self, encoder: &mut wgpu::CommandEncoder, scene: &GpuScene) {
         let lists = &mut self.lists;
         lists.ranges.clear();
@@ -568,8 +592,7 @@ impl ShadowMaps {
                     continue;
                 }
                 for (kind, &capacity) in lists.capacities.iter().enumerate() {
-                    let len = set.opaque(MeshKind(kind as u16)).len();
-                    let count = u32::try_from(len).unwrap_or(u32::MAX).min(capacity);
+                    let count = level_counts(set, MeshKind(kind as u16), capacity).iter().sum::<u32>();
                     if count > 0 {
                         lists.ranges.push((block, kind, count));
                         total += u64::from(count);
@@ -588,23 +611,27 @@ impl ShadowMaps {
         };
         let instances = scene.scene();
         let mut offset = 0usize;
-        for &(block, kind, count) in &lists.ranges {
+        for &(block, kind, _) in &lists.ranges {
             let set = match block {
                 Block::Casters(index) => &self.cascades[index].visible,
                 Block::Moving(index) => &self.cascades[index].moving,
             };
-            let entries = &set.opaque(MeshKind(kind as u16))[..count as usize];
-            if lists.gather {
-                for &entry in entries {
-                    let instance = instances.entry_instance(entry).unwrap_or(&GpuInstance::FREE);
-                    let bytes = bytemuck::bytes_of(instance);
+            let kind = MeshKind(kind as u16);
+            let capacity = lists.capacities.get(usize::from(kind.0)).copied().unwrap_or(0);
+            for (level, n) in level_counts(set, kind, capacity).into_iter().enumerate() {
+                let entries = &set.opaque(kind, level)[..n as usize];
+                if lists.gather {
+                    for &entry in entries {
+                        let instance = instances.entry_instance(entry).unwrap_or(&GpuInstance::FREE);
+                        let bytes = bytemuck::bytes_of(instance);
+                        view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
+                        offset += bytes.len();
+                    }
+                } else {
+                    let bytes: &[u8] = bytemuck::cast_slice(entries);
                     view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
                     offset += bytes.len();
                 }
-            } else {
-                let bytes: &[u8] = bytemuck::cast_slice(entries);
-                view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
-                offset += bytes.len();
             }
         }
         drop(view);
@@ -669,7 +696,7 @@ impl ShadowMaps {
     }
 
     /// Records cascade `cascade`'s casters into `pass` (a depth pass into its [`ShadowMaps::caster_target`]): one
-    /// instanced draw per mesh kind. Returns the draws, instances and triangles.
+    /// instanced draw per mesh kind and level of detail. Returns the draws, instances and triangles.
     pub(crate) fn draw(&self, cascade: usize, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
         let Some(state) = self.cascades.get(cascade) else {
             return (0, 0, 0);
@@ -725,23 +752,39 @@ impl ShadowMaps {
         let block = block as u32 * self.lists.stride;
         for (kind, (&capacity, &offset)) in self.lists.capacities.iter().zip(&self.lists.offsets).enumerate() {
             let kind = MeshKind(kind as u16);
-            let count = u32::try_from(set.opaque(kind).len()).unwrap_or(u32::MAX).min(capacity);
-            let mesh = meshes.range(kind);
-            if count == 0 || mesh.index_count == 0 {
-                continue;
+            let mut first = block + offset;
+            for (level, count) in level_counts(set, kind, capacity).into_iter().enumerate() {
+                let mesh = meshes.range(kind, level);
+                let start = first;
+                first += count;
+                if count == 0 || mesh.index_count == 0 {
+                    continue;
+                }
+                pass.draw_indexed(
+                    mesh.first_index..mesh.first_index + mesh.index_count,
+                    0,
+                    start..start + count,
+                );
+                draws += 1;
+                instances += count;
+                triangles += u64::from(count) * u64::from(mesh.index_count / 3);
             }
-            let first = block + offset;
-            pass.draw_indexed(
-                mesh.first_index..mesh.first_index + mesh.index_count,
-                0,
-                first..first + count,
-            );
-            draws += 1;
-            instances += count;
-            triangles += u64::from(count) * u64::from(mesh.index_count / 3);
         }
         (draws, instances, triangles)
     }
+}
+
+/// How many of `set`'s casters of `kind` a segment of `capacity` entries holds at each level: the levels back to back,
+/// cut where the segment is full.
+fn level_counts(set: &VisibleSet, kind: MeshKind, capacity: u32) -> [u32; MAX_LOD_LEVELS] {
+    let mut room = capacity;
+    std::array::from_fn(|level| {
+        let n = u32::try_from(set.opaque(kind, level).len())
+            .unwrap_or(u32::MAX)
+            .min(room);
+        room -= n;
+        n
+    })
 }
 
 /// The maps: a `resolution`² depth array of `layers` layers, its view for sampling and a render view of each of

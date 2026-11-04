@@ -66,8 +66,8 @@ use metallic_core::{CFrame, Color3, DataModel, Id, PropId, Value};
 use metallic_render::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use metallic_render::scene::{GpuInstance, InstanceBinding, RenderComponents};
 use metallic_render::{
-    Camera, DrawStats, GpuScene, InstanceScene, LightingReader, OffscreenTarget, PassId, PassSet, RenderContext,
-    Renderer, RendererSettings, SceneLighting, ShadowSettings, VisibleSet, wgpu,
+    Camera, DrawStats, GpuScene, InstanceScene, LightingReader, MAX_LOD_LEVELS, OffscreenTarget, PassId, PassSet,
+    RenderContext, Renderer, RendererSettings, SceneLighting, ShadowSettings, VisibleSet, wgpu,
 };
 
 thread_local! {
@@ -174,12 +174,15 @@ impl ShadowWork {
     }
 }
 
-/// What a shadowed hand-written frame draws: the casters of each kind in each cascade's list, and with
-/// [`CACHED_CASCADE`] the far cascade's moving casters of each kind, drawn on the copy of its static map.
+/// The casters of each kind at each level of detail in one list.
+type KindLevels = [[u32; MAX_LOD_LEVELS]; 4];
+
+/// What a shadowed hand-written frame draws: the casters of each kind and level in each cascade's list, and with
+/// [`CACHED_CASCADE`] the far cascade's moving casters of each kind and level, drawn on the copy of its static map.
 #[derive(Clone, Copy, Debug)]
 struct HandCasters {
-    cascades: [[u32; 4]; CASCADES],
-    moving: Option<[u32; 4]>,
+    cascades: [KindLevels; CASCADES],
+    moving: Option<KindLevels>,
 }
 
 /// One pass of a hand-written frame: its label, whether it clears the colour, and its depth use (`Some(true)` writes
@@ -1204,10 +1207,11 @@ impl HandShadows {
     }
 
     /// The renderer's shadow work for a frame that draws every cascade, whose lists hold `casters.cascades[cascade]
-    /// [kind]` casters: one staging write and a copy per non-empty list (with [`CACHED_CASCADE`], the far cascade's
-    /// moving casters' lists after its own), the cascades' uniform, then a depth pass per cascade with one draw per
-    /// non-empty list. With [`CACHED_CASCADE`] the far cascade's pass draws its static map, and a pass after it
-    /// builds its map: the copy, then one draw per non-empty list of moving casters.
+    /// [kind][level]` casters: one staging write and a copy per non-empty kind's list (its levels back to back; with
+    /// [`CACHED_CASCADE`], the far cascade's moving casters' lists after its own), the cascades' uniform, then a depth
+    /// pass per cascade with one draw per non-empty kind and level. With [`CACHED_CASCADE`] the far cascade's pass
+    /// draws its static map, and a pass after it builds its map: the copy, then one draw per non-empty kind and level
+    /// of moving casters.
     fn record(
         &self,
         queue: &wgpu::Queue,
@@ -1221,14 +1225,21 @@ impl HandShadows {
             let cascades = casters.cascades.iter().enumerate();
             cascades.chain(casters.moving.iter().map(|kinds| (CASCADES, kinds)))
         };
-        let listed: u64 = blocks().flat_map(|(_, kinds)| kinds).map(|&n| u64::from(n) * 4).sum();
+        let listed: u64 = blocks()
+            .flat_map(|(_, kinds)| kinds.iter().flatten())
+            .map(|&n| u64::from(n) * 4)
+            .sum();
         if let Some(size) = wgpu::BufferSize::new(listed) {
             if let Some(mut view) = queue.write_buffer_with(&self.staging, 0, size) {
                 view.slice(..).copy_from_slice(&self.zeros[..listed as usize]);
             }
             let mut source = 0;
             for (block, kinds) in blocks() {
-                for (kind, &n) in kinds.iter().enumerate().filter(|(_, n)| **n > 0) {
+                for (kind, levels) in kinds.iter().enumerate() {
+                    let n: u32 = levels.iter().sum();
+                    if n == 0 {
+                        continue;
+                    }
                     let bytes = u64::from(n) * 4;
                     let target = (block as u64 * self.stride + self.offsets[kind]) * 4;
                     encoder.copy_buffer_to_buffer(&self.staging, source, &self.lists, target, bytes);
@@ -1237,15 +1248,20 @@ impl HandShadows {
             }
         }
         queue.write_buffer(&self.uniform, 0, &[0; 1024]);
-        let draw = |pass: &mut wgpu::RenderPass<'_>, cascade: usize, block: usize, kinds: &[u32; 4]| {
+        let draw = |pass: &mut wgpu::RenderPass<'_>, cascade: usize, block: usize, kinds: &KindLevels| {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.cascade_groups[cascade], &[]);
             pass.set_vertex_buffer(0, vertices.slice(..));
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_bind_group(1, &self.instance_group, &[]);
-            for (kind, &n) in kinds.iter().enumerate().filter(|(_, n)| **n > 0) {
-                let first = (block as u64 * self.stride + self.offsets[kind]) as u32;
-                pass.draw_indexed(0..36, 0, first..first + n);
+            for (kind, levels) in kinds.iter().enumerate() {
+                let mut first = (block as u64 * self.stride + self.offsets[kind]) as u32;
+                for &n in levels {
+                    if n > 0 {
+                        pass.draw_indexed(0..36, 0, first..first + n);
+                    }
+                    first += n;
+                }
             }
         };
         fn begin<'e>(encoder: &'e mut wgpu::CommandEncoder, view: &wgpu::TextureView) -> wgpu::RenderPass<'e> {
@@ -1278,7 +1294,7 @@ impl HandShadows {
                 pass.set_pipeline(&self.copy);
                 pass.set_bind_group(0, &self.copy_group, &[]);
                 pass.draw(0..3, 0..1);
-                if moving.iter().any(|&n| n > 0) {
+                if moving.iter().flatten().any(|&n| n > 0) {
                     draw(&mut pass, cascade, CASCADES, moving);
                 }
             }
@@ -1564,37 +1580,55 @@ impl HandParts {
 /// The fewest allocations of a parts frame of `parts` parts (every `see_through`th one see-through, blocks and
 /// balls in turn) and of the same wgpu calls by hand, over [`FRAMES`] frames each in alternating order, with the
 /// frame's draw statistics.
+/// The main view `Renderer::render_scene` culls `scene` with from `camera` on the [`SIZE`]-square target: the
+/// default culling and levels of detail.
+fn main_view(scene: &InstanceScene, camera: &Camera) -> metallic_render::CullView {
+    let settings = metallic_render::CullSettings::default();
+    metallic_render::CullView::for_camera(camera, scene.origin(), SIZE, SIZE, &settings)
+}
+
 /// What `Renderer::render_scene` draws of `scene` seen from `camera` on the [`SIZE`]-square target with the default
-/// culling: (opaque draws, transparent draws, see-through instances) and each kind's visible instances. Culls
-/// `scene` (a CPU-only copy of the drawn one) and sorts its see-through instances as the renderer does.
+/// culling and levels of detail: (opaque draws, transparent draws, see-through instances) and each kind's visible
+/// instances, every level. Culls `scene` (a CPU-only copy of the drawn one, which so chooses the same levels) and
+/// sorts its see-through instances as the renderer does.
 fn expected_calls(
     scene: &mut InstanceScene,
     visible: &mut metallic_render::VisibleSet,
-    keys: &mut Vec<(u32, u32)>,
+    keys: &mut Vec<(u32, u32, u8)>,
     camera: &Camera,
 ) -> ((u32, u32, usize), [u32; 4]) {
-    let settings = metallic_render::CullSettings::default();
-    let view = metallic_render::CullView::for_camera(camera, scene.origin(), SIZE, SIZE, &settings);
+    let view = main_view(scene, camera);
     scene.cull(&view, visible);
     let mut lists = [0u32; 4];
+    let mut opaque_draws = 0;
     for (kind, n) in lists.iter_mut().enumerate() {
-        *n = visible.opaque(metallic_render::scene::MeshKind(kind as u16)).len() as u32;
+        let kind = metallic_render::scene::MeshKind(kind as u16);
+        *n = visible.opaque_len(kind) as u32;
+        // One draw per level with instances.
+        opaque_draws += (0..MAX_LOD_LEVELS)
+            .filter(|&level| !visible.opaque(kind, level).is_empty())
+            .count() as u32;
     }
-    let opaque_draws = lists.iter().filter(|&&n| n > 0).count() as u32;
-    // Back to front, then one draw per run of the same mesh (`parts/transparent.rs`).
+    // Back to front, then one draw per run of the same mesh and level (`parts/transparent.rs`).
     let eye = camera.position - scene.origin();
     keys.clear();
-    keys.extend(visible.transparent().iter().map(|&entry| {
-        let distance = scene
-            .entry_instance(entry)
-            .map_or(0.0, |instance| instance.translation().distance_squared(eye));
-        (!distance.max(0.0).to_bits(), entry)
-    }));
+    keys.extend(
+        visible
+            .transparent()
+            .iter()
+            .zip(visible.transparent_levels())
+            .map(|(&entry, &level)| {
+                let distance = scene
+                    .entry_instance(entry)
+                    .map_or(0.0, |instance| instance.translation().distance_squared(eye));
+                (!distance.max(0.0).to_bits(), entry, level)
+            }),
+    );
     keys.sort_unstable();
     let mut runs = 0;
     let mut last = None;
-    for &(_, entry) in keys.iter() {
-        let kind = scene.entry_instance(entry).map(GpuInstance::mesh);
+    for &(_, entry, level) in keys.iter() {
+        let kind = scene.entry_instance(entry).map(|i| (i.mesh(), level));
         if kind != last {
             runs += 1;
             last = kind;
@@ -1603,10 +1637,20 @@ fn expected_calls(
     ((opaque_draws, runs, keys.len()), lists)
 }
 
-/// The casters of each kind the renderer draws into each cascade of `scene` (a CPU-only copy of the drawn one)
-/// seen from `camera` and lit by `lighting`, with `work`'s settings: the culls the renderer makes. With
+/// The radius of a packed instance's bounding sphere: half the diagonal of its stretched, turned unit cube.
+fn bounding_radius(instance: &GpuInstance) -> f32 {
+    let squared: f32 = instance
+        .rows
+        .iter()
+        .map(|r| r[0] * r[0] + r[1] * r[1] + r[2] * r[2])
+        .sum();
+    0.5 * squared.sqrt()
+}
+
+/// The casters of each kind and level the renderer draws into each cascade of `scene` (a CPU-only copy of the drawn
+/// one) seen from `camera` and lit by `lighting`, with `work`'s settings: the culls the renderer makes. With
 /// [`ShadowWork::Cached`], also the far cascade's moving casters: every caster of the dynamic region (the test
-/// checks the renderer finds all of them in it).
+/// checks the renderer finds all of them in it), each at the level the far cascade draws it at.
 fn expected_shadows(
     scene: &mut InstanceScene,
     sets: &mut [VisibleSet; CASCADES],
@@ -1615,21 +1659,32 @@ fn expected_shadows(
     work: ShadowWork,
 ) -> HandCasters {
     let settings = work.settings();
-    let (views, count) =
-        metallic_render::shadow::cascade_views(&settings, camera, 1.0, scene.origin(), lighting.light_direction());
+    let lod = main_view(scene, camera).lod;
+    let (views, count) = metallic_render::shadow::cascade_views(
+        &settings,
+        camera,
+        1.0,
+        scene.origin(),
+        lighting.light_direction(),
+        &lod,
+    );
     assert_eq!(count, CASCADES);
-    let mut counts = [[0u32; 4]; CASCADES];
+    let mut counts = [[[0u32; MAX_LOD_LEVELS]; 4]; CASCADES];
     for ((view, casters), (set, kinds)) in views.iter().zip(sets.iter_mut().zip(&mut counts)) {
         scene.cull_casters(view, *casters, set);
-        for (kind, n) in kinds.iter_mut().enumerate() {
-            *n = set.opaque(metallic_render::scene::MeshKind(kind as u16)).len() as u32;
+        for (kind, levels) in kinds.iter_mut().enumerate() {
+            for (level, n) in levels.iter_mut().enumerate() {
+                *n = set.opaque(metallic_render::scene::MeshKind(kind as u16), level).len() as u32;
+            }
         }
     }
+    let far = views[CASCADES - 1].0;
     let moving = matches!(work, ShadowWork::Cached(_)).then(|| {
-        let mut kinds = [0u32; 4];
+        let mut kinds = [[0u32; MAX_LOD_LEVELS]; 4];
         let dynamic = scene.instances(metallic_render::scene::Region::Dynamic);
         for instance in dynamic.iter().filter(|i| metallic_render::scene::is_shadow_caster(i)) {
-            kinds[usize::from(instance.mesh().0)] += 1;
+            let level = metallic_render::lod::caster_level(&far, instance.mesh(), bounding_radius(instance));
+            kinds[usize::from(instance.mesh().0)][level] += 1;
         }
         kinds
     });
@@ -1750,13 +1805,17 @@ fn frame_and_floor(
                 );
                 if let Some(casters) = casters.as_ref() {
                     assert_eq!(stats.shadow_redrawn, 0b111, "every cascade is drawn");
-                    let expected: Vec<u32> = casters.cascades.iter().map(|kinds| kinds.iter().sum()).collect();
+                    let expected: Vec<u32> = casters
+                        .cascades
+                        .iter()
+                        .map(|kinds| kinds.iter().flatten().sum())
+                        .collect();
                     assert_eq!(&stats.shadow_casters[..CASCADES], expected, "the mirror's casters");
                     if let Some(moving) = casters.moving {
                         assert_eq!(stats.shadow_built, 0b100, "the far cascade's map is built");
                         assert_eq!(
                             stats.shadow_moving[2],
-                            moving.iter().sum(),
+                            moving.iter().flatten().sum::<u32>(),
                             "the mirror's moving casters"
                         );
                     }
@@ -2041,6 +2100,7 @@ fn culled_frames(parts: usize) -> (u64, i64, u64) {
                 16.0 / 9.0,
                 scene.origin(),
                 sun,
+                &view.lod,
             );
             for ((view, casters), set) in views.iter().zip(&mut cascades).take(count) {
                 scene.cull_casters(view, *casters, set);

@@ -22,6 +22,7 @@ fn vs_main(
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @builtin(instance_index) index: u32,
+    @builtin(vertex_index) vertex: u32,
 ) -> VertexOut {
     let entry = entries[index];
     let slot = entry & 0x7fffffffu;
@@ -32,6 +33,7 @@ fn vs_main(
         instance = dynamics[slot];
     }
     return place(
+        vertex,
         position,
         normal,
         instance.r0,

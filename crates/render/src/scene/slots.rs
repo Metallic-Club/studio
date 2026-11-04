@@ -25,6 +25,9 @@ pub(super) struct SlotMeta {
     pub(super) list: u16,
     /// The entry's position in that list.
     pub(super) list_pos: u32,
+    /// The level of detail the camera's view last drew the instance at ([`crate::lod`]) when it came from another
+    /// region's slot, so its culling grid item keeps its hysteresis; [`crate::lod::NEW`] otherwise.
+    pub(super) level: u8,
 }
 
 impl SlotMeta {
@@ -36,6 +39,7 @@ impl SlotMeta {
         moved: false,
         list: NOT_LISTED,
         list_pos: 0,
+        level: crate::lod::NEW,
     };
 }
 

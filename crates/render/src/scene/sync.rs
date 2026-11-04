@@ -414,7 +414,7 @@ impl InstanceScene {
                 continue;
             }
             meta.moved = false;
-            self.grid.update(region, slot, instance, meta.list);
+            self.grid.update(region, slot, instance, meta.list, meta.level);
         }
         self.grid.return_queue(queued);
     }
@@ -494,7 +494,7 @@ impl InstanceScene {
         // A slot that changes list enters, leaves or changes list in the culling grid now; one that only moved
         // waits on the grid's queue for the next cull. (A queued slot stays queued: it is on the queue once, and
         // the update there finds nothing left to do.)
-        self.grid.update(region, slot, instance, want);
+        self.grid.update(region, slot, instance, want, meta.level);
         if have != NOT_LISTED
             && let Some(moved) = self.lists.remove(have, pos)
         {
@@ -701,8 +701,14 @@ impl InstanceScene {
             // Promoted: its shadow leaves the cached cascades' static maps, which hold the static region only.
             self.shadow.note(instance);
         }
+        // The new slot's grid item starts at the level the old one was drawn at, so changing region pops nothing.
+        let level = self.grid.level(from.region, from.slot);
         self.regions[from.region.index()].release(from.slot);
-        self.place(id, to)
+        let placed = self.place(id, to);
+        if let Some(meta) = self.regions[to.index()].meta.get_mut(placed.slot as usize) {
+            meta.level = level;
+        }
+        placed
     }
 
     /// A new slot for `id` in `region`, recorded in the entry table.

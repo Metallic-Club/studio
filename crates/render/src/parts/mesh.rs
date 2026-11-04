@@ -6,20 +6,20 @@
 //! changes; mesh assets join the same pool later (ADR 0008 §4). Indices are absolute (`u32`, base vertex 0), which
 //! GLES needs: it has no base vertex.
 //!
-//! One level of detail for now (#80 adds levels). The Ball and Cylinder are tessellated finely enough that their
-//! silhouettes stay round at the sizes parts are usually seen at: 32 segments around, 16 rings for the Ball.
+//! The Ball and the Cylinder have levels of detail ([`crate::lod`]): at full detail they are tessellated finely
+//! enough that their silhouettes stay round at the sizes parts are usually seen at (32 segments around, 16 rings for
+//! the Ball), and each coarser level halves the segments (and rings), keeping a subset of the finer level's vertices.
+//! The pool holds every level of every kind, **level by level**: every kind's full detail first, then every coarser
+//! level in turn ([`MeshPool::level_starts`]), so a vertex's index alone says which level it belongs to (the debug
+//! tint of [`crate::Renderer::set_lod_tint`]).
 
 use std::f32::consts::{PI, TAU};
 
 use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
 
+use crate::lod::{BALL_SEGMENTS, CYLINDER_SEGMENTS, MAX_LOD_LEVELS};
 use crate::scene::MeshKind;
-
-/// Segments around the Ball and the Cylinder.
-const ROUND_SEGMENTS: u32 = 32;
-/// Rings from pole to pole of the Ball.
-const BALL_RINGS: u32 = 16;
 
 /// One vertex of a primitive mesh: position and unit normal in the unit mesh's own space.
 #[repr(C)]
@@ -55,13 +55,22 @@ pub struct MeshData {
 }
 
 impl MeshData {
-    /// The built-in mesh of `kind`; `None` for kinds that are not built in (mesh assets).
+    /// The built-in mesh of `kind` at full detail; `None` for kinds that are not built in (mesh assets).
     pub fn primitive(kind: MeshKind) -> Option<Self> {
-        Some(match kind {
-            MeshKind::BLOCK => block(),
-            MeshKind::BALL => ball(ROUND_SEGMENTS, BALL_RINGS),
-            MeshKind::CYLINDER => cylinder(ROUND_SEGMENTS),
-            MeshKind::WEDGE => wedge(),
+        Self::primitive_level(kind, 0)
+    }
+
+    /// The built-in mesh of `kind` at level of detail `level` (0 is full detail, see [`crate::lod`]); `None` for
+    /// kinds that are not built in and for levels the kind does not have.
+    pub fn primitive_level(kind: MeshKind, level: usize) -> Option<Self> {
+        Some(match (kind, level) {
+            (MeshKind::BLOCK, 0) => block(),
+            (MeshKind::BALL, _) => {
+                let segments = *BALL_SEGMENTS.get(level)?;
+                ball(segments, segments / 2)
+            }
+            (MeshKind::CYLINDER, _) => cylinder(*CYLINDER_SEGMENTS.get(level)?),
+            (MeshKind::WEDGE, 0) => wedge(),
             _ => return None,
         })
     }
@@ -251,35 +260,53 @@ pub struct MeshRange {
     pub index_count: u32,
 }
 
-/// Every built-in mesh in one vertex buffer and one index buffer.
+/// Every built-in mesh, at every level of detail, in one vertex buffer and one index buffer.
 #[derive(Debug)]
 pub struct MeshPool {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
-    /// Indexed by mesh kind; an empty range for kinds the pool does not have.
-    ranges: Vec<MeshRange>,
+    /// Indexed by mesh kind, then level; an empty range for kinds and levels the pool does not have.
+    ranges: Vec<[MeshRange; MAX_LOD_LEVELS]>,
+    /// The first vertex of each level.
+    level_starts: [u32; MAX_LOD_LEVELS],
 }
 
-impl MeshPool {
-    /// Builds the primitives and uploads them.
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        let mut vertices: Vec<MeshVertex> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-        let mut ranges = Vec::new();
-        for kind in 0..MeshKind::BUILTIN_COUNT {
-            let Some(mesh) = MeshData::primitive(MeshKind(kind)) else {
-                ranges.push(MeshRange::default());
+/// The pool's contents: every built-in mesh level by level, the ranges and where each level's vertices start.
+type PoolData = (
+    Vec<MeshVertex>,
+    Vec<u32>,
+    Vec<[MeshRange; MAX_LOD_LEVELS]>,
+    [u32; MAX_LOD_LEVELS],
+);
+
+fn pool_data() -> PoolData {
+    let mut vertices: Vec<MeshVertex> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let mut ranges = vec![[MeshRange::default(); MAX_LOD_LEVELS]; usize::from(MeshKind::BUILTIN_COUNT)];
+    let mut level_starts = [0u32; MAX_LOD_LEVELS];
+    for (level, start) in level_starts.iter_mut().enumerate() {
+        *start = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+        for (kind, kind_ranges) in (0..MeshKind::BUILTIN_COUNT).zip(ranges.iter_mut()) {
+            let Some(mesh) = MeshData::primitive_level(MeshKind(kind), level) else {
                 continue;
             };
             let base = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
             let first_index = u32::try_from(indices.len()).unwrap_or(u32::MAX);
             vertices.extend_from_slice(&mesh.vertices);
             indices.extend(mesh.indices.iter().map(|&i| base + i));
-            ranges.push(MeshRange {
+            kind_ranges[level] = MeshRange {
                 first_index,
                 index_count: u32::try_from(mesh.indices.len()).unwrap_or(u32::MAX),
-            });
+            };
         }
+    }
+    (vertices, indices, ranges, level_starts)
+}
+
+impl MeshPool {
+    /// Builds the primitives and uploads them.
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let (vertices, indices, ranges, level_starts) = pool_data();
         let buffer = |label, contents: &[u8], usage| {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -302,6 +329,7 @@ impl MeshPool {
                 wgpu::BufferUsages::INDEX,
             ),
             ranges,
+            level_starts,
         }
     }
 
@@ -315,18 +343,92 @@ impl MeshPool {
         &self.indices
     }
 
-    /// The index range of `kind`'s mesh; empty when the pool does not have it.
-    pub fn range(&self, kind: MeshKind) -> MeshRange {
-        self.ranges.get(usize::from(kind.0)).copied().unwrap_or_default()
+    /// The index range of `kind`'s mesh at level `level` (0: full detail); empty when the pool does not have it.
+    pub fn range(&self, kind: MeshKind, level: usize) -> MeshRange {
+        self.ranges
+            .get(usize::from(kind.0))
+            .and_then(|levels| levels.get(level))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The first vertex of each level in the vertex buffer: level `i`'s meshes are the vertices from
+    /// `level_starts()[i]` to the next level's start.
+    pub fn level_starts(&self) -> [u32; MAX_LOD_LEVELS] {
+        self.level_starts
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lod;
 
+    /// Every built-in kind at every level it has.
     fn kinds() -> impl Iterator<Item = (MeshKind, MeshData)> {
-        (0..MeshKind::BUILTIN_COUNT).map(|k| (MeshKind(k), MeshData::primitive(MeshKind(k)).unwrap()))
+        (0..MeshKind::BUILTIN_COUNT).flat_map(|k| {
+            (0..lod::levels(MeshKind(k)))
+                .map(move |level| (MeshKind(k), MeshData::primitive_level(MeshKind(k), level).unwrap()))
+        })
+    }
+
+    #[test]
+    fn levels_halve_the_triangles_of_round_kinds() {
+        let triangles = |kind: MeshKind| -> Vec<usize> {
+            (0..MAX_LOD_LEVELS + 1)
+                .map_while(|level| MeshData::primitive_level(kind, level))
+                .map(|mesh| mesh.indices.len() / 3)
+                .collect()
+        };
+        assert_eq!(triangles(MeshKind::BALL), [960, 224, 48, 8]);
+        assert_eq!(triangles(MeshKind::CYLINDER), [128, 64, 32]);
+        assert_eq!(triangles(MeshKind::BLOCK), [12]);
+        assert_eq!(triangles(MeshKind::WEDGE), [8]);
+        for kind in 0..MeshKind::BUILTIN_COUNT {
+            assert_eq!(triangles(MeshKind(kind)).len(), lod::levels(MeshKind(kind)));
+        }
+    }
+
+    #[test]
+    fn every_level_is_inscribed_in_the_finer_ones() {
+        // Every vertex of a coarser level is a vertex of the finer level: the coarse surface is inside the fine one,
+        // which is what lets a shadow be coarser than the surface receiving it (crate::lod).
+        for kind in [MeshKind::BALL, MeshKind::CYLINDER] {
+            for level in 1..lod::levels(kind) {
+                let fine = MeshData::primitive_level(kind, level - 1).unwrap();
+                let coarse = MeshData::primitive_level(kind, level).unwrap();
+                for v in &coarse.vertices {
+                    let p = Vec3::from(v.position);
+                    assert!(
+                        fine.vertices.iter().any(|f| Vec3::from(f.position).distance(p) < 1e-6),
+                        "{kind:?} level {level}: {p} is not a vertex of level {}",
+                        level - 1
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_pool_lays_the_levels_out_one_after_another() {
+        let (vertices, indices, ranges, starts) = pool_data();
+        assert_eq!(starts[0], 0);
+        assert!(starts.windows(2).all(|w| w[0] < w[1]), "{starts:?}");
+        for (kind, levels) in ranges.iter().enumerate() {
+            let kind = MeshKind(kind as u16);
+            for (level, range) in levels.iter().enumerate() {
+                if level >= lod::levels(kind) {
+                    assert_eq!(*range, MeshRange::default());
+                    continue;
+                }
+                let mesh = MeshData::primitive_level(kind, level).unwrap();
+                assert_eq!(range.index_count as usize, mesh.indices.len());
+                // Every vertex the range uses is in its level's span of the pool.
+                let end = starts.get(level + 1).copied().unwrap_or(vertices.len() as u32);
+                let used = &indices[range.first_index as usize..(range.first_index + range.index_count) as usize];
+                assert!(used.iter().all(|&i| i >= starts[level] && i < end), "{kind:?} {level}");
+            }
+        }
     }
 
     #[test]

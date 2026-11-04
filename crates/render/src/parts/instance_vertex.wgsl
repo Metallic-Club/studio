@@ -13,6 +13,7 @@ fn vs_main(
     @location(6) transparency: f32,
     @location(7) mesh_material: u32,
     @location(8) flags: u32,
+    @builtin(vertex_index) vertex: u32,
 ) -> VertexOut {
-    return place(position, normal, r0, r1, r2, color, transparency, mesh_material);
+    return place(vertex, position, normal, r0, r1, r2, color, transparency, mesh_material);
 }
