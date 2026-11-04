@@ -56,6 +56,10 @@
 //!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 //!
+//! The heap-growth tests ("nothing accumulates") sample the heap with the GPU idle and over two windows of frames,
+//! so wgpu's bookkeeping for frames in flight and its pools' one-off growth do not decide them; a leak grows in
+//! both windows and still fails them ([`HeapGrowth`], #151).
+//!
 //! Every adapter, software (`DeviceType::Cpu`: WARP, lavapipe) or hardware, is held to the same exact comparison of
 //! the renderer's frames with the hand-written ones. The excess CI's runners used to show (up to 6 allocations on the
 //! software adapters, the "machine noise" of #77 to #82, and 4 to 8 on macOS's Metal) came from three things in the
@@ -1307,7 +1311,7 @@ const LEAK_VAR: &str = "METALLIC_TEST_LEAK_PER_FRAME";
 ///
 /// - **wgpu's bookkeeping for frames in flight.** wgpu keeps a submitted frame's command buffers until the frame is
 ///   retired: on OpenGL wgpu-hal's recorded command list (58,144 bytes for the dynamic resolution frame), elsewhere
-///   its trackers and pooled encoders (8.5 KiB on the dev PC's Vulkan, 14,041 bytes on lavapipe in #83). With two
+///   its submission's bookkeeping (8 to 12 KB on the dev PC's Vulkan, 14,041 bytes on lavapipe in #83). With two
 ///   frames in flight ([`Pacer`]), a sample taken with one more or one fewer frame in flight than the other showed
 ///   that much growth or shrinkage. Waiting for the GPU to go idle before both samples leaves none in flight at
 ///   either, and that alone took OpenGL to within 24 bytes of zero.
@@ -1315,9 +1319,9 @@ const LEAK_VAR: &str = "METALLIC_TEST_LEAK_PER_FRAME";
 ///   gpu-allocator's map of a memory block's free-list chunks (5,184 bytes when it doubles, 72 when a smaller one
 ///   does), which `Queue::write_buffer`'s staging buffers fragment, and wgpu-core's pool of command encoders (6,624
 ///   bytes for a Direct3D 12 frame's two), which grows when the GPU falls a frame further behind. How far behind it
-///   falls, and so in which frame a step comes, depends on the GPU's timing: up to 11,808 bytes in one window on the
-///   dev PC, still 300 frames in. They stop growing, but not at a frame a test could pick in advance, and running
-///   the warm-up further ahead of the GPU did not make them stop sooner.
+///   falls, and so in which frame a step comes, depends on the GPU's timing: up to 16,368 bytes in one window on the
+///   dev PC's Vulkan, still 300 frames in. They stop growing, but not at a frame a test could pick in advance, and
+///   letting the warm-up run further ahead of the GPU (on the dev PC's Direct3D 12) did not make them stop sooner.
 ///
 /// A leak grows in every window and a step lands in one, so this calls the frames accumulating only when the heap
 /// grew in both windows by more than [`KEPT_PER_FRAME`] per frame. The second window is as long as every frame
@@ -1363,7 +1367,7 @@ impl HeapGrowth {
     fn accumulates(&self) -> bool {
         self.windows
             .iter()
-            .all(|&(frames, grown)| grown > KEPT_PER_FRAME * i64::try_from(frames).unwrap())
+            .all(|&(frames, grown)| grown > KEPT_PER_FRAME * signed(frames))
     }
 
     fn assert_nothing_accumulates(&self) {
