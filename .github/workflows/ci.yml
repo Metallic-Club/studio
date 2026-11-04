@@ -111,11 +111,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS only on the weekly or dispatched run: a macOS minute costs ten Linux minutes.
+        # macOS only on the weekly or dispatched run: a macOS minute costs ten Linux minutes. Linux is pinned to
+        # ubuntu-24.04: on the ubuntu-26.04 image (Mesa 26.0.8) the GPU test binaries segfault in libvulkan (#129).
         os: >-
           ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-              && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]')
-              || fromJSON('["ubuntu-latest", "windows-latest"]') }}
+              && fromJSON('["ubuntu-24.04", "windows-latest", "macos-latest"]')
+              || fromJSON('["ubuntu-24.04", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -131,7 +132,7 @@ jobs:
       # tests instead of skipping them, so the renderer is really tested here. (macOS, weekly only, skips without
       # one.)
       - name: Software GPU (Mesa lavapipe and llvmpipe)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri
@@ -145,7 +146,7 @@ jobs:
       # `dist` and fails on an abort (crates/luau/src/ffi.rs). LTO is turned down to keep it cheap; the panic
       # strategy, the thing under test, comes from the profile.
       - name: Luau error paths in the shipped profile
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         env:
           CARGO_PROFILE_DIST_LTO: "false"
           CARGO_PROFILE_DIST_CODEGEN_UNITS: "16"
@@ -154,7 +155,7 @@ jobs:
       # checks the interrupt its own way; the time budget's watchdog (crates/luau/src/watchdog.rs) must stop runaway
       # native loops too. Dependencies, Luau's C++ included, are optimised in the test profile (Cargo.toml).
       - name: Luau tests with native code (jit)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: cargo test -p metallic_luau --features jit
 
   # Everything that must build on mobile: the engine crates, Player and Launcher. Studio is desktop-only and xtask
