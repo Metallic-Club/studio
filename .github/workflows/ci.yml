@@ -153,15 +153,16 @@ jobs:
       # The renderer's image tests again on the GL fallback (llvmpipe through EGL), the path phones and older
       # hardware take. The run above picks Vulkan (lavapipe) whenever it has an adapter, so GL otherwise only gets
       # device setup (tests/offscreen.rs), which is how GL bugs like #155 went unseen. WGPU_BACKEND=gl leaves GL the
-      # only backend, so with METALLIC_REQUIRE_GPU a missing GL adapter fails here. The binaries are the ones built
-      # above; only the runs are new. Left out: no_alloc.rs, whose heap-growth tests are flaky on GL (#151), and
-      # pipelines.rs, whose first-frame test fails on GL (#156).
+      # only backend, so with METALLIC_REQUIRE_GPU a missing GL adapter fails here. `--workspace` (not `-p`) keeps the
+      # features of the build above, so the binaries are the ones built there and only the runs are new. Left out:
+      # no_alloc.rs, whose heap-growth tests are flaky on GL (#151), and pipelines.rs, whose first-frame test fails on
+      # GL (#156).
       - name: Renderer image tests on GL (llvmpipe)
         if: runner.os == 'Linux'
         env:
           WGPU_BACKEND: gl
         run: >-
-          cargo test -p metallic_render --test parts --test shadows --test lights --test post --test resolution
+          cargo test --workspace --test parts --test shadows --test lights --test post --test resolution
           --test sky --test lod --test overlay --test gpu_scene --test timings
       # An image test that differs from its reference writes what it drew to target/tmp; keep it to look at.
       - name: Keep the images that differ
