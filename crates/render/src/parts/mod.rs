@@ -763,6 +763,8 @@ impl PartRenderer {
         });
         let materials = MaterialTable::new(device);
         debug_assert_eq!(materials.buffer().size(), MATERIAL_TABLE_SIZE);
+        // Their pipelines are made here, in the device's turn with the workers' compiles (Direct3D 12 with FXC).
+        let turn = compiler.turn().take();
         let shadows = ShadowMaps::new((device, queue, maker), binding, instance_layout.as_ref(), cache);
         let lights = LocalLights::new(
             (device, queue, maker),
@@ -771,6 +773,7 @@ impl PartRenderer {
             LightSettings::default(),
             cache,
         );
+        drop(turn);
         let sun_group = frame_group_without_lights(device, &sun_layout, &frame_buffer, &materials, &shadows);
         let frame_group_lights = lights.revision();
         let lighting = SceneLighting::default();

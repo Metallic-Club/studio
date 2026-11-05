@@ -258,7 +258,12 @@ impl Renderer {
         let pipeline_cache = context.pipeline_cache().cloned();
         // OpenGL compiles on its context's thread: there every compile runs here, before this returns.
         let gl = context.capabilities().backend == wgpu::Backend::Gl;
-        let mut compiler = Compiler::new(context.device(), pipeline_cache.clone(), gl);
+        let mut compiler = Compiler::new(
+            context.device(),
+            pipeline_cache.clone(),
+            context.pipeline_turn().clone(),
+            gl,
+        );
         let first = Switch::of(&settings).plan();
         let first_format = if first.post() {
             hdr_format
