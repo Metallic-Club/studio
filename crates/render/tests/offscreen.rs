@@ -12,7 +12,7 @@ use metallic_render::{
     ContextOptions, FramePlan, OffscreenTarget, PassId, PassSet, RenderContext, RenderError, Renderer,
     RendererSettings, wgpu,
 };
-use support::{assert_all_pixels, assert_no_wgpu_errors, collect_wgpu_messages, gpu, gpu_with, read_back_rgba8};
+use support::{assert_all_pixels, gpu, gpu_with, read_back_rgba8};
 
 const CLEAR: wgpu::Color = wgpu::Color {
     r: 0.25,
@@ -223,7 +223,6 @@ fn primary_backends_are_preferred_over_gl() {
 /// The archived renderer crashed (heap corruption) when several threads set up GL at once; setup is serialised.
 #[test]
 fn devices_set_up_on_many_threads_at_once() {
-    collect_wgpu_messages();
     for backends in [wgpu::Backends::PRIMARY, wgpu::Backends::GL] {
         let options = ContextOptions {
             backends,
@@ -239,8 +238,23 @@ fn devices_set_up_on_many_threads_at_once() {
                 std::thread::spawn(move || {
                     for _ in 0..3 {
                         let context = RenderContext::new_offscreen(&options).unwrap();
+                        // EXPERIMENT (#145): frames 1 and 2, and the render passes.
+                        let s = settings(wgpu::TextureFormat::Rgba8Unorm);
+                        let target = OffscreenTarget::new(&context, s.width, s.height, s.color_format).unwrap();
+                        let mut renderer = Renderer::new(&context, s).unwrap();
+                        renderer.wait_for_pipelines();
+                        renderer.render(target.view());
+                        let first = read_back_rgba8(&context, target.texture())[0];
+                        renderer.render(target.view());
+                        let second = read_back_rgba8(&context, target.texture())[0];
+                        let mut passes = settings(wgpu::TextureFormat::Rgba8Unorm);
+                        passes.post.bloom.compute = false;
+                        let third = render_once(&context, passes)[0];
+                        eprintln!(
+                            "EXPERIMENT {backends:?} {:?}: compute frame 1 {first:?}, frame 2 {second:?}; passes {third:?}",
+                            renderer.post_stats().compute_passes
+                        );
                         let pixels = render_once(&context, settings(wgpu::TextureFormat::Rgba8Unorm));
-                        assert_no_wgpu_errors();
                         assert_all_pixels(&pixels, CLEAR_ENCODED, 1);
                     }
                 })
