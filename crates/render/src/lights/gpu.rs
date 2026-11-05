@@ -11,6 +11,7 @@ use super::cluster::{
     CLUSTERS_X, CLUSTERS_Y, ClusterCamera, ClusterGrid, ClusterStats, FIRST_SLICE, Slicing, TEXTURE_HEIGHT,
     TEXTURE_TEXELS, TEXTURE_WIDTH,
 };
+use super::directional::{FrameSuns, frame_suns};
 use super::select::{SelectView, influence, select};
 use super::{LIGHT_INTENSITY, LightSettings, LightStats, MAX_GPU_LIGHTS, MAX_SHADOW_TILES, SPOT_SOFTNESS};
 use crate::GpuScene;
@@ -55,7 +56,8 @@ impl GpuLight {
         let intensity = light.intensity * (LIGHT_INTENSITY * fade);
         let position = light.position - camera;
         let (cone, scale, offset) = match light.kind {
-            LightKind::Point => (-2.0, 0.0, 0.0),
+            // Directional lights are never local lights (they are drawn as extra suns, `super::directional`).
+            LightKind::Point | LightKind::Directional => (-2.0, 0.0, 0.0),
             LightKind::Spot => {
                 let half = (light.angle * 0.5).to_radians();
                 let outer = half.cos();
@@ -172,6 +174,8 @@ pub(crate) struct LocalLights {
     shadow_slots: Vec<usize>,
     bases: Vec<f32>,
     frame: FrameLights,
+    /// The extra suns (`DirectionalLight`s) the frame draws.
+    suns: FrameSuns,
     stats: LightStats,
     last: Option<Instant>,
     /// Seconds a frame advances the fades by, instead of the wall time since the last frame.
@@ -204,6 +208,7 @@ impl LocalLights {
             shadow_slots: Vec::with_capacity(MAX_GPU_LIGHTS),
             bases: Vec::with_capacity(MAX_GPU_LIGHTS),
             frame: FrameLights::default(),
+            suns: FrameSuns::default(),
             stats: LightStats::default(),
             last: None,
             fixed_step: None,
@@ -260,6 +265,11 @@ impl LocalLights {
         &self.frame
     }
 
+    /// The extra suns the frame uniform holds this frame.
+    pub(crate) fn suns(&self) -> &FrameSuns {
+        &self.suns
+    }
+
     /// What the last frame did.
     pub(crate) fn stats(&self) -> LightStats {
         self.stats
@@ -286,7 +296,8 @@ impl LocalLights {
         }
     }
 
-    /// Selects, fades, clusters and shadows the local lights of `scene` for a frame seen from `camera` on a
+    /// Chooses the extra suns (the scene's `DirectionalLight`s, see the [module documentation](super)), then
+    /// selects, fades, clusters and shadows the local lights of `scene` for a frame seen from `camera` on a
     /// `width` × `height` target with the main view's `cull` settings and levels of detail `lod`, and writes what
     /// changed to the GPU. The scene is drawn at `render` pixels (the target's size, or less with a render scale),
     /// which the shader's cluster lookup divides. Run it after [`GpuScene::upload_view`] and before the sun's shadows
@@ -307,8 +318,12 @@ impl LocalLights {
             (None, Some(last)) => start.saturating_duration_since(last).as_secs_f32().min(MAX_STEP),
         };
         self.last = Some(start);
+        let (suns, shining) = frame_suns(scene.scene().directional_lights(), self.settings.directional_budget());
+        self.suns = suns;
         self.stats = LightStats {
             in_scene: scene.scene().light_count() as u32,
+            directional_shining: shining,
+            directional_drawn: suns.len(),
             ..LightStats::default()
         };
         self.frame = FrameLights::default();
@@ -469,6 +484,8 @@ impl LocalLights {
             cpu_time: start.elapsed().saturating_sub(atlas.cull_time),
             shadow_cull_time: atlas.cull_time,
             gpu_bytes: self.gpu_bytes(),
+            directional_shining: self.stats.directional_shining,
+            directional_drawn: self.stats.directional_drawn,
         };
     }
 

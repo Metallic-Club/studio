@@ -44,9 +44,11 @@ fn the_first_frame_is_compiled_first_and_the_rest_behind_it() {
     renderer.wait_for_pipelines();
     let all = renderer.pipeline_stats();
     // Every permutation without a new colour format: the scene's 11 at each MSAA count up to 8, the post chain's 11,
-    // the upscale pass and the overlay.
+    // the upscale pass and the overlay. The scene's 9 with extra suns follow only once a scene has a
+    // `DirectionalLight` (#123), but inline (OpenGL) they are compiled up front too.
     let counts = renderer.msaa_sample_counts().iter().filter(|&n| n <= 8).count() as u32;
-    assert_eq!(all.compiled, 11 * counts + 13, "{all:?}");
+    let scene = if all.background { 11 } else { 20 };
+    assert_eq!(all.compiled, scene * counts + 13, "{all:?}");
     assert_eq!((all.pending, all.failed), (0, 0), "{all:?}");
     assert!(all.all_ms.is_some_and(|ms| ms >= first.first_frame_ms), "{all:?}");
     assert!(!all.switch_waiting);

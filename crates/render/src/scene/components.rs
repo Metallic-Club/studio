@@ -5,8 +5,9 @@
 //! are looked up by name once per class when the scene is made. Property ids are stable across subclasses, so the
 //! per-change cost is a table index, never a name lookup.
 //!
-//! Local lights work the same way: a class is a light when it has a light component registered here
-//! (`PointLightEmitter`, `SpotLightEmitter`), and its `Light` properties are resolved once per class.
+//! Lights work the same way: a class is a light when it has a light component registered here
+//! (`PointLightEmitter`, `SpotLightEmitter`, `DirectionalLightEmitter`), and its `Light` properties are resolved
+//! once per class.
 
 use metallic_core::glam::Vec3;
 use metallic_core::{ClassInfo, DataModel, Id, PropId, PropType, Registry};
@@ -39,7 +40,7 @@ pub struct MeshComponent {
     pub mesh: MeshFn,
 }
 
-/// The render side of one light component: which kind of local light an instance with it is.
+/// The render side of one light component: which kind of light an instance with it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LightComponent {
     /// The component's name, as classes list it.
@@ -61,8 +62,9 @@ impl RenderComponents {
         Self::default()
     }
 
-    /// The built-in components: `PrimitiveMesh` (a part drawn as the built-in mesh for its `Shape`), and the local
-    /// lights `PointLightEmitter` and `SpotLightEmitter` ([`crate::lights`]).
+    /// The built-in components: `PrimitiveMesh` (a part drawn as the built-in mesh for its `Shape`), the local
+    /// lights `PointLightEmitter` and `SpotLightEmitter`, and `DirectionalLightEmitter`, drawn as an extra sun
+    /// ([`crate::lights`]).
     pub fn builtin() -> Self {
         let mut components = Self::empty();
         components.register(MeshComponent {
@@ -76,6 +78,10 @@ impl RenderComponents {
         components.register_light(LightComponent {
             name: "SpotLightEmitter",
             kind: LightKind::Spot,
+        });
+        components.register_light(LightComponent {
+            name: "DirectionalLightEmitter",
+            kind: LightKind::Directional,
         });
         components
     }
@@ -176,6 +182,7 @@ pub(crate) struct LightProps {
     pub(crate) enabled: Option<PropId>,
     pub(crate) brightness: Option<PropId>,
     pub(crate) color: Option<PropId>,
+    /// `Range` (a `DirectionalLight` hides it, and the scene does not read it there).
     pub(crate) range: Option<PropId>,
     pub(crate) shadows: Option<PropId>,
     /// `SpotLight.Angle`.

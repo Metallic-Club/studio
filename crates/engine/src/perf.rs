@@ -402,7 +402,7 @@ impl PerfSummary {
             "\"lights\":{{\"in_scene\":{},\"in_view\":{},\"in_budget\":{},\"drawn\":{},\"fading\":{},\
              \"shadowed\":{},\"shadow_tiles\":{},\"lit_clusters\":{},\"cluster_entries\":{},\"max_per_cluster\":{},\
              \"overflow\":{},\"atlas_draws\":{},\"atlas_instances\":{},\"atlas_triangles\":{},\"atlas_frames\":{},\
-             \"tiles_redrawn\":{},\"gpu_bytes\":{}}}",
+             \"tiles_redrawn\":{},\"gpu_bytes\":{},\"directional_shining\":{},\"directional_drawn\":{}}}",
             l.in_scene,
             l.in_view,
             l.in_budget,
@@ -419,7 +419,9 @@ impl PerfSummary {
             d.light_shadow_triangles,
             self.light_shadow_frames,
             self.light_tiles_redrawn,
-            l.gpu_bytes
+            l.gpu_bytes,
+            l.directional_shining,
+            l.directional_drawn
         )
     }
 }

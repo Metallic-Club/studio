@@ -8,7 +8,7 @@ use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
 use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
-use super::lights::{LightChange, LightSet, SceneLight};
+use super::lights::{LightChange, LightKind, LightSet, SceneLight};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
 use super::{
@@ -79,6 +79,11 @@ pub struct InstanceScene {
     shadow: ShadowChanges,
     /// The local lights in the world (see [`super::lights`]).
     lights: LightSet,
+    /// The directional lights in the world, the extra suns (see [`super::lights`]).
+    suns: LightSet,
+    /// Whether either set holds a light: the one test a part's change pays for lights (see
+    /// [`InstanceScene::apply`]).
+    has_lights: bool,
 }
 
 /// The static region's shadow-caster changes since they were last taken: bounding spheres, origin-relative.
@@ -137,6 +142,8 @@ impl InstanceScene {
             watched: Vec::new(),
             shadow: ShadowChanges::default(),
             lights: LightSet::default(),
+            suns: LightSet::default(),
+            has_lights: false,
         })
     }
 
@@ -180,6 +187,8 @@ impl InstanceScene {
         self.revision = self.revision.wrapping_add(1);
         self.shadow.everything();
         self.lights.clear();
+        self.suns.clear();
+        self.has_lights = false;
         self.rest_cursor = 0;
         dm.mark_all(self.consumer);
     }
@@ -201,7 +210,7 @@ impl InstanceScene {
             if let Some(slot) = self.lookup(id) {
                 self.release(id, slot);
                 stats.removed += 1;
-            } else if self.lights.remove(id) {
+            } else if self.has_lights && self.remove_light(id) {
                 stats.lights += 1;
             }
         }
@@ -215,7 +224,7 @@ impl InstanceScene {
         }
         self.changes = changes;
         self.changes.clear();
-        stats.lights += self.lights.place_moved(dm, self.frame);
+        stats.lights += self.lights.place_moved(dm, self.frame) + self.suns.place_moved(dm, self.frame);
 
         self.demote_resting(&mut stats);
         stats
@@ -389,6 +398,33 @@ impl InstanceScene {
         self.lights.split_mut()
     }
 
+    /// The directional lights in the world (`DirectionalLight`, the extra suns), in no particular order (see
+    /// [`super::lights`]). They are not among [`InstanceScene::lights`].
+    pub fn directional_lights(&self) -> &[SceneLight] {
+        self.suns.lights()
+    }
+
+    /// Changes whenever a directional light appeared, changed, turned or left.
+    pub fn directional_light_revision(&self) -> u64 {
+        self.suns.revision()
+    }
+
+    /// Removes the light `id`, of either set. Returns whether it was one. Out of line, like the rest of the lights'
+    /// upkeep.
+    #[inline(never)]
+    fn remove_light(&mut self, id: Id) -> bool {
+        let removed = self.lights.remove(id) || self.suns.remove(id);
+        self.has_lights = !self.lights.is_empty() || !self.suns.is_empty();
+        removed
+    }
+
+    /// Notes that part `id`'s transform changed, for the lights of either set that follow it.
+    #[inline(never)]
+    fn part_moved(&mut self, id: Id) {
+        self.lights.part_moved(id, self.frame);
+        self.suns.part_moved(id, self.frame);
+    }
+
     /// Instances in the culling grid: every one on a draw list.
     pub fn culling_items(&self) -> usize {
         self.grid.len()
@@ -543,10 +579,10 @@ impl InstanceScene {
             self.apply_undrawn(dm, id, bits, stats);
             return;
         };
-        if !self.lights.is_empty() && bits.contains(DirtyBits::TRANSFORM) {
+        if self.has_lights && bits.contains(DirtyBits::TRANSFORM) {
             // The lights in it follow it: they are placed again after the drain. A scene without lights pays one
-            // length test here and nothing else.
-            self.lights.part_moved(id, self.frame);
+            // flag test here and nothing else.
+            self.part_moved(id);
         }
         let current = self.lookup(id);
         if bits.intersects(DirtyBits::CREATED | DirtyBits::STRUCTURE) {
@@ -583,7 +619,7 @@ impl InstanceScene {
         stats.updated += 1;
     }
 
-    /// A change of an instance that is not drawn: a local light, or a watched instance (`Lighting`). Kept out of
+    /// A change of an instance that is not drawn: a light, or a watched instance (`Lighting`). Kept out of
     /// [`InstanceScene::apply`], so the parts' path does not grow with it (the perf gate's sync workloads).
     #[cold]
     #[inline(never)]
@@ -599,9 +635,14 @@ impl InstanceScene {
             }
             return;
         };
-        if self.lights.apply(dm, id, bits, &light, self.world, &self.classes) == LightChange::Changed {
+        let set = match light.kind {
+            LightKind::Directional => &mut self.suns,
+            LightKind::Point | LightKind::Spot => &mut self.lights,
+        };
+        if set.apply(dm, id, bits, &light, self.world, &self.classes) == LightChange::Changed {
             stats.lights += 1;
         }
+        self.has_lights = !self.lights.is_empty() || !self.suns.is_empty();
     }
 
     /// Counts a transform change towards promotion (static region) or as activity (dynamic region). Returns the

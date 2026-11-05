@@ -197,7 +197,7 @@ pub struct Quality {
 impl Quality {
     /// Low (Intel Iris Xe laptops, mid-range phones; ADR 0008's Low tier): the scene at 75% scale, 512 m of view,
     /// parts under 2 pixels culled, one 1024² sun cascade out to 128 m (as the ADR sets), 32 local lights a frame
-    /// with 2 shadowed in a 1024² atlas, an LOD bias of 0.5, MLAA and bloom from a quarter of the output.
+    /// with 2 shadowed in a 1024² atlas, 1 extra sun, an LOD bias of 0.5, MLAA and bloom from a quarter of the output.
     pub const LOW: Self = Self {
         tier: Tier::Low,
         resolution: ResolutionSettings {
@@ -227,7 +227,7 @@ impl Quality {
 
     /// Medium (GTX 1650 / RX 6500 class at 60 fps, the Mid tier): full resolution, 1 km of view, parts under 1.5
     /// pixels culled, two 2048² sun cascades out to 192 m (the far one cached), 128 local lights with 8 shadowed in
-    /// a 2048² atlas, an LOD bias of 1, MLAA and bloom from half the output.
+    /// a 2048² atlas, 2 extra suns, an LOD bias of 1, MLAA and bloom from half the output.
     pub const MEDIUM: Self = Self {
         tier: Tier::Medium,
         resolution: ResolutionSettings::NATIVE,
@@ -253,7 +253,7 @@ impl Quality {
 
     /// High (RTX 3060 Ti class): full resolution, 2 km of view, parts under a pixel culled, three 2048² sun
     /// cascades out to 256 m (the far one cached; the renderer's defaults), 192 local lights with 8 shadowed in a
-    /// 4096² atlas, an LOD bias of 2, 4x MSAA and bloom from half the output with 13-tap downsampling.
+    /// 4096² atlas, 4 extra suns, an LOD bias of 2, 4x MSAA and bloom from half the output with 13-tap downsampling.
     pub const HIGH: Self = Self {
         tier: Tier::High,
         resolution: ResolutionSettings::NATIVE,
@@ -274,8 +274,8 @@ impl Quality {
     };
 
     /// Ultra: full resolution, no view distance, parts under half a pixel culled, three 3072² sun cascades out to
-    /// 256 m (High's, 1.5 times as sharp), 256 local lights with 10 shadowed, an LOD bias of 4, 8x MSAA and High's
-    /// bloom.
+    /// 256 m (High's, 1.5 times as sharp), 256 local lights with 10 shadowed, 4 extra suns, an LOD bias of 4, 8x
+    /// MSAA and High's bloom.
     pub const ULTRA: Self = Self {
         tier: Tier::Ultra,
         resolution: ResolutionSettings::NATIVE,
@@ -886,6 +886,8 @@ mod tests {
             assert!(q.shadows.enabled && q.shadows.cascade_count() >= 1, "{tier:?}");
             assert!(q.lights.enabled && q.lights.light_budget() >= 32, "{tier:?}");
             assert!(q.lights.shadows && q.lights.shadowed_lights >= 2, "{tier:?}");
+            // Every tier draws a game's DirectionalLights; Low 1, Medium 2, High and Ultra 4.
+            assert!(q.lights.directional_budget() >= 1, "{tier:?}");
             assert!(q.cull.enabled && q.lod.enabled, "{tier:?}");
             if let Some(p) = previous {
                 // Each tier costs at least as much as the one below it, everywhere.
@@ -896,6 +898,7 @@ mod tests {
                 assert!(q.shadows.resolution >= p.shadows.resolution, "{tier:?}");
                 assert!(q.shadows.distance >= p.shadows.distance, "{tier:?}");
                 assert!(q.lights.budget >= p.lights.budget, "{tier:?}");
+                assert!(q.lights.directional_lights >= p.lights.directional_lights, "{tier:?}");
                 assert!(q.lights.atlas_resolution >= p.lights.atlas_resolution, "{tier:?}");
                 assert!(q.lod.bias >= p.lod.bias, "{tier:?}");
                 assert!(

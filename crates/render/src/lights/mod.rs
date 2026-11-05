@@ -1,4 +1,5 @@
-//! Point and spot lights: clustered forward lighting with a per-frame budget, and a shadow atlas (ADR 0008 §6).
+//! Point and spot lights: clustered forward lighting with a per-frame budget, and a shadow atlas (ADR 0008 §6); and
+//! `DirectionalLight`s, drawn as extra suns (below).
 //!
 //! # From the scene to the frame
 //!
@@ -83,16 +84,39 @@
 //! which then fade in. A new atlas size likewise keeps the atlas before it in use until the new one is made; lights
 //! keep their tiles (wherever they now sit), all drawn again into it.
 //!
-//! `DirectionalLight` instances (extra suns) are not drawn yet: see #123.
+//! # Directional lights: extra suns
+//!
+//! A `DirectionalLight` lights the whole world with parallel rays along its forward direction (−Z of its world
+//! `CFrame`, after the part it sits in if any), so it reaches every cluster and belongs beside the sun rather than in
+//! the clusters' lists. The scene keeps them apart from the local lights
+//! ([`crate::InstanceScene::directional_lights`]), and each frame the [`LightSettings::directional_lights`] brightest
+//! that shine (`Enabled`, some `Brightness` and `Color`), ranked by brightness × the colour's luminance, at most
+//! [`MAX_EXTRA_SUNS`], go into the parts' frame uniform as extra suns: each adds Lambert diffuse and GGX specular
+//! like the sun, of [`DIRECTIONAL_RADIANCE`] × `Brightness` × `Color`. The sun from `Lighting` stays; extra suns
+//! add to it. Which lights are in that budget depends on the lights alone, never on the camera, so it changes only
+//! when the game changes a light (drawn at once, like every change the game makes) or the preset changes: nothing
+//! fades.
+//!
+//! **Only the sun casts directional shadows**: a `DirectionalLight`'s `Shadows` is ignored. Cascades are the most
+//! expensive shadows the renderer draws (the sun's near cascades are redrawn whenever the scene changes, #82), and the
+//! cascade code serves one light; shadows for extra suns are #166.
+//!
+//! **No cost when unused**: the frame uniform holds the extra suns and how many are drawn, and only pipelines made
+//! with them (`EXTRA_SUNS`, [`crate::parts`]) loop over them: a frame without one draws with exactly the pipelines it
+//! did before they existed. Those variants are compiled only once a frame first draws an extra sun. A single set of
+//! pipelines looping over a count of 0 was measured and cost the opaque pass 8% (`docs/perf.md`).
 
 mod atlas;
 mod cluster;
+mod directional;
 mod gpu;
 mod select;
 
 use std::time::Duration;
 
 pub use cluster::{CLUSTER_COUNT, CLUSTERS_X, CLUSTERS_Y, CLUSTERS_Z, FIRST_SLICE};
+pub use directional::DIRECTIONAL_RADIANCE;
+pub(crate) use directional::FrameSuns;
 pub(crate) use gpu::{FrameLights, LightBindings, LocalLights};
 
 /// The radiant intensity of `Brightness` 1, in the renderer's linear units: at 4 m it lights a surface facing it
@@ -118,6 +142,10 @@ pub const MAX_LIGHTS_PER_CLUSTER: u32 = 64;
 
 /// The most shadow-atlas tiles: the size of the tiles' uniform array.
 pub const MAX_SHADOW_TILES: usize = 64;
+
+/// The most `DirectionalLight`s a frame draws as extra suns ([`LightSettings::directional_lights`] is clamped to
+/// it): the size of their arrays in the frame uniform.
+pub const MAX_EXTRA_SUNS: usize = 4;
 
 /// How local lights are drawn, which the graphics presets drive ([`crate::settings::Quality`]): [`LightSettings::LOW`], [`LightSettings::MEDIUM`]
 /// (the default) and [`LightSettings::HIGH`]. Presets scale the cost (how many lights a frame draws, how many cast
@@ -163,11 +191,14 @@ pub struct LightSettings {
     /// scaled by `1 − N·L` (a surface facing the light needs none, a grazing one all of it) and at most
     /// [`crate::shadow::MAX_RECEIVER_OFFSET`] metres. See [`LightSettings::depth_bias`] for the values.
     pub normal_offset: f32,
+    /// The most `DirectionalLight`s a frame draws as extra suns, the brightest ones (at most [`MAX_EXTRA_SUNS`]; see
+    /// the [module documentation](self)). Not affected by [`LightSettings::enabled`], which is about local lights.
+    pub directional_lights: u32,
 }
 
 impl LightSettings {
     /// Low (Iris Xe laptops, mid-range phones): 32 lights a frame, 2 of them shadowed in a 1024² atlas of 256²
-    /// tiles.
+    /// tiles, and 1 extra sun.
     pub const LOW: Self = Self {
         enabled: true,
         budget: 32,
@@ -180,25 +211,28 @@ impl LightSettings {
         filter_radius: 1,
         depth_bias: 0.5,
         normal_offset: 1.0,
+        directional_lights: 1,
     };
 
     /// Medium (GTX 1650 / RX 6500 class at 60 fps, the Mid tier of ADR 0008): 128 lights a frame, at most 48 per
-    /// cluster, 8 of them shadowed in a 2048² atlas of 256² tiles (16 MiB).
+    /// cluster, 8 of them shadowed in a 2048² atlas of 256² tiles (16 MiB), and 2 extra suns.
     pub const MEDIUM: Self = Self {
         budget: 128,
         per_cluster: 48,
         shadowed_lights: 8,
         atlas_resolution: 2048,
+        directional_lights: 2,
         ..Self::LOW
     };
 
     /// High (RTX 3060 Ti class): 192 lights a frame, at most 64 per cluster, 8 of them shadowed in a 4096² atlas of
-    /// 512² tiles (64 MiB).
+    /// 512² tiles (64 MiB), and 4 extra suns.
     pub const HIGH: Self = Self {
         budget: 192,
         per_cluster: 64,
         atlas_resolution: 4096,
         tile_resolution: 512,
+        directional_lights: 4,
         ..Self::MEDIUM
     };
 
@@ -215,6 +249,11 @@ impl LightSettings {
         } else {
             0
         }
+    }
+
+    /// The extra suns' budget as drawn: at most [`MAX_EXTRA_SUNS`].
+    pub fn directional_budget(&self) -> u32 {
+        self.directional_lights.min(MAX_EXTRA_SUNS as u32)
     }
 
     /// The per-cluster cap as drawn: 1 to [`MAX_LIGHTS_PER_CLUSTER`].
@@ -262,6 +301,10 @@ pub struct LightStats {
     /// GPU memory local lights hold, in bytes: none until a frame first draws a light, and the shadow atlas only
     /// once a drawn light first has a shadow (see the [module documentation](self)).
     pub gpu_bytes: u64,
+    /// `DirectionalLight`s in the world that shine.
+    pub directional_shining: u32,
+    /// Of those, the ones drawn as extra suns ([`LightSettings::directional_lights`]).
+    pub directional_drawn: u32,
     /// CPU time of selecting, clustering and packing the lights.
     pub cpu_time: Duration,
     /// CPU time of the shadow tiles' caster culls.

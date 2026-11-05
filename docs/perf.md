@@ -1517,3 +1517,71 @@ frame (`mobile` on Vulkan within 0.13 ms).
 - **The GPU time is 2.9 times DX12's on `parts_100k` and 2 times on `mobile`**, mostly in the opaque pass, yet 13%
   lower on `many_lights`. Render CPU is 0.08 to 0.1 ms lower on Vulkan except on `parts_100k`.
 - Both gaps are #164.
+
+### Directional lights as extra suns (#123)
+
+`DirectionalLight`s are drawn beside the sun from `Lighting` as **extra suns**
+([`metallic_render::lights`](../crates/render/src/lights/mod.rs), "Directional lights: extra suns"): each adds
+Lambert diffuse and GGX specular from its forward direction, unshadowed.
+The presets draw the brightest 1 (Low), 2 (Medium), 4 (High, Ultra), ranked by brightness × the colour's luminance;
+which ones does not depend on the camera, so nothing fades. Only the sun casts directional shadows (a
+`DirectionalLight`'s `Shadows` is ignored; cascades for them are #166). The stress example's `--directional-lights
+<n>` adds that many to a scene (`StressScene::add_directional_lights`: different directions and tints, `Brightness`
+0.6 to 1) and `--directional-budget <n>` sets how many are drawn; the JSON's `lights` reports
+`directional_shining` and `directional_drawn`.
+
+**No cost when unused.** The extra suns reach the shaders in the frame uniform (704 → 848 bytes, written only when it
+changes, as before), and the part pipelines are made with and without them (`EXTRA_SUNS`, a pipeline-overridable
+constant, as `LOCAL_SHADOWS` is for #83): a frame without an extra sun draws with exactly the pipelines it drew with
+before. The other way was measured first and rejected: one set of pipelines looping over the frame's count of extra
+suns, which is 0 without any. On Vulkan that loop of no iteration cost `parts_100k`'s opaque pass 8% (the pass over the
+sky pass, which clocks the GPU: 10.5 to 10.7 against 9.8 on `main`, four interleaved rounds; with the call taken out
+of the same build, 9.8) and `many_lights`' 1.5% (1.536 to 1.544 ms against 1.513 to 1.518): the registers it holds
+cost occupancy even when it does not run, as #83 found for the local lights' loop. The variants with extra suns are
+compiled only once a frame first draws one (then in the background, at every MSAA count; on OpenGL, whose compiles
+run inline, up front with the rest), because on DX12 they would more than double the background compiles: 9 more
+part pipelines per MSAA count, 57 → 93 pipelines, 3.2 → 7.5 s of compile CPU on the workers and 0.7 → 1.3 s until the
+last is done (`parts_10k`, DX12, measured twice), which on `parts_100k` showed as a render CPU p99 of 3 ms instead of
+1.4 for the first second while they compiled. A scene's first frame waits for the ones it draws with (#86): with a
+`DirectionalLight` it took 850 ms instead of 660 on DX12.
+
+**2026-11-04**, Ryzen 5 5500, RX 6650 XT (Adrenalin 26.10.1), Windows 11, **DX12**, `AutoNoVsync`, 1,000 frames,
+seed 1, the renderer's defaults (Medium's lights: 2 extra suns; `--directional-budget 4` for 4). Before: `main` at
+`668b3f9`. After: branch `123-directional-lights`, without (`none`) and with `--directional-lights 1` and `4`. Times
+are p50 in ms; the pass is the opaque pass (`see_through_10k`: the transparent pass, which draws all of it).
+`parts_100k` and `mobile` after 2,000 frames of warm-up (so the extra suns' background compiles are done), two
+interleaved rounds agreeing within 0.03 ms (the passes within 0.002); `many_lights` and `see_through_10k` after 120,
+two rounds agreeing within 0.06 ms (passes within 0.01).
+
+| Scene | Extra suns | Frame | Render CPU | GPU | Pass |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `parts_100k` | `main` | 0.939 | 0.783 | 0.723 | 0.243 |
+| | none | 0.930 | 0.774 | 0.723 | 0.243 |
+| | 1 | 0.934 | 0.773 | 0.759 | 0.279 |
+| | 4 | 0.978 | 0.820 | 0.818 | 0.330 |
+| `mobile` (1280 × 720) | `main` | 0.526 | 0.427 | 0.418 | 0.094 |
+| | none | 0.533 | 0.434 | 0.418 | 0.094 |
+| | 1 | 0.542 | 0.427 | 0.437 | 0.111 |
+| | 4 | 0.559 | 0.418 | 0.461 | 0.135 |
+| `many_lights` | `main` | 2.349 | 0.725 | 2.202 | 1.777 |
+| | none | 2.411 | 0.762 | 2.207 | 1.767 |
+| | 1 | 2.312 | 0.760 | 2.120 | 1.676 |
+| | 4 | 2.427 | 0.756 | 2.231 | 1.785 |
+| `see_through_10k` | `main` | 1.306 | 0.844 | 1.143 | 0.796 |
+| | none | 1.307 | 0.848 | 1.144 | 0.797 |
+| | 1 | 1.449 | 0.866 | 1.280 | 0.929 |
+| | 4 | 1.698 | 0.911 | 1.516 | 1.151 |
+
+- **Without a `DirectionalLight` nothing changed**: every pass, the GPU frame and render CPU measure as on `main`
+  within run-to-run noise, on every scene.
+- **One extra sun** costs 0.036 ms of opaque pass on `parts_100k` at 1080p (15% of the pass, about the sun's own
+  shading) and 0.017 ms on `mobile` at 720p, and 0.13 ms in `see_through_10k`, whose see-through layers each shade it.
+  **Four** cost 0.087 and 0.041 ms (0.36 ms in `see_through_10k`).
+- **`many_lights`** measured faster with one extra sun than without (1.68 against 1.77 ms, in both rounds) and the same
+  with four: FXC compiles each variant on its own, and the one with extra suns came out cheaper for the local lights'
+  loop. On Vulkan (the opaque pass over the sky pass, which there varied with the GPU's clocks: `main` 91.0 to 91.7,
+  none 91.1, one 94.6 to 94.8, four 100.1 to 100.3) it is the expected 4% and 10% more.
+- **Render CPU** does not change: choosing the extra suns is a pass over the scene's directional lights (none, one or
+  four here) into a fixed array, under a microsecond, inside the lights' CPU time. The scene keeps them as it keeps
+  the local lights (a second set of the same records, following a part like them); the parts' sync pays the same
+  one test as before for lights (a flag now covering both sets), and all the rest is out of line.

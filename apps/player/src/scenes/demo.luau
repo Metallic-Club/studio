@@ -122,7 +122,7 @@ local core = part("OrbCore", Block, M.Neon, Vector3.new(1.5, 1.5, 1.5), CFrame.n
 
 -- The sun and the sky come from Lighting: a late afternoon, the sun low in the south-west, moving on slowly (a
 -- game hour every two minutes; T plays a whole day in a minute and a half: the lamps below light the night). Point
--- and spot lights render (#83); a DirectionalLight does not yet (#123).
+-- and spot lights render (#83), and a DirectionalLight adds a second, fixed sun (#123), on only by day.
 Lighting.ClockTime = 15.5
 Lighting.Brightness = 2
 Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
@@ -138,6 +138,10 @@ sun.Brightness = 1
 sun.Color = Color3.fromRGB(255, 244, 214)
 sun.CFrame = CFrame.lookAt(Vector3.new(0, 0, 0), Vector3.new(-0.4, -1, -0.3))
 sun.Parent = workspace
+local function isDay(): boolean
+    return Lighting.ClockTime > 6.5 and Lighting.ClockTime < 17.5
+end
+sun.Enabled = isDay()
 
 -- A lamp post: a point light inside a neon bulb, so it follows the bulb. It casts shadows; the bulb itself does not
 -- block its own light.
@@ -198,6 +202,11 @@ RunService.Heartbeat:Connect(function(deltaTime: number)
     -- The clock runs on while the parts are paused. ClockTime wraps past 24 by itself.
     local rate = if timelapse then TIMELAPSE_HOURS_PER_SECOND else HOURS_PER_SECOND
     Lighting.ClockTime += deltaTime * rate
+    -- The fixed sun does not set with Lighting's: it is switched off for the night (only when that changes).
+    local day = isDay()
+    if sun.Enabled ~= day then
+        sun.Enabled = day
+    end
 
     if paused then
         return
