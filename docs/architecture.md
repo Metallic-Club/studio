@@ -80,7 +80,8 @@ Box3D, through a Metallic-Club fork. 1 unit = 1 metre. ([ADR 0005](adr/0005-phys
 
 ## Projects
 
-A project is a folder: `metallic.toml`, JSON scenes, `.luau` scripts and assets. Only 3D exists for now.
+A project is one `.mtproj` file, a zip archive holding `metallic.toml`, JSON scenes, `.luau` scripts, assets and the
+asset index. Exported games are packed into `game.pak`. Only 3D exists for now.
 ([ADR 0006](adr/0006-project-format.md))
 
 ## The starting API
