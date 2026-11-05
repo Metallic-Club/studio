@@ -2,17 +2,18 @@
 //! adding each level onto the next larger (`bloom.wgsl`). Every step works at half the output's resolution or below;
 //! the chain is timed as one.
 //!
-//! **One compute pass** where the device has compute shaders (#145): every step is a dispatch of
-//! `bloom_compute.wgsl` in the same pass, so the chain of 2N − 1 steps costs one pass's recording and submit (about
-//! 18 µs of render CPU a render pass on DX12) instead of one each. The upsamples write each level's sum into a
-//! texture of its own (a dispatch cannot blend onto what it reads), the smallest level's sum being the level, and
-//! every level is a texture of its own too (OpenGL cannot sample one mip of a texture and write another in one
-//! dispatch). The levels are `Rg11b10Ufloat`, as the render passes' are, where the adapter writes it as storage (DX12, Vulkan and Metal on most GPUs), else `Rgba16Float`, which every
-//! device with compute shaders writes (OpenGL). **Elsewhere** (WebGL 2, GLES 3.0), when [`BloomSettings::compute`] is
-//! off, and where `Rgba16Float` levels would be large textures that the render passes' narrower ones are not (outputs
-//! above about 6 megapixels at OpenGL's Medium and above; [`crate::textures`] makes large textures off the frame, which
-//! a settings change of bloom's does not wait for), the chain is a render pass per step into levels in the scene
-//! colour's format, the upsamples blending onto them.
+//! **One compute pass** where the device has compute shaders, but on OpenGL (#145, [`compute_format`]): every step is
+//! a dispatch of `bloom_compute.wgsl` in the same pass, so the chain of 2N − 1 steps costs one pass's recording and
+//! submit (about 18 µs of render CPU a render pass on DX12) instead of one each. The upsamples write each level's sum
+//! into a texture of its own (a dispatch cannot blend onto what it reads), the smallest level's sum being the level,
+//! and every level is a texture of its own too (a backend that sets the mips a view samples on the texture, as
+//! OpenGL does, cannot sample one mip and write another in one dispatch). The levels are `Rg11b10Ufloat`, as the
+//! render passes' are, where the adapter writes it as storage (DX12, Vulkan and Metal on most GPUs), else
+//! `Rgba16Float`, which every device with compute shaders writes. **Elsewhere** (OpenGL, WebGL 2), when
+//! [`BloomSettings::compute`] is off, and where `Rgba16Float` levels would be large textures that the render passes'
+//! narrower ones are not (outputs above about 6 megapixels at Medium and above; [`crate::textures`] makes large
+//! textures off the frame, which a settings change of bloom's does not wait for), the chain is a render pass per step
+//! into levels in the scene colour's format, the upsamples blending onto them.
 
 use super::{BloomSettings, BloomStart, FullScreen, MAX_BLOOM_LEVELS, post_texture, sampler_entry};
 use super::{texture_entry, uniform_entry, uniform_slice};
@@ -191,9 +192,20 @@ fn storage_format_name(format: wgpu::TextureFormat) -> &'static str {
 }
 
 /// The format of bloom's levels as compute dispatches on `context` ([`COMPUTE_FORMATS`]: the first it writes as
-/// storage and filters); `None` without compute shaders or storage textures (WebGL 2, GLES 3.0).
+/// storage and filters); `None` without compute shaders or storage textures (WebGL 2, GLES 3.0), and on OpenGL.
+///
+/// OpenGL draws the render passes even with compute shaders: Mesa's llvmpipe (CI's OpenGL) ran the first
+/// downsample's dispatch before it had rasterised the scene pass before it, so bloom blurred the frame before
+/// (`tests/post.rs`, `bloom_reads_the_scene_of_its_own_frame`, failed in 29 of 30 runs there; never with the render
+/// passes, nor on lavapipe). OpenGL orders a render pass's writes before a later texture fetch without a barrier, and
+/// wgpu emits none there, so nothing a frame records can fix it; and OpenGL is the fallback path, whose drivers are
+/// the least tested with compute.
 pub(crate) fn compute_format(context: &RenderContext) -> Option<wgpu::TextureFormat> {
-    if !context.capabilities().compute || context.device().limits().max_storage_textures_per_shader_stage == 0 {
+    let capabilities = context.capabilities();
+    if !capabilities.compute
+        || capabilities.backend == wgpu::Backend::Gl
+        || context.device().limits().max_storage_textures_per_shader_stage == 0
+    {
         return None;
     }
     COMPUTE_FORMATS.into_iter().find(|&format| {
@@ -307,7 +319,7 @@ impl Bloom {
     }
 
     /// Whether the compute chain's levels are wider than the render passes' (`Rgba16Float` against the scene
-    /// colour's `Rg11b10Ufloat`, on OpenGL), so may make a large texture where the render passes make none.
+    /// colour's `Rg11b10Ufloat`), so may make a large texture where the render passes make none.
     fn wider(&self) -> bool {
         self.compute
             .as_ref()
@@ -481,9 +493,9 @@ impl Bloom {
                 .collect()
         };
         // The levels each downsample writes. The compute chain gives every level and every sum a texture of its own:
-        // OpenGL sets the mips a view samples on the texture, not the view, and drops the image stores of a dispatch
-        // into a mip outside them (Mesa's llvmpipe drew no bloom at all), so no dispatch may sample one mip of a
-        // texture and write another. The smallest level is its own sum, so its downsample writes it among the sums.
+        // OpenGL (which draws the render passes now) sets the mips a view samples on the texture, not the view, and
+        // llvmpipe dropped the image stores of a dispatch into a mip outside them, so no dispatch samples one mip of a
+        // texture and writes another. The smallest level is its own sum, so its downsample writes it among the sums.
         let (views, sums) = if compute {
             let single = |label, size| {
                 post_texture(device, label, size, 1, format, usage).create_view(&wgpu::TextureViewDescriptor::default())

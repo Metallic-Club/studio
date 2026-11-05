@@ -169,7 +169,7 @@ pub struct BloomSettings {
     pub wide_filter: bool,
     /// Draw the chain as one compute pass where the device has compute shaders (the default; #145), rather than a
     /// render pass per step: the same filters, for one pass's CPU cost instead of 2 × levels − 1. Devices without
-    /// compute shaders (WebGL 2, GLES 3.0) draw render passes either way.
+    /// compute shaders (WebGL 2, GLES 3.0) and OpenGL draw render passes either way.
     pub compute: bool,
 }
 
@@ -387,8 +387,9 @@ pub fn hdr_format(context: &RenderContext) -> wgpu::TextureFormat {
 
 /// The format of bloom's levels where its chain runs as one compute pass on `context` ([`BloomSettings::compute`]):
 /// `Rg11b10Ufloat` where the adapter writes it as storage, else `Rgba16Float`; `None` without compute shaders
-/// (WebGL 2, GLES 3.0), which draw a render pass per step. With `Rgba16Float` levels wider than the scene colour's,
-/// outputs above about 6 megapixels draw the render passes too (their levels would be large textures).
+/// (WebGL 2, GLES 3.0) and on OpenGL (#145), which draw a render pass per step. With `Rgba16Float` levels wider than
+/// the scene colour's, outputs above about 6 megapixels draw the render passes too (their levels would be large
+/// textures).
 pub fn bloom_compute_format(context: &RenderContext) -> Option<wgpu::TextureFormat> {
     bloom::compute_format(context)
 }

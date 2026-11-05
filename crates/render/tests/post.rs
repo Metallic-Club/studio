@@ -339,9 +339,10 @@ fn bloom_glows_around_a_lamp_at_night_at_every_effect_quality() {
 
 /// Bloom's chain as one compute pass (#145) runs the render passes' filters at the same coordinates, so the image
 /// is the one the render passes draw (as devices without compute shaders do). Where its levels are the scene colour's
-/// `Rg11b10Ufloat` (DX12, Vulkan) a pixel or two differ by a level; where they are `Rgba16Float` (OpenGL, which writes
+/// `Rg11b10Ufloat` (DX12, Vulkan) a pixel or two differ by a level; where they are `Rgba16Float` (an adapter that writes
 /// no `Rg11b10Ufloat` storage), which keeps a few more bits of the glow, up to two levels and 0.5 on average. The lamp
-/// at night (where the glow is the image) and the demo by day, at every effect quality.
+/// at night (where the glow is the image) and the demo by day, at every effect quality. OpenGL draws the render passes
+/// either way (#145) and skips this.
 #[test]
 fn bloom_draws_the_same_image_in_a_compute_pass_as_in_render_passes() {
     let Some(context) = gpu() else { return };

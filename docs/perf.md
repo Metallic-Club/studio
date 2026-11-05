@@ -1803,26 +1803,26 @@ and cull) are untouched.
 
 Bloom's chain was 2N − 1 render passes (9 at Medium and above, 7 at Low): a downsample per level, then an upsample
 adding each level onto the next larger. Its GPU time was the same at 720p and 1080p, so it was mostly the passes, and
-each render pass cost about 18 µs of render CPU (#85). **Where the device has compute shaders, the chain is now one
-compute pass** (`metallic_render::post`, `post/bloom.rs`), a dispatch per step:
+each render pass cost about 18 µs of render CPU (#85). **Where the device has compute shaders, but on OpenGL (below),
+the chain is now one compute pass** (`metallic_render::post`, `post/bloom.rs`), a dispatch per step:
 
 - **The same filters at the same coordinates.** `bloom_compute.wgsl` is appended to `bloom.wgsl` and runs its taps
   (the 5-tap dual filter, the 13-tap one, the quarter's four, the upsample's 3 × 3 tent, `finite` on every tap), one
   invocation per destination texel at the texel's centre, as the fragment entry points do. A dispatch cannot blend
   onto what it reads, so each upsample writes the level's sum apart (its own level plus the tent over the sum
   below), which is what the blend added up to; the finish pass reads the largest sum. Every level and every sum is a
-  texture of its own, not a mip of a shared one: OpenGL sets the mips a view samples on the texture, and Mesa's
-  llvmpipe dropped the image stores into a mip outside them (CI's GL run drew no bloom at all with mips).
+  texture of its own, not a mip of a shared one: a backend that sets the mips a view samples on the texture (OpenGL
+  does) cannot sample one mip and write another in a dispatch; Mesa's llvmpipe dropped such image stores, and CI's
+  GL run drew no bloom at all with mips.
 - **Its levels are the render passes' `Rg11b10Ufloat`** where the adapter writes it as storage (DX12, Vulkan; Metal
   on most GPUs), so the image is the one the render passes draw (`tests/post.rs`, below) and the memory is theirs plus
-  the sums (2.8 MB more at 1080p). Elsewhere (OpenGL writes no `Rg11b10Ufloat` storage) they are `Rgba16Float`,
-  which every device with compute shaders writes.
+  the sums (2.8 MB more at 1080p). Elsewhere they are `Rgba16Float`, which every device with compute shaders writes.
 - **Large textures.** Bloom's textures are made with its settings, at once (#152 makes the scene's attachments, the
   shadow maps and the atlas off the frame; bloom's stay under its 16 MiB up to 4K). `Rg11b10Ufloat` levels are no larger
   than the render passes' were. `Rgba16Float` levels are twice as large, so where they would reach 16 MiB and the
-  render passes' would not (an output above about 6 megapixels at Medium and above, on OpenGL: 4K), the chain draws
-  the render passes, whose pipelines such a device compiles too.
-- **The render passes stay** for devices without compute shaders (WebGL 2, GLES 3.0) and for
+  render passes' would not (an output above about 6 megapixels at Medium and above: 4K), the chain draws the render
+  passes, whose pipelines such a device compiles too.
+- **The render passes stay** for devices without compute shaders (WebGL 2, GLES 3.0), for OpenGL (below), and for
   `BloomSettings::compute = false`, which the stress example's `--bloom-render-passes` and
   `SceneRenderer::set_bloom_compute` set, to measure them and to test them anywhere.
 - **Pipelines**: the compute chain's six (`PipelineKey::BloomCompute`: the first downsample's three filters, the later
@@ -1876,12 +1876,23 @@ GPU time is the chain's (the JSON's `gpu_ms.passes.bloom`); in brackets, the sam
 - **`Rgba16Float` levels** (measured with the format forced on DX12) are 0.01 to 0.02 ms faster at High and Ultra
   here and the same at Low and Medium, at twice the memory, a large texture at 4K and an image up to two levels off;
   `Rg11b10Ufloat` wins where the adapter has it.
-- **A texture per level** (the GL fix above) measured as the mips the table was measured with: one more DX12 round
-  of every row, bloom within 0.003 ms and render CPU within noise.
-- **The render passes** in the new code (`--bloom-render-passes`, the GLES path) measured as `main` within noise at
-  every row (bloom 0.044/0.113/0.124/0.125 ms on `parts_100k`, the same counts).
+- **A texture per level** (above) measured as the mips the table was measured with: one more DX12 round of every
+  row, bloom within 0.003 ms and render CPU within noise.
+- **The render passes** in the new code (`--bloom-render-passes`, the path OpenGL and GLES take) measured as `main`
+  within noise at every row (bloom 0.044/0.113/0.124/0.125 ms on `parts_100k`, the same counts).
 
-**OpenGL** (same machine and runs, `WGPU_BACKEND=gl`; `Rgba16Float` levels, OpenGL's only storage format of the two):
+**OpenGL draws the render passes.** With the compute pass, Mesa's llvmpipe (CI's OpenGL) ran the first downsample's
+dispatch before it had rasterised the scene pass before it, so bloom blurred the frame before: CI's GL image tests
+failed now and then (`tests/shadows.rs`' acne check, whose two renders' bloom differed), and a test made for it,
+`tests/post.rs`' `bloom_reads_the_scene_of_its_own_frame` (a frame drawn after the clear colour changed against one
+that only drew that colour), failed in **29 of 30** runs on llvmpipe, against **0 of 30** with the render passes and
+0 of 10 on lavapipe. 20 loops of the shadow and post tests and 30 of CI's whole GL step (below) never failed: frames
+that lag behind identical frames look the same, so only tests whose frames change see it. Splitting the chain into a
+compute pass per dispatch changed nothing, as expected: OpenGL orders a render pass's writes before a later texture
+fetch without any barrier, wgpu emits none there, and llvmpipe defers its rasterisation past the dispatch. AMD's
+OpenGL driver here passes the test. Nothing a frame records can make llvmpipe wait, and OpenGL is the fallback path,
+whose drivers are the least tested with compute, so OpenGL keeps the render passes. What it gives up, measured
+before that (same machine and runs, `WGPU_BACKEND=gl`, `Rgba16Float` levels):
 
 | Scene | Preset | Render CPU before → after | GPU before → after | Bloom GPU before → after |
 | --- | --- | ---: | ---: | ---: |
@@ -1898,14 +1909,14 @@ GPU time is the chain's (the JSON's `gpu_ms.passes.bloom`); in brackets, the sam
 | | High | 2.329 → 2.063 | 1.056 → 0.934 | 0.260 → 0.134 |
 | | Ultra | 2.771 → 2.494 | 1.473 → 1.351 | 0.260 → 0.133 |
 
-OpenGL's render passes cost more (0.1 to 0.3 ms of render CPU saved), and its bloom GPU time halves.
-`many_lights` on OpenGL varies by 0.4 ms between rounds (its own two rounds of `main` were 4.06 and 3.75 ms of GPU at
-Medium), so its High row is noise.
+OpenGL's render passes cost more (0.1 to 0.3 ms of render CPU), and its bloom GPU time would halve. `many_lights` on
+OpenGL varies by 0.4 ms between rounds (its own two rounds of `main` were 4.06 and 3.75 ms of GPU at Medium), so its
+High row is noise. A driver known to order it right could be let back in.
 
 **Offscreen, every backend** (the `scene_passes` bench's 10,000-part grid at 1280 × 720, each preset's anti-aliasing,
 effects and scale, the scene passes merged, run with `BloomSettings::compute` off and on; p50 over three rounds of
-400 frames; ms). Vulkan has no adapter for a window here while the monitor is off (#110), so this is its
-measurement:
+400 frames; ms; GL measured before it kept the render passes). Vulkan has no adapter for a window here while the
+monitor is off (#110), so this is its measurement:
 
 | Backend | Preset | Render passes | Render CPU passes → compute | GPU passes → compute | Bloom GPU passes → compute |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -1922,8 +1933,8 @@ measurement:
 | | High | 11 → 2 + 1 | 1.517 → 1.196 | 0.740 → 0.613 | 0.259 → 0.134 |
 | | Ultra | 11 → 2 + 1 | 1.601 → 1.288 | 0.826 → 0.703 | 0.259 → 0.134 |
 
-On a frame with little else, the compute pass saves a third of the render CPU on DX12 (0.07 ms) and Vulkan (0.05 ms),
-0.2 to 0.3 ms on GL, and half of bloom's GPU time everywhere.
+On a frame with little else, the compute pass saves a third of the render CPU on DX12 (0.07 ms) and Vulkan (0.05 ms)
+and half of bloom's GPU time (0.2 to 0.3 ms of CPU on GL, which keeps the render passes).
 
 **What was not done, and why** (by the numbers above):
 
@@ -1940,9 +1951,9 @@ On a frame with little else, the compute pass saves a third of the render CPU on
   into the finish pass at full resolution (four times the texels, in a pass that takes 0.04 to 0.10 ms), for every
   preset; not worth it once the upsample is not a pass.
 
-**The GLES / WebGL path** (no compute shaders): the render passes as before, 7 for bloom at Low and 9 at Medium and
-above (10, 12, 11 and 11 render passes a frame at Low, Medium, High and Ultra); measured above with
-`--bloom-render-passes` as `main`'s. OpenGL 4.3 and GLES 3.1 have compute shaders and take the compute pass.
+**The OpenGL, GLES and WebGL path**: the render passes as before, 7 for bloom at Low and 9 at Medium and above (10,
+12, 11 and 11 render passes a frame at Low, Medium, High and Ultra); measured above with `--bloom-render-passes` as
+`main`'s.
 
 **The look.** The compute pass runs the render passes' filters at the same coordinates
 (`tests/post.rs`, `bloom_draws_the_same_image_in_a_compute_pass_as_in_render_passes`: the lamp at night, where the glow
@@ -1951,19 +1962,21 @@ is the image, and the demo by day, at Low, Medium and High, compute pass against
 | Backend (levels) | Max difference | Mean | Pixels over 2 levels |
 | --- | ---: | ---: | ---: |
 | Vulkan, DX12 (`Rg11b10Ufloat`) | 1 | 0.00003 to 0.00014 | 0 |
-| GL (`Rgba16Float`) | 1 to 2 | 0.17 to 0.50 | 0 |
+| GL, before it kept the render passes (`Rgba16Float`) | 1 to 2 | 0.17 to 0.50 | 0 |
 
 With `Rg11b10Ufloat` levels a handful of pixels differ by one level (the order the sums round in); `Rgba16Float` keeps
 a few more bits of the glow, which `Rg11b10Ufloat`'s 5- and 6-bit mantissas round down, so the image is half a level
 brighter on average where bloom covers it. Both are within the references' tolerance (a mean of 1, 1% of pixels over
 12): the reference images are unchanged and pass on Vulkan, DX12 and GL here, so no before/after crops are needed. CI
-runs the comparison on lavapipe, WARP and llvmpipe (GL).
+runs the comparison on lavapipe and WARP. Two more tests in `tests/post.rs` hold every backend to the same frame:
+`the_same_frame_draws_the_same_image_twice` (two renderers, to the bit) and `bloom_reads_the_scene_of_its_own_frame`
+(above), each with the compute pass and with the render passes.
 
 - **Allocations** (`tests/no_alloc.rs`): the hand-written frames record the same compute pass, dispatches and bind
-  groups (the render passes where a device has no compute shaders), and every frame makes exactly the wgpu calls
-  written out by hand: the default frame 129 / 129 on Vulkan, 121 / 121 on DX12, 153 / 153 on GL (199, 191 and 272
-  before: wgpu-core allocates for each render pass); the merged scene 105, 100 and 125 (178, 173 and 247).
+  groups (the render passes on OpenGL and where a device has no compute shaders), and every frame makes exactly the
+  wgpu calls written out by hand: the default frame 129 / 129 on Vulkan and 121 / 121 on DX12 (199 and 191 before:
+  wgpu-core allocates for each render pass); the merged scene 105 and 100 (178 and 173). OpenGL's are as before.
 - **Pipelines** (`tests/pipelines.rs`): every permutation is still compiled in the background before a switch needs
-  it: 11 for the post chain where one bloom chain is compiled, 17 on OpenGL with a scene colour of `Rg11b10Ufloat`
-  (both chains). `tests/post.rs` switches effects and anti-aliasing every frame as before.
+  it: 11 for the post chain where one bloom chain is compiled, 17 where the compute chain's levels are wider than the
+  scene colour's (both chains). `tests/post.rs` switches effects and anti-aliasing every frame as before.
 - The perf gate's workloads (scene sync and cull) are untouched.
