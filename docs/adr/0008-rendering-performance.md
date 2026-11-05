@@ -118,7 +118,7 @@ Per-frame **render CPU** budget (sync + cull + encode + submit), main thread or 
   | Effect quality | bloom resolution, exposure metering resolution |
   | Texture quality | |
 
-- **Auto** runs a short GPU-timed calibration on first launch and after driver or hardware changes, then dynamic resolution holds the frame time.
+- **Auto** runs a short GPU-timed calibration on first launch and after driver or hardware changes, then dynamic resolution holds the frame time. It times a fixed built-in workload drawn offscreen beside the game's first frames, not the game, so the tier does not depend on which game ran first (#139).
 - **The open post chain is kept** (passes can be added, removed and reordered; disabled passes are free). Passes are **fused** where possible: the bloom composite and grading/LUT/tone curve go in the single finish pass, and exposure metering reads a bloom mip instead of full resolution.
 - **Upscaling:** bilinear first; a higher-quality upscaler (FSR 1 class) is planned behind the render-scale setting.
 

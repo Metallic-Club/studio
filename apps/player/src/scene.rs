@@ -39,6 +39,7 @@ impl Scene {
         Scene::Stress(StressKind::Overdraw),
         Scene::Stress(StressKind::Mobile),
         Scene::Stress(StressKind::SeeThrough10k),
+        Scene::Stress(StressKind::Calibration),
     ];
 
     /// The name `--scene` takes.

@@ -734,6 +734,21 @@ impl Renderer {
         self.wait_for_compiles();
     }
 
+    /// Whether the local lights' pipelines of the target drawn into are compiled (a frame with lights draws with
+    /// them). Another renderer on the same device that draws lights, such as Auto's calibration workload (#139),
+    /// waits for them before compiling its own: they share their shaders, which a device such as DX12's compiles
+    /// once and keeps, where compiling them at the same moment compiles them twice.
+    pub fn lit_pipelines_ready(&self) -> bool {
+        let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
+        PartPipeline::LIT.into_iter().all(|pipeline| {
+            self.has(PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            })
+        })
+    }
+
     /// What the textures made off the frame have done and what is still being made (`textures`).
     pub fn texture_stats(&self) -> TextureStats {
         self.maker.stats()
@@ -780,6 +795,14 @@ impl Renderer {
     /// first readback arrives, and always when GPU timing is off or unsupported.
     pub fn gpu_timings(&self) -> Option<&FrameTimings> {
         self.timer.as_ref().and_then(GpuTimer::latest)
+    }
+
+    /// The per-pass GPU timings of up to [`crate::TIMING_RING_SIZE`] of the newest frames collected, in no particular
+    /// order: for a caller that draws several frames between two of its reads and wants each one's timings
+    /// ([`Renderer::gpu_timings`] keeps only the newest), as Auto's calibration does. A frame's timings stay until a
+    /// later frame's take their place.
+    pub fn recent_gpu_timings(&self) -> impl Iterator<Item = &FrameTimings> {
+        self.timer.iter().flat_map(GpuTimer::recent)
     }
 
     /// Changes the target size (on window resize). Recreates the internal attachments when the size changes.

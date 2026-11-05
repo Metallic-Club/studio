@@ -10,13 +10,14 @@ use metallic_platform::{Size, Window};
 use metallic_render::post::PostSettings;
 use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
-use metallic_render::settings::{Calibration, CalibrationStep, Calibrator, GraphicsSettings, Quality, Tier};
+use metallic_render::settings::{Calibration, Calibrator, GraphicsSettings, Quality, Tier};
 use metallic_render::{
     AntiAliasing, CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings,
     LightingReader, LodSettings, PassId, PassSet, RenderContext, RenderError, RenderSurface, Renderer,
     RendererSettings, SceneLighting, ShadowSettings, wgpu,
 };
 
+use crate::calibration::{AutoCalibration, CALIBRATION_SIZE, CALIBRATION_WORKLOAD, CalibrationOutcome, GameFrame};
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
 use crate::perf::{FrameSample, GraphicsStatus, PerfStats, PerfSummary, draw_overlay};
 
@@ -47,10 +48,12 @@ struct Device {
 /// [`SceneRenderer::set_graphics`] applies a player's [`GraphicsSettings`] (ADR 0008 §8): the preset's settings of
 /// every system, with the player's overrides, at once. Without it the renderer keeps the per-system settings set
 /// one by one ([`SceneRenderer::set_cull`] and the others; the renderer's defaults until then). With the Auto preset
-/// and no calibration for the adapter and driver it attaches to, it calibrates first ([`Calibrator`]): the game's
-/// first frames are drawn at each tier it measures, then at the tier chosen, and [`SceneRenderer::take_calibration`]
-/// hands the result to the app to save. [`SceneRenderer::write_user_settings`] writes the settings in effect into
-/// the game's `UserGameSettings` service, which scripts read.
+/// and no calibration for the adapter, driver and workload it attaches to, it calibrates on a fixed workload
+/// ([`crate::calibration`], #139): built on a worker thread, then drawn offscreen after each game frame at each tier
+/// [`Calibrator`] measures, while the game draws at Medium with dynamic resolution; the game then switches once, to
+/// the tier chosen, and [`SceneRenderer::take_calibration`] hands the result to the app to save.
+/// [`SceneRenderer::write_user_settings`] writes the settings in effect into the game's `UserGameSettings` service,
+/// which scripts read.
 ///
 /// Switching settings at run time waits for nothing: the shadow maps, the light atlas and the scaled scene textures
 /// are made again without waiting for the GPU (the old ones are freed once it is done with them), and every pipeline
@@ -72,12 +75,14 @@ pub struct SceneRenderer {
     present_mode: Option<wgpu::PresentMode>,
     /// The player's graphics settings, once set ([`SceneRenderer::set_graphics`]).
     graphics: Option<GraphicsSettings>,
-    /// The tier drawn at: the graphics settings', or the tier being measured while calibrating.
+    /// The tier drawn at: the graphics settings', or Medium while calibrating.
     tier: Option<Tier>,
     /// Auto's calibration, while it runs.
-    calibrator: Option<Calibrator>,
+    calibration: Option<AutoCalibration>,
     /// A calibration finished and not yet taken by the app.
     new_calibration: Option<Calibration>,
+    /// What the last calibration run here did.
+    last_calibration: Option<CalibrationOutcome>,
     /// The frame cap the app applies, reported to scripts.
     frame_cap: Option<u32>,
     /// `UserGameSettings` must be written again.
@@ -132,8 +137,9 @@ impl SceneRenderer {
             present_mode: None,
             graphics: None,
             tier: None,
-            calibrator: None,
+            calibration: None,
             new_calibration: None,
+            last_calibration: None,
             frame_cap: None,
             settings_changed: false,
             device: None,
@@ -324,8 +330,9 @@ impl SceneRenderer {
 
     /// Applies a player's graphics settings: the settings of every system at the preset's tier with the player's
     /// overrides ([`GraphicsSettings::quality`]), and vsync when the settings say. With Auto and no calibration for
-    /// this adapter and driver, calibrates first (at once when attached, otherwise when it attaches). Applies now
-    /// and to every later renderer; waits for nothing.
+    /// this adapter, driver and workload ([`CALIBRATION_WORKLOAD`]), calibrates (starting at once when attached,
+    /// otherwise when it attaches), drawing at Medium until it is done. Applies now and to every later renderer; waits
+    /// for nothing.
     pub fn set_graphics(&mut self, graphics: GraphicsSettings) {
         if let Some(vsync) = graphics.vsync {
             self.set_present_mode(if vsync {
@@ -334,7 +341,7 @@ impl SceneRenderer {
                 wgpu::PresentMode::AutoNoVsync
             });
         }
-        self.calibrator = None;
+        self.calibration = None;
         self.graphics = Some(graphics);
         self.start_graphics();
     }
@@ -350,9 +357,16 @@ impl SceneRenderer {
         self.new_calibration.take()
     }
 
-    /// The tier Auto's calibration is measuring, while it runs.
+    /// The tier Auto's calibration is measuring on its workload, while it runs (the game draws at Medium meanwhile).
     pub fn calibrating(&self) -> Option<Tier> {
-        self.calibrator.as_ref().map(Calibrator::probe)
+        self.calibration.as_ref().map(AutoCalibration::probe)
+    }
+
+    /// What the last calibration run by this renderer did: the tier chosen, how long it took, the workload frames
+    /// drawn and the game's worst frame meanwhile. `None` until one finishes (and when the settings' calibration was
+    /// loaded rather than measured).
+    pub fn last_calibration(&self) -> Option<&CalibrationOutcome> {
+        self.last_calibration.as_ref()
     }
 
     /// Tells the renderer the frame cap the app applies (`None`: uncapped), which scripts read in
@@ -380,32 +394,27 @@ impl SceneRenderer {
         }
     }
 
-    /// Applies the graphics settings now: calibrates first when Auto needs it on the attached adapter, otherwise
-    /// draws at their tier.
+    /// Applies the graphics settings now: when Auto needs a calibration on the attached adapter, starts it and draws
+    /// at Medium (with Auto's dynamic resolution) until it is done; otherwise draws at their tier.
     fn start_graphics(&mut self) {
         let Some(graphics) = self.graphics.as_ref() else {
             return;
         };
         let device = self.device.as_ref().map(|device| {
             let caps = device.context.capabilities();
-            let calibrate = graphics.needs_calibration(&caps.adapter_name, &caps.driver);
-            (
-                calibrate,
-                device.renderer.gpu_timing_enabled(),
-                device.renderer.frame_index(),
-            )
+            let calibrate = graphics.needs_calibration(&caps.adapter_name, &caps.driver, CALIBRATION_WORKLOAD);
+            (calibrate, device.renderer.gpu_timing_enabled())
         });
-        match device {
-            Some((true, true, frame)) => {
-                let calibrator = Calibrator::new(frame);
-                log::info!(
-                    "graphics: calibrating the Auto preset, starting at {:?}",
-                    calibrator.probe()
-                );
-                self.apply_probe(calibrator.probe());
-                self.calibrator = Some(calibrator);
+        match (device, self.device.as_ref()) {
+            (Some((true, true)), Some(device)) => {
+                // A safe tier for any machine while the workload is measured; the game switches once, when it is done.
+                let quality = graphics.quality_at(Tier::Medium);
+                log::info!("graphics: calibrating the Auto preset on its workload; drawing at Medium meanwhile");
+                let format = device.renderer.settings().color_format;
+                self.calibration = Some(AutoCalibration::new(format, CALIBRATION_SIZE));
+                self.apply_quality(&quality);
             }
-            Some((true, false, _)) => {
+            (Some((true, false)), _) => {
                 // No timestamps to measure with: the tier from the kind of adapter.
                 let tier = self
                     .capabilities()
@@ -417,15 +426,6 @@ impl SceneRenderer {
                 self.apply_quality(&quality);
             }
         }
-    }
-
-    /// Draws at `tier`'s settings at the target's own resolution, as calibration measures them.
-    fn apply_probe(&mut self, tier: Tier) {
-        let quality = Quality {
-            resolution: ResolutionSettings::NATIVE,
-            ..Quality::for_tier(tier)
-        };
-        self.apply_quality(&quality);
     }
 
     fn apply_quality(&mut self, quality: &Quality) {
@@ -445,7 +445,7 @@ impl SceneRenderer {
 
     /// Keeps Auto's choice of `tier` (measured at `gpu_ms`) for this adapter and draws at it.
     fn finish_calibration(&mut self, tier: Tier, gpu_ms: f32) {
-        self.calibrator = None;
+        self.calibration = None;
         let (adapter, driver) = self
             .capabilities()
             .map(|caps| (caps.adapter_name.clone(), caps.driver.clone()))
@@ -457,6 +457,7 @@ impl SceneRenderer {
             gpu_ms,
             adapter,
             driver,
+            workload: CALIBRATION_WORKLOAD,
         };
         self.new_calibration = Some(calibration.clone());
         if let Some(graphics) = self.graphics.as_mut() {
@@ -466,20 +467,32 @@ impl SceneRenderer {
         }
     }
 
-    /// Feeds the calibration the newest GPU timings after a frame.
-    fn advance_calibration(&mut self) {
-        let (Some(calibrator), Some(device)) = (self.calibrator.as_mut(), self.device.as_ref()) else {
+    /// Moves the calibration on after a game frame was presented (`frame_time` after the one before it): draws the
+    /// workload frames due and, once it is done, switches the game to the tier chosen.
+    fn advance_calibration(&mut self, frame_time: Option<Duration>) {
+        let (Some(calibration), Some(device)) = (self.calibration.as_mut(), self.device.as_ref()) else {
             return;
         };
-        let renderer = &device.renderer;
-        let timed = renderer
-            .gpu_timings()
-            .map(|timings| (timings.frame(), timings.total_ms()));
-        match calibrator.observe(renderer.frame_index(), timed) {
-            CalibrationStep::Measuring => {}
-            CalibrationStep::Probe(tier) => self.apply_probe(tier),
-            CalibrationStep::Done(tier, gpu_ms) => self.finish_calibration(tier, gpu_ms),
-        }
+        let frame = GameFrame {
+            frame_time,
+            gpu_ms: device.renderer.gpu_timings().map(|timings| timings.total_ms()),
+            lit_ready: device.renderer.lit_pipelines_ready(),
+        };
+        let Some(outcome) = calibration.after_frame(&device.context, frame) else {
+            return;
+        };
+        log::info!(
+            "graphics: calibrated {:.0} ms after the first frame, over {} game frames ({} waiting for the game's lit \
+             pipelines; {} workload frames, built in {:.0} ms); the game's worst frame meanwhile {:.1} ms",
+            outcome.duration.as_secs_f32() * 1000.0,
+            outcome.game_frames,
+            outcome.waited_frames,
+            outcome.workload_frames,
+            outcome.build.as_secs_f32() * 1000.0,
+            outcome.worst_game_frame.as_secs_f32() * 1000.0,
+        );
+        self.last_calibration = Some(outcome);
+        self.finish_calibration(outcome.tier, outcome.gpu_ms);
     }
 
     /// Writes the graphics settings in effect into `dm`'s `UserGameSettings`, which scripts read, when they changed
@@ -772,6 +785,7 @@ impl RenderHook for SceneRenderer {
         let render_cpu;
         let draws;
         let cull;
+        let presented = image.is_some();
         match image {
             Some(image) => {
                 device.renderer.render_scene(image.view(), scene, camera.as_ref());
@@ -810,7 +824,10 @@ impl RenderHook for SceneRenderer {
             .with_render_scale(device.renderer.resolution_stats().scale);
             self.perf.record(sample, device.renderer.gpu_timings(), draws);
         }
-        self.advance_calibration();
+        // The workload is drawn after a presented frame only: the swapchain paces it then.
+        if presented {
+            self.advance_calibration(frame_time);
+        }
     }
 }
 

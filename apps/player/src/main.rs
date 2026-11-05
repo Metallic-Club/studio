@@ -284,7 +284,8 @@ mod tests {
     fn the_help_lists_scenes_and_presets() {
         let text = help();
         assert!(text.contains(
-            "(scenes: demo, parts_10k, parts_50k, parts_100k, many_lights, overdraw, mobile, see_through_10k)"
+            "(scenes: demo, parts_10k, parts_50k, parts_100k, many_lights, overdraw, mobile, see_through_10k, \
+             calibration)"
         ));
         assert!(text.contains("--overlay"));
         assert!(text.contains("(presets: low, medium, high, ultra, auto)"));

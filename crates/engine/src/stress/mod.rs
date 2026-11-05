@@ -11,6 +11,7 @@
 //! | `overdraw` | A hall seen from inside, crossed by 64 walls between 2 and 41 m away, each covering the whole view but for a window, in the order the renderer then draws back to front, so every wall overdraws the ones behind it (up to 64 layers per pixel); glass in a tenth of the windows, 3,000 crates on the floor; 1% moving | 1920 × 1080 |
 //! | `mobile` | 5,000 parts, the city's mix, with 25 see-through ones; 1% moving | 1280 × 720 |
 //! | `see_through_10k` | 10,000 see-through blocks and balls on a lattice, the shapes alternating so that sorted back to front they interleave (#106), over an opaque floor; 1% moving | 1920 × 1080 |
+//! | `calibration` | The Auto preset's calibration workload (#139, the engine's `calibration` module): 3,000 parts of the city's mix on a 120 m square, 300 of them see-through, and 256 lamps (224 `PointLight`s and 32 `SpotLight`s, 16 with shadows) under the sun; 1% of the parts and an eighth of the lamps moving | 1920 × 1080 |
 //!
 //! Window sizes are logical pixels: what a benchmark asks for ([`StressKind::window_size`]). The builders work in
 //! any build (they only need the classes); running a scene and measuring it is [`bench`] (the `render` feature).
@@ -57,11 +58,13 @@ pub enum StressKind {
     Mobile,
     /// 10,000 interleaved see-through blocks and balls.
     SeeThrough10k,
+    /// The Auto preset's calibration workload (#139).
+    Calibration,
 }
 
 impl StressKind {
     /// Every scene, in the order the docs list them.
-    pub const ALL: [StressKind; 7] = [
+    pub const ALL: [StressKind; 8] = [
         StressKind::Parts10k,
         StressKind::Parts50k,
         StressKind::Parts100k,
@@ -69,6 +72,7 @@ impl StressKind {
         StressKind::Overdraw,
         StressKind::Mobile,
         StressKind::SeeThrough10k,
+        StressKind::Calibration,
     ];
 
     /// The scene's name (`parts_100k`, ...).
@@ -81,11 +85,12 @@ impl StressKind {
             StressKind::Overdraw => "overdraw",
             StressKind::Mobile => "mobile",
             StressKind::SeeThrough10k => "see_through_10k",
+            StressKind::Calibration => "calibration",
         }
     }
 
     /// Every scene's name.
-    pub fn names() -> [&'static str; 7] {
+    pub fn names() -> [&'static str; 8] {
         Self::ALL.map(Self::name)
     }
 
@@ -153,6 +158,7 @@ impl StressScene {
             StressKind::ManyLights => builder.lit_town()?,
             StressKind::Overdraw => builder.hall()?,
             StressKind::SeeThrough10k => builder.lattice()?,
+            StressKind::Calibration => builder.calibration()?,
         }
         builder.finish(kind, seed)
     }
@@ -802,6 +808,115 @@ impl<'a> Builder<'a> {
             Vec3::new(0.0, extent.y * 0.4, 0.0),
             70.0,
         )
+    }
+
+    /// The Auto preset's calibration workload (#139): 3,000 parts of the city's mix on a 120 m square (one per 4.8 m²,
+    /// a dense town), every tenth a see-through glass block or ball, and 256 lamps (a neon ball holding a light: 224
+    /// `PointLight`s and 32 `SpotLight`s pointing down, 16 with shadows), lit by the default `Lighting`'s sun and seen
+    /// from above one side so nearly all of it is in view. More lights than Medium's (128) and High's (192) budgets
+    /// and more shadowed ones than High's (8) and Ultra's (10), so every tier draws more than the one below it. 1% of
+    /// the parts and an eighth of the lamps (every shadowed one among them) move, as in the other scenes: the sun's
+    /// near cascades, the far one's build and the shadowed lights' tiles are drawn again every frame, which is where
+    /// the tiers' shadow settings cost.
+    fn calibration(&mut self) -> Result<(), StressError> {
+        let registry = self.dm.registry().clone();
+        let point = registry
+            .class_id("PointLight")
+            .ok_or(StressError::Missing("PointLight class"))?;
+        let spot = registry
+            .class_id("SpotLight")
+            .ok_or(StressError::Missing("SpotLight class"))?;
+        let light_prop = |class, name| registry.prop_id(class, name).ok_or(StressError::Missing(name));
+        let (brightness, color, range, shadows) = (
+            light_prop(point, "Brightness")?,
+            light_prop(point, "Color")?,
+            light_prop(point, "Range")?,
+            light_prop(point, "Shadows")?,
+        );
+        let (angle, spot_cframe) = (light_prop(spot, "Angle")?, light_prop(spot, "CFrame")?);
+        let side = 120.0f32;
+        let (parts, lamps) = (3_000usize, 256usize);
+        self.dm.reserve(parts + 2 * lamps);
+        self.part(
+            Look {
+                shape: "Block",
+                material: "Concrete",
+                color: [128, 126, 120],
+                transparency: 0.0,
+            },
+            Vec3::new(side + 8.0, 1.0, side + 8.0),
+            CFrame::new(Vec3::new(0.0, -0.5, 0.0)),
+            None,
+        )?;
+        for i in 1..parts {
+            let mut look = self.city_look();
+            if i % 10 == 0 {
+                look = Look {
+                    shape: if i % 20 == 0 { "Ball" } else { "Block" },
+                    material: "Glass",
+                    color: self.rng.pick(&PALETTE),
+                    transparency: f64::from(self.rng.range(0.3, 0.7)),
+                };
+            }
+            let size = if look.shape == "Ball" {
+                Vec3::splat(self.rng.range(1.0, 4.0))
+            } else {
+                Vec3::new(
+                    self.rng.range(1.0, 5.0),
+                    self.rng.range(1.0, 8.0),
+                    self.rng.range(1.0, 5.0),
+                )
+            };
+            let x = self.rng.range(-side / 2.0, side / 2.0);
+            let z = self.rng.range(-side / 2.0, side / 2.0);
+            let turn = Quat::from_rotation_y(self.rng.range(0.0, std::f32::consts::TAU));
+            let rest = CFrame::from_parts(Vec3::new(x, size.y / 2.0, z), turn);
+            let id = self.part(look, size, rest, None)?;
+            if i % 100 == 50 {
+                self.moving(id, rest);
+            }
+        }
+        for i in 0..lamps {
+            let is_spot = i % 8 == 7;
+            let tint = self.rng.pick(&PALETTE);
+            let x = self.rng.range(-side / 2.0, side / 2.0);
+            let z = self.rng.range(-side / 2.0, side / 2.0);
+            let height = if is_spot { 10.0 } else { self.rng.range(2.0, 7.0) };
+            let rest = CFrame::new(Vec3::new(x, height, z));
+            let lamp = self.part(
+                Look {
+                    shape: "Ball",
+                    material: "Neon",
+                    color: tint,
+                    transparency: 0.0,
+                },
+                Vec3::splat(0.6),
+                rest,
+                None,
+            )?;
+            if i % 8 == 0 {
+                self.moving(lamp, rest);
+            }
+            let light = self.dm.create(if is_spot { spot } else { point })?;
+            let [r, g, b] = tint;
+            self.dm
+                .set(light, brightness, Value::Number(f64::from(self.rng.range(1.0, 3.0))))?;
+            self.dm.set(light, color, Value::Color3(Color3::from_rgb_u8(r, g, b)))?;
+            self.dm
+                .set(light, range, Value::Number(f64::from(self.rng.range(10.0, 20.0))))?;
+            if i % 16 == 0 {
+                self.dm.set(light, shadows, Value::Bool(true))?;
+            }
+            if is_spot {
+                self.dm
+                    .set(light, angle, Value::Number(f64::from(self.rng.range(40.0, 80.0))))?;
+                let down = CFrame::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
+                self.dm.set(light, spot_cframe, Value::CFrame(down))?;
+            }
+            self.dm.set_parent(light, Some(lamp))?;
+            self.lights += 1;
+        }
+        self.set_camera(Vec3::new(0.0, 40.0, 85.0), Vec3::new(0.0, 0.0, -5.0), 70.0)
     }
 
     fn finish(self, kind: StressKind, seed: u64) -> Result<StressScene, StressError> {

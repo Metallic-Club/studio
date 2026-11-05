@@ -105,6 +105,7 @@ mod tests {
                 gpu_ms: 4.5,
                 adapter: "GPU".into(),
                 driver: "1".into(),
+                workload: 1,
             }),
             ..GraphicsSettings::new(Preset::Auto)
         };

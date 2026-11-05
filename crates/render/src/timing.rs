@@ -167,6 +167,9 @@ pub(crate) struct GpuTimer {
     /// Nanoseconds per timestamp tick.
     period_ns: f64,
     latest: Option<FrameTimings>,
+    /// The timings each slot last read back: the newest [`TIMING_RING_SIZE`] frames collected, so a caller that draws
+    /// several frames between two collects (Auto's calibration workload, #139) sees every one, not only the newest.
+    recent: [Option<FrameTimings>; TIMING_RING_SIZE],
     /// Each pass a merged render pass runs is timed apart, with timestamps written between them.
     inside_passes: bool,
 }
@@ -209,6 +212,7 @@ impl GpuTimer {
             slots,
             period_ns: f64::from(queue.get_timestamp_period()),
             latest: None,
+            recent: [None; TIMING_RING_SIZE],
             inside_passes: inside_passes
                 && device
                     .features()
@@ -313,13 +317,21 @@ impl GpuTimer {
         self.latest.as_ref()
     }
 
+    /// The timings of up to [`TIMING_RING_SIZE`] of the newest frames collected, in no particular order.
+    pub(crate) fn recent(&self) -> impl Iterator<Item = &FrameTimings> {
+        self.recent.iter().flatten()
+    }
+
     fn collect(&mut self) {
-        for slot in &mut self.slots {
+        for (slot, recent) in self.slots.iter_mut().zip(&mut self.recent) {
             match slot.state.load(Ordering::Acquire) {
                 MAPPED => {
                     let timings = read_slot(slot, self.period_ns);
                     slot.readback.unmap();
                     slot.state.store(FREE, Ordering::Release);
+                    if timings.is_some() {
+                        *recent = timings;
+                    }
                     if let Some(timings) = timings
                         && self.latest.is_none_or(|latest| latest.frame < timings.frame)
                     {

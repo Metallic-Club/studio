@@ -120,6 +120,8 @@
 //! under `render`, runs one in a window for a number of frames and reports the frame statistics as JSON
 //! ([`stress::run_bench`]; `cargo run --release -p metallic_engine --example stress -- --scene parts_100k`).
 
+#[cfg(feature = "render")]
+pub mod calibration;
 mod clock;
 mod config;
 mod engine;
