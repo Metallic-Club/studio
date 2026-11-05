@@ -18,6 +18,7 @@
 use super::{BloomSettings, BloomStart, FullScreen, MAX_BLOOM_LEVELS, post_texture, sampler_entry};
 use super::{texture_entry, uniform_entry, uniform_slice};
 use crate::RenderContext;
+use crate::context::{DescriptorHeapTurn, in_heap_turn};
 use crate::pipelines::{Pipeline, PipelineKey, Recipe};
 use crate::textures::BACKGROUND_BYTES;
 
@@ -133,6 +134,7 @@ impl Compute {
             compute(sampler_entry(2)),
             storage,
         ];
+        let layouts_turn = DescriptorHeapTurn::take();
         let down_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic bloom down"),
             entries: &down,
@@ -141,6 +143,7 @@ impl Compute {
             label: Some("metallic bloom up"),
             entries: &[down[0], down[1], down[2], down[3], compute(texture_entry(4, false))],
         });
+        drop(layouts_turn);
         Self {
             format,
             module,
@@ -286,9 +289,11 @@ impl Bloom {
             label: Some("metallic bloom"),
             source: wgpu::ShaderSource::Wgsl(include_str!("bloom.wgsl").into()),
         });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("metallic bloom"),
-            entries: &[uniform_entry(0, PARAMS_SIZE), texture_entry(1, true), sampler_entry(2)],
+        let layout = in_heap_turn(|| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("metallic bloom"),
+                entries: &[uniform_entry(0, PARAMS_SIZE), texture_entry(1, true), sampler_entry(2)],
+            })
         });
         let stride = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(PARAMS_SIZE);
         Self {
@@ -476,11 +481,13 @@ impl Bloom {
         let mips = |texture: &wgpu::Texture, count: usize| -> Vec<wgpu::TextureView> {
             (0..count as u32)
                 .map(|mip| {
-                    texture.create_view(&wgpu::TextureViewDescriptor {
-                        label: Some("metallic bloom level"),
-                        base_mip_level: mip,
-                        mip_level_count: Some(1),
-                        ..wgpu::TextureViewDescriptor::default()
+                    in_heap_turn(|| {
+                        texture.create_view(&wgpu::TextureViewDescriptor {
+                            label: Some("metallic bloom level"),
+                            base_mip_level: mip,
+                            mip_level_count: Some(1),
+                            ..wgpu::TextureViewDescriptor::default()
+                        })
                     })
                 })
                 .collect()
@@ -491,7 +498,8 @@ impl Bloom {
         // texture and writes another. The smallest level is its own sum, so its downsample writes it among the sums.
         let (views, sums) = if compute {
             let single = |label, size| {
-                post_texture(device, label, size, 1, format, usage).create_view(&wgpu::TextureViewDescriptor::default())
+                let texture = post_texture(device, label, size, 1, format, usage);
+                in_heap_turn(|| texture.create_view(&wgpu::TextureViewDescriptor::default()))
             };
             let sums: Vec<_> = sizes.iter().map(|&size| single("metallic bloom sum", size)).collect();
             let mut views: Vec<_> = sizes[..count - 1]

@@ -7,6 +7,7 @@
 //! ([`crate::pipelines`], ADR 0008 §9); a frame binds it, writes its 16-byte parameters only when the render size
 //! changed, and draws one triangle.
 
+use crate::context::DescriptorHeapTurn;
 use crate::post::FullScreen;
 
 /// The upscale pass's pipeline, sampler and parameters, and the bind group of the scene colour it reads.
@@ -30,6 +31,7 @@ impl Upscaler {
             label: Some("metallic upscale"),
             source: wgpu::ShaderSource::Wgsl(include_str!("upscale.wgsl").into()),
         });
+        let layout_turn = DescriptorHeapTurn::take();
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic upscale"),
             entries: &[
@@ -61,6 +63,7 @@ impl Upscaler {
                 },
             ],
         });
+        drop(layout_turn);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("metallic upscale"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,

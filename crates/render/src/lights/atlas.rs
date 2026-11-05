@@ -9,6 +9,7 @@ use metallic_core::glam::{Mat4, Vec3, Vec4};
 
 use super::{LightRuntime, LightSettings, MAX_SHADOW_TILES};
 use crate::GpuScene;
+use crate::context::in_heap_turn;
 use crate::cull::{Casters, CullView, Frustum, VisibleSet};
 use crate::lod::{LodView, MAX_LOD_LEVELS};
 use crate::parts::MeshPool;
@@ -316,18 +317,20 @@ impl ShadowAtlas {
         settings: &LightSettings,
         cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
-        let caster_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("metallic shadow atlas tile"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE),
-                },
-                count: None,
-            }],
+        let caster_layout = in_heap_turn(|| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("metallic shadow atlas tile"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE),
+                    },
+                    count: None,
+                }],
+            })
         });
         let (resolution, tile, per_row, capacity) = layout(device, settings);
         // The pipelines are made now, with the renderer (no hitch when the first shadow appears); the memory waits.
@@ -993,10 +996,12 @@ fn atlas_spec(resolution: u32) -> TextureSpec {
 /// The atlas texture's views for sampling and for drawing.
 fn atlas_views(texture: &wgpu::Texture) -> (wgpu::TextureView, wgpu::TextureView) {
     let view = |label| {
-        texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some(label),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            ..wgpu::TextureViewDescriptor::default()
+        in_heap_turn(|| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some(label),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                ..wgpu::TextureViewDescriptor::default()
+            })
         })
     };
     (view("metallic shadow atlas"), view("metallic shadow atlas target"))

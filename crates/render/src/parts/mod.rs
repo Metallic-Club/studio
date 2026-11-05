@@ -94,6 +94,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
 
+use crate::context::DescriptorHeapTurn;
 use crate::cull::CullSettings;
 use crate::depth::{DEPTH_COMPARE, DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, depth_stencil_state};
 use crate::lighting::{ResolvedLighting, SceneLighting};
@@ -643,6 +644,7 @@ impl PartRenderer {
         ];
         // The pipelines of frames with local lights bind all of it; the sky and the pipelines of frames without
         // (lights_off.wgsl) bind the first four entries alone, so such a frame binds what it did before local lights.
+        let layouts_turn = DescriptorHeapTurn::take();
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic parts frame"),
             entries: &frame_entries,
@@ -706,6 +708,7 @@ impl PartRenderer {
                 ],
             })
         });
+        drop(layouts_turn);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("metallic parts"),
             bind_group_layouts: &[Some(&frame_layout), instance_layout.as_ref()],

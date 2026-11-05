@@ -1,6 +1,6 @@
 //! The frame loop: runs the planned passes into a target and keeps the GPU timings coming.
 
-use crate::context::Submitter;
+use crate::context::{Submitter, in_heap_turn};
 use crate::cull::{CullSettings, CullStats, CullView};
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
@@ -1667,7 +1667,7 @@ impl Renderer {
             .set_target(self.scene_target_format(), self.plan.msaa_samples());
         let [depth, msaa_color, scene_color] = textures.map(|texture| {
             texture.map(|texture| Attachment {
-                view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                view: in_heap_turn(|| texture.create_view(&wgpu::TextureViewDescriptor::default())),
             })
         });
         self.depth = depth;

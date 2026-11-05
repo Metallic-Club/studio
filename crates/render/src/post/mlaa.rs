@@ -2,6 +2,7 @@
 //! scene colour into an RGBA8 texture of weights, which the finish pass blends with (`mlaa.wgsl`).
 
 use super::{FullScreen, MlaaSettings, post_texture, texture_entry, uniform_entry};
+use crate::context::in_heap_turn;
 
 const PARAMS_SIZE: u64 = 32;
 
@@ -26,9 +27,11 @@ impl Mlaa {
             label: Some("metallic mlaa"),
             source: wgpu::ShaderSource::Wgsl(include_str!("mlaa.wgsl").into()),
         });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("metallic mlaa"),
-            entries: &[uniform_entry(0, PARAMS_SIZE), texture_entry(1, false)],
+        let layout = in_heap_turn(|| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("metallic mlaa"),
+                entries: &[uniform_entry(0, PARAMS_SIZE), texture_entry(1, false)],
+            })
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic mlaa"),
@@ -72,15 +75,15 @@ impl Mlaa {
     /// (`None`). A settings change, never per frame.
     pub(crate) fn rebuild(&mut self, device: &wgpu::Device, scene: Option<&wgpu::TextureView>, size: (u32, u32)) {
         self.target = scene.map(|scene| {
-            let view = post_texture(
+            let texture = post_texture(
                 device,
                 "metallic mlaa weights",
                 size,
                 1,
                 WEIGHTS_FORMAT,
                 wgpu::TextureUsages::RENDER_ATTACHMENT,
-            )
-            .create_view(&wgpu::TextureViewDescriptor::default());
+            );
+            let view = in_heap_turn(|| texture.create_view(&wgpu::TextureViewDescriptor::default()));
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("metallic mlaa"),
                 layout: &self.layout,

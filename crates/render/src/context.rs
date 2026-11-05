@@ -7,12 +7,16 @@
 //! gfx-rs/wgpu#9760, #6211). Serialising setup removed the crash. Rendering and teardown stay parallel, except that
 //! **on WARP every submission in the process takes its turn** ([`Submitter`], #130): its shader compiler crashes when
 //! two devices submit draws at once. And on Direct3D 12 with FXC each device makes its pipelines one at a time
-//! ([`PipelineTurn`], #179): FXC's compiled shaders, which wgpu shares between pipelines, are not thread-safe.
+//! ([`PipelineTurn`], #179): FXC's compiled shaders, which wgpu shares between pipelines, are not thread-safe. And
+//! with the Direct3D 12 debug layer, **descriptor heaps are created one at a time in the process**
+//! ([`DescriptorHeapTurn`], #182): the layer loses track of heaps created on two threads at once.
 //!
 //! Backends are tried in tiers: Vulkan, Metal and DX12 first, and only when none of them has an adapter, GL. An
 //! instance only ever enables one tier, so most machines never set up GL at all.
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -111,6 +115,74 @@ impl PipelineTurn {
             .as_ref()
             .map(|turn| turn.lock().unwrap_or_else(PoisonError::into_inner))
     }
+}
+
+/// Set once the process has a Direct3D 12 device with the debug layer ([`DescriptorHeapTurn`]).
+static DEBUG_LAYER_DEVICE: AtomicBool = AtomicBool::new(false);
+
+/// The process's descriptor-heap turn ([`DescriptorHeapTurn`]).
+static DESCRIPTOR_HEAPS: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    /// Whether this thread holds [`DESCRIPTOR_HEAPS`], so a turn taken inside another one does not wait for itself.
+    static HOLDS_DESCRIPTOR_HEAPS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A turn to create Direct3D 12 descriptor heaps, which the debug layer needs taken one at a time in the process
+/// (#182). Held, from [`RenderContext::descriptor_heap_turn`], around every wgpu call that can create one: making a
+/// device, a bind group layout, a texture (the ones that can be render targets or depth buffers get views for
+/// clearing), a texture view, a surface's current texture, or a pipeline with an automatic layout. Samplers, bind
+/// groups and everything else only write descriptors into heaps that exist, and need no turn.
+///
+/// Every wgpu device in a process shares one `ID3D12Device` (`D3D12CreateDevice` returns the same one for an
+/// adapter), and so one debug layer. wgpu-hal makes a descriptor heap for each device's samplers and views, for each
+/// bind group layout and whenever a device's pool of view descriptors fills up. When two threads create descriptor
+/// heaps at once, the debug layer loses track of one of them, and the next descriptor written into it fails the
+/// layer's lookup ("Specified CPU descriptor handle ... does not refer to a location in a descriptor heap", #646
+/// `INVALID_DESCRIPTOR_HANDLE`), which it raises as exception `0x87D` that nothing handles: render tests died with
+/// exit code 2173 on CI, about once in 150 runs of `offscreen`, each time writing the first sampler of a new
+/// device's sampler heap. Plain Direct3D 12 shows it within seconds: 8 threads each creating a heap, writing a
+/// sampler at its start and releasing it hit it in every run, after 56 to 2110 heaps; with only the creations under
+/// one lock (writes and releases still free), never. Without the debug layer nothing keeps such a list (the
+/// device's methods are free-threaded), so release builds and machines without the layer are unaffected.
+///
+/// Only taken while the process has a Direct3D 12 device with validation (wgpu's debug layer; debug builds, or
+/// `WGPU_VALIDATION`). Otherwise it is one atomic load, and holds nothing. Taking it inside a turn this thread
+/// already holds does not wait. It never allocates, so it may be taken in a frame.
+#[must_use = "the turn ends when it is dropped"]
+#[derive(Debug)]
+pub struct DescriptorHeapTurn(Option<MutexGuard<'static, ()>>);
+
+impl DescriptorHeapTurn {
+    /// Waits for the process's turn where the debug layer needs one; see the type's documentation.
+    pub(crate) fn take() -> Self {
+        Self::take_if(DEBUG_LAYER_DEVICE.load(Ordering::Relaxed))
+    }
+
+    /// [`DescriptorHeapTurn::take`], with whether the process has a debug-layer device given.
+    fn take_if(debug_layer: bool) -> Self {
+        if !debug_layer || HOLDS_DESCRIPTOR_HEAPS.get() {
+            return Self(None);
+        }
+        // A panic while holding the lock leaves nothing half-written behind it (the guarded data is `()`).
+        let guard = DESCRIPTOR_HEAPS.lock().unwrap_or_else(PoisonError::into_inner);
+        HOLDS_DESCRIPTOR_HEAPS.set(true);
+        Self(Some(guard))
+    }
+}
+
+impl Drop for DescriptorHeapTurn {
+    fn drop(&mut self) {
+        if self.0.take().is_some() {
+            HOLDS_DESCRIPTOR_HEAPS.set(false);
+        }
+    }
+}
+
+/// `make` (wgpu calls that can create a descriptor heap) in a [`DescriptorHeapTurn`].
+pub(crate) fn in_heap_turn<T>(make: impl FnOnce() -> T) -> T {
+    let _turn = DescriptorHeapTurn::take();
+    make()
 }
 
 /// Whether the device is WARP: Direct3D 12's only software adapter.
@@ -412,16 +484,24 @@ impl RenderContext {
         adapter: wgpu::Adapter,
         options: &ContextOptions,
     ) -> Result<Self, RenderError> {
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("metallic device"),
-            required_features: adapter.features() & WANTED_FEATURES,
-            // Everything the adapter offers: later systems size their buffers from `device.limits()`.
-            required_limits: adapter.limits(),
-            memory_hints: wgpu::MemoryHints::Manual {
-                suballocated_device_memory_block_size: MEMORY_BLOCKS,
-            },
-            ..Default::default()
-        }))?;
+        if adapter.get_info().backend == wgpu::Backend::Dx12
+            && instance_flags().intersects(wgpu::InstanceFlags::VALIDATION | wgpu::InstanceFlags::GPU_BASED_VALIDATION)
+        {
+            // Before the device's own heaps: from here on, every heap in the process takes its turn.
+            DEBUG_LAYER_DEVICE.store(true, Ordering::Relaxed);
+        }
+        let (device, queue) = in_heap_turn(|| {
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("metallic device"),
+                required_features: adapter.features() & WANTED_FEATURES,
+                // Everything the adapter offers: later systems size their buffers from `device.limits()`.
+                required_limits: adapter.limits(),
+                memory_hints: wgpu::MemoryHints::Manual {
+                    suballocated_device_memory_block_size: MEMORY_BLOCKS,
+                },
+                ..Default::default()
+            }))
+        })?;
         let mut capabilities = Capabilities::new(&adapter, &device);
         capabilities.vertex_storage &= !options.force_vertex_instances;
         let capabilities = Arc::new(capabilities);
@@ -487,6 +567,14 @@ impl RenderContext {
         &self.pipeline_turn
     }
 
+    /// Waits for the turn to make something that can create a Direct3D 12 descriptor heap on this device (a bind
+    /// group layout, a texture, a texture view; see [`DescriptorHeapTurn`]), which ends when the turn is dropped. On
+    /// anything but Direct3D 12 with validation it never waits. The renderer takes it itself; this is for code that
+    /// makes such objects on the device directly, from more than one thread.
+    pub fn descriptor_heap_turn(&self) -> DescriptorHeapTurn {
+        DescriptorHeapTurn::take()
+    }
+
     /// The device's pipeline cache, where it keeps one on disk.
     pub(crate) fn pipeline_cache(&self) -> Option<&Arc<PipelineCacheStore>> {
         self.pipeline_cache.as_ref()
@@ -546,12 +634,18 @@ fn new_instance(backends: wgpu::Backends, display: Option<WindowDisplay>, option
     descriptor.backend_options.dx12.shader_compiler = options.dx12_compiler.clone();
     // `WGPU_DEBUG`, `WGPU_VALIDATION` and the backend options (`WGPU_DX12_COMPILER` among them) may still be tuned
     // from the environment.
-    descriptor.flags = descriptor.flags.with_env();
+    descriptor.flags = instance_flags();
     descriptor.backend_options = descriptor.backend_options.with_env();
     if let Some(display) = display {
         descriptor = descriptor.with_display_handle(Box::new(display));
     }
     wgpu::Instance::new(descriptor)
+}
+
+/// The flags every instance is made with: the build's (debugging and validation in debug builds), tuned by
+/// `WGPU_DEBUG` and `WGPU_VALIDATION`.
+fn instance_flags() -> wgpu::InstanceFlags {
+    wgpu::InstanceFlags::from_build_config().with_env()
 }
 
 fn request_adapter(
@@ -602,6 +696,28 @@ mod tests {
         let held = serial.take();
         assert!(held.is_some());
         assert!(serial.0.as_ref().is_some_and(|turn| turn.try_lock().is_err()));
+    }
+
+    #[test]
+    fn descriptor_heap_turns_are_one_at_a_time_only_with_the_debug_layer() {
+        assert!(DescriptorHeapTurn::take_if(false).0.is_none());
+        let held = DescriptorHeapTurn::take_if(true);
+        assert!(held.0.is_some());
+        // Taken again on the same thread: no wait for itself, and nothing to release.
+        let nested = DescriptorHeapTurn::take_if(true);
+        assert!(nested.0.is_none());
+        drop(nested);
+        // Another thread waits until the turn is dropped.
+        let waited = std::thread::spawn(|| {
+            let turn = DescriptorHeapTurn::take_if(true);
+            assert!(turn.0.is_some());
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!waited.is_finished());
+        drop(held);
+        waited.join().unwrap();
+        // And the turn is this thread's to take again.
+        assert!(DescriptorHeapTurn::take_if(true).0.is_some());
     }
 
     #[test]

@@ -314,6 +314,8 @@ impl HandPost {
     /// A scene colour of `scene` size in the renderer's HDR format, bloom's default levels for a [`SIZE`]-square
     /// output, MLAA's weights and pass with `mlaa`, and the finish pass into [`FORMAT`].
     fn new(context: &RenderContext, scene: (u32, u32), mlaa: bool) -> Self {
+        // Textures, views, layouts: alongside the other tests' renderers (`RenderContext::descriptor_heap_turn`).
+        let _heaps = context.descriptor_heap_turn();
         let device = context.device();
         let hdr = metallic_render::post::hdr_format(context);
         let texture = |label, (width, height): (u32, u32), mips, format, usage: wgpu::TextureUsages| {
@@ -1012,6 +1014,7 @@ const WGPU_POOL_NOISE: u64 = 2;
 fn a_frame_allocates_nothing_beyond_wgpus_own() {
     let Some(context) = measuring_gpu(false) else { return };
     let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).unwrap();
+    let heaps = context.descriptor_heap_turn();
     let depth = context
         .device()
         .create_texture(&wgpu::TextureDescriptor {
@@ -1029,6 +1032,7 @@ fn a_frame_allocates_nothing_beyond_wgpus_own() {
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
+    drop(heaps);
 
     let (ours_one, floor_one) = renderer_and_floor(
         &context,
@@ -1221,6 +1225,7 @@ struct HandScaled {
 impl HandScaled {
     /// Scene textures of `width` × `height`.
     fn new(context: &RenderContext, (width, height): (u32, u32)) -> Self {
+        let _heaps = context.descriptor_heap_turn();
         let depth = context
             .device()
             .create_texture(&wgpu::TextureDescriptor {
@@ -1883,7 +1888,11 @@ fn scene_upload_and_floor(context: &RenderContext, scatter: bool) -> Option<((u6
         return None;
     }
     scene.set_scatter_min_ranges(if scatter { 0 } else { u32::MAX });
-    let hand = HandUpload::new(device);
+    // Its pipelines' automatic layouts make descriptor heaps.
+    let hand = {
+        let _heaps = context.descriptor_heap_turn();
+        HandUpload::new(device)
+    };
     let mut ranges: Vec<(usize, u64, u64)> = Vec::with_capacity(SCENE_PARTS);
     let mut pacer = Pacer::new();
     let (mut ours, mut floor) = (Vec::with_capacity(FRAMES), Vec::with_capacity(FRAMES));
@@ -2415,6 +2424,7 @@ impl HandShadows {
 
 impl HandParts {
     fn new(context: &RenderContext, instances: u64, live: [u32; 4]) -> Self {
+        let _heaps = context.descriptor_heap_turn();
         let device = context.device();
         // The scene draws into the post chain's HDR scene colour (#85).
         let scene_format = metallic_render::post::hdr_format(context);

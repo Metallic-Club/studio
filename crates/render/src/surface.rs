@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle};
 
+use crate::context::in_heap_turn;
 use crate::{RenderContext, RenderError};
 
 /// A window the renderer can present to. Blanket-implemented, so any `HasWindowHandle + HasDisplayHandle` window
@@ -164,7 +165,8 @@ impl RenderSurface {
             return Ok(None);
         }
         for attempt in 0..2 {
-            match self.surface.get_current_texture() {
+            // wgpu makes a view of the image for clearing it.
+            match in_heap_turn(|| self.surface.get_current_texture()) {
                 wgpu::CurrentSurfaceTexture::Success(texture) => return Ok(Some(SurfaceFrame::new(texture))),
                 wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
                     // Still presentable; the surface is fixed before the next frame (configuring now would panic
@@ -207,7 +209,7 @@ pub struct SurfaceFrame {
 
 impl SurfaceFrame {
     fn new(texture: wgpu::SurfaceTexture) -> Self {
-        let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = in_heap_turn(|| texture.texture.create_view(&wgpu::TextureViewDescriptor::default()));
         Self { texture, view }
     }
 

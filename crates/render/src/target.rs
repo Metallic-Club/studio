@@ -24,6 +24,7 @@ impl OffscreenTarget {
         if !context.format_features(format).allowed_usages.contains(usage) {
             return Err(RenderError::UnsupportedTarget { format, samples: 1 });
         }
+        let turn = context.descriptor_heap_turn();
         let texture = context.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("metallic offscreen target"),
             size: wgpu::Extent3d {
@@ -39,6 +40,7 @@ impl OffscreenTarget {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        drop(turn);
         Ok(Self { texture, view })
     }
 

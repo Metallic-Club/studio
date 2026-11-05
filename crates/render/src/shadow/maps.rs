@@ -7,6 +7,7 @@ use metallic_core::glam::{Mat4, Vec3};
 
 use super::cascade::{CascadeCache, CascadeFit, SceneState, fit_cascades};
 use super::{CascadeStats, MAX_CASCADES, MAX_RECEIVER_OFFSET, ShadowSettings, ShadowStats};
+use crate::context::{DescriptorHeapTurn, in_heap_turn};
 use crate::cull::{Casters, VisibleSet};
 use crate::lod::{self, LodView, MAX_LOD_LEVELS};
 use crate::parts::{Camera, MeshPool, MeshVertex};
@@ -295,18 +296,20 @@ impl ShadowMaps {
         instance_layout: Option<&wgpu::BindGroupLayout>,
         cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
-        let cascade_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("metallic shadow cascade"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE),
-                },
-                count: None,
-            }],
+        let cascade_layout = in_heap_turn(|| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("metallic shadow cascade"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(UNIFORM_SIZE),
+                    },
+                    count: None,
+                }],
+            })
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("metallic shadow cascades"),
@@ -1084,6 +1087,7 @@ fn maps_spec(resolution: u32, layers: u32) -> TextureSpec {
 
 /// The maps' view for sampling and a render view of each of the first `targets` layers of `texture`.
 fn map_views(texture: &wgpu::Texture, targets: usize) -> (wgpu::TextureView, Vec<wgpu::TextureView>) {
+    let _turn = DescriptorHeapTurn::take();
     let sample_view = texture.create_view(&wgpu::TextureViewDescriptor {
         label: Some("metallic shadow maps"),
         dimension: Some(wgpu::TextureViewDimension::D2Array),
@@ -1117,10 +1121,12 @@ fn static_map_spec(resolution: u32) -> TextureSpec {
 /// A static map of `texture` ([`static_map_spec`]), with the bind group the copy into the cascade's map reads it
 /// through.
 fn static_map(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, texture: &wgpu::Texture) -> StaticMap {
-    let view = texture.create_view(&wgpu::TextureViewDescriptor {
-        label: Some("metallic shadow static map"),
-        dimension: Some(wgpu::TextureViewDimension::D2),
-        ..wgpu::TextureViewDescriptor::default()
+    let view = in_heap_turn(|| {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("metallic shadow static map"),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            ..wgpu::TextureViewDescriptor::default()
+        })
     });
     let source = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic shadow static map"),
@@ -1150,18 +1156,20 @@ fn copy_pipeline(
         label: Some("metallic shadow static copy"),
         source: wgpu::ShaderSource::Wgsl(include_str!("copy.wgsl").into()),
     });
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("metallic shadow static copy"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
+    let layout = in_heap_turn(|| {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("metallic shadow static copy"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        })
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("metallic shadow static copy"),

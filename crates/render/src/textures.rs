@@ -33,6 +33,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use crate::context::in_heap_turn;
+
 /// Textures of at least this many bytes are made in the background once a scene's first frame is drawn; smaller
 /// ones at once (a few milliseconds at most, and usually room in a block that exists).
 pub(crate) const BACKGROUND_BYTES: u64 = 16 << 20;
@@ -89,15 +91,17 @@ impl TextureSpec {
     }
 
     fn make(&self, device: &wgpu::Device) -> wgpu::Texture {
-        device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(self.label),
-            size: self.size,
-            mip_level_count: 1,
-            sample_count: self.samples,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.format,
-            usage: self.usage,
-            view_formats: &[],
+        in_heap_turn(|| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(self.label),
+                size: self.size,
+                mip_level_count: 1,
+                sample_count: self.samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: self.usage,
+                view_formats: &[],
+            })
         })
     }
 }
@@ -525,12 +529,14 @@ fn clear(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
     }
     let depth = texture.format().is_depth_stencil_format();
     for layer in 0..texture.depth_or_array_layers() {
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("metallic new texture"),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            base_array_layer: layer,
-            array_layer_count: Some(1),
-            ..wgpu::TextureViewDescriptor::default()
+        let view = in_heap_turn(|| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("metallic new texture"),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..wgpu::TextureViewDescriptor::default()
+            })
         });
         let color = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
