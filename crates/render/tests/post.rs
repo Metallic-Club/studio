@@ -393,6 +393,55 @@ fn the_same_frame_draws_the_same_image_twice() {
     assert!(differ.is_empty(), "{differ:?}");
 }
 
+/// Bloom blurs the scene of its own frame, not the one before: a frame drawn after the clear colour changed is the
+/// frame a renderer that only ever drew that colour draws, to the bit, with bloom's compute pass and its render
+/// passes. (Bloom of a uniform colour is that colour, so a frame's lag shows as the old colour mixed in.)
+#[test]
+fn bloom_reads_the_scene_of_its_own_frame() {
+    let Some(context) = gpu() else { return };
+    let red = wgpu::Color {
+        r: 0.8,
+        g: 0.05,
+        b: 0.05,
+        a: 1.0,
+    };
+    let blue = wgpu::Color {
+        r: 0.05,
+        g: 0.1,
+        b: 0.8,
+        a: 1.0,
+    };
+    let mut differ = Vec::new();
+    for compute in [true, false] {
+        let draw = |first: wgpu::Color, second: wgpu::Color| {
+            let mut settings = RendererSettings {
+                gpu_timing: false,
+                clear_color: first,
+                ..RendererSettings::new(FORMAT, SIZE, SIZE)
+            };
+            settings.post.bloom.compute = compute;
+            let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
+            let mut renderer = Renderer::new(&context, settings).expect("a renderer");
+            renderer.wait_for_pipelines();
+            renderer.render(target.view());
+            renderer.set_clear_color(second);
+            renderer.render(target.view());
+            read_back_rgba8(&context, target.texture())
+        };
+        let switched = draw(red, blue);
+        let steady = draw(blue, blue);
+        let diff = scenes::compare(&switched, &steady, 0);
+        eprintln!(
+            "bloom compute {compute}: red then blue against blue twice: {diff:?}, {:?}",
+            switched[0]
+        );
+        if diff.max > 0 {
+            differ.push((compute, diff));
+        }
+    }
+    assert!(differ.is_empty(), "{differ:?}");
+}
+
 /// A pixel the scene's shaders write as not a number (here a neon material whose metalness is NaN) stays one bad
 /// pixel: bloom's blur must not carry it over the image (which lavapipe, whose maths yields NaN where GPUs do not,
 /// showed as whole black frames), and MLAA must not either.
