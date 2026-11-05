@@ -1882,15 +1882,22 @@ GPU time is the chain's (the JSON's `gpu_ms.passes.bloom`); in brackets, the sam
   within noise at every row (bloom 0.044/0.113/0.124/0.125 ms on `parts_100k`, the same counts).
 
 **OpenGL draws the render passes.** With the compute pass, Mesa's llvmpipe (CI's OpenGL) ran the first downsample's
-dispatch before it had rasterised the scene pass before it, so bloom blurred the frame before: CI's GL image tests
-failed now and then (`tests/shadows.rs`' acne check, whose two renders' bloom differed), and a test made for it,
-`tests/post.rs`' `bloom_reads_the_scene_of_its_own_frame` (a frame drawn after the clear colour changed against one
-that only drew that colour), failed in **29 of 30** runs on llvmpipe, against **0 of 30** with the render passes and
-0 of 10 on lavapipe. 20 loops of the shadow and post tests and 30 of CI's whole GL step (below) never failed: frames
-that lag behind identical frames look the same, so only tests whose frames change see it. Splitting the chain into a
-compute pass per dispatch changed nothing, as expected: OpenGL orders a render pass's writes before a later texture
-fetch without any barrier, wgpu emits none there, and llvmpipe defers its rasterisation past the dispatch. AMD's
-OpenGL driver here passes the test. Nothing a frame records can make llvmpipe wait, and OpenGL is the fallback path,
+dispatch before it had rasterised the scene pass before it, so bloom blurred the frame before. Repeated on CI's
+runners (throwaway `diag-145-*` branches):
+
+| On llvmpipe (OpenGL) | Compute pass | A compute pass per dispatch | Render passes (this PR) |
+| --- | ---: | ---: | ---: |
+| `post.rs`' `bloom_reads_the_scene_of_its_own_frame` (new) | 49 of 50 runs failed | 20 of 20 | 0 of 90 |
+| `shadows.rs` alone (the acne check CI met) | 12 of 100 | – | 0 of 100 |
+| CI's whole GL step | – | – | 0 of 30 |
+
+The new test draws a frame after the clear colour changed against one that only drew that colour: bloom mixed the
+old colour in (a frame's lag; once only part of it). It never fails on lavapipe (0 of 10), DX12, Vulkan or AMD's
+OpenGL driver here. The acne check compares a shadowed and an unshadowed render whose last frames differ, so bloom's
+lag made a lit surface up to 5.7 levels darker in 12 of 100 runs (20 loops of the shadow and post tests together
+never met it: it depends on how far the rasteriser lags). A compute pass per dispatch changes nothing, as expected:
+OpenGL orders a render pass's writes before a later texture fetch without any barrier, wgpu emits none there, and
+llvmpipe defers its rasterisation past the dispatch. Nothing a frame records can make llvmpipe wait, and OpenGL is the fallback path,
 whose drivers are the least tested with compute, so OpenGL keeps the render passes. What it gives up, measured
 before that (same machine and runs, `WGPU_BACKEND=gl`, `Rgba16Float` levels):
 
