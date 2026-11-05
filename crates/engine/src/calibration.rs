@@ -126,6 +126,8 @@ pub(crate) struct AutoCalibration {
     /// For tests: `Some(cost)` feeds the calibrator each workload frame as it is drawn, at `cost(tier measured)`,
     /// instead of its GPU timings.
     timing_override: Option<fn(Tier) -> f32>,
+    /// How long it may take before it gives up ([`MAX_DURATION`]; tests on software rasterisers allow more).
+    max_duration: Duration,
 }
 
 enum State {
@@ -160,6 +162,7 @@ impl AutoCalibration {
             interval_count: 0,
             interval_ms: DEFAULT_INTERVAL_MS,
             timing_override: None,
+            max_duration: MAX_DURATION,
         }
     }
 
@@ -268,8 +271,8 @@ impl AutoCalibration {
             }
         };
         let step = step.or_else(|| {
-            (started.elapsed() > MAX_DURATION).then(|| {
-                log::warn!("graphics: calibration took over {MAX_DURATION:?}; giving up");
+            (started.elapsed() > self.max_duration).then(|| {
+                log::warn!("graphics: calibration took over {:?}; giving up", self.max_duration);
                 (Calibrator::untimed_tier(device_type), 0.0)
             })
         });
@@ -561,6 +564,9 @@ mod tests {
         let target = OffscreenTarget::new(context, SIZE.0, SIZE.1, FORMAT).expect("the game's target");
         let mut calibration = AutoCalibration::new(FORMAT, SIZE);
         calibration.timing_override = Some(workload_cost);
+        // The frames are this loop's to count, however slow the adapter: lavapipe draws the workload at Ultra (3 × 3072²
+        // cascades) at a few frames a second, past the 10 s a game gives a calibration.
+        calibration.max_duration = Duration::from_secs(3600);
         let mut cameras = CameraReader::new();
         for frame in 0..3_000u64 {
             stress
