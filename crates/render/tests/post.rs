@@ -371,6 +371,28 @@ fn bloom_draws_the_same_image_in_a_compute_pass_as_in_render_passes() {
     }
 }
 
+/// The same frame drawn twice is the same image to the bit, with bloom's compute pass and with its render passes:
+/// nothing in the chain reads what is not yet written. (On llvmpipe's OpenGL it once was not, #145: the image tests'
+/// point comparisons failed now and then.)
+#[test]
+fn the_same_frame_draws_the_same_image_twice() {
+    let Some(context) = gpu() else { return };
+    let mut differ = Vec::new();
+    for compute in [true, false] {
+        for (scene, make) in [("lamp", night_lamp as fn() -> Game), ("demo", demo)] {
+            let setup = |s: &mut RendererSettings| s.post.bloom.compute = compute;
+            let (first, _) = render(&context, &mut make(), setup);
+            let (second, _) = render(&context, &mut make(), setup);
+            let diff = scenes::compare(&first, &second, 0);
+            if diff.max > 0 {
+                eprintln!("{scene}, bloom compute {compute}: drawn twice: {diff:?}");
+                differ.push((scene, compute, diff));
+            }
+        }
+    }
+    assert!(differ.is_empty(), "{differ:?}");
+}
+
 /// A pixel the scene's shaders write as not a number (here a neon material whose metalness is NaN) stays one bad
 /// pixel: bloom's blur must not carry it over the image (which lavapipe, whose maths yields NaN where GPUs do not,
 /// showed as whole black frames), and MLAA must not either.
