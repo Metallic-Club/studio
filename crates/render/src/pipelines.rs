@@ -21,6 +21,9 @@
 //!   settings change whose pipelines are still compiling takes effect in the first frame after they are
 //!   ([`crate::Renderer`]'s settings say what is drawn until then), and a light made while the lit pipelines still
 //!   compile hurries them and fades in once they exist.
+//! - **Direct3D 12 with FXC makes one pipeline at a time** ([`crate::context::PipelineTurn`], #179): FXC's
+//!   compiled shaders, which wgpu shares between the pipelines that use them, are not safe to share between
+//!   threads. There one worker compiles, and the pipelines made on the calling thread wait for its compile.
 //! - **OpenGL compiles on the thread that owns its context**, so there (and on WebAssembly, or a machine with one
 //!   core, or where no thread can be started) every compile runs inline, all of them before
 //!   [`crate::Renderer::new`] returns, as before #86.
@@ -33,6 +36,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use crate::context::PipelineTurn;
 use crate::pipeline_cache::PipelineCacheStore;
 
 /// Makes one pipeline on `device`, with the pipeline cache where there is one. Owns (clones of) its shader module
@@ -292,9 +296,9 @@ impl Pool {
 }
 
 /// A worker: takes jobs until the pool closes, and saves the pipeline cache whenever the queue runs dry.
-fn work(pool: &Pool, device: &wgpu::Device, cache: Option<&PipelineCacheStore>) {
+fn work(pool: &Pool, device: &wgpu::Device, cache: Option<&PipelineCacheStore>, turn: &PipelineTurn) {
     while let Some(job) = pool.take() {
-        let done = compile(job, device, cache);
+        let done = compile(job, device, cache, turn);
         let save = {
             let mut state = pool.lock();
             if let Some(at) = state.running.iter().position(|&key| key == done.key) {
@@ -315,7 +319,8 @@ fn work(pool: &Pool, device: &wgpu::Device, cache: Option<&PipelineCacheStore>) 
     }
 }
 
-fn compile(job: Job, device: &wgpu::Device, cache: Option<&PipelineCacheStore>) -> Done {
+fn compile(job: Job, device: &wgpu::Device, cache: Option<&PipelineCacheStore>, turn: &PipelineTurn) -> Done {
+    let _turn = turn.take();
     let start = Instant::now();
     let Job { key, recipe, .. } = job;
     let cache = cache.map(PipelineCacheStore::cache);
@@ -331,6 +336,8 @@ fn compile(job: Job, device: &wgpu::Device, cache: Option<&PipelineCacheStore>) 
 pub(crate) struct Compiler {
     device: wgpu::Device,
     cache: Option<Arc<PipelineCacheStore>>,
+    /// Taken around each compile; where pipelines are made one at a time (Direct3D 12 with FXC), one worker.
+    turn: PipelineTurn,
     /// The workers' pool; `None` when compiles run inline.
     pool: Option<Arc<Pool>>,
     workers: u32,
@@ -344,12 +351,18 @@ pub(crate) struct Compiler {
 
 impl Compiler {
     /// A compiler for `device`: with worker threads unless `inline` (OpenGL, which compiles on its context's
-    /// thread) or the platform has none to spare.
-    pub(crate) fn new(device: &wgpu::Device, cache: Option<Arc<PipelineCacheStore>>, inline: bool) -> Self {
+    /// thread) or the platform has none to spare, each compile taking `turn`.
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        cache: Option<Arc<PipelineCacheStore>>,
+        turn: PipelineTurn,
+        inline: bool,
+    ) -> Self {
         let started = Instant::now();
         let mut compiler = Self {
             device: device.clone(),
             cache,
+            turn,
             pool: None,
             workers: 0,
             inline_done: VecDeque::new(),
@@ -365,11 +378,12 @@ impl Compiler {
         compiler
     }
 
-    /// Starts one worker per core but one (the calling thread's), at most eight. Where none can start, compiles run
-    /// inline.
+    /// Starts one worker per core but one (the calling thread's), at most eight, or one where pipelines are made one
+    /// at a time (more would only wait for the turn). Where none can start, compiles run inline.
     fn start_workers(&mut self) {
         let cores = std::thread::available_parallelism().map_or(1, usize::from);
-        let count = cores.saturating_sub(1).min(8);
+        let most = if self.turn.one_at_a_time() { 1 } else { 8 };
+        let count = cores.saturating_sub(1).min(most);
         if count == 0 {
             return;
         }
@@ -380,10 +394,15 @@ impl Compiler {
         });
         let mut started = 0;
         for _ in 0..count {
-            let (pool, device, cache) = (Arc::clone(&pool), self.device.clone(), self.cache.clone());
+            let (pool, device, cache, turn) = (
+                Arc::clone(&pool),
+                self.device.clone(),
+                self.cache.clone(),
+                self.turn.clone(),
+            );
             let spawned = std::thread::Builder::new()
                 .name("metallic pipelines".into())
-                .spawn(move || work(&pool, &device, cache.as_deref()));
+                .spawn(move || work(&pool, &device, cache.as_deref(), &turn));
             if spawned.is_ok() {
                 started += 1;
             }
@@ -415,11 +434,16 @@ impl Compiler {
                 pool.work.notify_one();
             }
             None => {
-                let done = compile(job, &self.device, self.cache.as_deref());
+                let done = compile(job, &self.device, self.cache.as_deref(), &self.turn);
                 self.inline_done.push_back(done);
                 self.mark_unsaved();
             }
         }
+    }
+
+    /// The device's turn its compiles take: pipelines made elsewhere on the device take it too.
+    pub(crate) fn turn(&self) -> &PipelineTurn {
+        &self.turn
     }
 
     /// Whether compiles run inline (OpenGL, and wherever no worker thread can compile), not in the background.

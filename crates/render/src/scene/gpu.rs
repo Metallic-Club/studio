@@ -245,7 +245,11 @@ impl GpuScene {
         let scatter = (binding == InstanceBinding::Storage
             && capabilities.compute
             && limits.max_storage_buffers_per_shader_stage >= 3)
-            .then(|| Scatter::new(&device, &limits));
+            .then(|| {
+                // In the device's turn with the renderer's compiles (Direct3D 12 with FXC).
+                let _turn = context.pipeline_turn().take();
+                Scatter::new(&device, &limits)
+            });
         let max_staging = if scatter.is_some() {
             limits.max_buffer_size.min(limits.max_storage_buffer_binding_size)
         } else {

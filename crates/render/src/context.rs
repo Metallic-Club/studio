@@ -6,7 +6,8 @@
 //! together killed the archived renderer's test runs with `STATUS_HEAP_CORRUPTION` (archive #276; upstream
 //! gfx-rs/wgpu#9760, #6211). Serialising setup removed the crash. Rendering and teardown stay parallel, except that
 //! **on WARP every submission in the process takes its turn** ([`Submitter`], #130): its shader compiler crashes when
-//! two devices submit draws at once.
+//! two devices submit draws at once. And on Direct3D 12 with FXC each device makes its pipelines one at a time
+//! ([`PipelineTurn`], #179): FXC's compiled shaders, which wgpu shares between pipelines, are not thread-safe.
 //!
 //! Backends are tried in tiers: Vulkan, Metal and DX12 first, and only when none of them has an adapter, GL. An
 //! instance only ever enables one tier, so most machines never set up GL at all.
@@ -65,6 +66,51 @@ fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(
     // A panic while holding the lock leaves nothing half-written behind it (the guarded data is `()`).
     let _turn = WARP_SUBMITS.lock().unwrap_or_else(PoisonError::into_inner);
     queue.submit(buffers)
+}
+
+/// Taken around every pipeline the renderer makes on a device whose compiled shaders must not be shared between
+/// threads, so its pipelines are made one at a time: Direct3D 12 with FXC, its default shader compiler (#179).
+///
+/// wgpu's DX12 backend keeps each compiled shader in a cache inside the device and hands every pipeline made with it
+/// a new reference to the same `ID3DBlob`, released once the pipeline is made. FXC's blobs (`d3dcompiler_47.dll`'s
+/// `D3DX11Core::CBuffer`) count their references without atomics: two threads adding and releasing references to one
+/// blob lose updates (a test of 4 threads x 2 million balanced pairs ends hundreds off). So two pipelines that share
+/// a shader stage, made at once on two threads of one device (the renderer's compile workers, #86), free the blob
+/// while the cache still holds it: the next pipeline that uses it calls through a freed object (an access violation,
+/// its vtable overwritten by a label) or frees it twice (`STATUS_HEAP_CORRUPTION` in `RtlFreeHeap` from
+/// `CBuffer::Release`), as dumps of CI's render tests on WARP show. Nothing here is specific to WARP (the dev PC's
+/// GPU on DX12 crashed the same way): CI's only Direct3D 12 adapter is WARP. DXC's blobs count atomically, and other
+/// backends have no such cache, so they make pipelines on every worker at once. To go once wgpu stops sharing FXC's
+/// blobs between threads (#180).
+///
+/// One device's turn: each device has its own cache, and the tests' devices keep compiling in parallel.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PipelineTurn(Option<Arc<Mutex<()>>>);
+
+impl PipelineTurn {
+    /// A turn for a device using `backend` with `compiler` (after `WGPU_DX12_COMPILER`): one at a time on DX12
+    /// unless the compiler is surely DXC (`Auto` falls back to FXC where `dxcompiler.dll` is missing).
+    fn new(backend: wgpu::Backend, compiler: &wgpu::Dx12Compiler) -> Self {
+        let dxc = matches!(
+            compiler,
+            wgpu::Dx12Compiler::DynamicDxc { .. } | wgpu::Dx12Compiler::StaticDxc
+        );
+        Self((backend == wgpu::Backend::Dx12 && !dxc).then(|| Arc::new(Mutex::new(()))))
+    }
+
+    /// Whether pipelines are made one at a time on this device.
+    pub(crate) fn one_at_a_time(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Waits for the device's turn to make a pipeline, and holds it until dropped; `None` (no wait) where pipelines
+    /// may be made at once.
+    pub(crate) fn take(&self) -> Option<MutexGuard<'_, ()>> {
+        // A panic while holding the lock leaves nothing half-written behind it (the guarded data is `()`).
+        self.0
+            .as_ref()
+            .map(|turn| turn.lock().unwrap_or_else(PoisonError::into_inner))
+    }
 }
 
 /// Whether the device is WARP: Direct3D 12's only software adapter.
@@ -267,6 +313,8 @@ pub struct RenderContext {
     capabilities: Arc<Capabilities>,
     /// The device's pipeline cache and its file, where there is one ([`ContextOptions::pipeline_cache_dir`]).
     pipeline_cache: Option<Arc<PipelineCacheStore>>,
+    /// Taken around every pipeline the renderer makes on this device ([`PipelineTurn`]).
+    pipeline_turn: PipelineTurn,
 }
 
 impl RenderContext {
@@ -382,6 +430,8 @@ impl RenderContext {
             .as_deref()
             .and_then(|dir| PipelineCacheStore::open(&adapter, &device, dir))
             .map(Arc::new);
+        // The compiler `new_instance` gave the backend.
+        let pipeline_turn = PipelineTurn::new(capabilities.backend, &options.dx12_compiler.clone().with_env());
         Ok(Self {
             instance,
             adapter,
@@ -389,6 +439,7 @@ impl RenderContext {
             queue,
             capabilities,
             pipeline_cache,
+            pipeline_turn,
         })
     }
 
@@ -429,6 +480,11 @@ impl RenderContext {
     /// What the adapter and device can do.
     pub fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// What the renderer takes around each pipeline it makes on this device ([`PipelineTurn`]).
+    pub(crate) fn pipeline_turn(&self) -> &PipelineTurn {
+        &self.pipeline_turn
     }
 
     /// The device's pipeline cache, where it keeps one on disk.
@@ -523,6 +579,29 @@ mod tests {
         assert!(tiers[0].contains(wgpu::Backends::VULKAN | wgpu::Backends::METAL | wgpu::Backends::DX12));
         assert!(!tiers[0].contains(wgpu::Backends::GL));
         assert_eq!(tiers[1], wgpu::Backends::GL);
+    }
+
+    #[test]
+    fn direct3d_12_makes_pipelines_one_at_a_time_unless_surely_with_dxc() {
+        let one_at_a_time =
+            |backend, compiler: wgpu::Dx12Compiler| PipelineTurn::new(backend, &compiler).one_at_a_time();
+        assert!(one_at_a_time(wgpu::Backend::Dx12, wgpu::Dx12Compiler::Fxc));
+        // Falls back to FXC where `dxcompiler.dll` is missing.
+        assert!(one_at_a_time(wgpu::Backend::Dx12, wgpu::Dx12Compiler::Auto));
+        assert!(!one_at_a_time(
+            wgpu::Backend::Dx12,
+            wgpu::Dx12Compiler::default_dynamic_dxc()
+        ));
+        assert!(!one_at_a_time(wgpu::Backend::Dx12, wgpu::Dx12Compiler::StaticDxc));
+        for backend in [wgpu::Backend::Vulkan, wgpu::Backend::Metal, wgpu::Backend::Gl] {
+            assert!(!one_at_a_time(backend, wgpu::Dx12Compiler::Fxc));
+        }
+        let free = PipelineTurn::new(wgpu::Backend::Vulkan, &wgpu::Dx12Compiler::Fxc);
+        assert!(free.take().is_none());
+        let serial = PipelineTurn::new(wgpu::Backend::Dx12, &wgpu::Dx12Compiler::Fxc);
+        let held = serial.take();
+        assert!(held.is_some());
+        assert!(serial.0.as_ref().is_some_and(|turn| turn.try_lock().is_err()));
     }
 
     #[test]
