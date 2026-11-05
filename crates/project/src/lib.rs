@@ -6,5 +6,9 @@
 //! Must not depend on: the render, physics, scripting or platform crates. See `docs/adr/0006-project-format.md`.
 
 pub mod manifest;
+pub mod scene;
 
 pub use manifest::{LoadedManifest, Manifest, ManifestError, ManifestWarning, ProjectKind, ProjectMode};
+pub use scene::{
+    LoadedScene, SCENE_FORMAT, SavedScene, SceneError, SceneIds, SceneWarning, load_scene, load_scene_bytes, save_scene,
+};

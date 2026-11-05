@@ -29,7 +29,7 @@ metallic_engine = { path = "crates/engine", default-features = false }
 metallic_player = { path = "apps/player" }
 
 # Third-party crates. `metallic_core` may only use small, portable ones (ADR 0002): glam, serde, thiserror.
-# `serde_json` is for `xtask` (host-only tooling, never shipped) and tests.
+# `serde_json` writes and reads scene files (`metallic_project`, ADR 0006) and serves `xtask` and tests. Pure Rust.
 glam = { version = "0.34", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -1279,7 +1279,10 @@ dependencies = [
 name = "metallic_project"
 version = "0.1.0"
 dependencies = [
+ "metallic_classes",
  "metallic_core",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "toml",
 ]

@@ -1,0 +1,70 @@
+{
+  "format": 0,
+  "instances": [{
+    "id": 1,
+    "class": "Workspace",
+    "properties": {
+      "CurrentCamera": 2,
+      "Name": "Workspace"
+    }
+  }, {
+    "id": 2,
+    "parent": 1,
+    "class": "Camera",
+    "properties": {
+      "CFrame": [0.0, 5.0, 10.0, -0.2297529, 0.0, 0.0, 0.97324896],
+      "Name": "Camera"
+    }
+  }, {
+    "id": 3,
+    "parent": 1,
+    "class": "Part",
+    "properties": {
+      "Anchored": true,
+      "Color": [0.388, 0.373, 0.384],
+      "Material": "Concrete",
+      "Name": "Baseplate",
+      "Size": [160.0, 2.0, 160.0]
+    }
+  }, {
+    "id": 4,
+    "parent": 1,
+    "class": "Part",
+    "properties": {
+      "CFrame": [0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+      "Material": "Neon",
+      "Name": "Lamp",
+      "Shape": "Ball"
+    }
+  }, {
+    "id": 5,
+    "parent": 4,
+    "class": "PointLight",
+    "properties": {
+      "Brightness": 3.0,
+      "Name": "Glow",
+      "Range": 24.0
+    }
+  }, {
+    "id": 6,
+    "class": "Lighting",
+    "properties": {
+      "ClockTime": 18.5,
+      "Name": "Lighting"
+    }
+  }, {
+    "id": 7,
+    "class": "ServerScriptService",
+    "properties": {
+      "Name": "ServerScriptService"
+    }
+  }, {
+    "id": 8,
+    "parent": 7,
+    "class": "Script",
+    "properties": {
+      "Name": "Spin",
+      "Source": "Scripts/Spin.luau"
+    }
+  }]
+}

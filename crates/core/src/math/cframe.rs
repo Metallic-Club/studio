@@ -14,8 +14,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// # Serialized form
 ///
 /// Seven numbers, `[px, py, pz, qx, qy, qz, qw]`: the position in metres, then the rotation quaternion. Scene files
-/// rely on this form, so it must not change. Reading normalizes the quaternion and rejects non-finite numbers or a
-/// zero quaternion.
+/// rely on this form, so it must not change. Reading normalizes a quaternion that is not already unit length (one
+/// that is, as every written one is, reads back bit for bit) and rejects non-finite numbers or a zero quaternion.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CFrame {
     position: Vec3,
@@ -212,8 +212,11 @@ impl<'de> Deserialize<'de> for CFrame {
         if !position.is_finite() {
             return Err(D::Error::custom("CFrame position must be finite"));
         }
-        let rotation = Vec4::new(qx, qy, qz, qw)
-            .try_normalize()
+        let rotation = Vec4::new(qx, qy, qz, qw);
+        // A quaternion that is already unit length, as every written one is, is kept bit for bit: normalizing it
+        // again can move its last bits, and a scene saved after loading would then differ from the file.
+        let unit = rotation.is_finite() && (rotation.length_squared() - 1.0).abs() <= UNIT_TOLERANCE;
+        let rotation = if unit { Some(rotation) } else { rotation.try_normalize() }
             .ok_or_else(|| D::Error::custom("CFrame rotation must be a finite, non-zero quaternion"))?;
         Ok(Self {
             position,
@@ -221,6 +224,10 @@ impl<'de> Deserialize<'de> for CFrame {
         })
     }
 }
+
+/// How far a quaternion's squared length may be from 1 for reading to keep it as it is: a few `f32` roundings, as
+/// left by normalizing.
+const UNIT_TOLERANCE: f32 = 4.0 * f32::EPSILON;
 
 fn normalized_or_identity(rotation: Quat) -> Quat {
     Vec4::from(rotation)
@@ -423,5 +430,23 @@ mod tests {
         assert_eq!(cf, CFrame::IDENTITY);
         assert!(serde_json::from_str::<CFrame>("[0, 0, 0, 0, 0, 0, 0]").is_err());
         assert!(serde_json::from_str::<CFrame>("[0, 0, 0, 0, 0, 1]").is_err());
+    }
+
+    #[test]
+    fn serde_keeps_unit_rotations_bit_for_bit() {
+        // A rotation whose normalized form is not a fixed point of normalizing (from a stress scene, #186).
+        let json = "[-191.19336, 1.199839, 27.382965, 0.0, 0.36817282, 0.0, 0.9297575]";
+        let cf: CFrame = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(serde_json::to_string(&cf).expect("serialize"), json.replace(' ', ""));
+        for angle in 0..64 {
+            let cf = CFrame::from_rotation(Quat::from_euler(
+                EulerRot::YXZ,
+                angle as f32 * 0.37,
+                angle as f32 * 0.11,
+                0.2,
+            ));
+            let back: CFrame = serde_json::from_str(&serde_json::to_string(&cf).expect("serialize")).expect("read");
+            assert_eq!(back, cf, "angle {angle}");
+        }
     }
 }
