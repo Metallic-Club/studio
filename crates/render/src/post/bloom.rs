@@ -103,10 +103,13 @@ struct Compute {
     down_layout: wgpu::BindGroupLayout,
     up_layout: wgpu::BindGroupLayout,
     pipelines: [Option<wgpu::ComputePipeline>; 6],
+    /// The device is WARP, whose compiler makes a compute pipeline's machine code as the pipeline is made: then each
+    /// compile takes its turn with every WARP device's ([`crate::context::warp_turn`]).
+    warp: bool,
 }
 
 impl Compute {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, warp: bool) -> Self {
         let source = concat!(include_str!("bloom.wgsl"), include_str!("bloom_compute.wgsl"));
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("metallic bloom compute"),
@@ -146,6 +149,7 @@ impl Compute {
             down_layout,
             up_layout,
             pipelines: Default::default(),
+            warp,
         }
     }
 
@@ -158,7 +162,9 @@ impl Compute {
             self.down_layout.clone()
         };
         let module = self.module.clone();
+        let warp = self.warp;
         Some(Box::new(move |device, cache| {
+            let _turn = warp.then(crate::context::warp_turn);
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(entry),
                 bind_group_layouts: &[Some(&layout)],
@@ -284,7 +290,8 @@ impl Bloom {
             first: Default::default(),
             down: Default::default(),
             up: None,
-            compute: compute_format(context).map(|format| Compute::new(device, format)),
+            compute: compute_format(context)
+                .map(|format| Compute::new(device, format, crate::context::is_warp(context.capabilities()))),
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("metallic bloom"),
                 size: stride * 2 * MAX_BLOOM_LEVELS as u64,

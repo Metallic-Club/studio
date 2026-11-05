@@ -6,7 +6,7 @@
 //! together killed the archived renderer's test runs with `STATUS_HEAP_CORRUPTION` (archive #276; upstream
 //! gfx-rs/wgpu#9760, #6211). Serialising setup removed the crash. Rendering and teardown stay parallel, except that
 //! **on WARP every submission in the process takes its turn** ([`Submitter`], #130): its shader compiler crashes when
-//! two devices submit draws at once.
+//! two devices submit draws at once. So does every compute pipeline's making (bloom's, #145), which WARP compiles then.
 //!
 //! Backends are tried in tiers: Vulkan, Metal and DX12 first, and only when none of them has an adapter, GL. An
 //! instance only ever enables one tier, so most machines never set up GL at all.
@@ -61,14 +61,21 @@ fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(
     if !one_at_a_time {
         return queue.submit(buffers);
     }
-    static WARP_SUBMITS: Mutex<()> = Mutex::new(());
-    // A panic while holding the lock leaves nothing half-written behind it (the guarded data is `()`).
-    let _turn = WARP_SUBMITS.lock().unwrap_or_else(PoisonError::into_inner);
+    let _turn = warp_turn();
     queue.submit(buffers)
 }
 
+/// Held, on WARP, while a device submits or makes a compute pipeline: WARP compiles shaders to machine code then (a
+/// render pipeline's at its first draw, inside the submission; a compute pipeline's when it is made, #145), and its
+/// compiler crashes when two devices compile at once (#130).
+pub(crate) fn warp_turn() -> MutexGuard<'static, ()> {
+    static WARP_COMPILES: Mutex<()> = Mutex::new(());
+    // A panic while holding the lock leaves nothing half-written behind it (the guarded data is `()`).
+    WARP_COMPILES.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Whether the device is WARP: Direct3D 12's only software adapter.
-fn is_warp(capabilities: &Capabilities) -> bool {
+pub(crate) fn is_warp(capabilities: &Capabilities) -> bool {
     capabilities.backend == wgpu::Backend::Dx12 && capabilities.device_type == wgpu::DeviceType::Cpu
 }
 
