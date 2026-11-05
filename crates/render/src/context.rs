@@ -251,6 +251,7 @@ impl RenderContext {
         W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
     {
         let window: Arc<dyn SurfaceWindow> = window;
+        let mut unpresentable = Vec::new();
         for tier in backend_tiers(options.backends) {
             let _setup = setup_lock();
             // GL needs the display connection at instance creation (EGL on Wayland/X11); other backends ignore it.
@@ -264,10 +265,28 @@ impl RenderContext {
                 let surface = RenderSurface::new(&context, surface, window, width, height)?;
                 return Ok((context, surface));
             }
+            // Adapters that exist but cannot present here are named in the error, so it points at the window and
+            // the driver rather than at a missing GPU: AMD's Vulkan driver fails the surface query while no
+            // monitor is connected (#110).
+            unpresentable.extend(
+                pollster::block_on(instance.enumerate_adapters(tier))
+                    .iter()
+                    .map(|adapter| {
+                        let info = adapter.get_info();
+                        format!("{} ({})", info.name, info.backend)
+                    }),
+            );
         }
-        Err(RenderError::NoAdapter {
-            tried: options.backends,
-        })
+        if unpresentable.is_empty() {
+            Err(RenderError::NoAdapter {
+                tried: options.backends,
+            })
+        } else {
+            Err(RenderError::NoPresentableAdapter {
+                tried: options.backends,
+                adapters: unpresentable,
+            })
+        }
     }
 
     /// Creates a surface for another window on this device (Studio's extra viewports).
