@@ -222,6 +222,12 @@ impl StressScene {
         self.movers.len()
     }
 
+    /// Keeps only the first `count` moving parts moving (the others rest where they were built), to measure how a
+    /// cost scales with the moving parts. Call it before the first [`StressScene::animate`].
+    pub fn keep_moving(&mut self, count: usize) {
+        self.movers.truncate(count);
+    }
+
     /// Parts whose centre is inside the camera's view at a 16:9 aspect: what a culled frame would draw, roughly.
     pub fn in_view(&self) -> usize {
         self.in_view

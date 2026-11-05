@@ -35,6 +35,21 @@ const CASCADE_CASTER_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState {
 /// The fewest entries a cascade's segment of a mesh kind holds.
 const MIN_LIST_CAPACITY: u32 = 256;
 
+/// A cached cascade's map is built by restoring the texels under its previous moving casters (#133) while their
+/// footprints add up to at most this share of the map's texels (overlaps counted as often as they are drawn);
+/// past it the whole static map is copied. Measured on `parts_100k` with the footprints made larger on purpose
+/// (`docs/perf.md`): restoring cost what the copy costs at about 1.4 maps' worth of texels, so at one map's worth
+/// it still saves about a sixth, with room for GPUs whose rectangles cost more.
+const MAX_RESTORE_SHARE: f32 = 1.0;
+
+/// Texels added on every side of a moving caster's footprint, against rounding: the GPU places the caster's
+/// vertices with other arithmetic than the CPU's bound, so a vertex on the bounding sphere could land a hair outside
+/// it, and a texel whose centre the bound only grazes could be covered.
+const FOOTPRINT_MARGIN: f32 = 1.0;
+
+/// Bytes of one footprint in the restore pass's vertex buffer: its two corners in clip space.
+const FOOTPRINT_SIZE: u64 = 16;
+
 /// The uniform of every cascade, each at [`UNIFORM_STRIDE`] (`Cascade` in shadow.wgsl).
 type CascadeUniforms = [[f32; (UNIFORM_STRIDE / 4) as usize]; MAX_CASCADES];
 
@@ -68,10 +83,85 @@ struct CascadeState {
     /// A cached cascade's moving casters this frame, and how many.
     moving: VisibleSet,
     moving_count: u32,
-    /// A cached cascade's map is built this frame: its static map copied in, the moving casters drawn on top.
+    /// A cached cascade's map is built this frame: its static map copied in (or restored under the previous moving
+    /// casters), the moving casters drawn on top.
     build: bool,
     /// What a cached cascade's map holds, `None` when not known (never built, or made again).
     built: Option<Built>,
+    /// The footprints of the moving casters on a cached cascade's map as built ([`CascadeState::built`]).
+    footprints: Vec<Footprint>,
+    /// This frame's moving casters' footprints, which become [`CascadeState::footprints`] when the map is built.
+    next_footprints: Vec<Footprint>,
+    /// The footprints a build restores this frame, when it restores: the previous moving casters'.
+    restore: Vec<Footprint>,
+    /// This frame's build restores [`CascadeState::restore`] instead of copying the whole static map: the map holds
+    /// the current static map and its previous moving casters, and their footprints are small enough.
+    restoring: bool,
+    /// The texels a restoring build draws (overlaps counted as often as they are drawn).
+    restored_texels: u64,
+    /// Where this frame's [`CascadeState::restore`] starts in the footprint buffer, in footprints.
+    restore_first: u64,
+}
+
+/// What a moving caster can cover on a cascade's map: a rectangle in the map's clip space, its corners `(x0, y0)`
+/// and `(x1, y1)` (x0 ≤ x1, y0 ≤ y1, inside −1 to 1), as the restore pass's vertex shader takes it (`vs_restore` in
+/// copy.wgsl). See [`FootprintView::footprint`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct Footprint([f32; 4]);
+
+impl Footprint {
+    /// The whole map.
+    const WHOLE: Self = Self([-1.0, -1.0, 1.0, 1.0]);
+
+    /// Its area in clip space (the whole map's is 4).
+    fn area(&self) -> f32 {
+        let [x0, y0, x1, y1] = self.0;
+        (x1 - x0) * (y1 - y0)
+    }
+}
+
+/// A cascade's map as footprints are found on it: its clip matrix (orthographic: `w` is 1), and how far across it,
+/// in clip space, a metre reaches and [`FOOTPRINT_MARGIN`] does. Made once per cascade and frame, so a footprint
+/// costs a matrix product and a few additions.
+#[derive(Clone, Copy, Debug)]
+struct FootprintView {
+    clip: Mat4,
+    per_metre: (f32, f32),
+    margin: f32,
+}
+
+impl FootprintView {
+    fn new(clip: Mat4, resolution: u32) -> Self {
+        Self {
+            clip,
+            per_metre: (clip.row(0).truncate().length(), clip.row(1).truncate().length()),
+            margin: FOOTPRINT_MARGIN * 2.0 / resolution as f32,
+        }
+    }
+
+    /// What a caster inside the sphere `center`, `radius` (origin-relative) can cover, with a [`FOOTPRINT_MARGIN`]
+    /// around it.
+    ///
+    /// Conservative because what the caster pass writes is bounded by the sphere's projection: a triangle covers a
+    /// texel only when the texel's centre is inside it (so does the restore's rectangle, so it needs no rounding to
+    /// texel edges), and every mesh, at every level of detail, lies inside the unit cube whose corners
+    /// [`bounding_sphere`] passes through (a ball's or cylinder's coarser levels put their vertices on the same surface
+    /// as the finest level's). The casters' slope-scaled depth bias ([`CASCADE_CASTER_BIAS`]) moves only the depth
+    /// they write, never which texels they cover, and the receivers' filter only reads the map: a texel no moving
+    /// caster wrote holds the static map's depth, however far the filter reaches. A sphere that is not finite covers
+    /// the whole map.
+    fn footprint(&self, center: Vec3, radius: f32) -> Footprint {
+        let p = self.clip * center.extend(1.0);
+        let reach_x = radius * self.per_metre.0 + self.margin;
+        let reach_y = radius * self.per_metre.1 + self.margin;
+        let corners = [p.x - reach_x, p.y - reach_y, p.x + reach_x, p.y + reach_y];
+        if corners.iter().all(|c| c.is_finite()) {
+            Footprint(corners.map(|c| c.clamp(-1.0, 1.0)))
+        } else {
+            Footprint::WHOLE
+        }
+    }
 }
 
 /// What a cached cascade's map was built from: its static map's drawing ([`CascadeState::drawings`]), and the scene
@@ -179,6 +269,10 @@ pub(crate) struct ShadowMaps {
     static_maps: Vec<StaticMap>,
     copy_layout: wgpu::BindGroupLayout,
     copy_pipeline: wgpu::RenderPipeline,
+    /// The copy of the static map under footprints only, and the footprints it draws: a vertex buffer of clip-space
+    /// corners, those of every cached cascade restored this frame back to back.
+    restore_pipeline: wgpu::RenderPipeline,
+    footprint_buffer: wgpu::Buffer,
     /// The moving casters as of `movers_revision` (the scene's revision), for the cached cascades.
     movers: Vec<Mover>,
     movers_revision: Option<u64>,
@@ -265,7 +359,7 @@ impl ShadowMaps {
         // The placeholder is bound until the first `configure`, so it needs the backend's minimum too.
         let placeholder = maps_spec(1, min_layers).make_now(device);
         let (sample_view, layer_views) = map_views(&placeholder, 1);
-        let (copy_layout, copy_pipeline) = copy_pipeline(device, cache);
+        let (copy_layout, copy_pipeline, restore_pipeline) = copy_pipeline(device, cache);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -289,6 +383,8 @@ impl ShadowMaps {
             static_maps: Vec::new(),
             copy_layout,
             copy_pipeline,
+            restore_pipeline,
+            footprint_buffer: footprint_buffer(device, MIN_LIST_CAPACITY as u64 * FOOTPRINT_SIZE),
             movers: Vec::new(),
             movers_revision: None,
             lists: ShadowLists {
@@ -490,6 +586,8 @@ impl ShadowMaps {
         for cascade in &mut self.cascades {
             cascade.redraw = false;
             cascade.build = false;
+            cascade.restoring = false;
+            cascade.restored_texels = 0;
             cascade.moving_count = 0;
         }
         self.stats = ShadowStats::default();
@@ -577,6 +675,8 @@ impl ShadowMaps {
                 cached: i >= dynamic,
                 moving: cascade.moving_count,
                 built: cascade.build,
+                restored: cascade.restoring,
+                restored_texels: u32::try_from(cascade.restored_texels).unwrap_or(u32::MAX),
             };
         }
         self.frame = frame;
@@ -613,11 +713,17 @@ impl ShadowMaps {
             self.movers_revision = Some(revision);
         }
         let kinds = self.lists.capacities.len();
+        let resolution = self.resolution;
         for cascade in self.cascades.iter_mut().take(count).skip(dynamic) {
             let set = &mut cascade.moving;
             let levels = cascade.fit.lod;
-            // Every kind's list has room for every mover, so the pushes never allocate.
+            let view = FootprintView::new(cascade.fit.clip, resolution);
+            // Every kind's list has room for every mover, so the pushes never allocate; nor do the footprints'
+            // once they have had room for every mover.
             set.begin(std::iter::repeat_n(self.movers.len(), kinds), 0, 0, levels.enabled());
+            let footprints = &mut cascade.next_footprints;
+            footprints.clear();
+            footprints.reserve(self.movers.len());
             let mut moving = 0u32;
             for mover in &self.movers {
                 if usize::from(mover.kind) < kinds && cascade.fit.frustum.contains_sphere(mover.center, mover.radius) {
@@ -628,6 +734,7 @@ impl ShadowMaps {
                         0
                     };
                     set.push_level(mover.entry, mover.kind, level);
+                    footprints.push(view.footprint(mover.center, mover.radius));
                     moving += 1;
                 }
             }
@@ -637,6 +744,21 @@ impl ShadowMaps {
                 moving: (moving > 0).then_some(revision),
             };
             cascade.build = cascade.built != Some(built);
+            if cascade.build {
+                // The map holds the static map as it is now and the moving casters it was last built with: restoring
+                // their footprints from the static map leaves it holding the static map alone (#133).
+                let holds_static = cascade.built.is_some_and(|b| b.drawing == cascade.drawings);
+                std::mem::swap(&mut cascade.restore, &mut cascade.footprints);
+                std::mem::swap(&mut cascade.footprints, &mut cascade.next_footprints);
+                // The whole map's area in clip space is 4.
+                let share = cascade.restore.iter().map(Footprint::area).sum::<f32>() / 4.0;
+                cascade.restoring = holds_static && share <= MAX_RESTORE_SHARE;
+                if cascade.restoring {
+                    cascade.restored_texels = (f64::from(share) * f64::from(resolution).powi(2)) as u64;
+                } else {
+                    cascade.restore.clear();
+                }
+            }
             cascade.built = Some(built);
         }
     }
@@ -682,8 +804,20 @@ impl ShadowMaps {
     }
 
     /// Uploads the lists of the cascades drawn this frame and of the moving casters of the cached cascades built
-    /// this frame: one staging write, then a copy per list and kind (its levels back to back).
+    /// this frame, and the footprints those builds restore: one staging write, then a copy per list and kind (its
+    /// levels back to back), and one for the footprints.
     fn upload_lists(&mut self, encoder: &mut wgpu::CommandEncoder, scene: &GpuScene) {
+        let mut footprints = 0u64;
+        for cascade in self.cascades.iter_mut().take(self.active) {
+            if cascade.build && cascade.restoring {
+                cascade.restore_first = footprints;
+                footprints += cascade.restore.len() as u64;
+            }
+        }
+        let footprint_bytes = footprints * FOOTPRINT_SIZE;
+        if self.footprint_buffer.size() < footprint_bytes {
+            self.footprint_buffer = footprint_buffer(&self.device, footprint_bytes.next_power_of_two());
+        }
         let lists = &mut self.lists;
         lists.ranges.clear();
         let mut total = 0u64;
@@ -705,7 +839,8 @@ impl ShadowMaps {
                 }
             }
         }
-        let Some(size) = wgpu::BufferSize::new(total * lists.entry_size) else {
+        let list_bytes = total * lists.entry_size;
+        let Some(size) = wgpu::BufferSize::new(list_bytes + footprint_bytes) else {
             return;
         };
         if lists.staging.size() < size.get() {
@@ -739,6 +874,14 @@ impl ShadowMaps {
                 }
             }
         }
+        for cascade in self.cascades.iter().take(self.active) {
+            if !(cascade.build && cascade.restoring) {
+                continue;
+            }
+            let bytes: &[u8] = bytemuck::cast_slice(&cascade.restore);
+            view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
+            offset += bytes.len();
+        }
         drop(view);
         let mut source = 0u64;
         for &(block, kind, count) in &self.lists.ranges {
@@ -751,6 +894,15 @@ impl ShadowMaps {
             let bytes = u64::from(count) * lists.entry_size;
             encoder.copy_buffer_to_buffer(&lists.staging, source, &lists.buffer, first * lists.entry_size, bytes);
             source += bytes;
+        }
+        if footprint_bytes > 0 {
+            encoder.copy_buffer_to_buffer(
+                &self.lists.staging,
+                list_bytes,
+                &self.footprint_buffer,
+                0,
+                footprint_bytes,
+            );
         }
     }
 
@@ -809,10 +961,18 @@ impl ShadowMaps {
         self.draw_list(cascade, cascade, &state.visible, meshes, pass)
     }
 
+    /// Whether cached cascade `cascade`'s build this frame keeps what its map holds and restores only the footprints
+    /// of its previous moving casters (#133): its pass must load the map, not clear it.
+    pub(crate) fn build_restores(&self, cascade: usize) -> bool {
+        cascade < self.active && self.cascades[cascade].build && self.cascades[cascade].restoring
+    }
+
     /// Records the building of cached cascade `cascade`'s map into `pass` (a depth pass into its
-    /// [`ShadowMaps::build_target`]): a copy of its static map (a full-screen triangle writing each texel's depth),
-    /// then its moving casters on top, one instanced draw per mesh kind. Returns the casters' draws, instances and
-    /// triangles (the copy is not counted).
+    /// [`ShadowMaps::build_target`], loaded when [`ShadowMaps::build_restores`], otherwise cleared): its static map
+    /// copied in, then its moving casters on top, one instanced draw per mesh kind. The copy is of the whole map (a
+    /// full-screen triangle writing each texel's depth), or, when restoring, of the footprints of the moving casters
+    /// the map was last built with (one instanced draw of a rectangle per footprint). Returns the casters' draws,
+    /// instances and triangles (the copy is not counted).
     pub(crate) fn build(&self, cascade: usize, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
         let static_map = cascade
             .checked_sub(self.settings.dynamic_count())
@@ -820,9 +980,20 @@ impl ShadowMaps {
         let (Some(state), Some(static_map)) = (self.cascades.get(cascade), static_map) else {
             return (0, 0, 0);
         };
-        pass.set_pipeline(&self.copy_pipeline);
-        pass.set_bind_group(0, &static_map.source, &[]);
-        pass.draw(0..3, 0..1);
+        if !state.restoring {
+            pass.set_pipeline(&self.copy_pipeline);
+            pass.set_bind_group(0, &static_map.source, &[]);
+            pass.draw(0..3, 0..1);
+        } else if let Ok(count) = u32::try_from(state.restore.len())
+            && count > 0
+        {
+            let first = state.restore_first * FOOTPRINT_SIZE;
+            let end = first + u64::from(count) * FOOTPRINT_SIZE;
+            pass.set_pipeline(&self.restore_pipeline);
+            pass.set_bind_group(0, &static_map.source, &[]);
+            pass.set_vertex_buffer(0, self.footprint_buffer.slice(first..end));
+            pass.draw(0..6, 0..count);
+        }
         if state.moving_count == 0 {
             return (0, 0, 0);
         }
@@ -968,10 +1139,13 @@ fn static_map(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, texture: &w
 /// shares the pass that draws the moving casters on top, with no copy command or extra pass on any backend. The
 /// static map is read as an unfilterable float texture (allowed for depth formats) with `textureLoad`, so no
 /// comparison or filtering touches the values: they are copied exactly.
+///
+/// The second pipeline is the same copy under footprints only (#133): one rectangle an instance, its corners from a
+/// vertex buffer, so it draws the same way on every backend and both instance paths.
 fn copy_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
-) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("metallic shadow static copy"),
         source: wgpu::ShaderSource::Wgsl(include_str!("copy.wgsl").into()),
@@ -994,34 +1168,56 @@ fn copy_pipeline(
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("metallic shadow static copy"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &module,
-            entry_point: Some("vs_copy"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: SHADOW_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Always),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &module,
-            entry_point: Some("fs_copy"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[],
-        }),
-        multiview_mask: None,
-        cache,
-    });
-    (layout, pipeline)
+    let make = |label: &str, entry_point: &str, buffers: &[Option<wgpu::VertexBufferLayout<'_>>]| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some(entry_point),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers,
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: SHADOW_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_copy"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[],
+            }),
+            multiview_mask: None,
+            cache,
+        })
+    };
+    let copy = make("metallic shadow static copy", "vs_copy", &[]);
+    let restore = make(
+        "metallic shadow static restore",
+        "vs_restore",
+        &[Some(wgpu::VertexBufferLayout {
+            array_stride: FOOTPRINT_SIZE,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4],
+        })],
+    );
+    (layout, copy, restore)
+}
+
+/// The footprints a build restores ([`ShadowMaps::build`]), `size` bytes.
+fn footprint_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("metallic shadow footprints"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 fn list_buffer(device: &wgpu::Device, binding: InstanceBinding, size: u64) -> wgpu::Buffer {
@@ -1119,4 +1315,103 @@ pub(crate) fn caster_pipeline(
         multiview_mask: None,
         cache,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use metallic_core::CFrame;
+    use metallic_core::glam::{EulerRot, Quat, Vec4};
+
+    use super::*;
+    use crate::parts::MeshData;
+    use crate::scene::affine_rows;
+
+    /// The far cascade the default settings fit to a camera at head height looking along the ground, and its size.
+    fn far_cascade() -> (CascadeFit, u32) {
+        let camera = Camera::from_cframe(
+            CFrame::look_at(Vec3::new(3.0, 6.0, 2.0), Vec3::new(100.0, 0.0, 30.0), Vec3::Y),
+            70.0,
+        );
+        let settings = ShadowSettings::default();
+        let mut fits = [CascadeFit::default(); MAX_CASCADES];
+        let sun = Vec3::new(-0.5, 0.65, 0.58).normalize();
+        let count = fit_cascades(
+            &camera,
+            16.0 / 9.0,
+            Vec3::ZERO,
+            sun,
+            &settings,
+            &LodView::OFF,
+            &mut fits,
+        );
+        (fits[count - 1], settings.resolution)
+    }
+
+    /// Every vertex of every built-in mesh, at every level of detail, placed by turned and stretched instances, lands
+    /// inside its instance's footprint on the far cascade's map, a margin of texels in from its edges: so every texel
+    /// a moving caster covers (a texel whose centre one of its triangles holds) is one the restore copies back.
+    #[test]
+    fn a_footprint_holds_its_caster_at_every_level_of_detail() {
+        let (far, resolution) = far_cascade();
+        let margin = FOOTPRINT_MARGIN * 2.0 / resolution as f32;
+        let mut checked = 0;
+        for kind in 0..MeshKind::BUILTIN_COUNT {
+            for level in 0..MAX_LOD_LEVELS {
+                let Some(mesh) = MeshData::primitive_level(MeshKind(kind), level) else {
+                    continue;
+                };
+                for i in 0..64 {
+                    let t = i as f32;
+                    let rotation = Quat::from_euler(EulerRot::XYZ, t * 0.7, t * 1.3, t * 2.1);
+                    let scale = Vec3::new(
+                        0.2 + (t * 0.37).fract() * 12.0,
+                        0.2 + (t * 0.61).fract() * 30.0,
+                        0.2 + (t * 0.83).fract() * 6.0,
+                    );
+                    let position = Vec3::new(40.0 + t, 1.0 + t * 0.5, 10.0 - t * 0.5);
+                    let instance = GpuInstance {
+                        rows: affine_rows(CFrame::from_parts(position, rotation), scale, Vec3::ZERO),
+                        ..GpuInstance::FREE
+                    };
+                    let (center, radius) = bounding_sphere(&instance);
+                    let footprint = FootprintView::new(far.clip, resolution).footprint(center, radius);
+                    let [x0, y0, x1, y1] = footprint.0;
+                    assert!(
+                        x0 > -1.0 && y0 > -1.0 && x1 < 1.0 && y1 < 1.0,
+                        "inside the map: {footprint:?}"
+                    );
+                    let r = instance.rows.map(Vec4::from);
+                    for vertex in &mesh.vertices {
+                        let p = Vec3::from(vertex.position).extend(1.0);
+                        let placed = Vec3::new(r[0].dot(p), r[1].dot(p), r[2].dot(p));
+                        let clip = far.clip * placed.extend(1.0);
+                        let (x, y) = (clip.x / clip.w, clip.y / clip.w);
+                        let inside =
+                            |v: f32, low: f32, high: f32| v >= low + margin - 1e-6 && v <= high - margin + 1e-6;
+                        assert!(
+                            inside(x, x0, x1) && inside(y, y0, y1),
+                            "kind {kind} level {level} instance {i}: ({x}, {y}) outside {footprint:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 10_000, "{checked}");
+    }
+
+    /// A footprint is clamped to the map and its area is in clip space (the map's is 4); a sphere that is not finite
+    /// covers the whole map, and one off the map covers nothing.
+    #[test]
+    fn footprints_are_clamped_to_the_map() {
+        let (far, resolution) = far_cascade();
+        let view = FootprintView::new(far.clip, resolution);
+        assert_eq!(view.footprint(Vec3::new(f32::NAN, 0.0, 0.0), 1.0), Footprint::WHOLE);
+        assert_eq!(view.footprint(Vec3::ZERO, f32::INFINITY), Footprint::WHOLE);
+        assert_eq!(Footprint::WHOLE.area(), 4.0);
+        let off = view.footprint(Vec3::new(1e5, 0.0, 1e5), 1.0);
+        assert_eq!(off.area(), 0.0, "{off:?}");
+        let huge = view.footprint(far.eye, 1e4);
+        assert_eq!(huge, Footprint::WHOLE);
+    }
 }

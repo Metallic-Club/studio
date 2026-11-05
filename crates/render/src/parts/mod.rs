@@ -147,8 +147,13 @@ pub struct DrawStats {
     /// Bit `i` set when cached cascade `i`'s map was built this frame: its static map copied in and its moving
     /// casters drawn on top ([`crate::shadow`]).
     pub shadow_built: u8,
+    /// Bit `i` set when cached cascade `i`'s map was built this frame by restoring the static map only under the
+    /// footprints of its previous moving casters, not by copying all of it ([`crate::shadow::CascadeStats::restored`]).
+    pub shadow_restored: u8,
+    /// The texels each cached cascade's restore drew this frame (0 for a full copy or no build).
+    pub shadow_restored_texels: [u32; MAX_CASCADES],
     /// Draws in the shadow passes this frame: one per mesh kind in each cascade drawn and each cached cascade built
-    /// (the copies of the static maps are not counted).
+    /// (the copies and restores of the static maps are not counted).
     pub shadow_draws: u32,
     /// Caster instances drawn into the cascades this frame.
     pub shadow_instances: u32,
@@ -1069,6 +1074,12 @@ impl PartRenderer {
         self.shadows.build_target(cascade)
     }
 
+    /// Whether building cached shadow cascade `cascade`'s map this frame restores footprints of what it holds, so
+    /// its pass loads the map rather than clearing it.
+    pub(crate) fn shadow_build_restores(&self, cascade: usize) -> bool {
+        self.shadows.build_restores(cascade)
+    }
+
     /// Records the building of cached cascade `cascade`'s map into `render_pass`, a depth pass into its
     /// [`PartRenderer::shadow_build_target`]: the copy of its static map and its moving casters.
     pub(crate) fn build_shadow(&mut self, cascade: usize, render_pass: &mut wgpu::RenderPass<'_>) {
@@ -1122,6 +1133,8 @@ impl PartRenderer {
         self.stats.shadow_cascades = shadow.cascades;
         self.stats.shadow_redrawn = shadow.redrawn_mask();
         self.stats.shadow_built = shadow.built_mask();
+        self.stats.shadow_restored = shadow.restored_mask();
+        self.stats.shadow_restored_texels = shadow.cascade.map(|c| c.restored_texels);
         self.stats.shadow_casters = shadow.cascade.map(|c| c.casters);
         self.stats.shadow_moving = shadow.cascade.map(|c| c.moving);
         if self.frame_uniforms != Some(uniforms) {

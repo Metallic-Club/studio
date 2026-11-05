@@ -49,6 +49,14 @@
 //! which a cascade without moving casters still holds its static map alone. The moving casters are few, so each is
 //! tested against the cascade's volume directly rather than with the culling grid.
 //!
+//! The whole static map is copied only when the map does not already hold it: after the static map was drawn
+//! again, or when the map's contents are not known. Otherwise the map holds the static map and the moving casters
+//! it was last built with, and the build **restores** only their footprints (#133): its pass loads the map, copies
+//! the static map back under one rectangle per previous moving caster (the texels its bounding sphere can cover,
+//! which bounds every level of detail, and a texel of margin), then draws this frame's moving casters. So a build
+//! costs what its moving casters cover rather than the map's size. When the footprints add up to more texels than
+//! the map holds, the whole map is copied instead.
+//!
 //! So moving parts cast shadows out to the shadow distance whatever the settings: the static map is what is
 //! cached, never a part of the look (ADR 0008: presets scale cost, they never remove a game's look). A cached
 //! cascade moves in coarser steps than one redrawn every frame (1/[`CACHED_STEP_DIVISOR`] of its width, for about 6%
@@ -222,6 +230,11 @@ pub struct CascadeStats {
     /// A cached cascade's map was built in the last frame: its static map copied in and its moving casters drawn on
     /// top (otherwise the map was kept: its static map and moving casters stayed).
     pub built: bool,
+    /// A cached cascade's map was built in the last frame by restoring the static map only under the footprints of
+    /// the moving casters it was built with before, not by copying all of it (see the [module documentation](self)).
+    pub restored: bool,
+    /// The texels that restore drew (footprints that overlap count as often as they are drawn); 0 for a full copy.
+    pub restored_texels: u32,
 }
 
 /// What the last frame did for shadows.
@@ -249,6 +262,12 @@ impl ShadowStats {
     /// Bit `i` set when cached cascade `i`'s map was built in the last frame.
     pub fn built_mask(&self) -> u8 {
         mask(self.cascade.iter().map(|c| c.built))
+    }
+
+    /// Bit `i` set when cached cascade `i`'s map was built in the last frame by restoring footprints
+    /// ([`CascadeStats::restored`]).
+    pub fn restored_mask(&self) -> u8 {
+        mask(self.cascade.iter().map(|c| c.restored))
     }
 }
 

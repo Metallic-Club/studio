@@ -2,7 +2,8 @@
 //! `CastShadow` and `Lighting.GlobalShadows` turning shadows off, the same image from the vertex-buffer fallback,
 //! and the caching of the far cascade: a frame in which nothing static changed and the camera and sun stayed draws
 //! the near cascades' casters and keeps the far cascade's static map, and a moving part beyond the near cascades
-//! still casts its shadow, drawn on a copy of that static map (#121); and a cube resting on the floor under a low
+//! still casts its shadow, drawn on a copy of that static map (#121), and leaves none behind where it was, though
+//! only its footprints are restored from the static map (#133); and a cube resting on the floor under a low
 //! sun, shadowed right up to its foot with no acne on the lit surfaces (#126); and the Low preset's single cascade
 //! against its own reference, which CI also runs on OpenGL (#155). Skips when the machine has no adapter (see
 //! `support::gpu`).
@@ -878,6 +879,109 @@ fn a_moving_part_beyond_the_dynamic_cascades_casts_a_shadow() {
         eprintln!("fallback against storage: {diff:?}");
         assert!(diff.max <= 2, "{diff:?}");
     }
+}
+
+/// A moving part leaving a spot leaves no shadow behind (#133). The far cascade's map is built by restoring the
+/// static map only under the footprints of the moving casters it held, so a footprint too small would leave the
+/// cube's old shadow on the floor. The far cube crosses 30 m of the far cascade, 2 m a frame, every frame building
+/// the map by restoring; then the image is, pixel for pixel, the one a fresh renderer draws of the same scene, whose
+/// map is a whole copy of the static map with the cube drawn on top. On both instance paths.
+#[test]
+fn a_moving_part_leaves_no_stale_shadow_behind() {
+    let Some(context) = gpu() else { return };
+    let fallback = gpu_with(&ContextOptions {
+        force_vertex_instances: true,
+        ..ContextOptions::default()
+    });
+    for context in std::iter::once(&context).chain(fallback.as_ref()) {
+        let mut built = far_mover_game();
+        let towards = sun(&built.game);
+        let across = Vec3::Y.cross(Vec3::new(-towards.x, 0.0, -towards.z).normalize());
+        let mut frames = Frames::new(context, &mut built.game, ShadowSettings::default());
+        // Moving in place first, so the cube is in the dynamic region.
+        wiggle(&mut frames, context, &mut built, 16);
+        let mut restored = Vec::new();
+        for step in 1..=15 {
+            // Away from the static cube, so both shadows stay in view.
+            move_to(&mut built.game, built.cube, built.at + across * (2.0 * step as f32));
+            frames.frame(context, &mut built.game);
+            let stats = frames.renderer.draw_stats();
+            assert_eq!(stats.shadow_moving[2], 1, "step {step}: {stats:?}");
+            assert_eq!(
+                stats.shadow_redrawn & 0b100,
+                0,
+                "step {step}: the static map was drawn again"
+            );
+            restored.push((stats.shadow_restored, stats.shadow_restored_texels[2]));
+        }
+        let resolution = frames.renderer.parts().shadow_settings().resolution;
+        eprintln!(
+            "{:?}: restored (mask, texels) while the cube crossed the far cascade: {restored:?} of a {resolution}² map",
+            InstanceBinding::for_context(context)
+        );
+        for &(mask, texels) in &restored {
+            assert_eq!(mask, 0b100, "a build copied the whole static map: {restored:?}");
+            assert!(
+                texels > 0 && u64::from(texels) * 100 < u64::from(resolution).pow(2),
+                "the footprint is not the cube's: {restored:?}"
+            );
+        }
+        let moved = frames.pixels(context);
+
+        let fresh = fresh_render(context, &mut frames, &built.game);
+        let diff = scenes::compare(&moved, &fresh, 0);
+        eprintln!("against a fresh renderer's full copy: {diff:?}");
+        if diff.max > 0 {
+            let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+            scenes::write_png(&out.join("stale_shadow_moved.png"), SIZE, SIZE, &moved);
+            scenes::write_png(&out.join("stale_shadow_fresh.png"), SIZE, SIZE, &fresh);
+            panic!(
+                "the moved cube left a stale shadow ({diff:?}); the images are in {}",
+                out.display()
+            );
+        }
+        // And the shadow did move: the floor where the cube stood is lit again.
+        let (start, bright) = (
+            level(&moved, project(&built.game, built.shadowed)),
+            level(&moved, project(&built.game, built.lit)),
+        );
+        assert!(
+            start > bright * 0.95,
+            "the floor the cube left is {start} against {bright} lit"
+        );
+    }
+}
+
+/// Renders `frames`' scene as it is now with a new renderer of the same settings, which draws every map from
+/// scratch (the far cascade's map a whole copy of its static map with the moving casters on top), and reads it back.
+fn fresh_render(context: &RenderContext, frames: &mut Frames, game: &Game) -> Vec<[u8; 4]> {
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
+    let mut renderer = Renderer::new(
+        context,
+        RendererSettings {
+            passes: PassSet::default(),
+            gpu_timing: true,
+            shadows: ShadowSettings::default(),
+            ..RendererSettings::new(FORMAT, SIZE, SIZE)
+        },
+    )
+    .expect("a renderer");
+    renderer.wait_for_pipelines();
+    let camera = frames.camera.read(&game.dm, game.workspace);
+    renderer.set_lighting(frames.lighting.read(&game.dm, lighting_service(game)));
+    let submission = renderer.render_scene(target.view(), &mut frames.scene, camera.as_ref());
+    let _ = context.device().poll(wgpu::PollType::Wait {
+        submission_index: Some(submission),
+        timeout: None,
+    });
+    let stats = renderer.draw_stats();
+    assert_eq!(
+        (stats.shadow_redrawn, stats.shadow_built, stats.shadow_restored),
+        (0b111, 0b100, 0),
+        "a fresh renderer copies the whole static map: {stats:?}"
+    );
+    assert_eq!(stats.shadow_moving[2], 1);
+    read_back_rgba8(context, target.texture())
 }
 
 /// With every cascade dynamic (the full-quality end of the setting) a moving part redraws them all, and the far

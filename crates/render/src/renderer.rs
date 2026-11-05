@@ -1144,7 +1144,7 @@ impl Renderer {
     }
 
     /// Records cascade `cascade`'s shadow pass when there is one this frame, cleared, then its casters drawn, or
-    /// with `build` its map built.
+    /// with `build` its map built (loaded rather than cleared when the build restores footprints, #133).
     fn record_shadow_pass(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1162,6 +1162,12 @@ impl Renderer {
         let Some(view) = view else {
             return;
         };
+        // A build that restores footprints keeps the rest of what the map holds (#133).
+        let load = if build && self.parts.shadow_build_restores(cascade) {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(1.0)
+        };
         let timestamp_writes = match (self.timer.as_ref(), slot) {
             (Some(timer), Some(slot)) => Some(timer.pass_writes(slot, self.shadow_recorded)),
             _ => None,
@@ -1172,7 +1178,7 @@ impl Renderer {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
+                    load,
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
