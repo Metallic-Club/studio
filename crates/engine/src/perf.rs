@@ -133,6 +133,9 @@ pub struct FrameSample {
     /// Bit `i` set when cached shadow cascade `i`'s map was built this frame from its static map and its moving
     /// casters. [`PerfStats::record`] fills it from the frame's draws.
     pub shadow_built: u8,
+    /// Bit `i` set when that build restored the static map only under its previous moving casters' footprints
+    /// rather than copying all of it (#133). [`PerfStats::record`] fills it from the frame's draws.
+    pub shadow_restored: u8,
     /// Shadow-atlas tiles drawn this frame ([`metallic_render::lights`]). [`PerfStats::record`] fills it from the
     /// frame's draws.
     pub light_tiles_redrawn: u32,
@@ -156,6 +159,7 @@ impl FrameSample {
             lights_ms: 0.0,
             shadow_redrawn: 0,
             shadow_built: 0,
+            shadow_restored: 0,
             light_tiles_redrawn: 0,
             render_scale: 1.0,
         }
@@ -255,6 +259,8 @@ pub struct PerfSummary {
     pub gpu_shadow_build_ms: [Distribution; MAX_CASCADES],
     /// In how many of the summarised frames each cached shadow cascade's map was built.
     pub shadow_builds: [u32; MAX_CASCADES],
+    /// How many of those builds restored footprints rather than copying the whole static map (#133).
+    pub shadow_restores: [u32; MAX_CASCADES],
     /// GPU time of the local lights' shadow atlas pass, the frames that kept every tile counting 0.
     pub gpu_light_shadow_ms: Distribution,
     /// In how many of the summarised frames atlas tiles were drawn (the others kept every tile).
@@ -288,8 +294,9 @@ impl PerfSummary {
     /// `low_1pct_fps`, `spikes` (`count`, `over_ms`, `worst_ms`), `cpu_ms` (`script`, `physics`, `render`, `cull`, `lights`), `render_scale` (the scale frames
     /// were drawn at), `gpu_ms` (`frames`, `total`, `passes` by name, `shadow` and `shadow_build` per cascade, `light_shadows`), `draws` (with `culled`, and
     /// `levels`: the instances drawn at each level of detail, full detail first), `shadow`
-    /// (the last frame's `cascades`, `casters` and `moving` per cascade, `draws`, `instances` and `triangles`, and per
-    /// cascade the summarised frames its casters were drawn in, `redraws`, and its map built in, `builds`) and
+    /// (the last frame's `cascades`, `casters`, `moving` and `restored_texels` per cascade, `draws`, `instances` and
+    /// `triangles`, and per cascade the summarised frames its casters were drawn in, `redraws`, its map built in,
+    /// `builds`, and built by restoring footprints in, `restores`) and
     /// `lights` (the last frame's light counts, clusters and atlas, and over the
     /// summarised frames `atlas_frames` and `tiles_redrawn`). Each distribution is `{"mean", "p50", "p99", "max"}`.
     pub fn write_json_members(&self, out: &mut String) {
@@ -385,13 +392,15 @@ impl PerfSummary {
         let list = |values: &[u32]| values.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         write!(
             out,
-            "\"shadow\":{{\"cascades\":{},\"redraws\":[{}],\"builds\":[{}],\"casters\":[{}],\"moving\":[{}],\
-             \"draws\":{},\"instances\":{},\"triangles\":{}}},",
+            "\"shadow\":{{\"cascades\":{},\"redraws\":[{}],\"builds\":[{}],\"restores\":[{}],\"casters\":[{}],\
+             \"moving\":[{}],\"restored_texels\":[{}],\"draws\":{},\"instances\":{},\"triangles\":{}}},",
             cascades,
             list(&self.shadow_redraws[..cascades.min(MAX_CASCADES)]),
             list(&self.shadow_builds[..cascades.min(MAX_CASCADES)]),
+            list(&self.shadow_restores[..cascades.min(MAX_CASCADES)]),
             list(&d.shadow_casters[..cascades.min(MAX_CASCADES)]),
             list(&d.shadow_moving[..cascades.min(MAX_CASCADES)]),
+            list(&d.shadow_restored_texels[..cascades.min(MAX_CASCADES)]),
             d.shadow_draws,
             d.shadow_instances,
             d.shadow_triangles
@@ -592,6 +601,7 @@ impl PerfStats {
         self.frames.push(FrameSample {
             shadow_redrawn: draws.shadow_redrawn,
             shadow_built: draws.shadow_built,
+            shadow_restored: draws.shadow_restored,
             light_tiles_redrawn: draws.lights.tiles_redrawn,
             lights_ms: ms(draws.lights.total_cpu_time()),
             ..sample
@@ -692,6 +702,7 @@ impl PerfStats {
             for cascade in 0..MAX_CASCADES {
                 summary.shadow_redraws[cascade] += u32::from(frame.shadow_redrawn >> cascade & 1);
                 summary.shadow_builds[cascade] += u32::from(frame.shadow_built >> cascade & 1);
+                summary.shadow_restores[cascade] += u32::from(frame.shadow_restored >> cascade & 1);
             }
             summary.light_shadow_frames += u32::from(frame.light_tiles_redrawn > 0);
             summary.light_tiles_redrawn += frame.light_tiles_redrawn;

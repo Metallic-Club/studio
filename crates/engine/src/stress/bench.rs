@@ -97,6 +97,9 @@ pub struct BenchOptions {
     pub frame_target_ms: Option<f32>,
     /// `DirectionalLight`s added to the scene (#123, [`StressScene::add_directional_lights`]); none by default.
     pub directional_lights: usize,
+    /// Keep only this many of the scene's moving parts moving ([`StressScene::keep_moving`]); all of them when
+    /// `None`.
+    pub moving: Option<usize>,
 }
 
 /// One step of the effect-toggle cycle ([`BenchOptions::toggle_effects`]).
@@ -200,6 +203,7 @@ impl BenchOptions {
             toggle_effects: None,
             frame_target_ms: None,
             directional_lights: 0,
+            moving: None,
         }
     }
 }
@@ -394,6 +398,9 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     scene
         .add_directional_lights(engine.data_model_mut(), options.directional_lights)
         .map_err(crate::stress::StressError::from)?;
+    if let Some(moving) = options.moving {
+        scene.keep_moving(moving);
+    }
     if let Some(field_of_view) = options.field_of_view {
         scene
             .set_field_of_view(engine.data_model_mut(), field_of_view)
@@ -738,9 +745,11 @@ mod tests {
         summary.gpu_cascades = 3;
         summary.shadow_redraws = [10, 10, 1, 0];
         summary.shadow_builds = [0, 0, 9, 0];
+        summary.shadow_restores = [0, 0, 8, 0];
         summary.draws.shadow_cascades = 3;
         summary.draws.shadow_casters = [5, 6, 7, 0];
         summary.draws.shadow_moving = [0, 0, 2, 0];
+        summary.draws.shadow_restored_texels = [0, 0, 121, 0];
         let report = BenchReport {
             scene: StressKind::Parts10k,
             seed: 1,
@@ -835,8 +844,8 @@ mod tests {
         assert!(json.contains("\"shadow_build\":[{\"mean\":"), "{json}");
         assert!(
             json.contains(
-                "\"shadow\":{\"cascades\":3,\"redraws\":[10,10,1],\"builds\":[0,0,9],\"casters\":[5,6,7],\
-                 \"moving\":[0,0,2]"
+                "\"shadow\":{\"cascades\":3,\"redraws\":[10,10,1],\"builds\":[0,0,9],\"restores\":[0,0,8],\
+                 \"casters\":[5,6,7],\"moving\":[0,0,2],\"restored_texels\":[0,0,121]"
             ),
             "{json}"
         );

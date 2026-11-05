@@ -731,7 +731,84 @@ then: not centred on the camera, one-texel steps).
   1.35 to 1.48 ms of GPU for the all-dynamic far cascade, measured while the machine was busy with builds; on a quiet
   machine it is the 0.44 ms here.)
 - **What would cut the copy**: restoring only the texels last frame's moving casters covered, instead of the whole
-  map, would make the build cost scale with the movers' footprint (#133).
+  map, would make the build cost scale with the movers' footprint (#133, below).
+
+### Restoring the moving casters' footprints (#133)
+
+The far cascade's build pass no longer copies the whole static map when the map already holds it. A map built
+since the static map was last drawn holds the static map and the moving casters it was built with, so the next build
+**loads** the map, copies the static map back only under those casters' **footprints** (one rectangle per caster,
+drawn as one instanced draw from a vertex buffer of clip-space corners, with the copy's fragment shader), then draws
+this frame's moving casters. The whole map is still copied, as before, when the static map was drawn again (or the map
+is new), and when the footprints add up to more texels than the map holds.
+
+A footprint is the square around the caster's bounding sphere as the cascade's orthographic projection sees it, and
+a texel more on every side. It is conservative: a triangle covers a texel only when it holds the texel's centre (so
+does the rectangle), and every built-in mesh at every level of detail lies inside the unit cube the bounding sphere
+passes through the corners of, so whatever level the cascade draws a caster at (#80), it stays inside. The slope-scaled
+depth bias of #126 moves only the depth a caster writes, never which texels, and the receivers' filter only reads
+the map: a texel no moving caster wrote holds the static map's depth however far the taps reach. The unit test
+`a_footprint_holds_its_caster_at_every_level_of_detail` (`shadow/maps.rs`) places every mesh and level, turned and
+stretched, and checks every vertex lands a texel inside its footprint. The footprints are found with the moving
+casters (one matrix product and a few additions each: about 9 µs a frame for 738 of them, timed on their own), kept
+in lists that stop growing once they have held every moving caster, and uploaded with the casters' lists in the same
+staging write (one more buffer copy).
+
+The stress example reports, per cascade, the frames whose build restored footprints (`shadow.restores`) and the
+texels the last frame's restore drew (`shadow.restored_texels`, overlaps counted as often as drawn); `--moving <n>`
+keeps only the first `n` of the scene's moving parts moving.
+
+**2026-11-04**, same machine and settings as the tables above (DX12, `AutoNoVsync`, 1,000 frames after 120, seed
+1), `parts_100k`, branch `133-cascade-footprints`. "Copy" is the same build with the restore switched off (a
+throwaway switch, not committed), which builds the map as #121 does. The far movers are the moving casters in the far
+cascade in the last frame (`--moving 1`, `--moving 13` and all 1,000 moving parts); the footprint is the texels the
+last frame's restore drew. Build times are the mean over the measured frames; GPU and frame are p50, in ms.
+
+| Map | Camera | Far movers | Footprint (texels) | Build, copy | Build, restore | GPU, copy | GPU, restore | Frame, copy | Frame, restore |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2048² | still | 1 | 276 | 0.140 | 0.0001 | 0.718 | 0.569 | 0.840 | 0.714 |
+| 2048² | still | 10 | 1,804 | 0.140 | 0.0001 | 0.719 | 0.571 | 0.843 | 0.711 |
+| 2048² | still | 738 | 124,980 (3.0%) | 0.141 | 0.011 | 0.721 | 0.583 | 0.933 | 0.904 |
+| 2048² | moving | 1 | 276 | 0.139 | 0.0006 | 0.733 | 0.584 | 0.860 | 0.727 |
+| 2048² | moving | 9 | 1,660 | 0.139 | 0.0007 | 0.733 | 0.586 | 0.863 | 0.741 |
+| 2048² | moving | 716 | 123,660 (2.9%) | 0.140 | 0.013 | 0.733 | 0.595 | 0.910 | 0.900 |
+| 3072² (Ultra) | still | 1 | 573 | 0.356 | 0.0001 | 1.037 | 0.673 | 1.160 | 0.805 |
+| 3072² (Ultra) | still | 10 | 3,680 | 0.357 | 0.0008 | 1.040 | 0.674 | 1.161 | 0.804 |
+| 3072² (Ultra) | still | 738 | 253,850 (2.7%) | 0.367 | 0.038 | 1.049 | 0.705 | 1.183 | 0.921 |
+| 3072² (Ultra) | moving | 1 | 573 | 0.355 | 0.0029 | 1.056 | 0.693 | 1.175 | 0.824 |
+| 3072² (Ultra) | moving | 9 | 3,381 | 0.355 | 0.0034 | 1.056 | 0.694 | 1.176 | 0.827 |
+| 3072² (Ultra) | moving | 716 | 251,375 (2.7%) | 0.365 | 0.040 | 1.065 | 0.722 | 1.192 | 0.896 |
+
+A first round of all 24 runs, with the footprints rounded out to whole texels (about 14% more texels), agreed within
+0.003 ms on every build time.
+
+- **The build scales with the footprint, not the map** (the done-when): 0.140 ms whatever moves with the copy; with
+  the restore, 0.0001 ms for one far mover, 0.011 ms for 738 of them covering 3% of the map. The walking camera's
+  means include its 8 frames whose static map was drawn again, which copy the whole map as before (`shadow.restores`
+  992 of 1,000 builds).
+- **Against #121's numbers**: its build took 0.151 ms (0.144 of it the copy) and added 0.16 ms to the GPU frame over
+  `main`; now the 738 far movers cost 0.011 ms, and the frame's GPU time is 0.583 ms against the copy's 0.721. (The
+  opaque pass is about 0.2 ms cheaper than in #121's table since #80's levels of detail.)
+- **Ultra** gains most: its 3072² copy took 0.36 ms, more than the 2.25 times 2048²'s that its texels would say, and
+  the restore takes 0.04 ms for 738 movers, so the GPU frame drops by a third (1.049 to 0.705 ms).
+- **Frame time** follows where the GPU bounds it (few movers: 0.84 to 0.71 ms); with every mover the frame is bound
+  by the render CPU (0.75 ms), which the restore does not change: 0.776 and 0.752 ms p50 with the copy and the restore
+  (still), 0.753 and 0.746 (walking), within run-to-run noise, and the cull column the same.
+- **The fallback**: with the footprints made larger on purpose (a throwaway scale on their radius, every frame
+  restoring), the 738 movers' restore took 0.026 ms at 11% of the map's texels, 0.042 at 23%, 0.071 at 39%, 0.092
+  at 59%, 0.111 at 84% and 0.138 at 146%, against 0.141 for the copy: a texel restored costs about what a texel copied
+  does, plus the rectangles' overlap. So the whole map is copied once the footprints add up to more than the map
+  (`MAX_RESTORE_SHARE`, 1.0), short of the measured 1.4 for GPUs whose rectangles cost more. On a tiled GPU the
+  restore's load reads the whole map into tile memory, as the copy's reads do; there is no Mobile-tier device to
+  measure that on yet.
+- **No stale shadow**: `a_moving_part_leaves_no_stale_shadow_behind` (`tests/shadows.rs`) moves an 80 m-away cube
+  2 m a frame across 30 m of the far cascade, every frame restoring (about 2,600 texels), and compares the image with
+  a fresh renderer's of the same scene, whose map is a whole copy of the static map with the cube on top: they are
+  equal pixel for pixel, on both instance paths (and on DX12, Vulkan and GL here). With the restore draw left out the
+  images differ by up to 37 levels, and with the footprints' radius halved by 35.
+- **Allocations**: `a_restoring_cached_cascade_frame_allocates_nothing_beyond_wgpus_own` (`tests/no_alloc.rs`)
+  compares frames that restore (a still sun, balls moving in every frame) with the same wgpu calls by hand, for 4 and
+  24 moving balls.
 
 ### Levels of detail (#80)
 

@@ -12,7 +12,8 @@
 //! times show the work), `--overlay` (show the performance overlay while running), `--no-cull` (draw every part, the
 //! numbers before culling), `--view-distance <m>` and `--min-screen-size <px>` (the culling thresholds; infinite and
 //! 1 by default), `--fov <degrees>` (narrow or widen the scene's camera), `--moving-camera` (walk the camera through
-//! the scene instead of keeping it still), `--no-shadows`, `--shadow-cascades <n>`, `--shadow-resolution <texels>`,
+//! the scene instead of keeping it still), `--moving <n>` (keep only the first `n` of the scene's moving parts
+//! moving, to show how a cost scales with them), `--no-shadows`, `--shadow-cascades <n>`, `--shadow-resolution <texels>`,
 //! `--shadow-distance <m>` and `--dynamic-cascades <n>` (the sun's shadows; 3, 2048, 256 and 2 by default),
 //! `--lights <low|medium|high|off>` (the point and spot lights' settings as the presets will set them; medium by
 //! default), `--light-budget <n>`, `--lights-per-cluster <n>`, `--shadowed-lights <n>` and `--no-light-shadows`,
@@ -61,6 +62,7 @@ fn usage() -> String {
     format!(
         "usage: stress --scene <name|all> [--frames N] [--warm-up N] [--seed N] [--size WxH] [--vsync] [--overlay]\n\
          \x20             [--no-cull] [--view-distance M] [--min-screen-size PX] [--fov DEGREES] [--moving-camera]\n\
+         \x20             [--moving N]\n\
          \x20             [--no-shadows] [--shadow-cascades N] [--shadow-resolution N] [--shadow-distance M]\n\
          \x20             [--dynamic-cascades N] [--lights low|medium|high|off] [--light-budget N]\n\
          \x20             [--lights-per-cluster N] [--shadowed-lights N] [--no-light-shadows]\n\
@@ -190,6 +192,9 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             "--directional-lights" => {
                 options.directional_lights =
                     usize::try_from(number(it.next(), "--directional-lights")?).map_err(|e| e.to_string())?;
+            }
+            "--moving" => {
+                options.moving = Some(usize::try_from(number(it.next(), "--moving")?).map_err(|e| e.to_string())?);
             }
             "--directional-budget" => {
                 options.lights.directional_lights =
