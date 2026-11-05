@@ -77,7 +77,7 @@ mod textures;
 mod timing;
 mod upscale;
 
-pub use context::{Capabilities, ContextOptions, MsaaSampleCounts, RenderContext};
+pub use context::{Capabilities, ContextOptions, DescriptorHeapTurn, MsaaSampleCounts, RenderContext};
 pub use cull::{Casters, CullSettings, CullStats, CullView, Frustum, VisibleSet};
 pub use error::RenderError;
 pub use graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass, PostChain};

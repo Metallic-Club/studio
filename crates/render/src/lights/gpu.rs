@@ -15,6 +15,7 @@ use super::directional::{FrameSuns, frame_suns};
 use super::select::{SelectView, influence, select};
 use super::{LIGHT_INTENSITY, LightSettings, LightStats, MAX_GPU_LIGHTS, MAX_SHADOW_TILES, SPOT_SOFTNESS};
 use crate::GpuScene;
+use crate::context::in_heap_turn;
 use crate::cull::{CullSettings, CullView};
 use crate::lod::LodView;
 use crate::parts::{Camera, MeshPool};
@@ -101,38 +102,41 @@ impl LightBuffers {
                 mapped_at_creation: false,
             })
         };
+        // A texture and its view, in a descriptor-heap turn.
         let texture = |label, width, height, format, usage| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
+            in_heap_turn(|| {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                (texture, view)
             })
         };
-        let cluster_texture = texture(
+        let (cluster_texture, cluster_view) = texture(
             "metallic light clusters",
             TEXTURE_WIDTH,
             TEXTURE_HEIGHT,
             wgpu::TextureFormat::R32Uint,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
-        let cluster_view = cluster_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let no_atlas = texture(
+        let (_, no_atlas) = texture(
             "metallic shadow atlas (none yet)",
             1,
             1,
             SHADOW_FORMAT,
             wgpu::TextureUsages::TEXTURE_BINDING,
-        )
-        .create_view(&wgpu::TextureViewDescriptor::default());
+        );
         Self {
             light_buffer: uniform("metallic local lights", size_of::<GpuLight>() * MAX_GPU_LIGHTS),
             tile_buffer: uniform("metallic shadow atlas tiles", TILE_SIZE * MAX_SHADOW_TILES),

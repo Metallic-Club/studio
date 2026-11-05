@@ -8,7 +8,7 @@ use metallic_core::{DataModel, Id};
 use super::instance::{GpuInstance, MeshKind};
 use super::sync::InstanceScene;
 use super::{MAX_UPLOAD_GAP, Region, RenderComponents, SyncStats};
-use crate::context::Submitter;
+use crate::context::{Submitter, in_heap_turn};
 use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 use crate::lod::MAX_LOD_LEVELS;
 use crate::{RenderContext, RenderError};
@@ -924,9 +924,11 @@ impl Scatter {
             },
             count: None,
         };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("metallic instance scatter"),
-            entries: &[storage(0, true), storage(1, false), storage(2, false)],
+        let layout = in_heap_turn(|| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("metallic instance scatter"),
+                entries: &[storage(0, true), storage(1, false), storage(2, false)],
+            })
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("metallic instance scatter"),

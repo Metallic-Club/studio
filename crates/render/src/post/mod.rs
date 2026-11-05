@@ -40,6 +40,7 @@ pub(crate) use bloom::Bloom;
 pub(crate) use finish::{Finish, FinishParams};
 pub(crate) use mlaa::Mlaa;
 
+use crate::context::in_heap_turn;
 use crate::pipelines::{Pipeline, PipelineKey, Recipe};
 use crate::{MsaaSampleCounts, PassId, PostChain, RenderContext};
 
@@ -527,19 +528,21 @@ fn post_texture(
     format: wgpu::TextureFormat,
     usage: wgpu::TextureUsages,
 ) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: mips,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
+    in_heap_turn(|| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
     })
 }
 

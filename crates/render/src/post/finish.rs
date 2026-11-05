@@ -2,6 +2,7 @@
 //! render scale's upscale fused in (`finish.wgsl`).
 
 use super::{FullScreen, sampler_entry, texture_entry, uniform_entry};
+use crate::context::in_heap_turn;
 
 /// The tone curve the finish pass applies to each channel after exposure (`tone` in `finish.wgsl`): the identity up
 /// to 0.85, then a shoulder with the same slope there that approaches 1, so values the output used to clip keep a
@@ -80,9 +81,11 @@ impl Finish {
             if mlaa {
                 entries.push(texture_entry(4, false));
             }
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some(ENTRY_POINTS[variant]),
-                entries: &entries,
+            in_heap_turn(|| {
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some(ENTRY_POINTS[variant]),
+                    entries: &entries,
+                })
             })
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
