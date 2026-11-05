@@ -3,6 +3,9 @@
 //! It lights everything, however far, so it hides the `Range` it inherits from `Light`. Hiding keeps the slot: the
 //! property's [`PropId`](metallic_core::PropId) is the same as in every other light, but scripts and Studio no longer
 //! see it by name. Only the light's rotation matters; its position does not.
+//!
+//! The renderer draws it as an extra sun beside `Lighting`'s (#123). Only `Lighting`'s sun casts directional shadows
+//! for now, so its `Shadows` is ignored (#166).
 
 use metallic_core::{ClassDesc, ComponentDesc};
 
@@ -17,7 +20,8 @@ pub static COMPONENT: ComponentDesc = ComponentDesc::new("DirectionalLightEmitte
 pub static CLASS: ClassDesc = ClassDesc::new("DirectionalLight", Some("Light"))
     .describe(
         "Parallel light from one direction over the whole world, like the sun. It points along its CFrame's forward \
-         direction and has no range.",
+         direction and has no range. It adds to Lighting's sun; only that sun casts shadows for now, so Shadows is \
+         ignored here.",
     )
     .category(CATEGORY)
     .creatable()

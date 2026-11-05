@@ -1,5 +1,6 @@
 //! `Lighting` driven from Luau reaches the renderer (#81): a script that changes `ClockTime` moves the sun the
-//! renderer lights with, and the renderer reads `Lighting` again only in frames after it changed.
+//! renderer lights with, and the renderer reads `Lighting` again only in frames after it changed. A
+//! `DirectionalLight` a script makes with `Instance.new` reaches the scene's extra suns (#123).
 //!
 //! It runs headless and needs no GPU: it follows the path [`metallic_engine::SceneRenderer`] takes each frame (the
 //! scene's sync on its change consumer, which watches the `Lighting` service, then [`LightingReader`] when the sync
@@ -183,6 +184,58 @@ fn every_lighting_property_reaches_the_renderer() {
     assert_eq!(lit.outdoor_ambient, metallic_core::Color3::new(0.4, 0.4, 0.4));
     assert_eq!(lit.sky_color, metallic_core::Color3::new(0.2, 0.3, 0.9));
     assert_eq!(lit.horizon_color, metallic_core::Color3::new(0.9, 0.8, 0.7));
+}
+
+#[test]
+fn a_directional_light_made_by_a_script_reaches_the_renderer() {
+    let mut engine = engine();
+    engine.start().expect("start");
+    let mut scene = watching_scene(engine.data_model_mut());
+    let mut reader = LightingReader::new();
+    render_side(&mut scene, &mut reader, engine.data_model_mut());
+    assert!(scene.directional_lights().is_empty());
+    probe(
+        &mut engine,
+        r#"(function()
+            local sun = Instance.new("DirectionalLight")
+            sun.Name = "Sun2"
+            sun.Brightness = 1.5
+            sun.Color = Color3.new(1, 0.5, 0.25)
+            sun.CFrame = CFrame.lookAt(Vector3.new(0, 0, 0), Vector3.new(0, -1, -1))
+            sun.Parent = workspace
+            return true
+        end)()"#,
+    );
+    assert_no_errors(&engine);
+    render_side(&mut scene, &mut reader, engine.data_model_mut());
+    let suns = scene.directional_lights();
+    assert_eq!(
+        (suns.len(), scene.light_count()),
+        (1, 0),
+        "an extra sun, not a local light"
+    );
+    let sun = suns[0];
+    assert!(sun.shines(), "{sun:?}");
+    assert_eq!(sun.brightness, 1.5);
+    assert!(
+        sun.direction.abs_diff_eq(Vec3::new(0.0, -1.0, -1.0).normalize(), 1e-5),
+        "{sun:?}"
+    );
+    // `Range` is hidden on a DirectionalLight: scripts do not see it.
+    assert_eq!(
+        probe(&mut engine, "pcall(function() return workspace.Sun2.Range end)"),
+        "false"
+    );
+    probe(
+        &mut engine,
+        "(function() workspace.Sun2.Enabled = false return true end)()",
+    );
+    render_side(&mut scene, &mut reader, engine.data_model_mut());
+    assert!(!scene.directional_lights()[0].shines());
+    probe(&mut engine, "(function() workspace.Sun2:Destroy() return true end)()");
+    render_side(&mut scene, &mut reader, engine.data_model_mut());
+    assert!(scene.directional_lights().is_empty());
+    assert_no_errors(&engine);
 }
 
 fn sun_direction_of(engine: &Engine<CollectOutput>) -> Vec3 {

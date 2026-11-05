@@ -12,7 +12,8 @@ use crate::scene::{LightKind, SceneLight};
 pub(crate) fn influence(light: &SceneLight) -> (Vec3, f32) {
     let range = light.range;
     match light.kind {
-        LightKind::Point => (light.position, range),
+        // Directional lights are kept apart (`InstanceScene::directional_lights`) and never selected here.
+        LightKind::Point | LightKind::Directional => (light.position, range),
         LightKind::Spot => {
             let half = (light.angle * 0.5).to_radians().clamp(0.0, std::f32::consts::FRAC_PI_2);
             let (sin, cos) = half.sin_cos();

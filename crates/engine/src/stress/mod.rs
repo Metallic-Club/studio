@@ -232,6 +232,38 @@ impl StressScene {
         self.view.1
     }
 
+    /// Adds `count` `DirectionalLight`s to `Workspace` (#123: extra suns), each from another direction above the
+    /// scene, in another warm or cool tint, `Brightness` 0.6 to 1 (the first the brightest). For measuring what extra
+    /// suns cost; they count among [`StressScene::lights`].
+    pub fn add_directional_lights(&mut self, dm: &mut DataModel, count: usize) -> Result<(), DmError> {
+        const TINTS: [[f32; 3]; 4] = [[1.0, 0.95, 0.85], [0.75, 0.85, 1.0], [1.0, 0.8, 0.6], [0.85, 1.0, 0.9]];
+        let registry = dm.registry().clone();
+        let (Some(class), Some(workspace_class)) =
+            (registry.class_id("DirectionalLight"), registry.class_id("Workspace"))
+        else {
+            return Ok(());
+        };
+        let Some(workspace) = dm.service(workspace_class) else {
+            return Ok(());
+        };
+        for i in 0..count {
+            let turn = i as f32 * 2.4;
+            let forward = Vec3::new(turn.cos(), -1.2 - 0.2 * (i % 3) as f32, turn.sin());
+            let light = dm.create(class)?;
+            dm.set_by_name(
+                light,
+                "CFrame",
+                Value::CFrame(CFrame::look_at(Vec3::ZERO, forward, Vec3::Y)),
+            )?;
+            let [r, g, b] = TINTS[i % TINTS.len()];
+            dm.set_by_name(light, "Color", Value::Color3(Color3::new(r, g, b)))?;
+            dm.set_by_name(light, "Brightness", Value::Number(1.0 - 0.1 * (i % 5) as f64))?;
+            dm.set_parent(light, Some(workspace))?;
+            self.lights += 1;
+        }
+        Ok(())
+    }
+
     /// Changes the camera's vertical field of view to `field_of_view` degrees (a narrower view sees fewer parts:
     /// how culling scales is measured this way) and counts the parts in view again.
     pub fn set_field_of_view(&mut self, dm: &mut DataModel, field_of_view: f32) -> Result<(), DmError> {

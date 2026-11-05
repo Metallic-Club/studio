@@ -51,11 +51,13 @@
 //! instances; when the origin moves, or the scene is rebuilt, or more than [`MAX_SHADOW_CHANGES`] pile up, the scene
 //! bumps [`InstanceScene::shadow_epoch`] instead, which redraws every cascade.
 //!
-//! # Local lights
+//! # Lights
 //!
 //! `PointLight`s and `SpotLight`s in the world are kept as dense records ([`SceneLight`], [`InstanceScene::lights`])
 //! from the same change consumer, with their world placement resolved (a light in a part follows the part). They
 //! have no slot: the renderer selects, clusters and uploads the ones it draws every frame ([`crate::lights`]).
+//! `DirectionalLight`s are kept the same way in a set of their own ([`InstanceScene::directional_lights`]): they
+//! reach everywhere, so they are drawn beside the sun as extra suns, never clustered.
 
 mod components;
 mod gpu;
@@ -167,6 +169,7 @@ pub struct SyncStats {
     pub demoted: u32,
     /// Watched instances ([`InstanceScene::watch`], such as `Lighting`) that changed: read them again.
     pub watched: u32,
-    /// Local lights that appeared, changed, left, or were placed again because the part they follow moved.
+    /// Lights (local or directional) that appeared, changed, left, or were placed again because the part they
+    /// follow moved.
     pub lights: u32,
 }

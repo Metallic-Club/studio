@@ -95,6 +95,8 @@ pub struct BenchOptions {
     /// The frame time frames should take, which the spike counter measures against (a frame over twice it, after
     /// the first 2 s, is a spike); a 60 fps frame by default.
     pub frame_target_ms: Option<f32>,
+    /// `DirectionalLight`s added to the scene (#123, [`StressScene::add_directional_lights`]); none by default.
+    pub directional_lights: usize,
 }
 
 /// One step of the effect-toggle cycle ([`BenchOptions::toggle_effects`]).
@@ -197,6 +199,7 @@ impl BenchOptions {
             merge_scene_passes: true,
             toggle_effects: None,
             frame_target_ms: None,
+            directional_lights: 0,
         }
     }
 }
@@ -388,6 +391,9 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
     let mut engine = Engine::new(config)?;
     let build_start = Instant::now();
     let mut scene = StressScene::build(engine.data_model_mut(), options.scene, options.seed)?;
+    scene
+        .add_directional_lights(engine.data_model_mut(), options.directional_lights)
+        .map_err(crate::stress::StressError::from)?;
     if let Some(field_of_view) = options.field_of_view {
         scene
             .set_field_of_view(engine.data_model_mut(), field_of_view)

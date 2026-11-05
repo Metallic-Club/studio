@@ -2,7 +2,9 @@
 //! light against committed reference images, on both instance paths; the light's range as a hard edge; a light in a
 //! part following it; the shadow atlas kept while nothing changes and drawn again when a caster moves; and the
 //! budget fading lights rather than popping them; and a cube resting on the floor under a spot, a near and a far
-//! point light, shadowed right up to its foot with no acne on the lit surfaces, at every preset (#126). Skips when
+//! point light, shadowed right up to its foot with no acne on the lit surfaces, at every preset (#126); and a
+//! `DirectionalLight` drawn as an extra sun from its forward direction against a reference, following its part,
+//! ignoring `Shadows`, and kept to the preset's budget by brightness (#123). Skips when
 //! the machine has no adapter (see `support::gpu`). `METALLIC_SAVE_IMAGES=1` saves the contact tests' images to the
 //! test's temporary folder.
 //!
@@ -430,6 +432,258 @@ fn a_light_in_a_part_follows_it() {
     game.dm.set_parent(lamp, None).expect("unparented");
     frames.frame(&context, &mut game);
     assert_eq!(frames.renderer.light_stats().in_scene, 0);
+}
+
+/// A `DirectionalLight` under `parent` whose rays go along `forward` (its CFrame's −Z, relative to a part parent).
+fn directional(game: &mut Game, parent: Id, forward: Vec3, color: [u8; 3], brightness: f64) -> Id {
+    let dm = &mut game.dm;
+    let class = dm.registry().class_id("DirectionalLight").expect("DirectionalLight");
+    let id = dm.create(class).expect("a light");
+    let up = if forward.normalize().y.abs() > 0.99 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::look_at(Vec3::ZERO, forward, up)))
+        .expect("CFrame");
+    let [r, g, b] = color;
+    dm.set_by_name(id, "Color", Value::Color3(Color3::from_rgb_u8(r, g, b)))
+        .expect("Color");
+    dm.set_by_name(id, "Brightness", Value::Number(brightness))
+        .expect("Brightness");
+    dm.set_parent(id, Some(parent)).expect("parented");
+    id
+}
+
+/// The night floor with a 2 m white cube at the origin and a red ball beside it, lit by a warm `DirectionalLight`
+/// whose rays come down from the front right (+X, +Z): the cube's top and front (+Z) face are lit, the ball shaded
+/// on its far side.
+fn directional_game() -> (Game, Id) {
+    let mut game = night_floor();
+    game.part(
+        Look::new("Block", "Plastic", [230, 230, 230]),
+        Vec3::splat(2.0),
+        CFrame::new(Vec3::new(0.0, 1.0, 0.0)),
+    );
+    game.part(
+        Look::new("Ball", "SmoothPlastic", [196, 40, 28]),
+        Vec3::splat(2.0),
+        CFrame::new(Vec3::new(-4.0, 1.0, 2.0)),
+    );
+    let ws = game.workspace;
+    let id = directional(&mut game, ws, Vec3::new(-0.5, -1.0, -0.6), [255, 236, 200], 1.5);
+    (game, id)
+}
+
+/// A `DirectionalLight` in `Workspace` lights the scene from its forward direction, like a second sun (#123), on both
+/// instance paths and against a reference; pointed up it lights nothing; its colour is its light's; and its
+/// `Shadows`, which only the sun casts, changes nothing.
+#[test]
+fn a_directional_light_lights_the_scene_from_its_forward_direction() {
+    let Some(pixels) = both_paths("lights_directional", || directional_game().0) else {
+        return;
+    };
+    let Some(context) = gpu() else { return };
+    let (game, _) = directional_game();
+    let settings = LightSettings::default();
+    let render_with = |change: &dyn Fn(&mut Game, Id)| {
+        let (mut game, id) = directional_game();
+        change(&mut game, id);
+        render(&context, &mut game, settings)
+    };
+    let set = |game: &mut Game, id: Id, name: &str, value: Value| game.dm.set_by_name(id, name, value).expect(name);
+    let dark = render_with(&|game, id| set(game, id, "Enabled", Value::Bool(false)));
+    let floor = |pixels: &[[u8; 4]]| floor_level(&game, pixels, 4.0, -3.0);
+    let front = |pixels: &[[u8; 4]]| level(pixels, project(&game, Vec3::new(0.0, 1.0, 1.0)));
+    eprintln!(
+        "floor lit {:.1} dark {:.1}, the cube's front lit {:.1} dark {:.1}",
+        floor(&pixels),
+        floor(&dark),
+        front(&pixels),
+        front(&dark)
+    );
+    assert!(floor(&pixels) > floor(&dark) + 40.0, "the light lights the floor");
+    assert!(front(&pixels) > front(&dark) + 40.0, "and the face it reaches");
+
+    // Its rays going up: nothing faces them.
+    let up = render_with(&|game, id| {
+        set(
+            game,
+            id,
+            "CFrame",
+            Value::CFrame(CFrame::look_at(Vec3::ZERO, Vec3::new(0.5, 1.0, 0.6), Vec3::Y)),
+        );
+    });
+    assert!(
+        (floor(&up) - floor(&dark)).abs() < 1.5,
+        "a light pointing up lights no floor"
+    );
+    // Coming from behind the cube (rays towards +Z): the floor is lit, the cube's front face is not.
+    let behind = render_with(&|game, id| {
+        set(
+            game,
+            id,
+            "CFrame",
+            Value::CFrame(CFrame::look_at(Vec3::ZERO, Vec3::new(-0.5, -1.0, 0.6), Vec3::Y)),
+        );
+    });
+    eprintln!(
+        "lit from behind: floor {:.1}, the cube's front {:.1}",
+        floor(&behind),
+        front(&behind)
+    );
+    assert!(floor(&behind) > floor(&dark) + 40.0);
+    // (Bloom carries a little of the lit floor and top onto the face, #85.)
+    assert!(
+        front(&behind) < front(&dark) + 10.0,
+        "the face turned from the light stays dark"
+    );
+    assert!(front(&pixels) > front(&behind) + 40.0);
+    // A blue light lights blue.
+    let blue = render_with(&|game, id| set(game, id, "Color", Value::Color3(Color3::from_rgb_u8(40, 80, 255))));
+    let at = project(&game, Vec3::new(4.0, 0.0, -3.0));
+    let p = blue[(at.1 * SIZE + at.0) as usize];
+    assert!(p[2] > p[0] + 40, "{p:?}");
+    // `Shadows` on: ignored, only the sun casts directional shadows.
+    let shadows = render_with(&|game, id| set(game, id, "Shadows", Value::Bool(true)));
+    let diff = scenes::compare(&shadows, &pixels, 1);
+    assert!(diff.max <= 1, "{diff:?}");
+}
+
+/// The first frame of a scene with a `DirectionalLight` already shows it (#86, #123): on a cold start, with every
+/// background compile held back, it waits for the pipelines made with the extra suns and matches the steady image.
+#[test]
+fn the_first_frame_of_a_scene_with_a_directional_light_shows_it() {
+    let Some(context) = gpu() else { return };
+    let settings = LightSettings::default();
+    let steady = render(&context, &mut directional_game().0, settings);
+    let mut game = directional_game().0;
+    let mut cold = Frames::with(&context, &mut game, settings, false);
+    cold.frame(&context, &mut game);
+    let first = cold.pixels(&context);
+    let stats = cold.renderer.pipeline_stats();
+    assert_eq!(stats.failed, 0, "{stats:?}");
+    let diff = scenes::compare(&steady, &first, THRESHOLD);
+    assert!(
+        diff.over <= MAX_OVER && diff.mean <= MAX_MEAN,
+        "the first frame is not the steady one: {diff:?} ({stats:?})"
+    );
+    // Without the light the same frame is far from it.
+    let (mut dark, id) = directional_game();
+    dark.dm.set_by_name(id, "Enabled", Value::Bool(false)).expect("Enabled");
+    let unlit = render(&context, &mut dark, settings);
+    assert!(scenes::compare(&steady, &unlit, THRESHOLD).over > 10.0 * MAX_OVER);
+    // The extra suns' variants are compiled only for a scene that has them: nine more per MSAA count (inline, on
+    // OpenGL, every one is compiled up front).
+    let plain = Frames::new(&context, &mut night_floor(), settings)
+        .renderer
+        .pipeline_stats();
+    cold.renderer.pause_pipeline_compiles(false);
+    cold.renderer.wait_for_pipelines();
+    let sunny = cold.renderer.pipeline_stats().compiled;
+    if plain.background {
+        assert!(
+            sunny > plain.compiled && (sunny - plain.compiled).is_multiple_of(9),
+            "{plain:?} and {sunny} pipelines"
+        );
+    } else {
+        assert_eq!(sunny, plain.compiled);
+    }
+}
+
+/// A `DirectionalLight` in a part turns with it; one switched off, without brightness or out of the world lights
+/// nothing; and over the preset's budget the brightest are drawn.
+#[test]
+fn directional_lights_follow_their_part_and_the_budget_keeps_the_brightest() {
+    let Some(context) = gpu() else { return };
+    let mut game = night_floor();
+    let holder = game.part(
+        Look::new("Block", "Plastic", [90, 90, 90]),
+        Vec3::splat(0.5),
+        CFrame::new(Vec3::new(0.0, 30.0, 0.0)),
+    );
+    let id = directional(&mut game, holder, Vec3::new(0.0, -1.0, -0.2), [255, 255, 255], 2.0);
+    let mut frames = Frames::new(&context, &mut game, LightSettings::default());
+    frames.frame(&context, &mut game);
+    let stats = frames.renderer.light_stats();
+    assert_eq!(
+        (stats.directional_shining, stats.directional_drawn, stats.in_scene),
+        (1, 1, 0),
+        "one extra sun, no local light: {stats:?}"
+    );
+    let lit = floor_level(&game, &frames.pixels(&context), 2.0, -2.0);
+    let suns = frames.scene.scene().directional_lights();
+    assert!(
+        suns[0]
+            .direction
+            .abs_diff_eq(Vec3::new(0.0, -1.0, -0.2).normalize(), 1e-5)
+    );
+    // The part turns over: so does its light, which now points up.
+    game.dm
+        .set_by_name(
+            holder,
+            "CFrame",
+            Value::CFrame(CFrame::from_parts(
+                Vec3::new(0.0, 30.0, 0.0),
+                Quat::from_rotation_x(std::f32::consts::PI),
+            )),
+        )
+        .expect("CFrame");
+    frames.frame(&context, &mut game);
+    let turned = floor_level(&game, &frames.pixels(&context), 2.0, -2.0);
+    assert!(frames.scene.scene().directional_lights()[0].direction.y > 0.9);
+    assert!(lit > turned + 40.0, "{lit} against {turned}");
+    // Off, or without brightness: not drawn.
+    game.dm.set_by_name(id, "Enabled", Value::Bool(false)).expect("Enabled");
+    frames.frame(&context, &mut game);
+    assert_eq!(frames.renderer.light_stats().directional_drawn, 0);
+    game.dm.set_by_name(id, "Enabled", Value::Bool(true)).expect("Enabled");
+    game.dm
+        .set_by_name(id, "Brightness", Value::Number(0.0))
+        .expect("Brightness");
+    frames.frame(&context, &mut game);
+    assert_eq!(frames.renderer.light_stats().directional_drawn, 0);
+    // The part leaves the world: the light goes with it.
+    game.dm.set_parent(holder, None).expect("unparented");
+    frames.frame(&context, &mut game);
+    assert!(frames.scene.scene().directional_lights().is_empty());
+
+    // Three lights at Low, whose budget is one: the brightest is drawn, and the image is that light's alone.
+    let three = || {
+        let mut game = night_floor();
+        let ws = game.workspace;
+        directional(&mut game, ws, Vec3::new(1.0, -1.0, 0.0), [255, 255, 255], 0.5);
+        directional(&mut game, ws, Vec3::new(0.0, -1.0, -1.0), [255, 255, 255], 2.0);
+        directional(&mut game, ws, Vec3::new(-1.0, -1.0, 0.0), [40, 40, 255], 3.0);
+        game
+    };
+    let mut game = three();
+    let mut frames = Frames::new(&context, &mut game, LightSettings::LOW);
+    for _ in 0..2 {
+        frames.frame(&context, &mut game);
+    }
+    let stats = frames.renderer.light_stats();
+    assert_eq!(
+        (stats.directional_shining, stats.directional_drawn),
+        (3, 1),
+        "{stats:?}"
+    );
+    let mut brightest = night_floor();
+    let ws = brightest.workspace;
+    directional(&mut brightest, ws, Vec3::new(0.0, -1.0, -1.0), [255, 255, 255], 2.0);
+    let alone = render(&context, &mut brightest, LightSettings::LOW);
+    let diff = scenes::compare(&frames.pixels(&context), &alone, 1);
+    assert!(diff.max <= 1, "{diff:?}");
+    // High's budget of four draws all three.
+    assert_eq!(
+        {
+            let mut game = three();
+            let mut frames = Frames::new(&context, &mut game, LightSettings::HIGH);
+            frames.frame(&context, &mut game);
+            frames.renderer.light_stats().directional_drawn
+        },
+        3
+    );
 }
 
 /// A still frame keeps every atlas tile; a part moving near the light draws its tiles again, and only those that see
