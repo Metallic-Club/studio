@@ -143,8 +143,12 @@ thread_local! {
 /// exit code 2173 on CI, about once in 150 runs of `offscreen`, each time writing the first sampler of a new
 /// device's sampler heap. Plain Direct3D 12 shows it within seconds: 8 threads each creating a heap, writing a
 /// sampler at its start and releasing it hit it in every run, after 56 to 2110 heaps; with only the creations under
-/// one lock (writes and releases still free), never. Without the debug layer nothing keeps such a list (the
-/// device's methods are free-threaded), so release builds and machines without the layer are unaffected.
+/// one lock (writes and releases still free), never. Releases are not covered: small heaps, whose memory a new heap
+/// takes at once, are also lost when one is released while another is made, and wgpu releases a heap wherever the
+/// last reference to its layout or device goes. That still shows when many devices are made and dropped on many
+/// threads at once (`offscreen`'s `devices_set_up_on_many_threads_at_once`, which skips Direct3D 12 with
+/// validation for it). Without the debug layer nothing keeps such a list (the device's methods are free-threaded),
+/// so release builds and machines without the layer are unaffected.
 ///
 /// Only taken while the process has a Direct3D 12 device with validation (wgpu's debug layer; debug builds, or
 /// `WGPU_VALIDATION`). Otherwise it is one atomic load, and holds nothing. Taking it inside a turn this thread
