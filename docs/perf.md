@@ -1987,3 +1987,8 @@ runs the comparison on lavapipe and WARP. Two more tests in `tests/post.rs` hold
   it: 11 for the post chain where one bloom chain is compiled, 17 where the compute chain's levels are wider than the
   scene colour's (both chains). `tests/post.rs` switches effects and anti-aliasing every frame as before.
 - The perf gate's workloads (scene sync and cull) are untouched.
+- **WARP** (Windows CI): one PR run ended `tests/lights.rs` with `STATUS_HEAP_CORRUPTION`. Making bloom's compute
+  pipelines take #130's process-wide turn did not stop it: the renderer's test binaries 20 times with the turn gave one
+  crash (in `tests/lod.rs`), 10 without it none, and `main` 57 runs with 3 failures whose kind went unrecorded and none
+  of 30 recorded since. Without evidence for it the turn was taken out again; the crash rate (about 1 in 30 on this
+  branch) is too low to tell from `main`'s.
