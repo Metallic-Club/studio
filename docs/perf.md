@@ -932,8 +932,10 @@ with a damped step: from a frame drawn at scale `s` that took `t` ms the scale t
 detail and the lights' ranking keep the window's size, so the scale moves none of them; the light clusters follow
 the size drawn (`tests/resolution.rs` checks the lights land in the same places at half and double scale).
 
-**Auto's calibration** (`settings::Calibrator`) times the game's own first frames on the GPU: 10 frames at Ultra to
-settle (shadow maps, atlas and first uploads), then the median of the next 30 timed frames; Ultra is kept if it takes
+**Auto's calibration** as #84 made it (#139 replaced it with a fixed workload: see
+[Auto's calibration on a fixed workload](#autos-calibration-on-a-fixed-workload-139)) timed the game's own first
+frames on the GPU: 10 frames at Ultra to settle (shadow maps, atlas and first uploads), then the median of the next
+30 timed frames; Ultra is kept if it takes
 at most half a 60 fps frame (8.3 ms), otherwise High is measured the same way (at most 60%, 10 ms), then Medium (80%,
 13.3 ms), and Low is what is left. It reads the timestamps the renderer already takes, so it waits for nothing; a
 machine that takes Ultra is calibrated after about 45 frames (the Player on `many_lights` with vsync: at frame 50,
@@ -1692,3 +1694,107 @@ two rounds agreeing within 0.06 ms (passes within 0.01).
   four here) into a fixed array, under a microsecond, inside the lights' CPU time. The scene keeps them as it keeps
   the local lights (a second set of the same records, following a part like them); the parts' sync pays the same
   one test as before for lights (a flag now covering both sets), and all the rest is out of line.
+
+### Auto's calibration on a fixed workload (#139)
+
+#84's calibration timed the game's own first frames, so the tier depended on the first game played (a light one's
+calibration was kept for heavier ones), and on the GPU's clocks under vsync. Auto now times a fixed workload instead
+(`metallic_engine::calibration`, `settings::Calibrator`); the game's frames never enter the measurement.
+
+**The workload** is the `calibration` stress scene (seed 139, the same on every machine): 3,256 parts on a 120 m
+square (the city's mix of blocks, balls, cylinders and wedges, 299 of them see-through glass), 256 lamps (224 point
+lights and 32 spot lights, 16 with shadows) under the default `Lighting`'s sun, with 1% of the parts and an eighth of
+the lamps (every shadowed one among them) moving, so the near cascades, the far one's build and the shadowed lights'
+tiles are drawn every frame. 256 lights exceed Medium's budget (128) and High's (192), and 16 shadowed ones High's
+(8) and Ultra's (10), so every tier draws more than the one below it. A renderer of its own draws it into an
+offscreen 1920 × 1080 target (the resolution the tiers are sized for; a larger window is dynamic resolution's to
+absorb) in the window's format, with the post chain. Uncapped on the dev PC (DX12, `stress --scene calibration
+--preset <tier>`, 600 frames after 120, p50 in ms):
+
+| Tier | Ultra | High | Medium | Low |
+| --- | ---: | ---: | ---: | ---: |
+| GPU | 2.50 | 1.95 | 1.53 | 0.62 |
+| Opaque pass | 1.82 | 1.46 | 0.99 | 0.32 |
+| Lights' shadow atlas | 0.13 | 0.09 | 0.07 | 0.02 |
+
+**How it runs** (nothing on the frame path waits for the GPU or for a thread):
+
+- **It starts after the game's first frame**, once the game's renderer has compiled its lit pipelines (at most 2 s
+  later; `Renderer::lit_pipelines_ready`). The workload draws with the same shaders, which DX12 compiles once per
+  device and keeps: started with the game, the workload's FXC compiles of the same lit stages competed with the game's
+  first frame (`many_lights`' first frame 1,403 ms against 1,091 to 1,100 without) and its build took 0.8 to 0.9 s;
+  started after them, it takes 25 to 50 ms.
+- **It is built on a worker thread in three steps**, each started right after a game frame is presented: its game and
+  GPU scene, its renderer (at Low), its first frame. A new device memory block holds wgpu's allocator while the OS
+  clears it (#152), and a game frame writing a buffer then waits: built at once and at Ultra, the build gave the game
+  21 to 69 ms frames. At Low its first frame's textures are small; Ultra's (3 × 3072² cascades and their static map,
+  8x MSAA at 1080p) then arrive off the frame, one a frame, like any settings change's.
+- **The workload is drawn after each game frame presented**, as many frames back to back as fill the GPU time the game
+  leaves: the game's frame interval (the median of those seen while the workload was built, before it loads the GPU),
+  less the game's GPU time and 1.5 ms, at most 8 (the first 4 are timed, `TIMING_RING_SIZE`; the rest keep the GPU
+  busy). Their timestamps come back asynchronously like the game's (`Renderer::recent_gpu_timings` keeps the newest
+  four, so a batch collected at once loses none).
+- **Each tier** counts from 4 frames after its settings are drawn (its switch's pipelines and textures done), then 16
+  frames, fewer when more than three quarters are over its share; its cost is their **lower quartile**. Ultra, High
+  and Medium are kept at #84's shares of a 60 fps frame (8.3, 10 and 13.3 ms), Low is what is left.
+- **The game** draws at Medium meanwhile, with Auto's dynamic resolution, and switches once, to the tier chosen, when
+  it is done, through #152's off-the-frame path. The workload's renderer is dropped then.
+
+**Clocks.** The first version drew batches of up to 8 ms and took each tier's median. In the Player at a 60 fps cap
+(on this 120 Hz display) it chose High at 7.7 ms on the demo and `parts_100k`, and Ultra at 2.6 ms on `many_lights`:
+the workload's High frames, 1.95 ms uncapped, took four times as long on a GPU a light game leaves idle most of the
+time, whose clocks stay low when one 8 ms frame and the game's 0.5 ms fill half of each 16.7 ms. Filling the room the
+game leaves keeps the GPU busy, so its clocks rise as for any game that needs them, and the lower quartile keeps the
+frames timed while they rise from deciding. Now the tier and its time are the same capped, under vsync and uncapped.
+
+**Measured** on the dev PC (Ryzen 5 5500, RX 6650 XT, DX12, driver 32.0.21045.16010, 2026-11-05). The Player with a
+fresh settings file (`preset = "auto"`, `frame_cap = 60`, so 60 fps on this 120 Hz display), three runs a first game;
+"after the first frame" is until the game switches, "waiting" the frames it waited for the game's lit pipelines, and
+the worst game frame is the longest frame interval meanwhile, the game's first (its own pipeline wait) left out:
+
+| First game | Tier (ms) | After the first frame | Game frames (waiting) | Workload frames (built in) | Worst game frame |
+| --- | --- | ---: | ---: | ---: | ---: |
+| demo | Ultra (2.50, 2.50, 2.51) | 261 to 273 ms | 17 to 18 (1) | 33 to 36 (32 to 40 ms) | 17.1 to 18.7 ms |
+| `parts_100k` | Ultra (2.49, 2.51, 2.50) | 598 to 629 ms | 37 to 39 (20 to 22) | 34 (44 to 46 ms) | 17.1 to 17.2 ms |
+| `many_lights` | Ultra (2.50, 2.50, 2.50) | 261 to 272 ms | 17 to 18 (1) | 28 to 32 (32 to 36 ms) | 17.1 to 17.3 ms |
+
+- **Under a second at 60 Hz** from the first frame in every case. `parts_100k` has no lights, so its renderer compiles
+  the lit pipelines in the background after its first frame; most of its 0.6 s is that wait. The workload itself
+  takes 0.25 s: its build, Ultra's switch (6 frames, its textures one a frame) and 20 timed frames in batches of 6.
+- **The game's worst frame** while calibrating is 17.1 to 18.7 ms against a 16.7 ms frame; at Medium without a
+  calibration the same frames' worst was 17.3 to 21.8 ms (the early frames' own work). The game's single switch to
+  Ultra afterwards costs what any switch to Ultra does (#152): frames of 18 to 22 ms while its textures arrive.
+- **The stress bench** (`stress --scene <s> --preset auto`, two runs each) chose Ultra at 2.49 to 2.51 ms under vsync
+  (120 Hz) and uncapped alike: `many_lights` in 188 to 209 ms (vsync) and 169 ms (uncapped), `parts_100k` in 510 ms
+  and 470 to 490 ms, worst game frames 13.5 to 17.9 ms and 10.3 to 14.4 ms.
+- **The game's first frame** does not move: `many_lights` 1,043 to 1,055 ms with Auto against 1,035 to 1,082 at
+  Medium; `parts_100k` 759 to 811 against 746 to 761.
+- **Memory** (wgpu's allocator report, DX12, `many_lights`): the game at Medium holds 100 MiB of textures and buffers
+  (256 MiB of blocks); with the workload at Ultra beside it 476 MiB (896), so the workload adds about 376 MiB (the
+  same peak in blocks as #152's High → Ultra switch); once it is dropped and the game is at Ultra, 369 MiB (640).
+- **GPU time**: 28 to 36 workload frames, about 85 ms of GPU work in all at Ultra's 2.5 ms, most of it in the 10 or
+  so game frames whose batches fill the room.
+
+**Saved** with the calibration as before, plus the workload's version: the `[calibration]` section gains
+`workload = 1` (`CALIBRATION_WORKLOAD`, raised whenever the scene, its size or how it is measured changes). A file
+from before reads as it did, its calibration as workload 0, which is measured again; nothing else in the format
+changed.
+
+```toml
+[calibration]
+tier = "ultra"
+gpu_ms = 2.50
+adapter = "AMD Radeon RX 6650 XT"
+driver = "32.0.21045.16010"
+workload = 1
+```
+
+**Tests**: `metallic_engine::calibration::tests::the_tier_does_not_depend_on_the_game_played` runs the real
+calibration on a device (its worker thread, its workload's renderer and switches) beside two games drawn every frame
+at Medium, `mobile` and `many_lights`, with the workload's frame times injected (Ultra 9 ms, High 6), and both choose
+High at 6 ms. `settings`' tests drive the calibrator as the engine does: the first tier that fits, frames before a
+probe's switch not counting, a GPU whose clocks rise during the measurement (its first frames four times as slow:
+Ultra, by the quartile, where the median would have failed it), batches filling the room, and a file from before the
+workload measured again. The steady-state frames after a calibration take one branch more than before (no
+calibration to advance) and allocate nothing (`tests/no_alloc.rs` unchanged); the perf gate's workloads (scene sync
+and cull) are untouched.

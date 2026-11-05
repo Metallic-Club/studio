@@ -13,10 +13,11 @@
 //! and each light's `Enabled`), and no override can either.
 //!
 //! **Auto** picks a tier on the machine, then holds the frame time with dynamic resolution. The [`Calibrator`]
-//! draws the game's first frames at Ultra, then High, then Medium, timing each on the GPU, and keeps the first tier
-//! whose median frame fits its share of a 60 fps frame; nothing waits for the GPU (the timings are the renderer's
-//! own, read back a few frames late). The result ([`Calibration`]) is saved with the settings, with the adapter and
-//! driver it was measured on, and measured again when either changes.
+//! times a fixed workload (the engine's built-in calibration scene, drawn offscreen beside the game's own frames, #139)
+//! at Ultra, then High, then Medium, and keeps the first tier whose frames fit its share of a 60 fps frame;
+//! nothing waits for the GPU (the timings are the renderer's own, read back a few frames late). Because it never times
+//! the game, the tier does not depend on which game ran first. The result ([`Calibration`]) is saved with the
+//! settings, with the adapter, driver and workload it was measured on, and measured again when any of them changes.
 //!
 //! **The file** is a few `key = value` lines (a small subset of TOML, written and read here, so no dependency):
 //! [`GraphicsSettings::to_text`] and [`GraphicsSettings::from_text`].
@@ -314,7 +315,7 @@ impl Quality {
     }
 }
 
-/// What the Auto preset measured: the tier it chose, on which adapter and driver.
+/// What the Auto preset measured: the tier it chose, on which adapter and driver, with which workload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Calibration {
     /// The tier chosen.
@@ -325,6 +326,10 @@ pub struct Calibration {
     pub adapter: String,
     /// Its driver ([`crate::Capabilities::driver`]).
     pub driver: String,
+    /// The version of the workload it timed (the engine's calibration scene and how it is measured): a calibration
+    /// of another version is measured again. 0 is a calibration from before the workload existed (#84 timed the
+    /// game being played), which a file without the key reads as.
+    pub workload: u32,
 }
 
 /// What a player chooses: a preset and any per-setting overrides. `None` takes the preset's value (for the frame
@@ -382,14 +387,14 @@ impl GraphicsSettings {
             .unwrap_or(Tier::Medium)
     }
 
-    /// Whether Auto must calibrate on this adapter and driver: Auto without a calibration, or with one measured on
-    /// another adapter or driver.
-    pub fn needs_calibration(&self, adapter: &str, driver: &str) -> bool {
+    /// Whether Auto must calibrate on this adapter and driver with version `workload` of the calibration workload:
+    /// Auto without a calibration, or with one measured on another adapter or driver, or with another workload.
+    pub fn needs_calibration(&self, adapter: &str, driver: &str, workload: u32) -> bool {
         self.preset == Preset::Auto
             && !self
                 .calibration
                 .as_ref()
-                .is_some_and(|c| c.adapter == adapter && c.driver == driver)
+                .is_some_and(|c| c.adapter == adapter && c.driver == driver && c.workload == workload)
     }
 
     /// The settings of every system: the tier's ([`GraphicsSettings::tier`]), with the overrides applied.
@@ -532,6 +537,7 @@ impl GraphicsSettings {
             let _ = writeln!(out, "gpu_ms = {:?}", calibration.gpu_ms);
             let _ = writeln!(out, "adapter = {}", quote(&calibration.adapter));
             let _ = writeln!(out, "driver = {}", quote(&calibration.driver));
+            let _ = writeln!(out, "workload = {}", calibration.workload);
         }
         out
     }
@@ -543,7 +549,7 @@ impl GraphicsSettings {
     pub fn from_text(text: &str) -> Result<Self, SettingsError> {
         let mut settings = Self::default();
         let mut section = Section::Main;
-        let (mut tier, mut gpu_ms, mut adapter, mut driver) = (None, None, None, None);
+        let (mut tier, mut gpu_ms, mut adapter, mut driver, mut workload) = (None, None, None, None, None);
         for (index, raw) in text.lines().enumerate() {
             let at = index + 1;
             let line = raw.trim();
@@ -621,6 +627,9 @@ impl GraphicsSettings {
                 (Section::Calibration, "driver") => {
                     driver = Some(value.text().ok_or_else(|| bad("a quoted string"))?.to_owned());
                 }
+                (Section::Calibration, "workload") => {
+                    workload = Some(value.count().ok_or_else(|| bad("a whole number"))?);
+                }
                 _ => return Err(SettingsError::new(at, format!("unknown setting `{key}`"))),
             }
         }
@@ -630,6 +639,8 @@ impl GraphicsSettings {
                 gpu_ms: gpu_ms.unwrap_or(0.0),
                 adapter: adapter.unwrap_or_default(),
                 driver: driver.unwrap_or_default(),
+                // A file from before #139: its calibration timed a game, and is measured again.
+                workload: workload.unwrap_or(0),
             });
         }
         Ok(settings)
@@ -754,13 +765,17 @@ fn quote(text: &str) -> String {
 
 /// The frame time calibration measures against: a 60 fps frame.
 pub const CALIBRATION_BUDGET_MS: f32 = 1000.0 / 60.0;
-/// Frames drawn at a tier before its frames are timed: its shadow maps, atlas and first uploads are made then.
-pub const CALIBRATION_SKIP: u64 = 10;
-/// Timed frames per tier: their median is the tier's cost.
-pub const CALIBRATION_SAMPLES: usize = 30;
+/// Workload frames drawn at a tier, once its settings are drawn, before its frames are timed: the first ones draw
+/// every shadow map and the cached cascade's static map again.
+pub const CALIBRATION_SKIP: u64 = 4;
+/// Timed workload frames per tier: their lower quartile is the tier's cost.
+pub const CALIBRATION_SAMPLES: usize = 16;
+/// The most workload frames drawn after one game frame. The first [`crate::TIMING_RING_SIZE`] of them are timed;
+/// the rest keep the GPU busy, so its clocks are those of a loaded GPU.
+pub const CALIBRATION_MAX_BATCH: u32 = 8;
 
-/// The share of [`CALIBRATION_BUDGET_MS`] each tier's median frame may take to be chosen: Ultra with twice the
-/// headroom ADR 0008 asks of the High tier's machine, Medium with a fifth to spare. Low is what is left.
+/// The share of [`CALIBRATION_BUDGET_MS`] each tier's frames may take to be chosen: Ultra with twice the headroom
+/// ADR 0008 asks of the High tier's machine, Medium with a fifth to spare. Low is what is left.
 fn calibration_share(tier: Tier) -> f32 {
     match tier {
         Tier::Ultra => 0.5,
@@ -770,80 +785,135 @@ fn calibration_share(tier: Tier) -> f32 {
     }
 }
 
-/// What a [`Calibrator`] asks for after a frame.
+/// What a [`Calibrator`] asks for after a workload frame's timings.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CalibrationStep {
-    /// Keep drawing at [`Calibrator::probe`].
+    /// Keep drawing the workload at [`Calibrator::probe`].
     Measuring,
-    /// The tier measured did not fit: draw at this cheaper one from now on.
+    /// The tier measured did not fit: draw the workload at this cheaper one from now on, and say when its settings
+    /// are drawn ([`Calibrator::probe_drawn_from`]).
     Probe(Tier),
-    /// Calibrated: the tier chosen and the median GPU frame time it was measured at (0 when it was not measured:
-    /// Low is chosen without measuring when Medium does not fit).
+    /// Calibrated: the tier chosen and the GPU frame time it was measured at, the lower quartile of its frames (0
+    /// when it was not measured: Low is chosen without measuring when Medium does not fit).
     Done(Tier, f32),
 }
 
-/// The Auto preset's calibration: times the game's frames at Ultra, then cheaper tiers, and chooses the first whose
-/// median GPU frame fits its share of a 60 fps frame. Feed it every frame's newest GPU timings
-/// ([`Calibrator::observe`]); it never waits for the GPU and allocates nothing. Each tier takes
-/// [`CALIBRATION_SKIP`] + [`CALIBRATION_SAMPLES`] frames (two thirds of a second at 60 fps), so a machine that
-/// takes Ultra is calibrated in 40 frames, and the slowest in 120.
+/// The Auto preset's calibration: times a fixed workload at Ultra, then cheaper tiers, and chooses the first whose
+/// frames fit its share of a 60 fps frame (#139). It never sees the game's frames, so the tier does not depend on the
+/// game being played; the engine draws the workload offscreen after the game's frames and feeds this each workload
+/// frame's GPU time ([`Calibrator::observe`]). It never waits for the GPU and allocates nothing.
+///
+/// A tier counts from [`CALIBRATION_SKIP`] frames after its settings are drawn ([`Calibrator::probe_drawn_from`]; a
+/// switch waits for its pipelines and textures, #86 and #152), then takes [`CALIBRATION_SAMPLES`] frames, fewer when
+/// more than three quarters of them are already over its share. Its cost is the **lower quartile** of those frames,
+/// not their median: the same frames of the same scene at the same settings only take longer when something else
+/// slows them, a GPU whose clocks are still rising from idle (a light game at 60 fps leaves it idle most of the time)
+/// or other work, so the faster frames are the truer measure, and a quartile rather than the fastest keeps one odd
+/// frame from deciding. [`Calibrator::batch`] says how many workload frames to draw back to back after a game frame,
+/// filling the GPU time the game leaves.
 #[derive(Clone, Debug)]
 pub struct Calibrator {
     probe: Tier,
-    /// The first frame index whose timings count for the probe.
-    from_frame: u64,
+    /// The first workload frame whose timings count for the probe; `None` until its settings are drawn.
+    from_frame: Option<u64>,
     samples: [f32; CALIBRATION_SAMPLES],
     len: usize,
-    /// The newest frame index taken in.
+    /// Samples over the probe's share.
+    over: usize,
+    /// The newest workload frame taken in.
     last_frame: Option<u64>,
+    /// Its GPU time, which sizes the batches.
+    last_ms: Option<f32>,
+}
+
+impl Default for Calibrator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Calibrator {
-    /// A calibration starting at Ultra, whose first frame is `frame` (the renderer's next frame index).
-    pub fn new(frame: u64) -> Self {
+    /// A calibration starting at Ultra, waiting for the workload to be drawn at it
+    /// ([`Calibrator::probe_drawn_from`]).
+    pub fn new() -> Self {
         Self {
             probe: Tier::Ultra,
-            from_frame: frame + CALIBRATION_SKIP,
+            from_frame: None,
             samples: [0.0; CALIBRATION_SAMPLES],
             len: 0,
+            over: 0,
             last_frame: None,
+            last_ms: None,
         }
     }
 
-    /// The tier to draw at now.
+    /// The tier to draw the workload at now.
     pub fn probe(&self) -> Tier {
         self.probe
     }
 
-    /// Takes in the newest GPU timings (`timed`: the frame index they are of and its GPU time in milliseconds) after
-    /// the renderer has drawn frame `frame - 1`, and says what to do next.
-    pub fn observe(&mut self, frame: u64, timed: Option<(u64, f32)>) -> CalibrationStep {
-        let Some((timed_frame, gpu_ms)) = timed else {
-            return CalibrationStep::Measuring;
-        };
-        if timed_frame < self.from_frame || self.last_frame.is_some_and(|last| last >= timed_frame) {
+    /// Whether the workload is drawn at the probe's settings (its switch is done), so its frames are being timed.
+    pub fn settled(&self) -> bool {
+        self.from_frame.is_some()
+    }
+
+    /// Says the workload is drawn at the probe's settings from workload frame `frame` on: the frames from
+    /// [`CALIBRATION_SKIP`] later count. Only the first call after each probe counts.
+    pub fn probe_drawn_from(&mut self, frame: u64) {
+        self.from_frame.get_or_insert(frame + CALIBRATION_SKIP);
+    }
+
+    /// How many workload frames to draw back to back after this game frame, given `room_ms`, the GPU time the game's
+    /// frames leave between two of them: one while the probe's switch is being made (its textures are made one a
+    /// frame, #152) or before any frame is timed, otherwise as many as fill the room at the newest frame's GPU time
+    /// (to the nearest frame), from 1 to [`CALIBRATION_MAX_BATCH`]. Filling it keeps the GPU busy, so its clocks rise
+    /// as they would for a game that needs them.
+    pub fn batch(&self, room_ms: f32) -> u32 {
+        match self.last_ms {
+            Some(ms) if self.settled() && ms > 0.0 && room_ms.is_finite() => {
+                ((room_ms / ms).round().max(0.0) as u32).clamp(1, CALIBRATION_MAX_BATCH)
+            }
+            _ => 1,
+        }
+    }
+
+    /// Takes in workload frame `frame`'s GPU time in milliseconds, and says what to do next. Feed the frames in
+    /// order: a frame not after the newest one taken in is ignored, as are frames drawn before the probe counts.
+    pub fn observe(&mut self, frame: u64, gpu_ms: f32) -> CalibrationStep {
+        if !gpu_ms.is_finite() || gpu_ms < 0.0 || self.last_frame.is_some_and(|last| last >= frame) {
             return CalibrationStep::Measuring;
         }
-        self.last_frame = Some(timed_frame);
+        self.last_frame = Some(frame);
+        self.last_ms = Some(gpu_ms);
+        if self.from_frame.is_none_or(|from| frame < from) {
+            return CalibrationStep::Measuring;
+        }
+        let limit = calibration_share(self.probe) * CALIBRATION_BUDGET_MS;
         if let Some(slot) = self.samples.get_mut(self.len) {
             *slot = gpu_ms;
             self.len += 1;
+            self.over += usize::from(gpu_ms > limit);
         }
-        if self.len < CALIBRATION_SAMPLES {
+        // The lower quartile is the sorted samples' quarter-way one: once more than three quarters are over, it is too.
+        let failed = self.over >= CALIBRATION_SAMPLES - CALIBRATION_SAMPLES / 4;
+        if self.len < CALIBRATION_SAMPLES && !failed {
             return CalibrationStep::Measuring;
         }
-        let samples = &mut self.samples[..self.len];
-        samples.sort_unstable_by(f32::total_cmp);
-        let median = samples[samples.len() / 2];
-        if median <= calibration_share(self.probe) * CALIBRATION_BUDGET_MS {
-            return CalibrationStep::Done(self.probe, median);
+        if !failed {
+            let samples = &mut self.samples[..self.len];
+            samples.sort_unstable_by(f32::total_cmp);
+            let quartile = samples[samples.len() / 4];
+            if quartile <= limit {
+                return CalibrationStep::Done(self.probe, quartile);
+            }
         }
         match self.probe.cheaper() {
             Some(Tier::Low) | None => CalibrationStep::Done(Tier::Low, 0.0),
             Some(next) => {
                 self.probe = next;
-                self.from_frame = frame + CALIBRATION_SKIP;
+                self.from_frame = None;
                 self.len = 0;
+                self.over = 0;
                 CalibrationStep::Probe(next)
             }
         }
@@ -957,22 +1027,41 @@ mod tests {
     fn auto_uses_its_calibration_with_dynamic_resolution() {
         let mut auto = GraphicsSettings::new(Preset::Auto);
         assert_eq!(auto.tier(), Tier::Medium, "until calibrated");
-        assert!(auto.needs_calibration("GPU", "1.0"));
+        assert!(auto.needs_calibration("GPU", "1.0", 1));
         auto.calibration = Some(Calibration {
             tier: Tier::Ultra,
             gpu_ms: 3.0,
             adapter: "GPU".into(),
             driver: "1.0".into(),
+            workload: 1,
         });
-        assert!(!auto.needs_calibration("GPU", "1.0"));
-        assert!(auto.needs_calibration("GPU", "2.0"), "a new driver");
+        assert!(!auto.needs_calibration("GPU", "1.0", 1));
+        assert!(auto.needs_calibration("GPU", "2.0", 1), "a new driver");
+        assert!(auto.needs_calibration("Other GPU", "1.0", 1), "another adapter");
+        assert!(auto.needs_calibration("GPU", "1.0", 2), "a new workload");
         let q = auto.quality();
         assert_eq!(q.tier, Tier::Ultra);
         assert!(q.resolution.dynamic);
         assert_eq!(q.resolution.range(), (DEFAULT_MIN_SCALE, 1.0));
         assert_eq!(q.resolution.target_ms, DEFAULT_TARGET_MS);
         // A fixed preset never calibrates.
-        assert!(!GraphicsSettings::new(Preset::Low).needs_calibration("GPU", "1.0"));
+        assert!(!GraphicsSettings::new(Preset::Low).needs_calibration("GPU", "1.0", 1));
+    }
+
+    #[test]
+    fn a_calibration_from_before_the_workload_reads_and_is_measured_again() {
+        // #84's file: no `workload` key. It still reads (the format is the same), as workload 0.
+        let text = "preset = \"auto\"\n\n[calibration]\ntier = \"ultra\"\ngpu_ms = 3.93\n\
+                    adapter = \"GPU\"\ndriver = \"1.0\"\n";
+        let settings = GraphicsSettings::from_text(text).expect("an old file reads");
+        let calibration = settings.calibration.as_ref().expect("its calibration");
+        assert_eq!((calibration.tier, calibration.workload), (Tier::Ultra, 0));
+        assert!(
+            settings.needs_calibration("GPU", "1.0", 1),
+            "measured again on the workload"
+        );
+        assert_eq!(settings.tier(), Tier::Ultra, "drawn at what it measured until then");
+        assert!(GraphicsSettings::from_text("[calibration]\nworkload = -1").is_err());
     }
 
     #[test]
@@ -993,6 +1082,7 @@ mod tests {
                 gpu_ms: 4.25,
                 adapter: "AMD Radeon \"RX\" 6650 XT".into(),
                 driver: "32.0\\1".into(),
+                workload: 3,
             }),
             ..GraphicsSettings::default()
         };
@@ -1040,49 +1130,137 @@ mod tests {
         assert_eq!((settings.preset, settings.lod_bias), (Preset::Low, Some(0.5)));
     }
 
-    /// Feeds `calibrator` one frame drawn at its probe per call, timed `latency` frames later at `cost(tier)` ms,
-    /// until it is done; returns the result and the frames it took.
-    fn calibrate(cost: impl Fn(Tier) -> f32) -> (CalibrationStep, u64) {
-        let latency = 2;
-        let mut calibrator = Calibrator::new(0);
-        let mut drawn = Vec::new();
-        for frame in 0..1000u64 {
-            let timed = frame.checked_sub(latency).map(|f| (f, cost(drawn[f as usize])));
-            let step = calibrator.observe(frame, timed);
-            if let CalibrationStep::Done(..) = step {
-                return (step, frame);
+    /// How a simulated calibration went.
+    #[derive(Debug)]
+    struct Run {
+        step: CalibrationStep,
+        /// Game frames until it was done.
+        game_frames: u64,
+        /// The most workload GPU time drawn after one game frame.
+        max_batch_ms: f32,
+    }
+
+    /// A probe's settings are drawn this many workload frames after it is asked for (its textures are made one a
+    /// frame, #152).
+    const SWITCH_FRAMES: u64 = 5;
+
+    /// Drives a calibrator as the engine does: after each game frame [`Calibrator::batch`] workload frames are drawn
+    /// back to back to fill `room_ms`, the `n`th costing `workload(tier drawn, n)`, and the timings of the first
+    /// [`crate::TIMING_RING_SIZE`] of each batch (the renderer's readbacks) arrive two game frames later, all at once.
+    /// The first probe is drawn at once (the workload's first frame waits for its settings); a later one
+    /// [`SWITCH_FRAMES`] workload frames after it is asked for, the frames between drawn at the tier before.
+    fn simulate(room_ms: f32, workload: impl Fn(Tier, u64) -> f32) -> Run {
+        const LATENCY: u64 = 2;
+        let mut calibrator = Calibrator::new();
+        // Each workload frame: the game frame it was drawn after, what it cost, and whether it was timed.
+        let mut drawn: Vec<(u64, f32, bool)> = Vec::new();
+        let (mut fed, mut ready_at, mut tier_drawn) = (0, 0, Tier::Ultra);
+        let mut max_batch_ms = 0.0f32;
+        for game_frame in 0..1000u64 {
+            while let Some(&(after, ms, timed)) = drawn.get(fed)
+                && after + LATENCY <= game_frame
+            {
+                let step = if timed {
+                    calibrator.observe(fed as u64, ms)
+                } else {
+                    CalibrationStep::Measuring
+                };
+                fed += 1;
+                match step {
+                    CalibrationStep::Done(..) => {
+                        return Run {
+                            step,
+                            game_frames: game_frame,
+                            max_batch_ms,
+                        };
+                    }
+                    CalibrationStep::Probe(_) => ready_at = drawn.len() as u64 + SWITCH_FRAMES,
+                    CalibrationStep::Measuring => {}
+                }
             }
-            drawn.push(calibrator.probe());
+            let mut batch_ms = 0.0;
+            for n in 0..calibrator.batch(room_ms) {
+                let frame = drawn.len() as u64;
+                if !calibrator.settled() && frame >= ready_at {
+                    tier_drawn = calibrator.probe();
+                    calibrator.probe_drawn_from(frame);
+                }
+                let ms = workload(tier_drawn, frame);
+                drawn.push((game_frame, ms, (n as usize) < crate::TIMING_RING_SIZE));
+                batch_ms += ms;
+            }
+            max_batch_ms = max_batch_ms.max(batch_ms);
         }
         panic!("never calibrated");
     }
 
     #[test]
     fn calibration_takes_the_first_tier_that_fits() {
-        let (step, frames) = calibrate(|_| 2.0);
-        assert_eq!(step, CalibrationStep::Done(Tier::Ultra, 2.0));
-        assert!(frames <= CALIBRATION_SKIP + CALIBRATION_SAMPLES as u64 + 3, "{frames}");
+        // A fast machine: Ultra, in batches of four frames (8 ms / 2 ms), within a sixth of a second at 60 Hz.
+        let run = simulate(8.0, |_, _| 2.0);
+        assert_eq!(run.step, CalibrationStep::Done(Tier::Ultra, 2.0));
+        assert!(run.game_frames <= 10, "{run:?}");
 
         // 12 ms at Ultra, 9 at High (60% of 16.7 is 10).
-        let (step, _) = calibrate(|tier| match tier {
+        let run = simulate(8.0, |tier, _| match tier {
             Tier::Ultra => 12.0,
             _ => 9.0,
         });
-        assert_eq!(step, CalibrationStep::Done(Tier::High, 9.0));
+        assert_eq!(run.step, CalibrationStep::Done(Tier::High, 9.0));
 
-        // Too slow everywhere: Low, after measuring Ultra, High and Medium.
-        let (step, frames) = calibrate(|_| 40.0);
-        assert_eq!(step, CalibrationStep::Done(Tier::Low, 0.0));
-        assert!(
-            frames <= 3 * (CALIBRATION_SKIP + CALIBRATION_SAMPLES as u64 + 3),
-            "{frames}"
-        );
+        // Too slow everywhere: Low, after measuring Ultra, High and Medium, each given up once more than three
+        // quarters of its samples are over (its lower quartile cannot fit then).
+        let run = simulate(8.0, |_, _| 40.0);
+        assert_eq!(run.step, CalibrationStep::Done(Tier::Low, 0.0));
+        let per_tier = CALIBRATION_SKIP + (CALIBRATION_SAMPLES - CALIBRATION_SAMPLES / 4) as u64 + SWITCH_FRAMES;
+        assert!(run.game_frames <= 3 * per_tier, "{run:?}");
     }
 
     #[test]
     fn frames_before_a_probe_do_not_count_for_it() {
-        // Ultra is slow, High fast: High's measurement must not include Ultra's frames still arriving late.
-        let (step, _) = calibrate(|tier| if tier == Tier::Ultra { 30.0 } else { 5.0 });
-        assert_eq!(step, CalibrationStep::Done(Tier::High, 5.0));
+        // Ultra is slow, High fast: High's measurement must not include Ultra's frames still arriving late, nor the
+        // frames drawn at Ultra while High's switch is made.
+        let run = simulate(8.0, |tier, _| if tier == Tier::Ultra { 30.0 } else { 5.0 });
+        assert_eq!(run.step, CalibrationStep::Done(Tier::High, 5.0));
+    }
+
+    #[test]
+    fn frames_slowed_by_rising_clocks_do_not_decide() {
+        // A GPU coming up from idle clocks: the first ten timed frames take four times as long. Their median would
+        // be 10 ms (over Ultra's 8.3); the lower quartile is the loaded GPU's 2.5.
+        let first_timed = CALIBRATION_SKIP;
+        let run = simulate(1.0, |_, frame| if frame < first_timed + 10 { 10.0 } else { 2.5 });
+        assert_eq!(run.step, CalibrationStep::Done(Tier::Ultra, 2.5));
+    }
+
+    #[test]
+    fn batches_fill_the_room_the_game_leaves() {
+        for room in [0.0, 4.0, 14.0] {
+            for ms in [0.5, 1.0, 2.5, 3.0, 7.9, 20.0] {
+                let run = simulate(room, |_, _| ms);
+                let frames = (run.max_batch_ms / ms).round() as u32;
+                // To the nearest frame, one at least, eight at most.
+                let fill = ((room / ms).round() as u32).clamp(1, CALIBRATION_MAX_BATCH);
+                assert_eq!(frames, fill, "{ms} ms in {room} ms: {run:?}");
+                assert!(
+                    run.max_batch_ms <= room + ms / 2.0 || frames == 1,
+                    "{ms} ms in {room} ms: {run:?}"
+                );
+            }
+        }
+        let mut calibrator = Calibrator::new();
+        assert_eq!(calibrator.batch(14.0), 1, "until a frame is timed");
+        calibrator.probe_drawn_from(0);
+        calibrator.observe(0, 1.0);
+        assert_eq!(calibrator.batch(14.0), CALIBRATION_MAX_BATCH);
+        calibrator.observe(1, 3.0);
+        assert_eq!(calibrator.batch(14.0), 5);
+        assert_eq!(calibrator.batch(0.0), 1, "one a frame however little room there is");
+        assert_eq!(calibrator.batch(f32::NAN), 1);
+        // Timings that are not a time, or not newer, change nothing.
+        for (frame, ms) in [(2, f32::NAN), (3, -1.0), (1, 0.1)] {
+            assert_eq!(calibrator.observe(frame, ms), CalibrationStep::Measuring);
+        }
+        assert_eq!(calibrator.batch(14.0), 5);
     }
 }

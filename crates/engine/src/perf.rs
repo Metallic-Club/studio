@@ -26,7 +26,7 @@ use metallic_render::{DrawStats, FrameTimings, MAX_CASCADES, Overlay, PassId, Pi
 pub struct GraphicsStatus {
     /// The player's preset; `None` when no graphics settings were set (the per-system settings as set one by one).
     pub preset: Option<Preset>,
-    /// The tier drawn at (for Auto, the calibrated one, or the one being measured).
+    /// The tier drawn at (for Auto, the calibrated one, or Medium while it calibrates).
     pub tier: Option<Tier>,
     /// The tier Auto's calibration is measuring, while it runs.
     pub calibrating: Option<Tier>,

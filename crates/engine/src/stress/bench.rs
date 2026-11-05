@@ -24,6 +24,7 @@ use metallic_render::settings::{GraphicsSettings, Preset, Quality, Tier};
 use metallic_render::{AntiAliasing, ContextOptions, CullSettings, LightSettings, LodSettings, ShadowSettings, wgpu};
 
 use super::{StressKind, StressScene};
+use crate::calibration::CalibrationOutcome;
 use crate::config::{EngineConfig, EngineMode};
 use crate::engine::Engine;
 use crate::error::EngineError;
@@ -266,6 +267,9 @@ pub struct BenchReport {
     pub graphics: GraphicsStatus,
     /// Auto's calibration, when it ran: the tier chosen and the median GPU frame time it measured.
     pub calibration: Option<(&'static str, f32)>,
+    /// What the calibration run in this benchmark did, when one ran (#139): how long it took, the workload frames
+    /// drawn and the game's worst frame meanwhile.
+    pub calibration_run: Option<CalibrationOutcome>,
     /// The frames between preset switches ([`BenchOptions::switch_presets`]), and how many switches the measured
     /// frames saw.
     pub switches: Option<(u32, u32)>,
@@ -364,11 +368,28 @@ impl BenchReport {
         out.push_str("\"graphics\":{");
         self.graphics.write_json_members(out);
         match self.calibration {
-            Some((tier, gpu_ms)) => write!(
-                out,
-                ",\"calibration\":{{\"tier\":{},\"gpu_ms\":{gpu_ms:.3}}}",
-                json_string(tier)
-            )?,
+            Some((tier, gpu_ms)) => {
+                write!(
+                    out,
+                    ",\"calibration\":{{\"tier\":{},\"gpu_ms\":{gpu_ms:.3}",
+                    json_string(tier)
+                )?;
+                if let Some(run) = &self.calibration_run {
+                    let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+                    write!(
+                        out,
+                        ",\"ms\":{:.1},\"build_ms\":{:.1},\"game_frames\":{},\"waited_frames\":{},\
+                         \"workload_frames\":{},\"worst_frame_ms\":{:.2}",
+                        ms(run.duration),
+                        ms(run.build),
+                        run.game_frames,
+                        run.waited_frames,
+                        run.workload_frames,
+                        ms(run.worst_game_frame)
+                    )?;
+                }
+                out.push('}');
+            }
             None => out.push_str(",\"calibration\":null"),
         }
         match self.switches {
@@ -508,6 +529,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
             .graphics()
             .and_then(|graphics| graphics.calibration.as_ref())
             .map(|calibration| (calibration.tier.name(), calibration.gpu_ms)),
+        calibration_run: renderer.last_calibration().copied(),
         switches: app.switch.as_ref().map(|(every, _)| (*every as u32, app.switches)),
         toggles: app
             .toggle
@@ -822,6 +844,16 @@ mod tests {
                 },
             },
             calibration: Some(("high", 3.25)),
+            calibration_run: Some(CalibrationOutcome {
+                tier: Tier::High,
+                gpu_ms: 3.25,
+                duration: std::time::Duration::from_millis(400),
+                game_frames: 24,
+                waited_frames: 2,
+                workload_frames: 70,
+                worst_game_frame: std::time::Duration::from_micros(16_900),
+                build: std::time::Duration::from_millis(210),
+            }),
             switches: Some((60, 16)),
             toggles: Some((30, 40, 48)),
             summary,
@@ -866,7 +898,8 @@ mod tests {
                  \"passes\":[\"opaque\",\"sky\",\"transparent\",\"bloom\",\"post\",\"ui\"]},\
                  \"pipelines\":{\"compiled\":54,\"pending\":3,\"failed\":0,\"workers\":8,\"first_frame_ms\":141.0,\
                  \"all_ms\":null,\"compile_ms\":2500.0,\"switch_waiting\":false,\"cache_loaded\":1024},\
-                 \"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250},\"switch_every\":60,\"switches\":16,\
+                 \"calibration\":{\"tier\":\"high\",\"gpu_ms\":3.250,\"ms\":400.0,\"build_ms\":210.0,\
+                 \"game_frames\":24,\"waited_frames\":2,\"workload_frames\":70,\"worst_frame_ms\":16.90},\"switch_every\":60,\"switches\":16,\
                  \"toggle_every\":30,\"toggles\":40,\"max_pending_pipelines\":48},"
             ),
             "{json}"
