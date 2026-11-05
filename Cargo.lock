@@ -1281,6 +1281,8 @@ dependencies = [
 name = "metallic_project"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "getrandom 0.4.3",
  "metallic_classes",
  "metallic_core",
  "serde",
