@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror.workspace = true
 toml.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 # The built-in classes, for tests that save and load real games (ADR 0001's rules exempt dev-dependencies).

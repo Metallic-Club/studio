@@ -10,13 +10,14 @@ use metallic_engine::metallic_platform::{
     AppHandler, ButtonState, DeviceEvent, EventLoopContext, GamepadEvent, KeyCode, Platform, PlatformError,
     WindowEvent, WindowId,
 };
+use metallic_engine::metallic_project::{Project, ProjectError};
 use metallic_engine::metallic_render::ContextOptions;
 use metallic_engine::metallic_script::OutputSink;
 use metallic_engine::perf::PerfSummary;
 use metallic_engine::stress::{StressError, StressScene};
 use metallic_engine::{
     Engine, EngineConfig, EngineError, EngineMode, FrameStats, RunContext, SceneRenderer, StdOutput, WindowedApp,
-    WindowedOptions,
+    WindowedOptions, project_sources,
 };
 
 use crate::config::PlayerConfig;
@@ -40,6 +41,30 @@ pub enum PlayerError {
     /// The class registry lacks a class the scene needs.
     #[error("the game has no {0} class")]
     MissingClass(&'static str),
+    /// The project ([`PlayerConfig::project`]) could not be opened or its start scene loaded.
+    #[error(transparent)]
+    Project(#[from] ProjectError),
+}
+
+/// Loads `project`'s start scene into `dm`, logging what its manifest and scene skipped.
+fn load_project(project: &mut Project, dm: &mut DataModel) -> Result<(), ProjectError> {
+    for warning in project.warnings() {
+        log::warn!("{}: {warning}", project.path().display());
+    }
+    let loaded = project.load_start_scene(dm)?;
+    for warning in &loaded.warnings {
+        log::warn!(
+            "{}: {}: {warning}",
+            project.path().display(),
+            project.manifest().start_scene
+        );
+    }
+    log::info!(
+        "project `{}`: loaded {}",
+        project.manifest().name,
+        project.manifest().start_scene
+    );
+    Ok(())
 }
 
 /// Seconds of a stress scene's motion per frame: its moving parts move by frame number, as in the engine's
@@ -92,11 +117,22 @@ impl Player<StdOutput> {
 impl<O: OutputSink> Player<O> {
     /// A player for `config` whose scripts print to `output` (Studio's Output panel, a test's collector).
     pub fn with_output(config: PlayerConfig, output: O) -> Result<Self, PlayerError> {
+        let mut project = config.project.as_deref().map(Project::open).transpose()?;
+        let sources = match project.as_mut() {
+            Some(project) => project_sources(project)?,
+            None => config.scene.sources(),
+        };
         let engine_config = EngineConfig::new(RunContext::Local)
             .with_mode(EngineMode::Windowed)
-            .with_sources(config.scene.sources());
+            .with_sources(sources);
         let mut engine = Engine::with_output(engine_config, output)?;
-        let stress = config.scene.install(engine.data_model_mut())?;
+        let stress = match project.as_mut() {
+            Some(project) => {
+                load_project(project, engine.data_model_mut())?;
+                None
+            }
+            None => config.scene.install(engine.data_model_mut())?,
+        };
         let mut config = config;
         let mut renderer = SceneRenderer::new(ContextOptions {
             pipeline_cache_dir: config.pipeline_cache.clone(),

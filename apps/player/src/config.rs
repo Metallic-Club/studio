@@ -31,8 +31,11 @@ pub const DEFAULT_WARMUP_FRAMES: u64 = 30;
 /// ```
 #[derive(Clone, Debug)]
 pub struct PlayerConfig {
-    /// The game to run. Built-in scenes only until projects load from disk (M4).
+    /// The built-in game to run, unless [`PlayerConfig::project`] names a project.
     pub scene: Scene,
+    /// A `.mtproj` project to run in place of [`PlayerConfig::scene`] (`--project`): its start scene, with its
+    /// scripts. The window keeps [`PlayerConfig::scene`]'s size.
+    pub project: Option<PathBuf>,
     /// The player's graphics settings (ADR 0008 §8): the preset and its overrides, and Auto's calibration. The
     /// `metallic_player` binary loads them from the user's settings file; the Auto preset by default.
     pub graphics: GraphicsSettings,
@@ -76,7 +79,14 @@ impl PlayerConfig {
             warmup_frames: 0,
             exit_after: None,
             overlay: false,
+            project: None,
         }
+    }
+
+    /// Sets [`PlayerConfig::project`].
+    pub fn with_project(mut self, path: impl Into<PathBuf>) -> Self {
+        self.project = Some(path.into());
+        self
     }
 
     /// Sets [`PlayerConfig::overlay`].

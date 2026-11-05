@@ -1,0 +1,8 @@
+[project]
+name = "Baseplate"
+description = ""
+tags = []
+kind = "3d"
+mode = "standalone"
+start_scene = "Scenes/Main.scene"
+engine = "0.1"

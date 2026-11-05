@@ -56,7 +56,8 @@ pub struct EngineConfig {
     pub mode: EngineMode,
     /// The game runs inside Studio: `RunService:IsStudio()` returns true.
     pub studio: bool,
-    /// Where scripts' `Source` paths are read from. Empty [`MemorySources`] by default, until projects (M4).
+    /// Where scripts' `Source` paths are read from. Empty [`MemorySources`] by default; a project's scripts come
+    /// from [`project_sources`](crate::project_sources).
     pub sources: Rc<dyn SourceLoader>,
 }
 

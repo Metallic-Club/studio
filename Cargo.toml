@@ -59,6 +59,9 @@ raw-window-handle = "0.6.2"
 gilrs = "0.11.2"
 # Parses and writes `metallic.toml`, the project manifest (`metallic_project`, ADR 0006). Pure Rust, no proc-macros.
 toml = "1.2"
+# Reads and writes `.mtproj` project archives (`metallic_project`, ADR 0006): deflate and stored members only, pure
+# Rust (zlib-rs), no C libraries and none of the other codecs or encryption.
+zip = { version = "9.4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # Logging facade; the app that ships picks the logger.
 log = "0.4"
 # The Player binary's command line (`--bench`, `--scene`, `--preset`). No dependencies, no proc-macros.

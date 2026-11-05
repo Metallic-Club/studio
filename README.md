@@ -49,11 +49,22 @@ Flags (`cargo run -p metallic_player --release -- --help`):
 | Flag | Does |
 |---|---|
 | `--scene <name>` | the built-in game to run: `demo`, or a stress scene (`parts_10k`, `parts_50k`, `parts_100k`, `many_lights`, `overdraw`, `mobile`, `see_through_10k`; see [docs/perf.md](docs/perf.md#stress-scenes)) |
+| `--project <file.mtproj>` | runs a project in place of a built-in game: its start scene, with its scripts (below) |
 | `--preset <name>` | `low`, `medium`, `high`, `ultra` or `auto` for this run, in place of the settings file's preset (below) |
 | `--bench <frames>` | runs that many frames after a 30-frame warm-up, with no frame cap (vsync still paces it), then prints frame times (p50, p99, 1% low), script, physics and render CPU time, GPU time per pass and the draws per pass as JSON on stdout and exits |
 | `--overlay` | starts with the performance overlay shown; F3 shows or hides it |
 
 `METALLIC_LOG=info` (or `debug`, ...) shows the engine's logs on stderr.
+
+A project is one `.mtproj` file, a zip archive ([ADR 0006](docs/adr/0006-project-format.md)). Until Studio makes them,
+make one from the 3D Baseplate template and play it:
+
+```bash
+cargo run -p metallic_project --example new_project -- templates/baseplate-3d MyGame.mtproj
+cargo run -p metallic_player --release -- --project MyGame.mtproj
+```
+
+![The Player running a new project made from the 3D Baseplate template](docs/screenshots/187-baseplate.png)
 
 Graphics settings live in `graphics.toml` in the user's config folder (`%APPDATA%\metallic\Player\config` on Windows,
 `~/Library/Application Support/dev.metallic.Player` on macOS, `~/.config/metallic/player` on Linux), made with the
