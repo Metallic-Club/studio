@@ -1,4 +1,4 @@
-//! The games built into the Player, until projects load from disk (M4).
+//! The games built into the Player (projects on disk are [`PlayerConfig::project`](crate::PlayerConfig::project)).
 
 use std::fmt;
 use std::str::FromStr;

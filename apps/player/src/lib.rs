@@ -7,8 +7,9 @@
 //! # Running a game
 //!
 //! A [`Player`] is a game in the engine ([`metallic_engine::Engine`]), made from a [`PlayerConfig`]: which game
-//! ([`Scene`]; built-in scenes until projects load from disk in M4), the window, the graphics [`Preset`] and when to
-//! stop. [`Player::new`] loads the scene, installs the renderer and starts the game. Then one of three things drives
+//! (a built-in [`Scene`], or a `.mtproj` project: [`PlayerConfig::project`]), the window, the graphics [`Preset`] and
+//! when to stop. [`Player::new`] loads the scene (a project's start scene, with its scripts), installs the renderer
+//! and starts the game. Then one of three things drives
 //! its frames, depending on who owns the event loop and the window:
 //!
 //! | Host | Owns | Drives the Player with |
@@ -58,7 +59,7 @@ mod tests {
     use metallic_engine::metallic_core::Value;
     use metallic_engine::metallic_platform::{ButtonState, Key, KeyCode, KeyEvent, WindowEvent, WindowId};
     use metallic_engine::metallic_script::{CollectOutput, OutputLevel};
-    use metallic_engine::{InputEvent, RunState};
+    use metallic_engine::{InputEvent, RunContext, RunState};
 
     use super::*;
 
@@ -193,6 +194,77 @@ mod tests {
         assert_eq!(read("RenderScale"), Value::Number(0.75));
         assert_eq!(read("LodBias"), Value::Number(3.0), "the file's overrides stay");
         assert_eq!(read("FrameRateCap"), Value::Int(i64::from(DEFAULT_FRAME_CAP)));
+    }
+
+    #[test]
+    fn a_project_made_from_the_baseplate_template_plays() {
+        use metallic_engine::metallic_project::{Project, Template};
+
+        let dir = std::env::temp_dir().join(format!("metallic-player-project-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch folder");
+        let path = dir.join("Baseplate.mtproj");
+        let template = Template::from_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates/baseplate-3d"))
+            .expect("the template");
+        let mut project = Project::create(&path, &template, "Baseplate").expect("a new project");
+
+        // A script in the start scene whose source is a member of the project.
+        // Built in a headless engine's game that never starts.
+        let mut editor =
+            metallic_engine::Engine::new(metallic_engine::EngineConfig::new(RunContext::Local)).expect("an engine");
+        let dm = editor.data_model_mut();
+        project.load_start_scene(dm).expect("the start scene");
+        let registry = dm.registry().clone();
+        let service = dm
+            .service(registry.class_id("ServerScriptService").expect("the class"))
+            .expect("the service");
+        let script = dm
+            .create(registry.class_id("Script").expect("the class"))
+            .expect("a script");
+        dm.set_name(script, "Hello".into()).expect("named");
+        dm.set_by_name(script, "Source", Value::String("Scripts/Hello.luau".into()))
+            .expect("its source");
+        dm.set_parent(script, Some(service)).expect("parented");
+        let scene = metallic_engine::metallic_project::save_scene(dm, &mut Default::default()).expect("saved");
+        let start = project.manifest().start_scene.clone();
+        project.write(&start, scene.text).expect("the scene");
+        project
+            .write("Scripts/Hello.luau", "print('hello from the project')")
+            .expect("the script");
+        project.save().expect("saved");
+        drop(project);
+
+        let config = PlayerConfig::new(Scene::Demo).with_project(&path);
+        let mut player = Player::with_output(config, CollectOutput::new()).expect("the project plays");
+        for name in ["Baseplate", "SpawnLocation"] {
+            read(&player, name, "Name");
+        }
+        player.frame(FRAME);
+        assert_no_errors(&player);
+        let printed: Vec<&str> = player
+            .engine()
+            .host()
+            .output()
+            .of_level(OutputLevel::Print)
+            .map(|line| line.message.as_str())
+            .collect();
+        assert_eq!(
+            printed,
+            ["hello from the project"],
+            "the project's script ran, not the demo's"
+        );
+
+        let error = Player::with_output(
+            PlayerConfig::new(Scene::Demo).with_project(dir.join("Missing.mtproj")),
+            CollectOutput::new(),
+        )
+        .expect_err("no such file");
+        assert!(
+            error.to_string().ends_with("Missing.mtproj: no such project file"),
+            "{error}"
+        );
+        drop(player);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

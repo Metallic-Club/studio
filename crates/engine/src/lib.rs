@@ -119,6 +119,12 @@
 //! [`stress`] builds the scenes every renderer change is measured against (ADR 0008 §10), by name and seed, and,
 //! under `render`, runs one in a window for a number of frames and reports the frame statistics as JSON
 //! ([`stress::run_bench`]; `cargo run --release -p metallic_engine --example stress -- --scene parts_100k`).
+//!
+//! # Projects
+//!
+//! A game saved as a `.mtproj` project ([`metallic_project::Project`]) runs by making the engine with the
+//! project's scripts as its sources ([`project_sources`]) and loading its start scene into the game before
+//! [`Engine::start`] ([`Project::load_start_scene`](metallic_project::Project::load_start_scene)).
 
 #[cfg(feature = "render")]
 pub mod calibration;
@@ -134,6 +140,7 @@ mod input;
 mod output;
 #[cfg(feature = "render")]
 pub mod perf;
+mod project;
 #[cfg(feature = "render")]
 mod scene_renderer;
 pub mod stress;
@@ -151,6 +158,7 @@ pub use hooks::{RenderFrame, RenderHook, RenderHookError};
 #[cfg(feature = "render")]
 pub use input::InputEvent;
 pub use output::StdOutput;
+pub use project::project_sources;
 #[cfg(feature = "render")]
 pub use scene_renderer::SceneRenderer;
 #[cfg(feature = "render")]
@@ -164,6 +172,8 @@ pub use metallic_script::{MemorySources, RunContext, SourceLoader};
 // instances and drives the platform's event loop through these.
 pub use metallic_core;
 pub use metallic_platform;
+// Projects, so apps open `.mtproj` files through the engine.
+pub use metallic_project;
 // The renderer too (with a window), so apps name its graphics settings through the engine.
 #[cfg(feature = "render")]
 pub use metallic_render;

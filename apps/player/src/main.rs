@@ -1,9 +1,10 @@
-//! The `metallic_player` executable: plays a built-in game in a window.
+//! The `metallic_player` executable: plays a built-in game or a `.mtproj` project in a window.
 //!
 //! ```text
 //! metallic_player                      # the demo, until the window is closed
 //! metallic_player --bench 600          # 600 frames after a warm-up, then the stats as JSON on stdout
 //! metallic_player --scene demo --preset high
+//! metallic_player --project MyGame.mtproj   # a project's start scene, with its scripts
 //! ```
 //!
 //! The graphics settings are read from `graphics.toml` in the user's config folder (made with the Auto preset the
@@ -11,6 +12,7 @@
 //! (`pipelines/`, on Vulkan) so the next start compiles less.
 
 use std::io::Write as _;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::OnceLock;
 
@@ -29,6 +31,7 @@ Usage: metallic_player [OPTIONS]
 
 Options:
   --scene <NAME>     The built-in game to run [default: demo] (scenes: {scenes})
+  --project <FILE>   A .mtproj project to run in place of a built-in game: its start scene, with its scripts
   --preset <NAME>    The graphics preset for this run, in place of the settings file's (presets: {presets})
   --bench <FRAMES>   Run FRAMES frames after a warm-up, without a frame cap, print the stats as JSON and exit
   --overlay          Start with the performance overlay shown (F3 toggles it)
@@ -39,6 +42,7 @@ Options:
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Args {
     scene: Scene,
+    project: Option<PathBuf>,
     preset: Option<Preset>,
     bench: Option<u64>,
     overlay: bool,
@@ -52,10 +56,15 @@ impl Args {
         use lexopt::prelude::*;
 
         let mut parsed = Args::default();
+        let mut scene_given = false;
         let mut parser = lexopt::Parser::from_args(args);
         while let Some(arg) = parser.next()? {
             match arg {
-                Long("scene") => parsed.scene = parser.value()?.parse()?,
+                Long("scene") => {
+                    parsed.scene = parser.value()?.parse()?;
+                    scene_given = true;
+                }
+                Long("project") => parsed.project = Some(PathBuf::from(parser.value()?)),
                 Long("preset") => parsed.preset = Some(parser.value()?.parse()?),
                 Long("overlay") => parsed.overlay = true,
                 Long("bench") => {
@@ -70,6 +79,9 @@ impl Args {
                 _ => return Err(arg.unexpected()),
             }
         }
+        if scene_given && parsed.project.is_some() {
+            return Err("--scene and --project each name the game to run; give one of them".into());
+        }
         Ok(parsed)
     }
 
@@ -80,6 +92,7 @@ impl Args {
         };
         config.preset = self.preset;
         config.overlay = self.overlay;
+        config.project = self.project.clone();
         config
     }
 }
@@ -113,11 +126,14 @@ fn main() -> ExitCode {
     let mut config = args.config();
     load_user_graphics(&mut config);
     if args.bench.is_none() {
+        let game = match &config.project {
+            Some(path) => format!("project {}", path.display()),
+            None => format!("scene `{}`", config.scene),
+        };
         eprintln!(
-            "Metallic Player {}: scene `{}`. {}F3 shows the performance overlay.",
+            "Metallic Player {}: {game}. {}F3 shows the performance overlay.",
             metallic_player::VERSION,
-            config.scene,
-            if config.scene == Scene::Demo {
+            if config.project.is_none() && config.scene == Scene::Demo {
                 "WASD and Q/E move, hold the right mouse button to look, C orbits, Space pauses. "
             } else {
                 ""
@@ -265,6 +281,21 @@ mod tests {
         assert_eq!(config.frame_cap, None, "a bench is paced by vsync only");
         assert!(parse(&["-h"]).unwrap().help);
         assert!(parse(&["--version"]).unwrap().version);
+    }
+
+    #[test]
+    fn a_project_takes_the_place_of_the_scene() {
+        let args = parse(&["--project", "My Game.mtproj", "--overlay"]).unwrap();
+        assert_eq!(args.project, Some(PathBuf::from("My Game.mtproj")));
+        let config = args.config();
+        assert_eq!(config.project, Some(PathBuf::from("My Game.mtproj")));
+        assert!(config.overlay);
+        assert_eq!(parse(&[]).unwrap().config().project, None, "the demo by default");
+
+        let error = parse(&["--scene", "demo", "--project", "Game.mtproj"]).unwrap_err();
+        assert!(error.contains("give one of them"), "{error}");
+        assert!(parse(&["--project"]).is_err(), "a file is required");
+        assert!(help().contains("--project <FILE>"));
     }
 
     #[test]
