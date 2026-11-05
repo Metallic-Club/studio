@@ -4,13 +4,15 @@
 //! wgpu's OpenGL backend on Windows (WGL) is not safe to set up on several threads at once: each GL instance makes
 //! a hidden window, sets its pixel format and creates a context in the vendor's driver, and threads doing that
 //! together killed the archived renderer's test runs with `STATUS_HEAP_CORRUPTION` (archive #276; upstream
-//! gfx-rs/wgpu#9760, #6211). Serialising setup removed the crash. Rendering and teardown stay parallel.
+//! gfx-rs/wgpu#9760, #6211). Serialising setup removed the crash. Rendering and teardown stay parallel, except that
+//! **on WARP every submission in the process takes its turn** ([`Submitter`], #130): its shader compiler crashes when
+//! two devices submit draws at once.
 //!
 //! Backends are tried in tiers: Vulkan, Metal and DX12 first, and only when none of them has an adapter, GL. An
 //! instance only ever enables one tier, so most machines never set up GL at all.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -23,6 +25,51 @@ pub(crate) fn setup_lock() -> MutexGuard<'static, ()> {
     static SETUP: Mutex<()> = Mutex::new(());
     // A panic while holding the lock leaves nothing half-written behind it (the guarded data is `()`).
     SETUP.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Submits command buffers to one device's queue, one submission in the process at a time on WARP.
+///
+/// WARP (Direct3D 12's software adapter) compiles a pipeline's shaders to machine code the first time a draw uses
+/// it, inside `ExecuteCommandLists` and on its own thread pool. Windows' own WARP (10.0.26100, on CI and the dev PC)
+/// crashes in that compiler when two devices submit such draws at once: an access violation in `d3d10warp.dll`
+/// (`JITBaseVariable::OptimizeCopy`, `PixelJitProgram::ClassifyVars`, `FeCleanup::Pass2`), in every run of a
+/// two-device repro and a third of `no_alloc` runs under a debugger, with wgpu's validation off (#130). One device
+/// submitting from several threads never crashed (wgpu-core locks its queue), nor did two devices whose submissions
+/// took turns, which is what this does; nor the redistributable WARP 1.0.20 or 1.0.22 (NuGet). The Direct3D 12
+/// debug layer hides it, so it only shows without validation: release builds, or a machine without the layer.
+/// Uncontended (one device, as in a game) the lock costs next to nothing and allocates nothing. Other adapters
+/// submit unlocked.
+#[derive(Clone, Debug)]
+pub(crate) struct Submitter {
+    queue: wgpu::Queue,
+    one_at_a_time: bool,
+}
+
+impl Submitter {
+    /// Hands `buffers` to the queue, as `wgpu::Queue::submit` does.
+    pub(crate) fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(&self, buffers: I) -> wgpu::SubmissionIndex {
+        submit(&self.queue, self.one_at_a_time, buffers)
+    }
+}
+
+/// [`Submitter::submit`], for a queue and adapter given apart.
+fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(
+    queue: &wgpu::Queue,
+    one_at_a_time: bool,
+    buffers: I,
+) -> wgpu::SubmissionIndex {
+    if !one_at_a_time {
+        return queue.submit(buffers);
+    }
+    static WARP_SUBMITS: Mutex<()> = Mutex::new(());
+    // A panic while holding the lock leaves nothing half-written behind it (the guarded data is `()`).
+    let _turn = WARP_SUBMITS.lock().unwrap_or_else(PoisonError::into_inner);
+    queue.submit(buffers)
+}
+
+/// Whether the device is WARP: Direct3D 12's only software adapter.
+fn is_warp(capabilities: &Capabilities) -> bool {
+    capabilities.backend == wgpu::Backend::Dx12 && capabilities.device_type == wgpu::DeviceType::Cpu
 }
 
 /// Device features the renderer turns on whenever the adapter has them.
@@ -360,9 +407,23 @@ impl RenderContext {
         &self.device
     }
 
-    /// The command queue.
+    /// The command queue, for writes. Submit through [`RenderContext::submit`], not the queue's own `submit`.
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    /// Hands `buffers` to the GPU, as `wgpu::Queue::submit` does: on WARP, one submission in the process at a time,
+    /// because WARP's shader compiler crashes when two devices submit at once (#130).
+    pub fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(&self, buffers: I) -> wgpu::SubmissionIndex {
+        submit(&self.queue, is_warp(&self.capabilities), buffers)
+    }
+
+    /// What the renderer's parts submit through, kept beside their clone of the queue.
+    pub(crate) fn submitter(&self) -> Submitter {
+        Submitter {
+            queue: self.queue.clone(),
+            one_at_a_time: is_warp(&self.capabilities),
+        }
     }
 
     /// What the adapter and device can do.

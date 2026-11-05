@@ -793,7 +793,7 @@ impl RenderHook for SceneRenderer {
                         label: Some("metallic scene upload"),
                     });
                 self.last_upload = scene.upload(&mut encoder);
-                device.context.queue().submit(std::iter::once(encoder.finish()));
+                device.context.submit(std::iter::once(encoder.finish()));
                 render_cpu = start.elapsed().saturating_sub(acquire);
                 draws = DrawStats::default();
                 cull = Duration::ZERO;

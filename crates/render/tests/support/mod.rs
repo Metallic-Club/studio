@@ -168,7 +168,7 @@ fn read_back_texels(context: &RenderContext, texture: &wgpu::Texture, texel_size
         },
         texture.size(),
     );
-    context.queue().submit(Some(encoder.finish()));
+    context.submit(Some(encoder.finish()));
     buffer.map_async(wgpu::MapMode::Read, .., |result| {
         result.expect("map the readback buffer")
     });
@@ -199,7 +199,7 @@ pub(crate) fn read_back_buffer(context: &RenderContext, buffer: &wgpu::Buffer, s
         .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     encoder.copy_buffer_to_buffer(buffer, 0, &readback, 0, size);
-    context.queue().submit(Some(encoder.finish()));
+    context.submit(Some(encoder.finish()));
     readback.map_async(wgpu::MapMode::Read, .., |result| {
         result.expect("map the readback buffer")
     });

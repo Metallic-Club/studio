@@ -532,7 +532,7 @@ impl HandPost {
 /// the merged scene pass, which discards depth at its end.
 fn hand_written_frame(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    context: &RenderContext,
     target: &wgpu::TextureView,
     depth: &wgpu::TextureView,
     passes: &[HandPass],
@@ -585,7 +585,7 @@ fn hand_written_frame(
             multiview_mask: None,
         }));
     }
-    queue.submit(std::iter::once(encoder.finish()))
+    context.submit(std::iter::once(encoder.finish()))
 }
 
 fn median(mut counts: Vec<u64>) -> u64 {
@@ -618,7 +618,7 @@ fn frames_and_floor(
     post: Option<&HandPost>,
     pending: bool,
 ) -> (u64, u64) {
-    let (device, queue) = (context.device(), context.queue());
+    let device = context.device();
     let mut renderer = Renderer::new(
         context,
         RendererSettings {
@@ -645,7 +645,7 @@ fn frames_and_floor(
             let (count, submission) = if renderer_turn {
                 allocations_in(|| renderer.render(target.view()))
             } else {
-                allocations_in(|| hand_written_frame(device, queue, target.view(), depth, hand, post))
+                allocations_in(|| hand_written_frame(device, context, target.view(), depth, hand, post))
             };
             pacer.submitted(device, submission);
             if frame >= WARM_UP {
@@ -714,10 +714,12 @@ fn measuring_gpu(force_vertex_instances: bool) -> Option<RenderContext> {
 /// 50 allocations per frame, different for the renderer and the hand-written frame and from process to process: the
 /// swings of up to 40 in #125 (the dev PC has no debug layer installed, so it never saw them).
 ///
-/// Turning validation off instead removes the messages too, but WARP without its debug layer crashed in about one test
-/// process in twelve on CI, on one of its own worker threads (#130). So validation stays on, and a handler that runs
-/// before wgpu-hal's marks every debug-output exception handled, which is what a debugger would do with it: the
-/// messages go nowhere (wgpu-hal never logged them anyway), and everything else the layer checks still runs.
+/// Turning validation off instead removes the messages too, but the layer's checks are worth keeping. (Without it,
+/// WARP's shader compiler crashed whenever two tests' devices submitted at once, until `RenderContext::submit` made
+/// them take turns: #130.) So validation stays on, and a handler that runs before wgpu-hal's marks every debug-output
+/// exception handled, which is what a debugger would do with it: the messages go nowhere (wgpu-hal never logged them
+/// anyway), and everything else the layer checks still runs. The hand-written frames submit through
+/// `RenderContext::submit` too, as the renderer does.
 #[cfg(windows)]
 mod debug_output {
     use windows_sys::Win32::Foundation::{DBG_PRINTEXCEPTION_C, DBG_PRINTEXCEPTION_WIDE_C};
@@ -1052,7 +1054,7 @@ impl HandScaled {
     fn frame(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        context: &RenderContext,
         target: &wgpu::TextureView,
         corner: Option<(u32, u32)>,
     ) -> wgpu::SubmissionIndex {
@@ -1096,7 +1098,7 @@ impl HandScaled {
         }
         // The finish pass draws UI.
         self.post.record(&mut encoder, target, corner);
-        queue.submit(std::iter::once(encoder.finish()))
+        context.submit(std::iter::once(encoder.finish()))
     }
 }
 
@@ -1109,7 +1111,7 @@ fn scaled_frame_and_floor(
     texture: (u32, u32),
     corner: Option<(u32, u32)>,
 ) -> (u64, u64) {
-    let (device, queue) = (context.device(), context.queue());
+    let device = context.device();
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(
         context,
@@ -1131,7 +1133,7 @@ fn scaled_frame_and_floor(
             let (count, submission) = if renderer_turn {
                 allocations_in(|| renderer.render(target.view()))
             } else {
-                allocations_in(|| hand.frame(device, queue, target.view(), corner))
+                allocations_in(|| hand.frame(device, context, target.view(), corner))
             };
             pacer.submitted(device, submission);
             if frame >= WARM_UP {
@@ -1641,7 +1643,7 @@ fn scene_on_gpu(context: &RenderContext, game: &mut SceneGame) -> GpuScene {
         .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     scene.upload(&mut encoder);
-    context.queue().submit(Some(encoder.finish()));
+    context.submit(Some(encoder.finish()));
     scene
 }
 
@@ -1683,7 +1685,7 @@ fn scene_upload_and_floor(context: &RenderContext, scatter: bool) -> Option<((u6
         }));
         let instances = scatter.then_some(stats.slots);
         let (floor_count, ()) = allocations_in(|| hand.upload(queue, &mut by_hand, stats.bytes, &ranges, instances));
-        pacer.submitted(device, queue.submit([encoder.finish(), by_hand.finish()]));
+        pacer.submitted(device, context.submit([encoder.finish(), by_hand.finish()]));
         if frame >= WARM_UP {
             ours.push(count);
             floor.push(floor_count);
@@ -2336,12 +2338,13 @@ impl HandParts {
     fn frame(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        context: &RenderContext,
         target: &wgpu::TextureView,
         (opaque, transparent): (u32, (u32, usize)),
         visible: &[u32],
         shadows: Option<&HandCasters>,
     ) -> wgpu::SubmissionIndex {
+        let queue = context.queue();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
         });
@@ -2435,7 +2438,7 @@ impl HandParts {
                 pass.draw_indexed(0..36, 0, draw..draw + 1);
             }
         }
-        queue.submit(std::iter::once(encoder.finish()))
+        context.submit(std::iter::once(encoder.finish()))
     }
 }
 
@@ -2569,7 +2572,7 @@ fn frame_and_floor(
     work: ShadowWork,
 ) -> (u64, u64, DrawStats) {
     let shadows = work != ShadowWork::Off;
-    let (device, queue) = (context.device(), context.queue());
+    let device = context.device();
     let mut game = support::scenes::Game::new();
     // Every kind opaque, and see-through blocks and balls mixed so the transparent pass makes several draws.
     support::scenes::grid(&mut game, parts, 100, support::scenes::SeeThrough::Mixed(see_through));
@@ -2673,7 +2676,7 @@ fn frame_and_floor(
                 allocations_in(|| {
                     hand.frame(
                         device,
-                        queue,
+                        context,
                         target.view(),
                         (calls.0, pulled),
                         &visible,
@@ -3094,7 +3097,13 @@ impl HandOverlay {
     }
 
     /// A UI-only frame that writes the quads and draws them: the same wgpu calls as the renderer's overlay frame.
-    fn frame(&self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::TextureView) -> wgpu::SubmissionIndex {
+    fn frame(
+        &self,
+        device: &wgpu::Device,
+        context: &RenderContext,
+        target: &wgpu::TextureView,
+    ) -> wgpu::SubmissionIndex {
+        let queue = context.queue();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("metallic frame"),
         });
@@ -3121,7 +3130,7 @@ impl HandOverlay {
         pass.set_vertex_buffer(0, self.buffer.slice(..u64::from(quads) * Self::QUAD));
         pass.draw(0..6, 0..quads);
         drop(pass);
-        queue.submit(std::iter::once(encoder.finish()))
+        context.submit(std::iter::once(encoder.finish()))
     }
 }
 
@@ -3129,7 +3138,7 @@ impl HandOverlay {
 /// every frame) and of the same wgpu calls by hand, over [`FRAMES`] frames each in alternating order, with the
 /// overlay's quad count.
 fn overlay_frame_and_floor(context: &RenderContext, work: OverlayWork) -> (u64, u64, usize) {
-    let (device, queue) = (context.device(), context.queue());
+    let device = context.device();
     let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
     let mut renderer = Renderer::new(
         context,
@@ -3155,7 +3164,7 @@ fn overlay_frame_and_floor(context: &RenderContext, work: OverlayWork) -> (u64, 
                     renderer.render(target.view())
                 })
             } else {
-                allocations_in(|| hand.frame(device, queue, target.view()))
+                allocations_in(|| hand.frame(device, context, target.view()))
             };
             pacer.submitted(device, submission);
             if frame >= WARM_UP {

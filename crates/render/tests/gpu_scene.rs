@@ -57,7 +57,7 @@ fn frame(context: &RenderContext, scene: &mut GpuScene, dm: &mut DataModel) -> U
         .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     let stats = scene.upload(&mut encoder);
-    context.queue().submit(Some(encoder.finish()));
+    context.submit(Some(encoder.finish()));
     stats
 }
 

@@ -247,7 +247,7 @@ fn upload(c: &mut Criterion) {
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             scene.upload(&mut encoder);
-            wait(&context, context.queue().submit(Some(encoder.finish())));
+            wait(&context, context.submit(Some(encoder.finish())));
         }
         // Sync, upload and the submission that carries it: the scene's whole CPU cost in a frame.
         group.bench_function(format!("sync_upload_{name}"), |b| {
@@ -261,7 +261,7 @@ fn upload(c: &mut Criterion) {
                         .device()
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
                     black_box(scene.upload(&mut encoder));
-                    let submission = context.queue().submit(Some(encoder.finish()));
+                    let submission = context.submit(Some(encoder.finish()));
                     total += start.elapsed();
                     wait(&context, submission);
                 }
@@ -300,7 +300,7 @@ fn upload(c: &mut Criterion) {
                         bytemuck::cast_slice(instances),
                     );
                 }
-                let submission = context.queue().submit(None);
+                let submission = context.submit(None);
                 total += start.elapsed();
                 wait(&context, submission);
             }
