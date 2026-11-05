@@ -1370,10 +1370,11 @@ const LEAK_VAR: &str = "METALLIC_TEST_LEAK_PER_FRAME";
 /// So every measured frame ends with the GPU idle: its submission and its pending writes are retired before the next
 /// frame takes an encoder, and the encoders go round in the same order on every run, whatever the GPU's timing.
 /// [`SETTLE_FRAMES`] such frames, unmeasured, come first, so the encoders the frames go round have each recorded the
-/// frame before the windows start. With that, the heap grew by exactly 0 in both windows of every heap-growth test
-/// in 30 full runs on each of the dev PC's Vulkan, Direct3D 12 and OpenGL, except a 2,592-byte step in one window
-/// of the Direct3D 12 overlay frames: gpu-allocator's free-list chunk map, which picks between equal free chunks in
-/// a hash order seeded per process, so a frame's staging write fragments a block differently from run to run.
+/// frame before the windows start. With that, every window of every heap-growth test grew by exactly 0 bytes in 30
+/// full runs on each of the dev PC's Vulkan, Direct3D 12 and OpenGL and 20 on each of CI's lavapipe, WARP and
+/// llvmpipe, except one-window steps of gpu-allocator's free-list chunk map (2,592 bytes in 10 of the Direct3D 12
+/// overlay frames' runs, 5,184 once on lavapipe): it picks between equal free chunks in a hash order seeded per
+/// process, so a frame's staging write can fragment a memory block differently from run to run.
 struct HeapGrowth {
     /// The frames in each window and how many bytes the heap grew over them. The second window is measured only if
     /// the heap grew too much in the first: otherwise it could not change the answer.
