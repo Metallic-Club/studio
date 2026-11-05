@@ -128,9 +128,17 @@ fn a_frame_reports_its_passes() {
     assert!(stats.finish && !stats.mlaa);
     assert_eq!(stats.scene_format, hdr);
     assert_eq!(stats.bloom_levels as usize, BloomSettings::HIGH.levels(SIZE));
-    // Opaque, sky, transparent and the finish pass, which draws UI (#97); bloom's chain at half the size and below.
+    // Opaque, sky, transparent and the finish pass, which draws UI (#97); bloom's chain at half the size and below,
+    // one compute pass where the device has compute shaders (#145), else a render pass per step.
     assert_eq!(stats.full_screen_passes, 4);
-    assert_eq!(stats.render_passes, 3 + 2 * stats.bloom_levels - 1 + 1);
+    let render_chain = (3 + 2 * stats.bloom_levels - 1 + 1, 0);
+    if metallic_render::post::bloom_compute_format(&context).is_some() {
+        assert_eq!((stats.render_passes, stats.compute_passes), (4, 1));
+    } else {
+        assert_eq!((stats.render_passes, stats.compute_passes), render_chain);
+    }
+    let (_, passes) = render(&context, &mut demo(), |s| s.post.bloom.compute = false);
+    assert_eq!((passes.render_passes, passes.compute_passes), render_chain);
     let (_, mlaa) = render(&context, &mut demo(), |s| s.passes = s.passes.with(PassId::Mlaa));
     assert!(mlaa.mlaa);
     assert_eq!(mlaa.full_screen_passes, 5);
@@ -326,6 +334,40 @@ fn bloom_glows_around_a_lamp_at_night_at_every_effect_quality() {
         // The glow is around the lamp, not a veil over the image: the corners barely change.
         let (dark, veiled) = (ring(&plain, 150.0, 200.0), ring(&bloomed, 150.0, 200.0));
         assert!((veiled - dark).abs() < 2.0, "{name}: {dark} -> {veiled}");
+    }
+}
+
+/// Bloom's chain as one compute pass (#145) runs the render passes' filters at the same coordinates, so the image
+/// is the one the render passes draw (as devices without compute shaders do). Where its levels are the scene colour's
+/// `Rg11b10Ufloat` (DX12, Vulkan) a pixel or two differ by a level; where they are `Rgba16Float` (OpenGL, which writes
+/// no `Rg11b10Ufloat` storage), which keeps a few more bits of the glow, up to two levels and 0.5 on average. The lamp
+/// at night (where the glow is the image) and the demo by day, at every effect quality.
+#[test]
+fn bloom_draws_the_same_image_in_a_compute_pass_as_in_render_passes() {
+    let Some(context) = gpu() else { return };
+    if metallic_render::post::bloom_compute_format(&context).is_none() {
+        eprintln!("no compute shaders: bloom draws render passes only");
+        return;
+    }
+    for (scene, make) in [("lamp", night_lamp as fn() -> Game), ("demo", demo)] {
+        for (name, post) in [
+            ("low", PostSettings::LOW),
+            ("medium", PostSettings::MEDIUM),
+            ("high", PostSettings::HIGH),
+        ] {
+            let (compute, stats) = render(&context, &mut make(), |s| s.post = post);
+            assert_eq!(stats.compute_passes, 1, "{scene} {name}");
+            let (passes, stats) = render(&context, &mut make(), |s| {
+                s.post = post;
+                s.post.bloom.compute = false;
+            });
+            assert_eq!(stats.compute_passes, 0, "{scene} {name}");
+            save(&format!("bloom_{scene}_{name}_compute"), &compute);
+            save(&format!("bloom_{scene}_{name}_passes"), &passes);
+            let diff = scenes::compare(&compute, &passes, 1);
+            eprintln!("{scene} {name}: compute pass against render passes: {diff:?}");
+            assert!(diff.max <= 2 && diff.mean <= 1.0, "{scene} {name}: {diff:?}");
+        }
     }
 }
 

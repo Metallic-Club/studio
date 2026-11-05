@@ -52,6 +52,9 @@
 //! scene colour and then records the chain as the renderer does ([`HandPost`]: bloom's downsampling and upsampling
 //! passes, the finish pass, with the renderer's own shaders), and the plain frame is also compared with MLAA's pass
 //! added and with the scene passes merged into one. A frame without the finish pass makes the calls it made before.
+//! Since #145 bloom's chain is one compute pass where the device has compute shaders (every adapter CI has), and the
+//! hand-written frames record the same compute pass, its dispatches and the same bind groups; elsewhere a render pass
+//! per step, as before.
 //!
 //! Pipelines compiled off the frame (#86) too: every renderer here waits for its background compiles before it is
 //! measured, so the frames compare as before; and the default frame drawn while a settings change waits for
@@ -258,19 +261,35 @@ const MERGED_PASSES: [HandPass; 2] = [("scene", true, Some(true)), ("ui", false,
 const UI_ONLY: [HandPass; 1] = [("ui", true, None)];
 
 /// The post chain of a hand-written frame as the renderer's defaults draw it (`src/post`): the HDR scene colour,
-/// bloom's chain of passes into the levels of one texture, MLAA's pass when asked, and the finish pass into the
-/// target, with the renderer's own shaders, pipelines, textures and bind groups like its own.
+/// bloom's chain (one compute pass of dispatches where the device has compute shaders, #145, else a render pass per
+/// step into the levels of one texture), MLAA's pass when asked, and the finish pass into the target, with the
+/// renderer's own shaders, pipelines, textures and bind groups like its own.
 struct HandPost {
     scene: wgpu::TextureView,
-    levels: Vec<wgpu::TextureView>,
-    first: wgpu::RenderPipeline,
-    down: wgpu::RenderPipeline,
-    up: wgpu::RenderPipeline,
+    bloom: HandBloom,
     down_groups: Vec<wgpu::BindGroup>,
     up_groups: Vec<wgpu::BindGroup>,
     mlaa: Option<(wgpu::RenderPipeline, wgpu::BindGroup, wgpu::TextureView)>,
     finish: wgpu::RenderPipeline,
     finish_group: wgpu::BindGroup,
+}
+
+/// Bloom's chain as the renderer records it on the device.
+enum HandBloom {
+    /// A render pass per step into `levels`.
+    Passes {
+        levels: Vec<wgpu::TextureView>,
+        first: wgpu::RenderPipeline,
+        down: wgpu::RenderPipeline,
+        up: wgpu::RenderPipeline,
+    },
+    /// One compute pass: a dispatch of `workgroups` per level down, then up.
+    Compute {
+        first: wgpu::ComputePipeline,
+        down: wgpu::ComputePipeline,
+        up: wgpu::ComputePipeline,
+        workgroups: Vec<(u32, u32)>,
+    },
 }
 
 /// The renderer's names for bloom's passes (`src/post/bloom.rs`).
@@ -297,7 +316,7 @@ impl HandPost {
     fn new(context: &RenderContext, scene: (u32, u32), mlaa: bool) -> Self {
         let device = context.device();
         let hdr = metallic_render::post::hdr_format(context);
-        let texture = |label, (width, height): (u32, u32), mips, format| {
+        let texture = |label, (width, height): (u32, u32), mips, format, usage: wgpu::TextureUsages| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
@@ -309,24 +328,55 @@ impl HandPost {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
         };
+        let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let whole = |texture: wgpu::Texture| texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let scene_view = whole(texture("hand scene colour", scene, 1, hdr));
+        let scene_view = whole(texture("hand scene colour", scene, 1, hdr, attachment));
         let bloom = metallic_render::PostSettings::default().bloom;
         let count = bloom.levels(SIZE);
-        let bloom_texture = texture("hand bloom", (SIZE / 2, SIZE / 2), count as u32, hdr);
-        let levels: Vec<_> = (0..count as u32)
-            .map(|mip| {
-                bloom_texture.create_view(&wgpu::TextureViewDescriptor {
-                    base_mip_level: mip,
-                    mip_level_count: Some(1),
-                    ..wgpu::TextureViewDescriptor::default()
+        // Where the device has compute shaders the renderer's chain is one compute pass, its levels and their sums
+        // storage textures (#145).
+        let compute_format = metallic_render::post::bloom_compute_format(context);
+        let compute = compute_format.is_some();
+        let (bloom_format, bloom_usage) = match compute_format {
+            Some(format) => (format, wgpu::TextureUsages::STORAGE_BINDING),
+            None => (hdr, attachment),
+        };
+        let mips = |texture: wgpu::Texture, count: usize| -> Vec<wgpu::TextureView> {
+            (0..count as u32)
+                .map(|mip| {
+                    texture.create_view(&wgpu::TextureViewDescriptor {
+                        base_mip_level: mip,
+                        mip_level_count: Some(1),
+                        ..wgpu::TextureViewDescriptor::default()
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        };
+        let half = (SIZE / 2, SIZE / 2);
+        // The compute chain's smallest level is written among the sums, as the renderer's.
+        let (levels, sums) = if compute {
+            let sums = mips(
+                texture("hand bloom sums", half, count as u32, bloom_format, bloom_usage),
+                count,
+            );
+            let mut levels = mips(
+                texture("hand bloom", half, count as u32 - 1, bloom_format, bloom_usage),
+                count - 1,
+            );
+            levels.push(sums[count - 1].clone());
+            (levels, sums)
+        } else {
+            let levels = mips(
+                texture("hand bloom", half, count as u32, bloom_format, bloom_usage),
+                count,
+            );
+            (levels, Vec::new())
+        };
+        let output = sums.first().unwrap_or(&levels[0]).clone();
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
@@ -373,59 +423,150 @@ impl HandPost {
                 mapped_at_creation: false,
             })
         };
-        let bloom_module = module("hand bloom", include_str!("../src/post/bloom.wgsl"));
-        let first = pipeline(&bloom_module, ("vs_bloom", "fs_first_wide"), hdr, None);
-        let down = pipeline(&bloom_module, ("vs_bloom", "fs_down_wide"), hdr, None);
-        let add = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent::REPLACE,
-        };
-        let up = pipeline(&bloom_module, ("vs_bloom", "fs_up"), hdr, Some(add));
-        // One slot per pass in one buffer, as the renderer's.
+        // One slot per step in one buffer, as the renderer's.
         let stride = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(32);
         let bloom_params = uniform(stride * 12);
-        let group = |pipeline: &wgpu::RenderPipeline, slot: u64, source: &wgpu::TextureView| {
+        let params_entry = |slot: usize| wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &bloom_params,
+                offset: slot as u64 * stride,
+                size: wgpu::BufferSize::new(32),
+            }),
+        };
+        fn view_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
+            wgpu::BindGroupEntry {
+                binding,
+                resource: wgpu::BindingResource::TextureView(view),
+            }
+        }
+        let sampler_entry = wgpu::BindGroupEntry {
+            binding: 2,
+            resource: wgpu::BindingResource::Sampler(&sampler),
+        };
+        let group = |layout: &wgpu::BindGroupLayout, entries: &[wgpu::BindGroupEntry<'_>]| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("hand bloom"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &bloom_params,
-                            offset: slot * stride,
-                            size: wgpu::BufferSize::new(32),
-                        }),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
+                layout,
+                entries,
             })
         };
-        let down_groups = (0..count)
-            .map(|i| {
-                if i == 0 {
-                    group(&first, 0, &scene_view)
-                } else {
-                    group(&down, i as u64, &levels[i - 1])
-                }
-            })
-            .collect();
-        let up_groups = (0..count - 1)
-            .map(|i| group(&up, 6 + i as u64, &levels[i + 1]))
-            .collect();
+        let (bloom, down_groups, up_groups) = if compute {
+            // The renderer's shader, declaring its storage format.
+            let source = concat!(
+                include_str!("../src/post/bloom.wgsl"),
+                include_str!("../src/post/bloom_compute.wgsl")
+            );
+            let source = match bloom_format {
+                wgpu::TextureFormat::Rg11b10Ufloat => source.replace("rgba16float", "rg11b10ufloat"),
+                _ => source.to_owned(),
+            };
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("hand bloom compute"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            let kernel = |entry| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("hand bloom"),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+            };
+            let (first, down, up) = (kernel("cs_first_wide"), kernel("cs_down_wide"), kernel("cs_up"));
+            let down_groups = (0..count)
+                .map(|i| {
+                    let (pipeline, source) = if i == 0 {
+                        (&first, &scene_view)
+                    } else {
+                        (&down, &levels[i - 1])
+                    };
+                    let entries = [
+                        params_entry(i),
+                        view_entry(1, source),
+                        sampler_entry.clone(),
+                        view_entry(3, &levels[i]),
+                    ];
+                    group(&pipeline.get_bind_group_layout(0), &entries)
+                })
+                .collect();
+            let up_groups = (0..count - 1)
+                .map(|i| {
+                    let entries = [
+                        params_entry(6 + i),
+                        view_entry(1, &sums[i + 1]),
+                        sampler_entry.clone(),
+                        view_entry(3, &sums[i]),
+                        view_entry(4, &levels[i]),
+                    ];
+                    group(&up.get_bind_group_layout(0), &entries)
+                })
+                .collect();
+            let workgroups = (0..count)
+                .map(|i| {
+                    let side = ((SIZE / 2) >> i).max(1);
+                    (side.div_ceil(8), side.div_ceil(8))
+                })
+                .collect();
+            let chain = HandBloom::Compute {
+                first,
+                down,
+                up,
+                workgroups,
+            };
+            (chain, down_groups, up_groups)
+        } else {
+            let module = module("hand bloom", include_str!("../src/post/bloom.wgsl"));
+            let first = pipeline(&module, ("vs_bloom", "fs_first_wide"), hdr, None);
+            let down = pipeline(&module, ("vs_bloom", "fs_down_wide"), hdr, None);
+            let add = wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::REPLACE,
+            };
+            let up = pipeline(&module, ("vs_bloom", "fs_up"), hdr, Some(add));
+            let down_groups = (0..count)
+                .map(|i| {
+                    let (pipeline, source) = if i == 0 {
+                        (&first, &scene_view)
+                    } else {
+                        (&down, &levels[i - 1])
+                    };
+                    let entries = [params_entry(i), view_entry(1, source), sampler_entry.clone()];
+                    group(&pipeline.get_bind_group_layout(0), &entries)
+                })
+                .collect();
+            let up_groups = (0..count - 1)
+                .map(|i| {
+                    let entries = [
+                        params_entry(6 + i),
+                        view_entry(1, &levels[i + 1]),
+                        sampler_entry.clone(),
+                    ];
+                    group(&up.get_bind_group_layout(0), &entries)
+                })
+                .collect();
+            let chain = HandBloom::Passes {
+                levels: levels.clone(),
+                first,
+                down,
+                up,
+            };
+            (chain, down_groups, up_groups)
+        };
         let mlaa = mlaa.then(|| {
-            let weights = whole(texture("hand mlaa weights", scene, 1, wgpu::TextureFormat::Rgba8Unorm));
+            let weights = whole(texture(
+                "hand mlaa weights",
+                scene,
+                1,
+                wgpu::TextureFormat::Rgba8Unorm,
+                attachment,
+            ));
             let module = module("hand mlaa", include_str!("../src/post/mlaa.wgsl"));
             let pipeline = pipeline(&module, ("vs_mlaa", "fs_mlaa"), wgpu::TextureFormat::Rgba8Unorm, None);
             let params = uniform(32);
@@ -468,7 +609,7 @@ impl HandPost {
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(&levels[0]),
+                resource: wgpu::BindingResource::TextureView(&output),
             },
         ];
         if let Some((_, _, weights)) = mlaa.as_ref() {
@@ -484,10 +625,7 @@ impl HandPost {
         });
         Self {
             scene: scene_view,
-            levels,
-            first,
-            down,
-            up,
+            bloom,
             down_groups,
             up_groups,
             mlaa,
@@ -533,17 +671,50 @@ impl HandPost {
             render_pass.set_bind_group(0, group, &[]);
             render_pass.draw(0..3, 0..1);
         }
-        for (i, (view, group)) in self.levels.iter().zip(&self.down_groups).enumerate() {
-            let mut render_pass = pass(encoder, BLOOM_DOWN[i], view, wgpu::LoadOp::Clear(wgpu::Color::BLACK));
-            render_pass.set_pipeline(if i == 0 { &self.first } else { &self.down });
-            render_pass.set_bind_group(0, group, &[]);
-            render_pass.draw(0..3, 0..1);
-        }
-        for i in (0..self.levels.len() - 1).rev() {
-            let mut render_pass = pass(encoder, BLOOM_UP[i], &self.levels[i], wgpu::LoadOp::Load);
-            render_pass.set_pipeline(&self.up);
-            render_pass.set_bind_group(0, &self.up_groups[i], &[]);
-            render_pass.draw(0..3, 0..1);
+        match &self.bloom {
+            HandBloom::Passes {
+                levels,
+                first,
+                down,
+                up,
+            } => {
+                for (i, (view, group)) in levels.iter().zip(&self.down_groups).enumerate() {
+                    let mut render_pass = pass(encoder, BLOOM_DOWN[i], view, wgpu::LoadOp::Clear(wgpu::Color::BLACK));
+                    render_pass.set_pipeline(if i == 0 { first } else { down });
+                    render_pass.set_bind_group(0, group, &[]);
+                    render_pass.draw(0..3, 0..1);
+                }
+                for i in (0..levels.len() - 1).rev() {
+                    let mut render_pass = pass(encoder, BLOOM_UP[i], &levels[i], wgpu::LoadOp::Load);
+                    render_pass.set_pipeline(up);
+                    render_pass.set_bind_group(0, &self.up_groups[i], &[]);
+                    render_pass.draw(0..3, 0..1);
+                }
+            }
+            HandBloom::Compute {
+                first,
+                down,
+                up,
+                workgroups,
+            } => {
+                let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("bloom"),
+                    timestamp_writes: None,
+                });
+                for (i, (group, &(x, y))) in self.down_groups.iter().zip(workgroups).enumerate() {
+                    if i <= 1 {
+                        compute_pass.set_pipeline(if i == 0 { first } else { down });
+                    }
+                    compute_pass.set_bind_group(0, group, &[]);
+                    compute_pass.dispatch_workgroups(x, y, 1);
+                }
+                compute_pass.set_pipeline(up);
+                for i in (0..self.up_groups.len()).rev() {
+                    let (x, y) = workgroups[i];
+                    compute_pass.set_bind_group(0, &self.up_groups[i], &[]);
+                    compute_pass.dispatch_workgroups(x, y, 1);
+                }
+            }
         }
         let mut render_pass = pass(encoder, "post", target, wgpu::LoadOp::Clear(wgpu::Color::BLACK));
         render_pass.set_pipeline(&self.finish);

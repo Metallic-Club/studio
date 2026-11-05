@@ -71,6 +71,7 @@ pub struct SceneRenderer {
     anti_aliasing: AntiAliasing,
     merge_scene_passes: bool,
     post_chain: bool,
+    bloom_compute: bool,
     lod_tint: bool,
     present_mode: Option<wgpu::PresentMode>,
     /// The player's graphics settings, once set ([`SceneRenderer::set_graphics`]).
@@ -133,6 +134,7 @@ impl SceneRenderer {
             anti_aliasing: AntiAliasing::Off,
             merge_scene_passes: true,
             post_chain: true,
+            bloom_compute: true,
             lod_tint: false,
             present_mode: None,
             graphics: None,
@@ -263,14 +265,31 @@ impl SceneRenderer {
     /// Applies now and to every later renderer.
     pub fn set_post(&mut self, post: PostSettings) {
         self.post = post;
+        let drawn = self.drawn_post();
         if let Some(device) = self.device.as_mut() {
-            device.renderer.set_post(post);
+            device.renderer.set_post(drawn);
         }
     }
 
     /// How the post chain finishes the image.
     pub fn post(&self) -> PostSettings {
         self.post
+    }
+
+    /// Draws bloom's chain as a render pass per step when `on` is false, as devices without compute shaders do
+    /// (WebGL 2, GLES 3.0), instead of one compute pass (#145): for measuring what the compute pass saves, and for
+    /// testing the render passes on any device. On by default. Applies now and to every later renderer.
+    pub fn set_bloom_compute(&mut self, on: bool) {
+        self.bloom_compute = on;
+        self.set_post(self.post);
+    }
+
+    /// The post settings the renderer draws with: [`SceneRenderer::post`], with bloom's compute pass off when
+    /// [`SceneRenderer::set_bloom_compute`] turned it off.
+    fn drawn_post(&self) -> PostSettings {
+        let mut post = self.post;
+        post.bloom.compute &= self.bloom_compute;
+        post
     }
 
     /// Changes the anti-aliasing: off (the default), MLAA, or MSAA, which falls back to the largest sample count the
@@ -840,7 +859,7 @@ impl SceneRenderer {
             lights: self.lights,
             lod: self.lod,
             resolution: self.resolution,
-            post: self.post,
+            post: self.drawn_post(),
             // MLAA works everywhere; MSAA is set once the renderer knows its sample counts.
             passes: self.passes(self.anti_aliasing.mlaa()),
             ..RendererSettings::new(format, width, height)

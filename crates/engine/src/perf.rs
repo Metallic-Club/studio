@@ -41,10 +41,11 @@ pub struct GraphicsStatus {
 impl GraphicsStatus {
     /// The status as the members of a JSON object, without the braces: `preset`, `tier` and `calibrating` (names,
     /// or `null`), `resolution` (`scale`, `width`, `height`, `dynamic`, `target_ms`, `min_scale`, `max_scale`),
-    /// `post` (`scene_format`, `finish`, `anti_aliasing`, `bloom_levels`, `render_passes`, `full_screen_passes`, and
-    /// `passes`: the planned passes' names in order, bloom's chain as one) and `pipelines` (`compiled`, `pending`,
-    /// `failed`, `workers`, `first_frame_ms`, `all_ms` (`null` while some are pending), `compile_ms` (CPU time summed
-    /// over the workers), `switch_waiting` and `cache_loaded` (bytes, `null` without a pipeline cache)).
+    /// `post` (`scene_format`, `finish`, `anti_aliasing`, `bloom_levels`, `render_passes`, `compute_passes`,
+    /// `full_screen_passes`, and `passes`: the planned passes' names in order, bloom's chain as one) and `pipelines`
+    /// (`compiled`, `pending`, `failed`, `workers`, `first_frame_ms`, `all_ms` (`null` while some are pending),
+    /// `compile_ms` (CPU time summed over the workers), `switch_waiting` and `cache_loaded` (bytes, `null` without a
+    /// pipeline cache)).
     pub fn write_json_members(&self, out: &mut String) {
         use std::fmt::Write as _;
         let name = |name: Option<&str>| name.map_or_else(|| "null".to_owned(), json_string);
@@ -68,12 +69,13 @@ impl GraphicsStatus {
         let _ = write!(
             out,
             ",\"post\":{{\"scene_format\":{},\"finish\":{},\"anti_aliasing\":{},\"bloom_levels\":{},\
-             \"render_passes\":{},\"full_screen_passes\":{},\"passes\":[",
+             \"render_passes\":{},\"compute_passes\":{},\"full_screen_passes\":{},\"passes\":[",
             json_string(p.format_name()),
             p.finish,
             json_string(p.anti_aliasing().name()),
             p.bloom_levels,
             p.render_passes,
+            p.compute_passes,
             p.full_screen_passes
         );
         for (i, pass) in p.passes().enumerate() {
@@ -882,11 +884,12 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
         SCALE,
         TEXT,
         format_args!(
-            "POST  {}  AA {}  BLOOM {}  PASSES {} ({} FULL-SCREEN)",
+            "POST  {}  AA {}  BLOOM {}  PASSES {} + {} COMPUTE ({} FULL-SCREEN)",
             post.format_name(),
             post.anti_aliasing().name(),
             post.bloom_levels,
             post.render_passes,
+            post.compute_passes,
             post.full_screen_passes
         ),
     );

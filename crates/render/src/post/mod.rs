@@ -7,8 +7,9 @@
 //!   in use ([`PostStats::scene_format`]).
 //! - **The effects** ([`crate::PassId::Mlaa`], [`crate::PassId::Bloom`]) read the scene colour and write textures of
 //!   their own, in the order of the [`crate::PostChain`]: MLAA's edge weights at the scene's resolution, and bloom's
-//!   chain of downsampling and upsampling passes from half (or a quarter of) the output's resolution down to a
-//!   thirty-second ([`BloomSettings`]). An effect not in the pass set costs nothing: no pass, no texture, nothing
+//!   chain of downsamples and upsamples from half (or a quarter of) the output's resolution down to a thirty-second
+//!   ([`BloomSettings`]), one compute pass where the device has compute shaders and a render pass per step elsewhere
+//!   ([`BloomSettings::compute`], #145). An effect not in the pass set costs nothing: no pass, no texture, nothing
 //!   bound.
 //! - **The finish pass** ([`crate::PassId::Post`]) reads the scene colour and writes the output once: exposure, the
 //!   colour filter, bloom's composite, the tone curve, the grade (saturation, contrast), MLAA's neighbourhood
@@ -39,7 +40,7 @@ pub(crate) use bloom::Bloom;
 pub(crate) use finish::{Finish, FinishParams};
 pub(crate) use mlaa::Mlaa;
 
-use crate::pipelines::{PipelineKey, Recipe};
+use crate::pipelines::{Pipeline, PipelineKey, Recipe};
 use crate::{MsaaSampleCounts, PassId, PostChain, RenderContext};
 
 pub use finish::tone_curve;
@@ -166,6 +167,10 @@ pub struct BloomSettings {
     /// Downsample with Jimenez's 13-tap filter instead of the dual filter's 5 taps: steadier on small bright
     /// details, at about twice the taps.
     pub wide_filter: bool,
+    /// Draw the chain as one compute pass where the device has compute shaders (the default; #145), rather than a
+    /// render pass per step: the same filters, for one pass's CPU cost instead of 2 × levels − 1. Devices without
+    /// compute shaders (WebGL 2, GLES 3.0) draw render passes either way.
+    pub compute: bool,
 }
 
 impl BloomSettings {
@@ -175,6 +180,7 @@ impl BloomSettings {
         threshold: 0.0,
         start: BloomStart::Quarter,
         wide_filter: false,
+        compute: true,
     };
     /// Medium: from half the output's size, 5-tap downsampling.
     pub const MEDIUM: Self = Self {
@@ -302,8 +308,11 @@ pub struct PostStats {
     /// Bloom's levels (0: no bloom).
     pub bloom_levels: u32,
     /// Render passes the frame begins after the shadows: the planned passes, with bloom's chain counted pass by
-    /// pass.
+    /// pass where it draws render passes, and not at all where it is a compute pass.
     pub render_passes: u32,
+    /// Compute passes the frame begins after the shadows: 1 for bloom's chain where it runs as compute dispatches
+    /// ([`BloomSettings::compute`]), else 0.
+    pub compute_passes: u32,
     /// Passes reading or writing a whole target at the scene's or output's resolution
     /// ([`crate::FramePlan::full_screen_passes`]).
     pub full_screen_passes: u32,
@@ -352,6 +361,7 @@ impl Default for PostStats {
             mlaa: false,
             bloom_levels: 0,
             render_passes: 0,
+            compute_passes: 0,
             full_screen_passes: 0,
             planned: [None; PassId::COUNT],
         }
@@ -373,6 +383,14 @@ pub fn hdr_format(context: &RenderContext) -> wgpu::TextureFormat {
                     .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE | wgpu::TextureFormatFeatureFlags::BLENDABLE)
         })
         .unwrap_or(wgpu::TextureFormat::Rgba8UnormSrgb)
+}
+
+/// The format of bloom's levels where its chain runs as one compute pass on `context` ([`BloomSettings::compute`]):
+/// `Rg11b10Ufloat` where the adapter writes it as storage, else `Rgba16Float`; `None` without compute shaders
+/// (WebGL 2, GLES 3.0), which draw a render pass per step. With `Rgba16Float` levels wider than the scene colour's,
+/// outputs above about 6 megapixels draw the render passes too (their levels would be large textures).
+pub fn bloom_compute_format(context: &RenderContext) -> Option<wgpu::TextureFormat> {
+    bloom::compute_format(context)
 }
 
 /// Whether `format` holds light above 1.
@@ -445,7 +463,7 @@ pub(crate) struct FullScreen {
 impl FullScreen {
     /// The compile of this pipeline.
     pub(crate) fn recipe(self) -> Recipe {
-        Box::new(move |device, cache| self.create(device, cache))
+        Box::new(move |device, cache| self.create(device, cache).into())
     }
 
     /// Makes the pipeline now.
@@ -498,13 +516,15 @@ fn linear_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     })
 }
 
-/// A 2D texture of `size` with `mips` levels in `format`, drawn into and sampled.
+/// A 2D texture of `size` with `mips` levels in `format`, sampled and used as `usage` says (drawn into, or written
+/// as storage).
 fn post_texture(
     device: &wgpu::Device,
     label: &str,
     (width, height): (u32, u32),
     mips: u32,
     format: wgpu::TextureFormat,
+    usage: wgpu::TextureUsages,
 ) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -517,7 +537,7 @@ fn post_texture(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
 }
@@ -532,8 +552,8 @@ pub(crate) struct Post {
 
 impl Post {
     /// Every pipeline of the chain, in the order a frame is likeliest to need them: the finish pass's variants, then
-    /// bloom's, then MLAA's.
-    pub(crate) const KEYS: [PipelineKey; 11] = [
+    /// bloom's (its render passes', then its compute chain's), then MLAA's.
+    pub(crate) const KEYS: [PipelineKey; 17] = [
         PipelineKey::Finish(1),
         PipelineKey::Finish(0),
         PipelineKey::Finish(3),
@@ -544,38 +564,61 @@ impl Post {
         PipelineKey::BloomFirst(0),
         PipelineKey::BloomDown(0),
         PipelineKey::BloomFirst(2),
+        PipelineKey::BloomCompute(1),
+        PipelineKey::BloomCompute(4),
+        PipelineKey::BloomCompute(5),
+        PipelineKey::BloomCompute(0),
+        PipelineKey::BloomCompute(3),
+        PipelineKey::BloomCompute(2),
         PipelineKey::Mlaa,
     ];
 
-    /// The chain for the finish pass writing `output` and the effects reading and writing `scene`. Its pipelines are
-    /// compiled apart ([`Post::recipe`]) and installed as they finish.
-    pub(crate) fn new(device: &wgpu::Device, output: wgpu::TextureFormat, scene: wgpu::TextureFormat) -> Self {
+    /// The chain for the finish pass writing `output` and the effects reading and writing `scene`, on `context`
+    /// (bloom's compute chain where it has compute shaders). Its pipelines are compiled apart ([`Post::recipe`]) and
+    /// installed as they finish.
+    pub(crate) fn new(context: &RenderContext, output: wgpu::TextureFormat, scene: wgpu::TextureFormat) -> Self {
+        let device = context.device();
         let sampler = linear_sampler(device);
         Self {
             finish: Finish::new(device, output),
-            bloom: Bloom::new(device, scene),
+            bloom: Bloom::new(context, scene),
             mlaa: Mlaa::new(device),
             sampler,
         }
+    }
+
+    /// Whether `key` is compiled ahead of any switch: every key of the chain but bloom's for the path this device
+    /// does not draw by default ([`Bloom::prewarms`]).
+    pub(crate) fn prewarms(&self, key: PipelineKey) -> bool {
+        self.bloom.prewarms(key)
     }
 
     /// The compile of the chain's pipeline `key`; `None` for a key that is not the chain's.
     pub(crate) fn recipe(&self, key: PipelineKey) -> Option<Recipe> {
         match key {
             PipelineKey::Finish(variant) => Some(self.finish.full_screen(usize::from(variant)).recipe()),
-            PipelineKey::BloomFirst(_) | PipelineKey::BloomDown(_) | PipelineKey::BloomUp => {
-                self.bloom.full_screen(key).map(FullScreen::recipe)
-            }
+            PipelineKey::BloomFirst(_)
+            | PipelineKey::BloomDown(_)
+            | PipelineKey::BloomUp
+            | PipelineKey::BloomCompute(_) => self.bloom.recipe(key),
             PipelineKey::Mlaa => Some(self.mlaa.full_screen().recipe()),
             _ => None,
         }
     }
 
     /// Puts the compiled pipeline `key` in place.
-    pub(crate) fn install(&mut self, key: PipelineKey, pipeline: wgpu::RenderPipeline) {
+    pub(crate) fn install(&mut self, key: PipelineKey, pipeline: Pipeline) {
         match key {
-            PipelineKey::Finish(variant) => self.finish.install(usize::from(variant), pipeline),
-            PipelineKey::Mlaa => self.mlaa.install(pipeline),
+            PipelineKey::Finish(variant) => {
+                if let Some(pipeline) = pipeline.render() {
+                    self.finish.install(usize::from(variant), pipeline);
+                }
+            }
+            PipelineKey::Mlaa => {
+                if let Some(pipeline) = pipeline.render() {
+                    self.mlaa.install(pipeline);
+                }
+            }
             _ => self.bloom.install(key, pipeline),
         }
     }
@@ -584,7 +627,10 @@ impl Post {
     pub(crate) fn has(&self, key: PipelineKey) -> bool {
         match key {
             PipelineKey::Finish(variant) => self.finish.has(usize::from(variant)),
-            PipelineKey::BloomFirst(_) | PipelineKey::BloomDown(_) | PipelineKey::BloomUp => self.bloom.has(key),
+            PipelineKey::BloomFirst(_)
+            | PipelineKey::BloomDown(_)
+            | PipelineKey::BloomUp
+            | PipelineKey::BloomCompute(_) => self.bloom.has(key),
             PipelineKey::Mlaa => self.mlaa.has(),
             _ => true,
         }

@@ -34,6 +34,8 @@
 //! before the post chain (no HDR target, bloom, tone curve or MLAA; the scene passes apart), to measure what it costs.
 //! Merged passes (#97): the scene passes are recorded as one render pass by default, as every preset does;
 //! `--split-scene` (without `--preset`) records them apart, to measure what merging saves.
+//! Bloom in one compute pass (#145): `--bloom-render-passes` draws bloom's chain as a render pass per step, as devices
+//! without compute shaders do, to measure what the compute pass saves.
 //!
 //! No hitches (#86): `--toggle-effects <n>` toggles the next of `metallic_engine::stress::TOGGLES` every `n` frames
 //! from the first (every preset, anti-aliasing and effect quality, lights, shadows and the overlay off and on), while
@@ -71,7 +73,8 @@ fn usage() -> String {
          \x20             [--preset low|medium|high|ultra|auto] [--render-scale X] [--dynamic-resolution MS]\n\
          \x20             [--min-scale X] [--max-scale X] [--switch-presets N]\n\
          \x20             [--aa off|mlaa|msaa2|msaa4|msaa8] [--effects low|medium|high|ultra] [--split-scene]\n\
-         \x20             [--no-post] [--toggle-effects N] [--frame-target MS] [--pipeline-cache DIR]\n\
+         \x20             [--no-post] [--bloom-render-passes] [--toggle-effects N] [--frame-target MS]\n\
+         \x20             [--pipeline-cache DIR]\n\
          \x20             [--vertex-instances]\n\
          scenes: {}",
         StressKind::names().join(", ")
@@ -227,6 +230,7 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
             "--merge-scene" => options.merge_scene_passes = true,
             "--split-scene" => options.merge_scene_passes = false,
             "--no-post" => options.post_chain = false,
+            "--bloom-render-passes" => options.bloom_compute = false,
             "--vertex-instances" => options.context.force_vertex_instances = true,
             // `cargo bench`-style runners pass this; nothing to do.
             "--bench" => {}

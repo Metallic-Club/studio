@@ -62,8 +62,9 @@ pub enum PassId {
     /// MLAA's edges and blend weights ([`crate::post`]): reads the scene colour, writes the weights the finish pass
     /// blends with. Runs only with [`PassId::Post`].
     Mlaa,
-    /// Bloom's chain of downsampling and upsampling passes at half the output's resolution and below, timed as one.
-    /// Runs only with [`PassId::Post`].
+    /// Bloom's chain of downsamples and upsamples at half the output's resolution and below, timed as one: one
+    /// compute pass where the device has compute shaders, else a render pass per step (#145). Runs only with
+    /// [`PassId::Post`].
     Bloom,
     /// The finish pass: exposure, bloom composite, tone curve and grade, from the scene colour into the output (with
     /// a render scale, upscaled on the way).

@@ -287,7 +287,7 @@ impl OverlayPass {
 
 /// The compile of the overlay's pipeline for targets in `format`.
 pub(crate) fn overlay_recipe(format: wgpu::TextureFormat) -> Recipe {
-    Box::new(move |device, cache| create_pipeline(device, cache, format))
+    Box::new(move |device, cache| create_pipeline(device, cache, format).into())
 }
 
 fn create_pipeline(
