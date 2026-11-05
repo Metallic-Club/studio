@@ -357,16 +357,15 @@ impl HandPost {
                 .collect()
         };
         let half = (SIZE / 2, SIZE / 2);
-        // The compute chain's smallest level is written among the sums, as the renderer's.
+        // The compute chain's levels and sums are textures of their own, the smallest level written among the sums,
+        // as the renderer's.
         let (levels, sums) = if compute {
-            let sums = mips(
-                texture("hand bloom sums", half, count as u32, bloom_format, bloom_usage),
-                count,
-            );
-            let mut levels = mips(
-                texture("hand bloom", half, count as u32 - 1, bloom_format, bloom_usage),
-                count - 1,
-            );
+            let single = |i: usize| {
+                let side = ((SIZE / 2) >> i).max(1);
+                whole(texture("hand bloom", (side, side), 1, bloom_format, bloom_usage))
+            };
+            let sums: Vec<_> = (0..count).map(single).collect();
+            let mut levels: Vec<_> = (0..count - 1).map(single).collect();
             levels.push(sums[count - 1].clone());
             (levels, sums)
         } else {

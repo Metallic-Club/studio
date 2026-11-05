@@ -238,22 +238,6 @@ fn devices_set_up_on_many_threads_at_once() {
                 std::thread::spawn(move || {
                     for _ in 0..3 {
                         let context = RenderContext::new_offscreen(&options).unwrap();
-                        // EXPERIMENT (#145): frames 1 and 2, and the render passes.
-                        let s = settings(wgpu::TextureFormat::Rgba8Unorm);
-                        let target = OffscreenTarget::new(&context, s.width, s.height, s.color_format).unwrap();
-                        let mut renderer = Renderer::new(&context, s).unwrap();
-                        renderer.wait_for_pipelines();
-                        renderer.render(target.view());
-                        let first = read_back_rgba8(&context, target.texture())[0];
-                        renderer.render(target.view());
-                        let second = read_back_rgba8(&context, target.texture())[0];
-                        let mut passes = settings(wgpu::TextureFormat::Rgba8Unorm);
-                        passes.post.bloom.compute = false;
-                        let third = render_once(&context, passes)[0];
-                        eprintln!(
-                            "EXPERIMENT {backends:?} {:?}: compute frame 1 {first:?}, frame 2 {second:?}; passes {third:?}",
-                            renderer.post_stats().compute_passes
-                        );
                         let pixels = render_once(&context, settings(wgpu::TextureFormat::Rgba8Unorm));
                         assert_all_pixels(&pixels, CLEAR_ENCODED, 1);
                     }

@@ -4,9 +4,10 @@
 //!
 //! **One compute pass** where the device has compute shaders (#145): every step is a dispatch of
 //! `bloom_compute.wgsl` in the same pass, so the chain of 2N − 1 steps costs one pass's recording and submit (about
-//! 18 µs of render CPU a render pass on DX12) instead of one each. The upsamples write each level's sum into a second
-//! texture (a dispatch cannot blend onto what it reads), the smallest level's sum being the level. The levels are `Rg11b10Ufloat`, as the render passes' are,
-//! where the adapter writes it as storage (DX12, Vulkan and Metal on most GPUs), else `Rgba16Float`, which every
+//! 18 µs of render CPU a render pass on DX12) instead of one each. The upsamples write each level's sum into a
+//! texture of its own (a dispatch cannot blend onto what it reads), the smallest level's sum being the level, and
+//! every level is a texture of its own too (OpenGL cannot sample one mip of a texture and write another in one
+//! dispatch). The levels are `Rg11b10Ufloat`, as the render passes' are, where the adapter writes it as storage (DX12, Vulkan and Metal on most GPUs), else `Rgba16Float`, which every
 //! device with compute shaders writes (OpenGL). **Elsewhere** (WebGL 2, GLES 3.0), when [`BloomSettings::compute`] is
 //! off, and where `Rgba16Float` levels would be large textures that the render passes' narrower ones are not (outputs
 //! above about 6 megapixels at OpenGL's Medium and above; [`crate::textures`] makes large textures off the frame, which
@@ -472,22 +473,19 @@ impl Bloom {
                 })
                 .collect()
         };
-        // The levels each downsample writes. The compute chain's smallest level is its own sum, so its downsample
-        // writes it among the sums: then no upsample samples two levels of one texture, which OpenGL cannot (it sets
-        // the levels a view samples on the texture, not the view).
+        // The levels each downsample writes. The compute chain gives every level and every sum a texture of its own:
+        // OpenGL sets the mips a view samples on the texture, not the view, and drops the image stores of a dispatch
+        // into a mip outside them (Mesa's llvmpipe drew no bloom at all), so no dispatch may sample one mip of a
+        // texture and write another. The smallest level is its own sum, so its downsample writes it among the sums.
         let (views, sums) = if compute {
-            let sums = mips(
-                &post_texture(device, "metallic bloom sums", sizes[0], count as u32, format, usage),
-                count,
-            );
-            let mut views = if count > 1 {
-                mips(
-                    &post_texture(device, "metallic bloom", sizes[0], count as u32 - 1, format, usage),
-                    count - 1,
-                )
-            } else {
-                Vec::with_capacity(1)
+            let single = |label, size| {
+                post_texture(device, label, size, 1, format, usage).create_view(&wgpu::TextureViewDescriptor::default())
             };
+            let sums: Vec<_> = sizes.iter().map(|&size| single("metallic bloom sum", size)).collect();
+            let mut views: Vec<_> = sizes[..count - 1]
+                .iter()
+                .map(|&size| single("metallic bloom level", size))
+                .collect();
             views.push(sums[count - 1].clone());
             (views, sums)
         } else {
