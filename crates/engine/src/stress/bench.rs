@@ -90,6 +90,10 @@ pub struct BenchOptions {
     /// Record the scene passes as one render pass when there are no graphics settings (on by default, as every
     /// preset does; off draws them apart, to measure what merging saves).
     pub merge_scene_passes: bool,
+    /// Draw bloom's chain as one compute pass where the device has compute shaders (on by default, #145); off draws
+    /// a render pass per step, as devices without them do, to measure what the compute pass saves
+    /// ([`SceneRenderer::set_bloom_compute`]).
+    pub bloom_compute: bool,
     /// Toggle the next effect of [`TOGGLES`] every this many frames, warm-up included (from the first frame, while
     /// the renderer still compiles its pipelines in the background), to show that no switch hitches (#86).
     pub toggle_effects: Option<u32>,
@@ -201,6 +205,7 @@ impl BenchOptions {
             anti_aliasing: None,
             effects: None,
             merge_scene_passes: true,
+            bloom_compute: true,
             toggle_effects: None,
             frame_target_ms: None,
             directional_lights: 0,
@@ -451,6 +456,7 @@ pub fn run_bench(options: &BenchOptions) -> Result<BenchReport, EngineError> {
         renderer.set_graphics(graphics);
     }
     renderer.set_post_chain(options.post_chain);
+    renderer.set_bloom_compute(options.bloom_compute);
     renderer.set_lod_tint(options.lod_tint);
     renderer.set_present_mode(if options.vsync {
         wgpu::PresentMode::Fifo
@@ -818,7 +824,8 @@ mod tests {
                     msaa_samples: 4,
                     mlaa: false,
                     bloom_levels: 5,
-                    render_passes: 14,
+                    render_passes: 5,
+                    compute_passes: 1,
                     full_screen_passes: 5,
                     planned: [
                         Some(PassId::Opaque),
@@ -894,7 +901,8 @@ mod tests {
                 "\"graphics\":{\"preset\":\"auto\",\"tier\":\"high\",\"calibrating\":null,\"resolution\":{\
                  \"scale\":0.7500,\"width\":1440,\"height\":810,\"dynamic\":true,\"target_ms\":2.000,\
                  \"min_scale\":0.500,\"max_scale\":1.000},\"post\":{\"scene_format\":\"rg11b10f\",\"finish\":true,\
-                 \"anti_aliasing\":\"msaa4\",\"bloom_levels\":5,\"render_passes\":14,\"full_screen_passes\":5,\
+                 \"anti_aliasing\":\"msaa4\",\"bloom_levels\":5,\"render_passes\":5,\"compute_passes\":1,\
+                 \"full_screen_passes\":5,\
                  \"passes\":[\"opaque\",\"sky\",\"transparent\",\"bloom\",\"post\",\"ui\"]},\
                  \"pipelines\":{\"compiled\":54,\"pending\":3,\"failed\":0,\"workers\":8,\"first_frame_ms\":141.0,\
                  \"all_ms\":null,\"compile_ms\":2500.0,\"switch_waiting\":false,\"cache_loaded\":1024},\

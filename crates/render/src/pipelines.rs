@@ -37,7 +37,33 @@ use crate::pipeline_cache::PipelineCacheStore;
 
 /// Makes one pipeline on `device`, with the pipeline cache where there is one. Owns (clones of) its shader module
 /// and layouts, so it can run on any thread.
-pub(crate) type Recipe = Box<dyn FnOnce(&wgpu::Device, Option<&wgpu::PipelineCache>) -> wgpu::RenderPipeline + Send>;
+pub(crate) type Recipe = Box<dyn FnOnce(&wgpu::Device, Option<&wgpu::PipelineCache>) -> Pipeline + Send>;
+
+/// A compiled pipeline: a render pipeline, or a compute pipeline (bloom's chain where the device has compute
+/// shaders, [`crate::post`]).
+#[derive(Clone, Debug)]
+pub(crate) enum Pipeline {
+    /// Draws.
+    Render(wgpu::RenderPipeline),
+    /// Dispatches.
+    Compute(wgpu::ComputePipeline),
+}
+
+impl Pipeline {
+    /// The render pipeline; `None` for a compute one.
+    pub(crate) fn render(self) -> Option<wgpu::RenderPipeline> {
+        match self {
+            Pipeline::Render(pipeline) => Some(pipeline),
+            Pipeline::Compute(_) => None,
+        }
+    }
+}
+
+impl From<wgpu::RenderPipeline> for Pipeline {
+    fn from(pipeline: wgpu::RenderPipeline) -> Self {
+        Pipeline::Render(pipeline)
+    }
+}
 
 /// One of the scene's pipelines for a colour format and MSAA count (see [`crate::parts`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -157,6 +183,9 @@ pub(crate) enum PipelineKey {
     BloomDown(u8),
     /// Bloom's upsample.
     BloomUp,
+    /// Bloom's chain as compute dispatches, where the device has compute shaders: the first downsample's three
+    /// filters (0 to 2), the later downsamples' two (3, 4) and the upsample (5).
+    BloomCompute(u8),
     /// MLAA's edge pass.
     Mlaa,
     /// The upscale pass of frames without the finish pass.
@@ -208,7 +237,7 @@ struct Job {
 /// A finished compile: its pipeline, or `None` when it failed.
 struct Done {
     key: PipelineKey,
-    pipeline: Option<wgpu::RenderPipeline>,
+    pipeline: Option<Pipeline>,
     cpu: Duration,
 }
 
@@ -410,7 +439,7 @@ impl Compiler {
 
     /// Hands every finished compile to `install`, without waiting. Allocates nothing; with nothing queued it touches
     /// nothing at all.
-    pub(crate) fn drain(&mut self, mut install: impl FnMut(PipelineKey, wgpu::RenderPipeline)) {
+    pub(crate) fn drain(&mut self, mut install: impl FnMut(PipelineKey, Pipeline)) {
         if self.queued.is_empty() {
             return;
         }
@@ -430,7 +459,7 @@ impl Compiler {
 
     /// Waits until nothing is queued or compiling, handing each compile to `install` as it finishes. Resumes paused
     /// compiles first. For [`crate::Renderer::new`] and loading screens, never a frame.
-    pub(crate) fn wait(&mut self, mut install: impl FnMut(PipelineKey, wgpu::RenderPipeline)) {
+    pub(crate) fn wait(&mut self, mut install: impl FnMut(PipelineKey, Pipeline)) {
         self.pause(false);
         loop {
             self.drain(&mut install);
@@ -487,11 +516,7 @@ impl Compiler {
     /// Waits until none of `keys` is queued or compiling (prioritizing them first), handing every compile that
     /// finishes meanwhile to `install`. For a scene's first frame, which must draw with what its scene and settings
     /// need; never for later frames.
-    pub(crate) fn wait_for(
-        &mut self,
-        keys: &[PipelineKey],
-        mut install: impl FnMut(PipelineKey, wgpu::RenderPipeline),
-    ) {
+    pub(crate) fn wait_for(&mut self, keys: &[PipelineKey], mut install: impl FnMut(PipelineKey, Pipeline)) {
         self.prioritize(keys);
         loop {
             self.drain(&mut install);
@@ -520,7 +545,7 @@ impl Compiler {
         }
     }
 
-    fn finish(&mut self, done: Done, install: &mut impl FnMut(PipelineKey, wgpu::RenderPipeline)) {
+    fn finish(&mut self, done: Done, install: &mut impl FnMut(PipelineKey, Pipeline)) {
         if let Some(at) = self.queued.iter().position(|&key| key == done.key) {
             self.queued.swap_remove(at);
         }

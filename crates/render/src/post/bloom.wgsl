@@ -6,6 +6,9 @@
 // with a threshold it keeps only what is brighter, with a soft knee. Later ones halve a mip with the dual filter's
 // five taps or, at the higher effect qualities, the 13-tap filter of Jimenez's "Next generation post processing in
 // Call of Duty" (2014), which flickers less on small bright things.
+//
+// Where the device has compute shaders the same filters run as compute dispatches instead (`bloom_compute.wgsl`,
+// appended to this file), all of them in one compute pass (#145).
 
 struct BloomPass {
     // xy: one source texel in texture coordinates; zw: the share of the source read (the drawn corner of the scene
@@ -120,13 +123,18 @@ fn fs_down_wide(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(down_wide(in.uv), 1.0);
 }
 
-// The upsample: a 3x3 tent over the smaller mip, added onto the larger one by the pipeline's blend.
+// The upsample's 3x3 tent over the smaller mip.
+fn up_tent(uv: vec2<f32>) -> vec3<f32> {
+    let edges = tap(uv, vec2<f32>(0.0, -1.0)) + tap(uv, vec2<f32>(-1.0, 0.0)) + tap(uv, vec2<f32>(1.0, 0.0))
+        + tap(uv, vec2<f32>(0.0, 1.0));
+    let corners = tap(uv, vec2<f32>(-1.0, -1.0)) + tap(uv, vec2<f32>(1.0, -1.0)) + tap(uv, vec2<f32>(-1.0, 1.0))
+        + tap(uv, vec2<f32>(1.0, 1.0));
+    let sum = tap(uv, vec2<f32>(0.0)) * 4.0 + edges * 2.0 + corners;
+    return sum * 0.0625;
+}
+
+// The upsample: the tent over the smaller mip, added onto the larger one by the pipeline's blend.
 @fragment
 fn fs_up(in: VertexOutput) -> @location(0) vec4<f32> {
-    let edges = tap(in.uv, vec2<f32>(0.0, -1.0)) + tap(in.uv, vec2<f32>(-1.0, 0.0)) + tap(in.uv, vec2<f32>(1.0, 0.0))
-        + tap(in.uv, vec2<f32>(0.0, 1.0));
-    let corners = tap(in.uv, vec2<f32>(-1.0, -1.0)) + tap(in.uv, vec2<f32>(1.0, -1.0))
-        + tap(in.uv, vec2<f32>(-1.0, 1.0)) + tap(in.uv, vec2<f32>(1.0, 1.0));
-    let sum = tap(in.uv, vec2<f32>(0.0)) * 4.0 + edges * 2.0 + corners;
-    return vec4<f32>(sum * 0.0625, 1.0);
+    return vec4<f32>(up_tent(in.uv), 1.0);
 }

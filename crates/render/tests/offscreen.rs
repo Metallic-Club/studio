@@ -39,6 +39,8 @@ fn render_once(context: &RenderContext, settings: RendererSettings) -> Vec<[u8; 
         .expect("an offscreen target");
     let mut renderer = Renderer::new(context, settings).expect("a renderer");
     renderer.wait_for_pipelines();
+    let stats = renderer.pipeline_stats();
+    assert_eq!(stats.failed, 0, "every pipeline compiles: {stats:?}");
     renderer.render(target.view());
     read_back_rgba8(context, target.texture())
 }

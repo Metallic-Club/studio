@@ -10,8 +10,8 @@ use crate::lod::{LodSettings, LodView};
 use crate::overlay::{Overlay, OverlayPass, overlay_recipe};
 use crate::parts::{Camera, DrawStats, PartRenderer};
 use crate::pipeline_cache::PipelineCacheStore;
-use crate::pipelines::{Compiler, PartPipeline, PipelineKey, PipelineStats, Recipe};
-use crate::post::{AntiAliasing, Bloom, FinishParams, Post, PostSettings, PostStats};
+use crate::pipelines::{Compiler, PartPipeline, Pipeline, PipelineKey, PipelineStats, Recipe};
+use crate::post::{AntiAliasing, FinishParams, Post, PostSettings, PostStats};
 use crate::resolution::{DynamicResolution, ResolutionSettings, ResolutionStats, scaled_size};
 use crate::scene::{InstanceBinding, UploadStats};
 use crate::shadow::{MAX_CASCADES, ShadowSettings, ShadowStats};
@@ -288,7 +288,7 @@ impl Renderer {
             msaa_color: None,
             scene_color: None,
             hdr_format,
-            post: Post::new(context.device(), settings.color_format, hdr_format),
+            post: Post::new(context, settings.color_format, hdr_format),
             texture_size: (settings.width, settings.height),
             render_size: (settings.width, settings.height),
             resolution: DynamicResolution::new(settings.resolution),
@@ -357,7 +357,9 @@ impl Renderer {
         }
         self.queue(PipelineKey::Overlay);
         for key in Post::KEYS {
-            self.queue(key);
+            if self.post.prewarms(key) {
+                self.queue(key);
+            }
         }
         self.queue(PipelineKey::Upscale);
         for other in self.msaa_counts.iter().filter(|&n| n <= 8 && n != samples) {
@@ -490,7 +492,12 @@ impl Renderer {
             let (bloom, mlaa) = (plan.contains(PassId::Bloom), plan.contains(PassId::Mlaa));
             f(PipelineKey::Finish(u8::from(bloom) | u8::from(mlaa) << 1));
             if bloom {
-                Bloom::keys(&switch.post.bloom).into_iter().for_each(&mut f);
+                let size = (self.settings.width, self.settings.height);
+                self.post
+                    .bloom
+                    .keys(&switch.post.bloom, size)
+                    .into_iter()
+                    .for_each(&mut f);
             }
             if mlaa {
                 f(PipelineKey::Mlaa);
@@ -932,7 +939,9 @@ impl Renderer {
     /// What the post chain draws with: the scene colour's format, the anti-aliasing, bloom's levels, and how many
     /// passes and full-screen passes a frame has.
     pub fn post_stats(&self) -> PostStats {
-        let bloom_passes = self.post.bloom.passes();
+        // Bloom's planned pass is its chain: render passes of its own, or one compute pass.
+        let bloom_planned = usize::from(self.plan.contains(PassId::Bloom));
+        let bloom_passes = self.post.bloom.render_passes();
         let planned = self.plan.passes().len();
         let mut order = [None; PassId::COUNT];
         for (slot, pass) in order.iter_mut().zip(self.plan.passes()) {
@@ -945,7 +954,8 @@ impl Renderer {
             msaa_samples: self.plan.msaa_samples(),
             mlaa: self.plan.contains(PassId::Mlaa),
             bloom_levels: self.post.bloom.levels() as u32,
-            render_passes: (planned + bloom_passes.saturating_sub(1)) as u32,
+            render_passes: (planned + bloom_passes).saturating_sub(bloom_planned) as u32,
+            compute_passes: self.post.bloom.compute_passes() as u32,
             full_screen_passes: self.plan.full_screen_passes() as u32,
         }
     }
@@ -1707,20 +1717,30 @@ fn install(
     upscaler: &mut Upscaler,
     (overlay_pass, overlay_pipeline): (&mut Option<OverlayPass>, &mut Option<wgpu::RenderPipeline>),
     key: PipelineKey,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Pipeline,
 ) {
     match key {
         PipelineKey::Part {
             format,
             samples,
             pipeline: which,
-        } => parts.install(format, samples, which, pipeline),
-        PipelineKey::Upscale => upscaler.install(pipeline),
-        PipelineKey::Overlay => {
-            if let Some(pass) = overlay_pass.as_mut() {
-                pass.set_pipeline(pipeline.clone());
+        } => {
+            if let Some(pipeline) = pipeline.render() {
+                parts.install(format, samples, which, pipeline);
             }
-            *overlay_pipeline = Some(pipeline);
+        }
+        PipelineKey::Upscale => {
+            if let Some(pipeline) = pipeline.render() {
+                upscaler.install(pipeline);
+            }
+        }
+        PipelineKey::Overlay => {
+            if let Some(pipeline) = pipeline.render() {
+                if let Some(pass) = overlay_pass.as_mut() {
+                    pass.set_pipeline(pipeline.clone());
+                }
+                *overlay_pipeline = Some(pipeline);
+            }
         }
         _ => post.install(key, pipeline),
     }

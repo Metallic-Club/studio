@@ -1479,7 +1479,7 @@ fn refresh_group<const N: usize>(
 /// The compile of `pipeline` for `format` at `samples`, made from `shaders` on any thread.
 fn part_recipe(shaders: &Arc<Shaders>, format: wgpu::TextureFormat, samples: u32, pipeline: PartPipeline) -> Recipe {
     let shaders = Arc::clone(shaders);
-    Box::new(move |device, cache| create_pipeline(device, cache, &shaders, format, samples, pipeline))
+    Box::new(move |device, cache| create_pipeline(device, cache, &shaders, format, samples, pipeline).into())
 }
 
 /// Makes the scene's `pipeline` for `format` at `samples`.

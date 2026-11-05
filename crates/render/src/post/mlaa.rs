@@ -72,8 +72,15 @@ impl Mlaa {
     /// (`None`). A settings change, never per frame.
     pub(crate) fn rebuild(&mut self, device: &wgpu::Device, scene: Option<&wgpu::TextureView>, size: (u32, u32)) {
         self.target = scene.map(|scene| {
-            let view = post_texture(device, "metallic mlaa weights", size, 1, WEIGHTS_FORMAT)
-                .create_view(&wgpu::TextureViewDescriptor::default());
+            let view = post_texture(
+                device,
+                "metallic mlaa weights",
+                size,
+                1,
+                WEIGHTS_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            )
+            .create_view(&wgpu::TextureViewDescriptor::default());
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("metallic mlaa"),
                 layout: &self.layout,
