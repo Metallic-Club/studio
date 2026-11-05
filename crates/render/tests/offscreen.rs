@@ -12,7 +12,7 @@ use metallic_render::{
     ContextOptions, FramePlan, OffscreenTarget, PassId, PassSet, RenderContext, RenderError, Renderer,
     RendererSettings, wgpu,
 };
-use support::{assert_all_pixels, gpu, gpu_with, read_back_rgba8};
+use support::{assert_all_pixels, assert_no_wgpu_errors, collect_wgpu_messages, gpu, gpu_with, read_back_rgba8};
 
 const CLEAR: wgpu::Color = wgpu::Color {
     r: 0.25,
@@ -39,6 +39,8 @@ fn render_once(context: &RenderContext, settings: RendererSettings) -> Vec<[u8; 
         .expect("an offscreen target");
     let mut renderer = Renderer::new(context, settings).expect("a renderer");
     renderer.wait_for_pipelines();
+    let stats = renderer.pipeline_stats();
+    assert_eq!(stats.failed, 0, "every pipeline compiles: {stats:?}");
     renderer.render(target.view());
     read_back_rgba8(context, target.texture())
 }
@@ -221,6 +223,7 @@ fn primary_backends_are_preferred_over_gl() {
 /// The archived renderer crashed (heap corruption) when several threads set up GL at once; setup is serialised.
 #[test]
 fn devices_set_up_on_many_threads_at_once() {
+    collect_wgpu_messages();
     for backends in [wgpu::Backends::PRIMARY, wgpu::Backends::GL] {
         let options = ContextOptions {
             backends,
@@ -237,6 +240,7 @@ fn devices_set_up_on_many_threads_at_once() {
                     for _ in 0..3 {
                         let context = RenderContext::new_offscreen(&options).unwrap();
                         let pixels = render_once(&context, settings(wgpu::TextureFormat::Rgba8Unorm));
+                        assert_no_wgpu_errors();
                         assert_all_pixels(&pixels, CLEAR_ENCODED, 1);
                     }
                 })
