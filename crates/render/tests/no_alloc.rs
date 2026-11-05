@@ -64,9 +64,10 @@
 //!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 //!
-//! The heap-growth tests ("nothing accumulates") sample the heap with the GPU idle and over two windows of frames,
-//! so wgpu's bookkeeping for frames in flight and its pools' one-off growth do not decide them; a leak grows in
-//! both windows and still fails them ([`HeapGrowth`], #151).
+//! The heap-growth tests ("nothing accumulates") measure frames that each end with the GPU idle, over two windows of
+//! frames, so wgpu's bookkeeping for frames in flight, its pools' one-off growth and which of its pooled encoders
+//! records which frame do not decide them; a leak grows in both windows and still fails them ([`HeapGrowth`], #151,
+//! #171).
 //!
 //! Every adapter, software (`DeviceType::Cpu`: WARP, lavapipe) or hardware, is held to the same exact comparison of
 //! the renderer's frames with the hand-written ones. The excess CI's runners used to show (up to 6 allocations on the
@@ -995,9 +996,10 @@ fn a_leak_fails_the_heap_check() {
     };
     (0..WARM_UP).for_each(&mut frame);
     let growing = HeapGrowth::measure_leaking(context.device(), WARM_UP, 256, &mut frame);
-    // After the warm-up and both windows above; room for every box, so only the boxes grow the heap.
-    let first = 2 * (WARM_UP + FRAMES);
-    let mut kept = Vec::with_capacity(first + 2 * FRAMES);
+    // After the warm-up, the settling frames and both windows above; room for every box (this measure's settling
+    // frames and both its windows), so only the boxes grow the heap.
+    let first = 2 * (WARM_UP + SETTLE_FRAMES + FRAMES);
+    let mut kept = Vec::with_capacity(first + 2 * (SETTLE_FRAMES + FRAMES));
     let boxed = HeapGrowth::measure_leaking(context.device(), first, 0, |n| {
         frame(n);
         kept.push(Box::new([0u8; 256]));
@@ -1317,11 +1319,15 @@ fn wait_for_idle(device: &wgpu::Device) {
 /// frames, the limit these tests have always had.
 const KEPT_PER_FRAME: i64 = 160;
 
+/// Frames [`HeapGrowth`] draws with the GPU idle after each before it measures any, so wgpu's encoders have settled
+/// into the order they go round in when every frame ends idle (#171).
+const SETTLE_FRAMES: usize = 10;
+
 /// Set to a number of bytes, every frame [`HeapGrowth::measure`] measures also grows a `Vec` by that many, kept to
 /// the end: a deliberate leak, to see that every heap-growth test here fails with one (#151). Unset, nothing leaks.
 const LEAK_VAR: &str = "METALLIC_TEST_LEAK_PER_FRAME";
 
-/// How much the heap grew over two consecutive windows of frames, each measured with the GPU idle at both ends.
+/// How much the heap grew over two consecutive windows of frames, each frame ending with the GPU idle.
 ///
 /// A single window of 100 frames, measured with frames in flight, failed at random: on lavapipe (19,248 and 19,392
 /// bytes against 16 KiB) and on the dev PC's OpenGL (58 KB on every run), Vulkan and Direct3D 12 (±9 KB) (#151). Two
@@ -1349,6 +1355,25 @@ const LEAK_VAR: &str = "METALLIC_TEST_LEAK_PER_FRAME";
 /// grew in both windows by more than [`KEPT_PER_FRAME`] per frame. The second window is as long as every frame
 /// before it, so a buffer that keeps doubling (whose growth comes in steps twice as far apart each time) also grows
 /// in both.
+///
+/// That still failed on the dev PC's Vulkan, 2 of 30 full runs (#171): 24,768 bytes in both windows of the parts
+/// frames, 38,256 then 29,376 in the lit frames. A trace of every allocation that outlived a window found nothing
+/// freed by another thread (the counters are per thread, and nothing the test thread allocated was freed elsewhere)
+/// and nothing of the renderer's: each window held whole sets of one pooled Vulkan encoder's scratch, 12,736 bytes
+/// each (its framebuffer cache's table, 10,288, grown in `begin_render_pass`; its barrier lists, 1,152 and 896, at
+/// the submit; its list of free command buffers, 384, in `reset_all`), the first time that encoder recorded a frame.
+/// wgpu-core keeps its encoders in a stack, takes the newest one free for each frame and for each submit's pending
+/// writes, and gives a frame's back when the frame is retired; with frames in flight, how far the GPU has got at
+/// each submit decides which encoder records the next frame, so an encoder that had only ever recorded copies could
+/// record its first frame hundreds of frames in. Tests running in parallel on the same GPU made that more likely.
+///
+/// So every measured frame ends with the GPU idle: its submission and its pending writes are retired before the next
+/// frame takes an encoder, and the encoders go round in the same order on every run, whatever the GPU's timing.
+/// [`SETTLE_FRAMES`] such frames, unmeasured, come first, so the encoders the frames go round have each recorded the
+/// frame before the windows start. With that, the heap grew by exactly 0 in both windows of every heap-growth test
+/// in 30 full runs on each of the dev PC's Vulkan, Direct3D 12 and OpenGL, except a 2,592-byte step in one window
+/// of the Direct3D 12 overlay frames: gpu-allocator's free-list chunk map, which picks between equal free chunks in
+/// a hash order seeded per process, so a frame's staging write fragments a block differently from run to run.
 struct HeapGrowth {
     /// The frames in each window and how many bytes the heap grew over them. The second window is measured only if
     /// the heap grew too much in the first: otherwise it could not change the answer.
@@ -1370,19 +1395,25 @@ impl HeapGrowth {
     fn measure_leaking(device: &wgpu::Device, first: usize, leak: usize, mut frame: impl FnMut(usize)) -> Self {
         let mut leaked: Vec<u8> = Vec::new();
         let mut next = first;
+        let mut idle_frame = |next: &mut usize| {
+            frame(*next);
+            wait_for_idle(device);
+            *next += 1;
+        };
+        for _ in 0..SETTLE_FRAMES {
+            idle_frame(&mut next);
+        }
         let mut growth = Self { windows: [None; 2] };
-        for (window, frames) in [FRAMES, first + FRAMES].into_iter().enumerate() {
+        // The second window is as long as every frame before it (the warm-up's and the settling ones included).
+        for (window, frames) in [FRAMES, next + FRAMES].into_iter().enumerate() {
             if window > 0 && !growth.accumulates() {
                 break;
             }
-            wait_for_idle(device);
             let before = live_bytes();
             for _ in 0..frames {
-                frame(next);
+                idle_frame(&mut next);
                 leaked.resize(leaked.len() + leak, 0);
-                next += 1;
             }
-            wait_for_idle(device);
             growth.windows[window] = Some((frames, live_bytes() - before));
         }
         drop(leaked);
