@@ -858,10 +858,10 @@ Low 0.43 M for 0.492 ms.
   written only when it changes): +0.05 ms of cull CPU on `parts_100k`, whose 30% round parts put levels in nearly
   every grid cell, and +0.02 ms of render CPU in all. A grid cell that has never held a round part takes the loop
   without levels, and cells with round parts go through an out-of-line one, so a scene of blocks chooses nothing;
-  the perf gate's `render_cull` (10,000 blocks) still counts +4.8% instructions (334,647 → 350,854 `Ir`; a first
+  the perf gate's `render_cull` (10,000 blocks) still counted +4.8% instructions (334,647 → 350,854 `Ir`; a first
   version with the levels' loop inline counted +8.0%, of which a temporary walk-only workload put +8.1% in the walk
-  itself, not in moving the 100 items), while its wall time on the dev PC is within 2% (a throwaway copy of the
-  workload: 18.8 against 19.1 µs a walk). `cargo bench -p metallic_render --bench gpu_scene -- cull` on 100,000
+  itself, not in moving the 100 items), while its wall time on the dev PC was within 2% (a throwaway copy of the
+  workload: 18.8 against 19.1 µs a walk). #138 found where and won it back (below). `cargo bench -p metallic_render --bench gpu_scene -- cull` on 100,000
   parts with the stress city's mix of shapes: 114.6 µs with levels, 109.7 µs without.
 - **Cached shadows**: the far cascade's static map was drawn in 8 of the walking camera's frames, as on `main`: its
   casters' levels follow its slice and the camera's projection, not where the camera stands.
@@ -871,6 +871,36 @@ Low 0.43 M for 0.492 ms.
   holds every preset to such a bound on rows of balls and cylinders, checks both instance paths draw the same, and
   that coarser shadows put no acne on their receivers: none at any preset, while with the casters drawn at full
   detail instead it finds 1.4% of the parts' pixels darkened.
+
+**Where `render_cull`'s +4.8% was (#138).** Callgrind on the gate's runner (ubuntu-latest, the gate's release
+build of the bench, then the same build with line tables to place each instruction), self `Ir` of `render_cull`:
+
+| Function | before #80 (`a3363a2`) | #80 (`225d5e1`) | #138 |
+| --- | ---: | ---: | ---: |
+| `InstanceScene::cull` (the walk; the grid's cull is inlined into it) | 286,746 | 300,581 | 282,132 |
+| `Grid::update` (moving the 100 queued items) | 26,704 | 29,000 | 29,000 |
+| sorting the cells, `floorf`, `Grid::remove`, the rest | 21,251 | 21,285 | 21,297 |
+| **Total** (the gate's count) | **334,701** | **350,866** | **332,429** |
+
+- **The walk, +13,835**: none of it in the levels' code. The loop over a cell's items compiled to the same tests and
+  the same push, but after every listed item it reloaded two values from the stack (the list table's address and the
+  frustum's plane count): 2 instructions × 5,951 visible items. The loop had run out of callee-saved registers:
+  #80 put a call on its likely path (the see-through push, moved out of line to keep `push` small) and kept the
+  view's two level flags (`levels`, `remember`) live across the whole pass, and the register allocator spilled the
+  item loop's values rather than those. Neither change alone gets them back: marking the see-through push `#[cold]`
+  frees one (338,626, +1.2%), and deciding per cell while ordering whether it takes levels (a bit in the order
+  entry, with the out-of-line helpers reading `remember` from the view) frees the other. With both, the push also
+  falls through into the next item instead of jumping back: one jump fewer per listed item than before #80.
+- **Moving the items, +2,296**: `Grid::update` works out each item's class of levels and keeps its level (about 23
+  instructions a move). That is what levels cost and stays.
+- `render_sync_moving` and `render_sync_scattered` count the same as `main` (132,488 and 143,697 on that runner).
+- `main` at `cfe43ca` counted the same as #80 (350,878; `InstanceScene::cull` and `Grid::update` exactly so). The
+  library's own `--emit asm` had shown the loop as before #80, probably because the spill depends on everything else
+  live in the function the loop ends up in, which the gate's build (thin LTO, one codegen unit) decides: profile the
+  gate's binary. The throwaway workflow that produced these (`diag-138-*` branches, deleted) ran `cargo bench -p
+  metallic_render --bench perf_gate` per commit, again with `CARGO_PROFILE_BENCH_DEBUG=line-tables-only` and
+  `GUNGRAUN_CALLGRIND_ARGS="--dump-instr=yes --compress-pos=no --compress-strings=no"`, and matched the counts per
+  instruction against `objdump -d`.
 
 ### Graphics settings (#84)
 

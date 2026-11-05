@@ -446,7 +446,11 @@ impl VisibleSet {
         }
     }
 
-    /// Adds a visible see-through instance drawn at level `level`.
+    /// Adds a visible see-through instance drawn at level `level`. Cold as well as out of line: a call on the cull
+    /// loop's likely path makes every value the loop keeps need a callee-saved register, and the loop has more than
+    /// there are, so it reloaded two of them after every opaque instance (#138). Cold, the call is a side path the
+    /// register allocator spills around.
+    #[cold]
     #[inline(never)]
     fn push_see_through(&mut self, entry: u32, level: u8) {
         self.transparent.push(entry);

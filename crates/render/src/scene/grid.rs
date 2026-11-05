@@ -48,12 +48,17 @@ pub const CELL_SIZE: f32 = 32.0;
 /// Items with a larger bounding radius go on the large list (a cell's loose box grows by its largest radius).
 pub(super) const LARGE_RADIUS: f32 = CELL_SIZE;
 
-/// A cull's order entries: the index of a cell, or of a large item ([`LARGE`]), and for a cell whether its items
-/// must be tested against the planes and for distance and size.
+/// A cull's order entries: the index of a cell, or of a large item ([`LARGE`]), for a cell whether its items
+/// must be tested against the planes and for distance and size, and whether the view chooses levels of detail for
+/// the cell's items (or the large item) at all ([`WITH_LEVELS`]).
 const LARGE: u32 = 1 << 31;
 const TEST_PLANES: u32 = 1 << 30;
 const TEST_SIZE: u32 = 1 << 29;
-const INDEX: u32 = TEST_SIZE - 1;
+/// Decided per cell while ordering, so nothing about levels stays live across the pass that lists the items: with
+/// the view's two level flags held across it, the item loop ran out of callee-saved registers in the perf gate's
+/// LTO'd build and reloaded two of its values from the stack after every listed item (#138, `docs/perf.md`).
+const WITH_LEVELS: u32 = 1 << 28;
+const INDEX: u32 = WITH_LEVELS - 1;
 
 /// Where a slot's item is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,8 +447,6 @@ impl Grid {
     ) -> CullStats {
         let mut stats = CullStats::default();
         let levels = view.lod.enabled();
-        // A camera's view remembers the levels it chose; a shadow view's follow from its own distance.
-        let remember = view.lod.distance() == 0.0;
         out.begin(capacities, transparent, self.cells.len() + self.large.len(), levels);
         let half_cell = Vec3::splat(CELL_SIZE * 0.5);
         // First the cells and large items in view, with their depth...
@@ -477,6 +480,9 @@ impl Grid {
             if farthest > view.max_distance || cell.smallest * view.size_scale < view.min_screen_size * farthest {
                 flags |= TEST_SIZE;
             }
+            if levels && cell.levels {
+                flags |= WITH_LEVELS;
+            }
             // Ordered by the cell's own box: its items' centres are in it.
             out.order.push((view.box_key(center, half_cell), index | flags));
         }
@@ -489,8 +495,10 @@ impl Grid {
             } else if !view.sphere_large_and_near(item.center, item.radius) {
                 stats.too_far_or_small += 1;
             } else if keeps::<MODE>(item) {
+                let with_levels = if levels && item.class() != 0 { WITH_LEVELS } else { 0 };
                 // By the box's nearest point, so a wall is ordered by its near face.
-                out.order.push((view.box_key(item.center, large.half), index | LARGE));
+                out.order
+                    .push((view.box_key(item.center, large.half), index | LARGE | with_levels));
             }
         }
         // ...then nearest first, their items into the lists: front to back a cell at a time.
@@ -501,8 +509,8 @@ impl Grid {
             if place & LARGE != 0 {
                 if let Some(large) = self.large.get_mut(index) {
                     let item = &mut large.item;
-                    if levels && item.class() != 0 {
-                        push_with_level(view, item, remember, out);
+                    if place & WITH_LEVELS != 0 {
+                        push_large_with_level(view, item, out);
                     } else {
                         out.push(item.entry, item.list);
                     }
@@ -513,8 +521,8 @@ impl Grid {
                 continue;
             };
             let (test_planes, test_size) = (place & TEST_PLANES != 0, place & TEST_SIZE != 0);
-            if levels && cell.levels {
-                cull_cell_with_levels::<MODE>(cell, view, (test_planes, test_size), remember, out, &mut stats);
+            if place & WITH_LEVELS != 0 {
+                cull_cell_with_levels::<MODE>(cell, view, (test_planes, test_size), out, &mut stats);
                 continue;
             }
             // A cell that has held no round part: exactly the cull without levels.
@@ -544,10 +552,10 @@ fn cull_cell_with_levels<const MODE: u8>(
     cell: &mut Cell,
     view: &CullView,
     (test_planes, test_size): (bool, bool),
-    remember: bool,
     out: &mut VisibleSet,
     stats: &mut CullStats,
 ) {
+    let remember = remembers(view);
     for item in &mut cell.items {
         if !keeps::<MODE>(item) {
             continue;
@@ -562,6 +570,19 @@ fn cull_cell_with_levels<const MODE: u8>(
             push_with_level(view, item, remember, out);
         }
     }
+}
+
+/// Whether `view` remembers the levels it chooses: a camera's view does, a shadow view's follow from its own
+/// distance.
+#[inline]
+fn remembers(view: &CullView) -> bool {
+    view.lod.distance() == 0.0
+}
+
+/// [`push_with_level`] for a large round item, out of line like [`cull_cell_with_levels`].
+#[inline(never)]
+fn push_large_with_level(view: &CullView, item: &mut Item, out: &mut VisibleSet) {
+    push_with_level(view, item, remembers(view), out);
 }
 
 /// Lists the round `item` at the level `view` draws it at: a camera's view by its distance from the eye, with the
