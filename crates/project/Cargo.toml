@@ -13,3 +13,5 @@ workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+thiserror.workspace = true
+toml.workspace = true
