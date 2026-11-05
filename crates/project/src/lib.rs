@@ -4,3 +4,7 @@
 //! `game.pak` format.
 //!
 //! Must not depend on: the render, physics, scripting or platform crates. See `docs/adr/0006-project-format.md`.
+
+pub mod manifest;
+
+pub use manifest::{LoadedManifest, Manifest, ManifestError, ManifestWarning, ProjectKind, ProjectMode};

@@ -57,6 +57,8 @@ winit = { version = "0.30.13", default-features = false, features = [
 raw-window-handle = "0.6.2"
 # Desktop gamepads for `metallic_platform` (Windows, Linux, macOS only).
 gilrs = "0.11.2"
+# Parses and writes `metallic.toml`, the project manifest (`metallic_project`, ADR 0006). Pure Rust, no proc-macros.
+toml = "1.2"
 # Logging facade; the app that ships picks the logger.
 log = "0.4"
 # The Player binary's command line (`--bench`, `--scene`, `--preset`). No dependencies, no proc-macros.
