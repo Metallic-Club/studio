@@ -1,14 +1,18 @@
 //! Everything about files: projects, scenes, assets and packages.
 //!
-//! Owns: `.mtproj` projects ([`Project`]), `metallic.toml`, scene save and load, the asset index and asset decoding,
-//! safe file operations and the `game.pak` format.
+//! Owns: `.mtproj` projects ([`Project`]), `metallic.toml`, scene save and load, the asset index ([`AssetIndex`])
+//! and asset decoding, safe file operations and the `game.pak` format.
 //!
 //! Must not depend on: the render, physics, scripting or platform crates. See `docs/adr/0006-project-format.md`.
 
+pub mod asset_index;
 pub mod manifest;
 pub mod project;
 pub mod scene;
 
+pub use asset_index::{
+    Asset, AssetId, AssetIndex, AssetIndexError, AssetMove, Fingerprint, INDEX_FILE, IndexReport, ParseAssetIdError,
+};
 pub use manifest::{LoadedManifest, Manifest, ManifestError, ManifestWarning, ProjectKind, ProjectMode};
 pub use project::{PROJECT_EXTENSION, Project, ProjectError, Template, check_member_path};
 pub use scene::{

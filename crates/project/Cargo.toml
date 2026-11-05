@@ -13,6 +13,8 @@ workspace = true
 
 [dependencies]
 metallic_core.workspace = true
+crc32fast.workspace = true
+getrandom.workspace = true
 serde.workspace = true
 # `float_roundtrip` reads every number back as exactly the value that was written, so a scene saved, loaded and
 # saved again is the same file byte for byte.

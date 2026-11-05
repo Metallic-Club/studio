@@ -3,7 +3,8 @@
 //! [`Project::open`] reads the archive's central directory and `metallic.toml`; every other member is read from the
 //! archive when it is asked for ([`Project::read`]). Edits ([`Project::write`], [`Project::remove`],
 //! [`Project::set_manifest`]) stay in memory until [`Project::save`], so the file on disk only changes there.
-//! [`Project::create`] makes a new project from a [`Template`].
+//! [`Project::create`] makes a new project from a [`Template`]. The asset index (`assets.json`) is read on open
+//! ([`Project::assets`]) and brought up to date by [`Project::refresh_assets`].
 //!
 //! # Writing an archive
 //!
@@ -33,6 +34,7 @@ use zip::result::ZipError;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
+use crate::asset_index::{AssetId, AssetIndex, AssetIndexError, Fingerprint, INDEX_FILE, IndexReport};
 use crate::manifest::{ENGINE_VERSION, MANIFEST_FILE, Manifest, ManifestError, ManifestWarning};
 use crate::scene::{LoadedScene, SceneError, load_scene_bytes};
 
@@ -62,14 +64,17 @@ pub struct Project {
     edits: BTreeMap<String, Option<Vec<u8>>>,
     manifest: Manifest,
     warnings: Vec<ManifestWarning>,
+    /// The asset index, with any unsaved change (which is also in `edits`, as `assets.json`).
+    assets: AssetIndex,
 }
 
 impl Project {
-    /// Opens the project at `path`: reads the archive's central directory and its `metallic.toml`.
+    /// Opens the project at `path`: reads the archive's central directory, its `metallic.toml` and its asset index
+    /// (`assets.json`; a project without one has an empty index).
     ///
     /// Fails when the file is missing, is not a zip archive, holds a member whose path is unsafe
-    /// ([`check_member_path`]), or has no valid `metallic.toml` at its root. The start scene is only read by
-    /// [`Project::load_start_scene`].
+    /// ([`check_member_path`]), has no valid `metallic.toml` at its root, or has an `assets.json` that is refused. The
+    /// start scene is only read by [`Project::load_start_scene`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ProjectError> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path).map_err(|source| {
@@ -95,6 +100,7 @@ impl Project {
             edits: BTreeMap::new(),
             manifest: Manifest::new(""),
             warnings: Vec::new(),
+            assets: AssetIndex::new(),
         };
         let bytes = project.read(MANIFEST_FILE).map_err(|error| match error {
             ProjectError::MissingMember { path, .. } => ProjectError::MissingManifest { path },
@@ -107,6 +113,13 @@ impl Project {
         project.check(&loaded.manifest.start_scene)?;
         project.manifest = loaded.manifest;
         project.warnings = loaded.warnings;
+        if project.contains(INDEX_FILE) {
+            let bytes = project.read(INDEX_FILE)?;
+            project.assets = AssetIndex::from_bytes(&bytes).map_err(|source| ProjectError::AssetIndex {
+                path: project.path.clone(),
+                source,
+            })?;
+        }
         Ok(project)
     }
 
@@ -232,7 +245,8 @@ impl Project {
     }
 
     /// Sets the contents of `member`, adding it if it is new (in memory until [`Project::save`]). Writing
-    /// `metallic.toml` this way is refused: use [`Project::set_manifest`].
+    /// `metallic.toml` this way is refused (use [`Project::set_manifest`]), and so is writing `assets.json` (it
+    /// changes through [`Project::refresh_assets`]).
     pub fn write(&mut self, member: &str, bytes: impl Into<Vec<u8>>) -> Result<(), ProjectError> {
         self.check(member)?;
         if member == MANIFEST_FILE {
@@ -240,14 +254,19 @@ impl Project {
                 path: self.path.clone(),
             });
         }
+        if member == INDEX_FILE {
+            return Err(ProjectError::IndexMember {
+                path: self.path.clone(),
+            });
+        }
         self.edits.insert(member.to_owned(), Some(bytes.into()));
         Ok(())
     }
 
-    /// Removes `member` (in memory until [`Project::save`]). Returns whether it was there. `metallic.toml` cannot
-    /// be removed.
+    /// Removes `member` (in memory until [`Project::save`]). Returns whether it was there. `metallic.toml` and
+    /// `assets.json` cannot be removed.
     pub fn remove(&mut self, member: &str) -> bool {
-        if member == MANIFEST_FILE || !self.contains(member) {
+        if member == MANIFEST_FILE || member == INDEX_FILE || !self.contains(member) {
             return false;
         }
         if self.stored.contains_key(member) {
@@ -256,6 +275,76 @@ impl Project {
             self.edits.remove(member);
         }
         true
+    }
+
+    /// The fingerprint of `member` (its size and CRC-32), with unsaved edits applied. A saved member's comes from
+    /// the archive's central directory, so it is not read, however large it is.
+    pub fn fingerprint(&self, member: &str) -> Result<Fingerprint, ProjectError> {
+        let missing = || ProjectError::MissingMember {
+            path: self.path.clone(),
+            member: member.to_owned(),
+        };
+        match self.edits.get(member) {
+            Some(Some(bytes)) => return Ok(Fingerprint::of(bytes)),
+            Some(None) => return Err(missing()),
+            None => {}
+        }
+        let index = *self.stored.get(member).ok_or_else(missing)?;
+        let entry = self
+            .archive
+            .by_index_data(index)
+            .map_err(|error| ProjectError::ReadMember {
+                path: self.path.clone(),
+                member: member.to_owned(),
+                source: zip_to_io(error),
+            })?;
+        Ok(Fingerprint {
+            size: entry.size(),
+            crc32: entry.crc32(),
+        })
+    }
+
+    /// The asset index: a stable id for every asset member, with unsaved changes. It is as of the last
+    /// [`Project::refresh_assets`] (or as saved); members edited since are not in it yet.
+    pub fn assets(&self) -> &AssetIndex {
+        &self.assets
+    }
+
+    /// Brings the asset index up to date with the project's members ([`AssetIndex::update`]), giving new assets
+    /// random ids, and says what was added, moved and is missing. A change to the index is an edit, saved by
+    /// [`Project::save`]. On an error the index is unchanged.
+    pub fn refresh_assets(&mut self) -> Result<IndexReport, ProjectError> {
+        let mut members = BTreeMap::new();
+        for member in self.members() {
+            members.insert(member.to_owned(), self.fingerprint(member)?);
+        }
+        let mut assets = self.assets.clone();
+        let report = assets
+            .update(&members, AssetId::random)
+            .map_err(|source| ProjectError::AssetIndex {
+                path: self.path.clone(),
+                source,
+            })?;
+        self.set_assets(assets);
+        Ok(report)
+    }
+
+    /// Drops the asset `id` from the index ([`AssetIndex::forget`]), for a missing asset that is not coming back.
+    /// Returns the path it had. Saved by [`Project::save`].
+    pub fn forget_asset(&mut self, id: AssetId) -> Option<String> {
+        let mut assets = self.assets.clone();
+        let path = assets.forget(id)?;
+        self.set_assets(assets);
+        Some(path)
+    }
+
+    /// Replaces the asset index, recording `assets.json` as an edit when it changed.
+    fn set_assets(&mut self, assets: AssetIndex) {
+        if assets != self.assets {
+            self.edits
+                .insert(INDEX_FILE.to_owned(), Some(assets.to_json().into_bytes()));
+            self.assets = assets;
+        }
     }
 
     /// Writes every edit to the project's file, crash-safely: a new archive beside it, flushed, then renamed over
@@ -385,6 +474,20 @@ pub enum ProjectError {
     ManifestMember {
         /// The project's file.
         path: PathBuf,
+    },
+    /// `assets.json` changes through [`Project::refresh_assets`], not by writing it.
+    #[error("{}: assets.json is changed through the asset index, not written as a member", path.display())]
+    IndexMember {
+        /// The project's file.
+        path: PathBuf,
+    },
+    /// `assets.json` is refused, or the asset index could not be updated.
+    #[error("{}: {source}", path.display())]
+    AssetIndex {
+        /// The project's file.
+        path: PathBuf,
+        /// What is wrong.
+        source: AssetIndexError,
     },
     /// The start scene `metallic.toml` names is not in the project.
     #[error("{}: the start scene `{scene}` is not in the project", path.display())]

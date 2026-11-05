@@ -29,7 +29,9 @@ MyGame.mtproj
 - **Member paths** use `/`, are relative to the archive root and are case-sensitive. A member whose path is absolute
   or contains `..` is refused, so extracting can never write outside its folder.
 - **Asset ids live in the archive** (`assets.json`), so they survive moving the file to another machine. Scenes
-  reference assets by id.
+  reference assets by id. Every member but `metallic.toml` and `assets.json` is an asset. An id is 128 random bits
+  (32 hex digits), never reused. Each asset's entry also records its size and CRC-32 (the zip checksum), so a member
+  that moved or was renamed is recognised and keeps its id; an asset whose member is gone is reported missing (#188).
 - **Machine-local caches** (thumbnails, imported or derived data, extracted members) live in the user cache folder
   (`metallic_platform`'s `Paths::cache_dir`), in a folder per project, keyed by a hash of the project file's path. The
   engine or Studio passes that folder in; `metallic_project` does not depend on `metallic_platform` (ADR 0001).
