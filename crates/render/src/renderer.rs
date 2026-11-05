@@ -1,5 +1,6 @@
 //! The frame loop: runs the planned passes into a target and keeps the GPU timings coming.
 
+use crate::context::Submitter;
 use crate::cull::{CullSettings, CullStats, CullView};
 use crate::depth::{DEPTH_CLEAR, DEPTH_FORMAT};
 use crate::graph::{AttachmentOps, ColorAttachment, DepthOps, FramePlan, PassId, PassSet, PlannedPass};
@@ -171,6 +172,7 @@ const FIRST_FRAME_KEYS: usize = MAX_NEEDED + PartPipeline::ALL_LIT.len();
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    submitter: Submitter,
     settings: RendererSettings,
     plan: FramePlan,
     /// MSAA counts both the colour format and depth support.
@@ -276,6 +278,7 @@ impl Renderer {
         let mut renderer = Self {
             device: context.device().clone(),
             queue: context.queue().clone(),
+            submitter: context.submitter(),
             settings,
             plan: FramePlan::new(settings.passes, 1),
             msaa_counts,
@@ -1510,7 +1513,7 @@ impl Renderer {
                 self.shadow_in_use,
             );
         }
-        let submission = self.queue.submit(std::iter::once(encoder.finish()));
+        let submission = self.submitter.submit(std::iter::once(encoder.finish()));
         if let (Some(timer), Some(slot)) = (self.timer.as_ref(), slot) {
             timer.after_submit(slot);
         }

@@ -139,7 +139,7 @@ fn clear(context: &RenderContext, textures: &[&wgpu::Texture]) -> f64 {
         }
     }
     let start = Instant::now();
-    let submission = context.queue().submit([encoder.finish()]);
+    let submission = context.submit([encoder.finish()]);
     // Outside any frame: an example may wait.
     let _ = device.poll(wgpu::PollType::Wait {
         submission_index: Some(submission),

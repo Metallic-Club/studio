@@ -8,6 +8,7 @@ use metallic_core::{DataModel, Id};
 use super::instance::{GpuInstance, MeshKind};
 use super::sync::InstanceScene;
 use super::{MAX_UPLOAD_GAP, Region, RenderComponents, SyncStats};
+use crate::context::Submitter;
 use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 use crate::lod::MAX_LOD_LEVELS;
 use crate::{RenderContext, RenderError};
@@ -183,6 +184,7 @@ pub struct GpuScene {
     scene: InstanceScene,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    submitter: Submitter,
     binding: InstanceBinding,
     buffers: [RegionBuffer; 2],
     staging: wgpu::Buffer,
@@ -283,6 +285,7 @@ impl GpuScene {
             scene,
             device,
             queue: context.queue().clone(),
+            submitter: context.submitter(),
             binding,
             buffers,
             staging,
@@ -891,7 +894,7 @@ impl GpuScene {
             label: Some("metallic instance buffer growth"),
         });
         encoder.copy_buffer_to_buffer(&old.buffer, 0, &buffer, 0, old.buffer.size());
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.submitter.submit(std::iter::once(encoder.finish()));
         self.buffers[region.index()] = RegionBuffer { buffer, capacity };
         self.revision += 1;
         true
