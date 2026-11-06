@@ -17,10 +17,12 @@ use metallic_engine::metallic_render::lights::MAX_GPU_LIGHTS;
 use metallic_engine::metallic_render::resolution::{MAX_SCALE, MIN_SCALE};
 use metallic_engine::metallic_render::settings::{GraphicsSettings, Preset, Quality, Tier};
 
+use super::keybinds::{self, KeybindsPage};
 use super::{
     LOD_BIAS, MAX_FRAME_CAP, MAX_VIEW_DISTANCE, MotionPreference, SHADOW_DISTANCE, StudioSettings, TARGET_FRAME_MS,
     ui_scale,
 };
+use crate::keymap::{Command, Keymap};
 use crate::theme::tokens::{Accent, radius, size, space, text};
 use crate::theme::{ButtonKind, ThemeMode, button, current_colors, fonts};
 
@@ -34,7 +36,7 @@ pub enum Category {
     Appearance,
     /// The viewport's graphics.
     Rendering,
-    /// The keymap (#214).
+    /// The keymap: its own page ([`KeybindsPage`]), not [`ENTRIES`].
     Keybinds,
 }
 
@@ -63,7 +65,7 @@ impl Category {
             Category::General => "How Studio starts and behaves.",
             Category::Appearance => "Changes apply at once.",
             Category::Rendering => "How the editor's viewport draws your scenes. The game's own look is never changed.",
-            Category::Keybinds => "Keybinds are coming in #214.",
+            Category::Keybinds => "Click a shortcut to change it. Right-click to add or remove one.",
         }
     }
 }
@@ -345,18 +347,19 @@ pub static ENTRIES: &[Entry] = &[
 ];
 
 /// The width of a setting's control column.
-const CONTROL_WIDTH: f32 = 260.0;
+pub(super) const CONTROL_WIDTH: f32 = 260.0;
 /// The width of a drop-down in it.
 const COMBO_WIDTH: f32 = 200.0;
 /// The width of the category list.
 const CATEGORY_WIDTH: f32 = 168.0;
 
-/// The Settings window's own state: whether it is open, the page shown, and the search.
+/// The Settings window's own state: whether it is open, the page shown, the search, and the Keybinds page's.
 #[derive(Debug, Default)]
 pub struct SettingsWindow {
     open: bool,
     category: Category,
     query: String,
+    keybinds: KeybindsPage,
 }
 
 impl SettingsWindow {
@@ -391,8 +394,18 @@ impl SettingsWindow {
         self.query = query.into();
     }
 
-    /// Draws the window, if open, over `ctx`, changing `settings` as the user does.
-    pub fn show(&mut self, ctx: &egui::Context, settings: &mut StudioSettings) {
+    /// The Keybinds page's state.
+    pub fn keybinds(&mut self) -> &mut KeybindsPage {
+        &mut self.keybinds
+    }
+
+    /// Whether the keybind capture dialog is open: Studio does not run the keymap meanwhile.
+    pub fn is_capturing(&self) -> bool {
+        self.open && self.keybinds.is_capturing()
+    }
+
+    /// Draws the window, if open, over `ctx`, changing `settings` and the `keymap` as the user does.
+    pub fn show(&mut self, ctx: &egui::Context, settings: &mut StudioSettings, keymap: &mut Keymap) {
         if !self.open {
             return;
         }
@@ -408,11 +421,14 @@ impl SettingsWindow {
             .default_size([780.0, 640.0])
             .min_width(680.0)
             .min_height(360.0)
-            .show(ctx, |ui| self.contents(ui, settings));
+            .show(ctx, |ui| self.contents(ui, settings, keymap));
         self.open &= open;
+        if self.open {
+            self.keybinds.dialog(ctx, keymap);
+        }
     }
 
-    fn contents(&mut self, ui: &mut Ui, settings: &mut StudioSettings) {
+    fn contents(&mut self, ui: &mut Ui, settings: &mut StudioSettings, keymap: &mut Keymap) {
         let p = current_colors(ui.ctx()).palette;
         ui.horizontal(|ui| {
             ui.label(
@@ -447,7 +463,9 @@ impl SettingsWindow {
                     // The scroll area takes the row's left-to-right layout; the page reads top to bottom.
                     ui.vertical(|ui| {
                         if searching {
-                            self.results(ui, settings);
+                            self.results(ui, settings, keymap);
+                        } else if self.category == Category::Keybinds {
+                            self.keybinds.show(ui, keymap);
                         } else {
                             page(ui, self.category, settings);
                         }
@@ -456,10 +474,18 @@ impl SettingsWindow {
         });
     }
 
-    fn results(&self, ui: &mut Ui, settings: &mut StudioSettings) {
+    /// Every setting and keybind the search finds, by category.
+    fn results(&mut self, ui: &mut Ui, settings: &mut StudioSettings, keymap: &mut Keymap) {
         let p = current_colors(ui.ctx()).palette;
         let found = search(&self.query);
-        if found.is_empty() {
+        let commands: Vec<Command> = keymap
+            .registry()
+            .commands()
+            .iter()
+            .filter(|command| keybinds::matches(command, &self.query, keymap))
+            .copied()
+            .collect();
+        if found.is_empty() && commands.is_empty() {
             ui.label(
                 RichText::new(format!("No settings match \u{201C}{}\u{201D}.", self.query.trim()))
                     .size(text::BODY_LG)
@@ -477,6 +503,15 @@ impl SettingsWindow {
                 row(ui, entry, settings);
             }
             ui.add_space(space::S6);
+        }
+        // Keybinds last, as in the category list.
+        if !commands.is_empty() {
+            section_label(ui, Category::Keybinds.label());
+            for command in &commands {
+                if let Some((id, slot)) = keybinds::command_row(ui, command, keymap) {
+                    self.keybinds.capture(id, slot);
+                }
+            }
         }
     }
 }
@@ -497,7 +532,7 @@ fn page(ui: &mut Ui, category: Category, settings: &mut StudioSettings) {
 }
 
 /// An uppercase section label, as the website's.
-fn section_label(ui: &mut Ui, label: &str) {
+pub(super) fn section_label(ui: &mut Ui, label: &str) {
     let p = current_colors(ui.ctx()).palette;
     ui.label(
         RichText::new(label.to_uppercase())
