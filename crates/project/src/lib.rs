@@ -16,7 +16,10 @@ pub use asset_index::{
 };
 pub use assets::{AssetError, AssetReader, DecodeError, ImageAsset, MeshAsset, decode_image, decode_mesh};
 pub use manifest::{LoadedManifest, Manifest, ManifestError, ManifestWarning, ProjectKind, ProjectMode};
-pub use project::{PROJECT_EXTENSION, Project, ProjectError, Template, check_member_path};
+pub use project::{
+    MemberMove, MoveReport, PROJECT_EXTENSION, Project, ProjectError, References, Template, check_member_path,
+};
 pub use scene::{
-    LoadedScene, SCENE_FORMAT, SavedScene, SceneError, SceneIds, SceneWarning, load_scene, load_scene_bytes, save_scene,
+    LoadedScene, PATH_PROPERTIES, SCENE_FORMAT, SavedScene, SceneError, SceneIds, SceneReference, SceneWarning,
+    load_scene, load_scene_bytes, save_scene,
 };

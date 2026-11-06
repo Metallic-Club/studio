@@ -53,7 +53,8 @@
 //!   `CFrame` (position, then rotation quaternion), an enum item's name, and an instance's `id` for a reference.
 //! - `attributes` have no declared type, so each value names its own: `{"Vector3": [1.0, 2.0, 3.0]}`.
 //! - Script instances are data like any other: their `Source` property holds the archive member path of their code,
-//!   such as `Scripts/Door.luau` (ADR 0006).
+//!   such as `Scripts/Door.luau` (ADR 0006). Moving a member rewrites the paths that name it ([`PATH_PROPERTIES`]);
+//!   assets referred to by id (`MeshPart.MeshId`) need no rewrite.
 //!
 //! The text is deterministic: the same game and [`SceneIds`] always give the same bytes, so saving a scene that was
 //! just loaded writes the file it was loaded from.
@@ -61,6 +62,7 @@
 mod json;
 mod load;
 mod migrate;
+mod references;
 mod save;
 mod value;
 
@@ -72,6 +74,8 @@ use std::collections::HashMap;
 use metallic_core::{DmError, Id, PropFlags, ResolvedProp};
 
 pub use load::{load_scene, load_scene_bytes};
+pub use references::{PATH_PROPERTIES, SceneReference};
+pub(crate) use references::{find as find_references, rewrite_paths};
 pub use save::save_scene;
 
 /// The scene format version this engine writes. Older versions load through migrations; newer ones are refused.
