@@ -9,6 +9,13 @@
 //! The material of each instance comes from the material table ([`MaterialTable`]) through the instance's material
 //! row, so materials cost no draws either.
 //!
+//! **Mesh assets** (#189, `MeshPart`) join the same scheme: each pair of a mesh asset and a base-colour texture is a
+//! mesh kind of the scene's ([`crate::InstanceScene::mesh_assets`]), its mesh in the shared pool
+//! ([`crate::Renderer::add_mesh_asset`]) at one level of detail, so it is one more instanced draw, culled, sorted and drawn into
+//! every shadow like the primitives. Each draw binds a base-colour texture: the asset's (an sRGB texture sampled with
+//! the mesh's texture coordinates, multiplied into the colour), or a white one for the primitives, which therefore
+//! look as before. See-through mesh parts draw untextured, in the sorted list with everything else.
+//!
 //! Which slots a draw covers comes from the scene's **draw lists** ([`crate::scene`]): one list of entries per
 //! mesh kind, kept current from the dirty slots alone, laid out in one buffer with a segment per kind
 //! ([`crate::GpuScene::list_segments`]). A kind's draws are instances `first .. first + len` of its segment, one
@@ -80,6 +87,7 @@
 //! when it has local lights or extra suns; a light made later, while they still compile, is drawn once they are (a
 //! local light fades in).
 
+mod assets;
 mod camera;
 mod material;
 mod mesh;
@@ -95,6 +103,7 @@ use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
 
 use crate::context::DescriptorHeapTurn;
+use crate::context::Submitter;
 use crate::cull::CullSettings;
 use crate::depth::{DEPTH_COMPARE, DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, depth_stencil_state};
 use crate::lighting::{ResolvedLighting, SceneLighting};
@@ -108,6 +117,7 @@ use crate::scene::{GpuInstance, InstanceBinding, MeshKind};
 use crate::shadow::{FrameShadow, MAX_CASCADES, ShadowMaps, ShadowSettings, ShadowStats};
 use crate::textures::TextureMaker;
 use crate::{GpuScene, PassId};
+use assets::{AssetTextures, WHITE, texture_group};
 use material::MATERIAL_TABLE_SIZE;
 use transparent::{TransparentList, TransparentPath};
 
@@ -319,12 +329,14 @@ impl FrameUniforms {
     }
 }
 
-/// One opaque draw: a mesh kind's index range at one level over that level's part of its list segment.
+/// One opaque draw: a mesh kind's index range at one level over that level's part of its list segment, with its
+/// base-colour texture (an index into the asset textures' groups; white for every kind but a mesh asset's).
 #[derive(Clone, Copy, Debug, Default)]
 struct KindDraw {
     mesh: MeshRange,
     first: u32,
     count: u32,
+    texture: u32,
 }
 
 /// The render pipelines for one colour format and sample count, as their compiles finish ([`crate::pipelines`]),
@@ -480,6 +492,12 @@ pub struct PartRenderer {
     queue: wgpu::Queue,
     binding: InstanceBinding,
     meshes: MeshPool,
+    /// The mesh assets' base-colour textures, and the white one every other draw binds.
+    textures: AssetTextures,
+    /// The texture of each mesh kind (an index into `textures`' groups), as of the last [`PartRenderer::resolve_assets`].
+    kind_textures: Vec<u32>,
+    /// The scene's mesh-asset kinds and the asset revisions the kinds were last pointed at the assets for.
+    assets_for: Option<(u64, u64, u64)>,
     materials: MaterialTable,
     lighting: SceneLighting,
     /// `lighting` worked out for the shaders, once per change.
@@ -709,14 +727,25 @@ impl PartRenderer {
             })
         });
         drop(layouts_turn);
+        // The base-colour texture's group follows the instance group, or the frame group where there is none.
+        let textures = AssetTextures::new(device, queue);
+        debug_assert_eq!(texture_group(binding), if instance_layout.is_some() { 2 } else { 1 });
+        let groups = |frame| -> Vec<Option<&wgpu::BindGroupLayout>> {
+            let mut groups = vec![Some(frame)];
+            if let Some(instances) = instance_layout.as_ref() {
+                groups.push(Some(instances));
+            }
+            groups.push(Some(textures.layout()));
+            groups
+        };
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("metallic parts"),
-            bind_group_layouts: &[Some(&frame_layout), instance_layout.as_ref()],
+            bind_group_layouts: &groups(&frame_layout),
             immediate_size: 0,
         });
         let unlit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("metallic parts (no local lights)"),
-            bind_group_layouts: &[Some(&sun_layout), instance_layout.as_ref()],
+            bind_group_layouts: &groups(&sun_layout),
             immediate_size: 0,
         });
         let pulled_layouts = pulled_layout.as_ref().map(|pulled| {
@@ -727,7 +756,7 @@ impl PartRenderer {
             .map(|(frame, label)| {
                 device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some(label),
-                    bind_group_layouts: &[Some(frame), Some(pulled)],
+                    bind_group_layouts: &[Some(frame), Some(pulled), Some(textures.layout())],
                     immediate_size: 0,
                 })
             })
@@ -785,6 +814,9 @@ impl PartRenderer {
             queue: queue.clone(),
             binding,
             meshes: MeshPool::with_pulled(device, queue, transparent_path == TransparentPath::Pulled),
+            textures,
+            kind_textures: Vec::new(),
+            assets_for: None,
             materials,
             lighting,
             resolved: lighting.resolve(),
@@ -906,6 +938,73 @@ impl PartRenderer {
     /// The meshes.
     pub fn meshes(&self) -> &MeshPool {
         &self.meshes
+    }
+
+    /// Adds the mesh asset `key` to the pool (see [`crate::Renderer::add_mesh_asset`]).
+    pub(crate) fn add_mesh_asset(&mut self, submitter: &Submitter, key: &str, mesh: &MeshData) -> Result<(), String> {
+        self.meshes
+            .add_asset((&self.device, &self.queue, submitter), key, mesh)?;
+        // The kinds that name it are pointed at it at the next frame.
+        self.assets_for = None;
+        Ok(())
+    }
+
+    /// Adds the texture asset `key` (see [`crate::Renderer::add_texture_asset`]).
+    pub(crate) fn add_texture_asset(&mut self, maker: &TextureMaker, key: &str, size: (u32, u32), rgba: Vec<u8>) {
+        self.textures.add((&self.device, &self.queue, maker), key, size, rgba);
+    }
+
+    /// Whether the mesh asset `key` was added.
+    pub(crate) fn has_mesh_asset(&self, key: &str) -> bool {
+        self.meshes.asset(key).is_some()
+    }
+
+    /// Whether the texture asset `key` was added (drawable or still being made).
+    pub(crate) fn has_texture_asset(&self, key: &str) -> bool {
+        self.textures.contains(key)
+    }
+
+    /// At the start of a frame of `scene`: writes the asset textures that arrived, and points the scene's mesh-asset
+    /// kinds at the meshes and textures that are here, when the kinds or the assets changed since the last frame.
+    /// When they did, every cached shadow is drawn again (a mesh that arrived casts now). Allocates nothing in a frame
+    /// where neither changed, and nothing at all in a scene without mesh assets once its first frame is drawn.
+    pub(crate) fn resolve_assets(&mut self, scene: &mut GpuScene, maker: &TextureMaker) {
+        self.textures.poll(&self.device, &self.queue, maker);
+        let key = (
+            scene.scene().mesh_asset_revision(),
+            self.meshes.assets_len() as u64,
+            self.textures.revision(),
+        );
+        if self.assets_for == Some(key) {
+            return;
+        }
+        self.assets_for = Some(key);
+        self.point_kinds(scene);
+    }
+
+    /// Points every mesh-asset kind of `scene` at its mesh's range and its texture's group (see
+    /// [`PartRenderer::resolve_assets`]). Out of line: it runs only when assets or kinds change.
+    #[cold]
+    #[inline(never)]
+    fn point_kinds(&mut self, scene: &mut GpuScene) {
+        let kinds = scene.scene().mesh_assets();
+        self.meshes
+            .forget_kinds_from(MeshKind::BUILTIN_COUNT as usize + kinds.len());
+        self.kind_textures.clear();
+        self.kind_textures
+            .resize(usize::from(MeshKind::BUILTIN_COUNT) + kinds.len(), WHITE);
+        let before = self.meshes.revision();
+        for (kind, asset) in (MeshKind::BUILTIN_COUNT..).zip(kinds) {
+            let range = self.meshes.asset(&asset.mesh);
+            self.meshes.set_kind(MeshKind(kind), range);
+            if let Some(texture) = self.kind_textures.get_mut(usize::from(kind)) {
+                *texture = self.textures.index(&asset.texture);
+            }
+        }
+        if self.meshes.revision() != before {
+            // Cached cascades and atlas tiles were drawn without the meshes that just arrived.
+            scene.invalidate_shadows();
+        }
     }
 
     /// How the sun's shadows are drawn (the resolution as clamped to the device).
@@ -1162,6 +1261,7 @@ impl PartRenderer {
                     mesh,
                     first: instances.start,
                     count,
+                    texture: self.kind_textures.get(usize::from(kind.0)).copied().unwrap_or(WHITE),
                 });
                 self.stats.opaque_instances += count;
                 self.stats.opaque_triangles += u64::from(count) * u64::from(mesh.index_count / 3);
@@ -1251,7 +1351,13 @@ impl PartRenderer {
                 };
                 render_pass.set_pipeline(pipeline);
                 self.bind(render_pass, variant, self.opaque_group.as_ref(), scene.list_buffer());
+                // The primitives' draws come first and share the white texture; each mesh asset's binds its own.
+                let mut bound = u32::MAX;
                 for draw in &self.draws {
+                    if draw.texture != bound {
+                        bound = draw.texture;
+                        render_pass.set_bind_group(texture_group(self.binding), self.textures.group(bound), &[]);
+                    }
                     let indices = draw.mesh.first_index..draw.mesh.first_index + draw.mesh.index_count;
                     render_pass.draw_indexed(indices, 0, draw.first..draw.first + draw.count);
                 }
@@ -1270,6 +1376,8 @@ impl PartRenderer {
                     return;
                 };
                 render_pass.set_pipeline(pipeline);
+                // See-through mesh assets draw untextured: the sorted list is one draw (or runs that cross kinds).
+                render_pass.set_bind_group(texture_group(self.binding), self.textures.group(WHITE), &[]);
                 if self.transparent.path() == TransparentPath::Pulled {
                     // Every see-through instance in one draw, back to front, with no vertex or index buffer.
                     let Some(group) = self.pulled_group.as_ref() else {

@@ -113,8 +113,10 @@ impl MeshKind {
     pub const CYLINDER: Self = Self(2);
     /// A unit ramp that slopes down towards -Z, stretched to the part's size.
     pub const WEDGE: Self = Self(3);
-    /// How many built-in kinds there are; mesh assets get kinds from here up.
+    /// How many built-in kinds there are; mesh assets get kinds from here up ([`super::MeshAssetKey`]).
     pub const BUILTIN_COUNT: u16 = 4;
+    /// No mesh: an instance of this kind is on no draw list and draws nothing (a `MeshPart` without a `MeshId`).
+    pub const NONE: Self = Self(u16::MAX);
 }
 
 /// The 3×4 affine of `cframe` with the unit mesh stretched by `scale`, translated so `origin` is at zero.

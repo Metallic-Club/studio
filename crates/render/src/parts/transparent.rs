@@ -91,7 +91,7 @@ pub(crate) struct TransparentList {
     counts: TransparentCounts,
     /// What the list was last sorted for: the scene's transparent revision, the revision of the entries drawn (a
     /// view's visible ones, or every one) and the camera offset.
-    sorted_for: Option<(u64, u64, Vec3)>,
+    sorted_for: Option<(u64, u64, Vec3, u64)>,
 }
 
 impl TransparentList {
@@ -155,7 +155,8 @@ impl TransparentList {
         camera: Vec3,
         meshes: &MeshPool,
     ) -> bool {
-        let key = (scene.transparent_revision(), drawn.revision, camera);
+        // A mesh asset that arrived changes what its instances draw.
+        let key = (scene.transparent_revision(), drawn.revision, camera, meshes.revision());
         if self.sorted_for == Some(key) {
             return false;
         }

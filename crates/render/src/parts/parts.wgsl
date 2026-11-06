@@ -1,4 +1,4 @@
-// Parts: instanced primitive meshes, shaded PBR-lite (Lambert diffuse, GGX specular) under one directional light
+// Parts: instanced meshes (the primitives and mesh assets), shaded PBR-lite (Lambert diffuse, GGX specular) under one directional light
 // (the sun, or the moon at night) and a sky/ground hemisphere ambient, all from `Lighting`, plus the extra suns
 // (`DirectionalLight`s, `extra_suns` below) and the local point and spot lights (lights.wgsl). One shading model;
 // the material row picks the parameters. frame.wgsl comes before this
@@ -36,6 +36,9 @@ struct VertexOut {
     // Linear colour; alpha is 1 − Transparency.
     @location(2) @interpolate(flat) color: vec4<f32>,
     @location(3) @interpolate(flat) material: u32,
+    // Where the base-colour texture is sampled (`base_texture`, bound by the instance file: a mesh asset's texture,
+    // or white for every other draw).
+    @location(4) uv: vec2<f32>,
 }
 
 // The packed sRGB colour of an instance (red in the lowest byte), as linear light.
@@ -78,6 +81,7 @@ fn place(
     level: u32,
     position: vec3<f32>,
     normal: vec3<f32>,
+    uv: vec2<f32>,
     r0: vec4<f32>,
     r1: vec4<f32>,
     r2: vec4<f32>,
@@ -98,7 +102,13 @@ fn place(
     out.normal = cofactor * normal;
     out.color = vec4<f32>(lod_tint(level, mesh_material, unpack_color(color)), 1.0 - transparency);
     out.material = mesh_material & 0xffffu;
+    out.uv = uv;
     return out;
+}
+
+// The base colour at a fragment: the instance's colour times its texture's (linear, since the texture is sRGB).
+fn albedo_of(in: VertexOut) -> vec3<f32> {
+    return in.color.rgb * textureSample(base_texture, base_sampler, in.uv).rgb;
 }
 
 fn material_row(row: u32) -> MaterialRow {
@@ -212,11 +222,10 @@ fn extra_suns(n: vec3<f32>, v: vec3<f32>, n_dot_v: f32, diffuse: vec3<f32>, f0: 
     return out;
 }
 
-fn shade(in: VertexOut) -> Shaded {
+fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     let row = material_row(in.material);
     let roughness = clamp(row.surface.x, 0.045, 1.0);
     let metalness = row.surface.y;
-    let albedo = in.color.rgb;
     let n = normalize(in.normal);
     let v = normalize(-in.position);
     let l = frame.light_direction.xyz;
@@ -266,14 +275,15 @@ fn shade(in: VertexOut) -> Shaded {
 
 @fragment
 fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
-    let s = shade(in);
+    // Sampled first, in uniform control flow.
+    let s = shade(in, albedo_of(in));
     return vec4<f32>(encode(s.body + s.specular), 1.0);
 }
 
 // Premultiplied alpha. Glass keeps its reflections at full strength while its body fades.
 @fragment
 fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
-    let s = shade(in);
+    let s = shade(in, albedo_of(in));
     let alpha = in.color.a;
     let glass = material_row(in.material).surface.w > 0.5;
     let specular = select(s.specular * alpha, s.specular, glass);

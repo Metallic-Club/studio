@@ -81,8 +81,15 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "parki
 pollster = "1.0.1"
 # Plain-old-data casts for GPU buffer contents (`metallic_render`'s instance records). Already in the tree via wgpu.
 bytemuck = { version = "1.25", features = ["derive"] }
-# Reads and writes the renderer's reference images in its image tests (dev-dependency of `metallic_render` only).
+# Decodes PNG textures (`metallic_project`'s asset decoding, #189), and reads and writes the renderer's reference images
+# in its image tests. Pure Rust.
 png = "0.18"
+# Decodes glTF and GLB models (`metallic_project`'s asset decoding, #189). Without `import`: no `image` crate, no
+# reading of files by path; the project resolves a model's buffers itself. `utils` reads accessors. Pure Rust.
+gltf = { version = "1.4", default-features = false, features = ["utils"] }
+# Decodes JPEG textures (`metallic_project`'s asset decoding, #189). Pure Rust; its SIMD paths are chosen at run time
+# on x86 and are plain NEON on ARM.
+zune-jpeg = "0.5"
 # Windows-only dev-dependency of `metallic_render`'s allocation tests, which keep the Direct3D 12 debug layer's
 # messages away from wgpu-hal's message handler (crates/render/tests/no_alloc.rs, #125). Already in the tree via wgpu.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }

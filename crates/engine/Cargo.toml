@@ -37,6 +37,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 gungraun.workspace = true
+# The mesh-asset image test's reference image (`tests/mesh_assets.rs`).
+png.workspace = true
 
 [[example]]
 name = "headless"

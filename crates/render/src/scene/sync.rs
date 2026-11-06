@@ -5,7 +5,8 @@ use metallic_core::{CFrame, Color3, ConsumerId, DataModel, DirtyBits, DmError, I
 
 use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 
-use super::components::{ClassBinding, ClassTable, MeshInput, RenderComponents};
+use super::assets::{AssetKinds, MeshAssetKey};
+use super::components::{AssetProps, ClassBinding, ClassTable, MeshInput, RenderComponents};
 use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
 use super::lights::{LightChange, LightKind, LightSet, SceneLight};
@@ -84,6 +85,8 @@ pub struct InstanceScene {
     /// Whether either set holds a light: the one test a part's change pays for lights (see
     /// [`InstanceScene::apply`]).
     has_lights: bool,
+    /// The mesh-asset kinds (see [`super::assets`]).
+    asset_kinds: AssetKinds,
 }
 
 /// The static region's shadow-caster changes since they were last taken: bounding spheres, origin-relative.
@@ -144,6 +147,7 @@ impl InstanceScene {
             lights: LightSet::default(),
             suns: LightSet::default(),
             has_lights: false,
+            asset_kinds: AssetKinds::default(),
         })
     }
 
@@ -791,7 +795,10 @@ impl InstanceScene {
     /// the change record names a transform property (`CFrame`, `Position`, `Orientation`, `Size`: the `TRANSFORM`
     /// dirty bit), which moves the bounding sphere for the culling grid.
     fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding, transform: bool) {
-        let instance = pack(dm, id, binding, &self.classes, self.origin);
+        let mut instance = pack(dm, id, binding, &self.classes, self.origin);
+        if let Some(asset) = binding.asset {
+            self.asset_kind(dm, id, asset, &mut instance);
+        }
         let region = &mut self.regions[slot.region.index()];
         let mut moved = transform;
         if let Some(target) = region.instances.get_mut(slot.slot as usize) {
@@ -812,6 +819,36 @@ impl InstanceScene {
             self.grid.queue(entry(slot.region, slot.slot));
         }
         region.mark_dirty(slot.slot);
+    }
+}
+
+impl InstanceScene {
+    /// Gives a mesh part's packed `instance` the kind of the mesh and texture it names. Out of line, so a primitive
+    /// part's change pays one test for mesh assets (the perf gate's sync workloads).
+    #[cold]
+    #[inline(never)]
+    fn asset_kind(&mut self, dm: &DataModel, id: Id, asset: AssetProps, instance: &mut GpuInstance) {
+        let mesh = dm.string(id, asset.mesh).unwrap_or("");
+        let texture = asset.texture.and_then(|p| dm.string(id, p).ok()).unwrap_or("");
+        let kind = self.asset_kinds.kind(mesh, texture);
+        instance.mesh_material = (u32::from(kind.0) << 16) | (instance.mesh_material & 0xFFFF);
+    }
+
+    /// The mesh and texture of every mesh-asset kind the scene has met: kind `MeshKind::BUILTIN_COUNT + i` draws the
+    /// `i`th (see [`super::assets`]). The renderer draws a kind once its mesh is here.
+    pub fn mesh_assets(&self) -> &[MeshAssetKey] {
+        self.asset_kinds.keys()
+    }
+
+    /// Changes whenever [`InstanceScene::mesh_assets`] grows; no two scenes share one.
+    pub fn mesh_asset_revision(&self) -> u64 {
+        self.asset_kinds.revision()
+    }
+
+    /// Counts every shadow as changed, so cached cascades and shadow-atlas tiles are drawn again (a mesh asset that
+    /// arrived changes what its casters draw).
+    pub(crate) fn invalidate_shadows(&mut self) {
+        self.shadow.everything();
     }
 }
 

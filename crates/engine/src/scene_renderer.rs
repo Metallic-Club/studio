@@ -19,7 +19,9 @@ use metallic_render::{
 
 use crate::calibration::{AutoCalibration, CALIBRATION_SIZE, CALIBRATION_WORKLOAD, CalibrationOutcome, GameFrame};
 use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
+use crate::mesh_assets::MeshAssets;
 use crate::perf::{FrameSample, GraphicsStatus, PerfStats, PerfSummary, draw_overlay};
+use metallic_project::AssetReader;
 
 /// Frames between two refreshes of the overlay's percentiles: about four times a second at 60 fps.
 const SUMMARY_EVERY: u32 = 15;
@@ -112,6 +114,8 @@ pub struct SceneRenderer {
     attached_at: Option<Instant>,
     /// Milliseconds from the first attach until the first frame was presented.
     first_frame_ms: Option<f32>,
+    /// The project's mesh and texture assets, loaded for the `MeshPart`s that name them ([`SceneRenderer::set_assets`]).
+    assets: Option<MeshAssets>,
 }
 
 impl SceneRenderer {
@@ -161,7 +165,21 @@ impl SceneRenderer {
             frame_start: None,
             attached_at: None,
             first_frame_ms: None,
+            assets: None,
         }
+    }
+
+    /// Loads the meshes and textures the game's `MeshPart`s name from `reader` (a project's:
+    /// [`Project::asset_reader`](metallic_project::Project::asset_reader)), decoding them on a worker thread; each
+    /// part draws once its mesh is here ([`MeshAssets`], #189). Without it, mesh parts draw nothing.
+    pub fn set_assets(&mut self, reader: AssetReader) {
+        self.assets = Some(MeshAssets::new(reader));
+    }
+
+    /// The assets loaded for the game's mesh parts, once [`SceneRenderer::set_assets`] gave a project's: what is still
+    /// loading and what could not be loaded.
+    pub fn assets(&self) -> Option<&MeshAssets> {
+        self.assets.as_ref()
     }
 
     /// Milliseconds from the first attach to a window (the device and the renderer made, the first frame's pipelines
@@ -725,6 +743,10 @@ impl RenderHook for SceneRenderer {
                 // A new surface on another monitor or after a resume may prefer another format.
                 device.renderer = Renderer::new(&device.context, settings)?;
                 device.renderer.set_lighting(self.lighting);
+                // The new renderer has none of the mesh assets.
+                if let Some(assets) = self.assets.as_mut() {
+                    assets.reload();
+                }
             }
             device.renderer.set_overlay_enabled(self.overlay);
             device.renderer.set_lod_tint(self.lod_tint);
@@ -777,6 +799,9 @@ impl RenderHook for SceneRenderer {
             scene.set_camera_position(frame.dm, camera.position);
         }
         self.last_sync = scene.sync(frame.dm);
+        if let Some(assets) = self.assets.as_mut() {
+            assets.update(scene.scene(), &mut device.renderer);
+        }
         if self.last_sync.watched > 0
             && let Some(lighting) = self.lighting_service
         {

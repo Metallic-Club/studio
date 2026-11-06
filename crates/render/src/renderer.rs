@@ -8,7 +8,7 @@ use crate::lighting::SceneLighting;
 use crate::lights::{LightSettings, LightStats};
 use crate::lod::{LodSettings, LodView};
 use crate::overlay::{Overlay, OverlayPass, overlay_recipe};
-use crate::parts::{Camera, DrawStats, PartRenderer};
+use crate::parts::{Camera, DrawStats, MeshData, PartRenderer};
 use crate::pipeline_cache::PipelineCacheStore;
 use crate::pipelines::{Compiler, PartPipeline, Pipeline, PipelineKey, PipelineStats, Recipe};
 use crate::post::{AntiAliasing, FinishParams, Post, PostSettings, PostStats};
@@ -1103,6 +1103,8 @@ impl Renderer {
             self.wait_for_scene(scene);
         }
         let (mut encoder, slot) = self.begin_frame();
+        // Mesh assets and textures that arrived, before anything culls or draws the kinds they draw.
+        self.parts.resolve_assets(scene, &self.maker);
         let cull = &self.settings.cull;
         let size = (self.settings.width, self.settings.height);
         let view = camera.filter(|_| cull.enabled).map(|camera| {
@@ -1261,6 +1263,61 @@ impl Renderer {
     /// The part renderer, to change materials or the lighting.
     pub fn parts_mut(&mut self) -> &mut PartRenderer {
         &mut self.parts
+    }
+
+    /// Adds a mesh asset under `key` (#189), or replaces the one there: a unit mesh like the primitives (its bounds
+    /// within −0.5 to 0.5, stretched to each part's `Size`), with texture coordinates. Every part whose `MeshId` is
+    /// `key` ([`crate::InstanceScene::mesh_assets`]) draws it from the next frame, as one more instanced draw, and casts
+    /// its shadows. It joins the mesh pool, which grows when full (a copy on the GPU, outside any frame). Refuses an
+    /// empty mesh, an index past its vertices and a mesh larger than the device's buffers.
+    pub fn add_mesh_asset(&mut self, key: &str, mesh: &MeshData) -> Result<(), RenderError> {
+        self.parts
+            .add_mesh_asset(&self.submitter, key, mesh)
+            .map_err(|reason| RenderError::Asset {
+                key: key.to_owned(),
+                reason,
+            })
+    }
+
+    /// Adds a texture asset under `key` (#189): `width` × `height` pixels of 8-bit sRGB RGBA, rows from the top. Every
+    /// part whose `TextureId` is `key` multiplies its colour by it (opaque parts; see-through ones draw untextured). A
+    /// large texture is made off the frame (#152) and drawn a few frames later; until then those parts draw with
+    /// their colour alone. Refuses a size of zero or above [`Renderer::max_texture_size`], and pixels that do not
+    /// match the size.
+    pub fn add_texture_asset(&mut self, key: &str, width: u32, height: u32, rgba: Vec<u8>) -> Result<(), RenderError> {
+        let refuse = |reason: String| RenderError::Asset {
+            key: key.to_owned(),
+            reason,
+        };
+        let max = self.max_texture_size();
+        if width == 0 || height == 0 || width > max || height > max {
+            return Err(refuse(format!(
+                "a {width} × {height} texture; this device takes 1 to {max} pixels a side"
+            )));
+        }
+        if rgba.len() as u64 != u64::from(width) * u64::from(height) * 4 {
+            return Err(refuse(format!(
+                "{} bytes of pixels for a {width} × {height} texture",
+                rgba.len()
+            )));
+        }
+        self.parts.add_texture_asset(&self.maker, key, (width, height), rgba);
+        Ok(())
+    }
+
+    /// Whether a mesh asset was added under `key`.
+    pub fn has_mesh_asset(&self, key: &str) -> bool {
+        self.parts.has_mesh_asset(key)
+    }
+
+    /// Whether a texture asset was added under `key` (drawn already, or still being made).
+    pub fn has_texture_asset(&self, key: &str) -> bool {
+        self.parts.has_texture_asset(key)
+    }
+
+    /// The widest or tallest texture this device takes, in pixels.
+    pub fn max_texture_size(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
     }
 
     /// What [`Renderer::render_scene`] lights the scene and draws the sky with.

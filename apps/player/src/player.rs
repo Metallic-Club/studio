@@ -143,6 +143,10 @@ impl<O: OutputSink> Player<O> {
             renderer.set_perf_window(usize::try_from(frames).unwrap_or(usize::MAX).min(1 << 20));
         }
         renderer.set_overlay(config.overlay);
+        // The project's meshes and textures, loaded off the main thread for its mesh parts (#189).
+        if let Some(project) = project.as_ref() {
+            renderer.set_assets(project.asset_reader());
+        }
         let graphics = config.effective_graphics();
         // A benchmark keeps its own pacing (no cap); otherwise the settings' cap, 0 for none, replaces the default.
         if config.max_frames.is_none()

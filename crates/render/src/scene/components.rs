@@ -1,7 +1,7 @@
 //! The render side of components, registered by name, and what each class needs to be drawn.
 //!
 //! The scene never names a class. A class is renderable when it has a component registered here (`PrimitiveMesh`
-//! for `Part`; mesh parts add theirs later), and the properties the scene reads (`CFrame`, `Size`, `Color`, ...)
+//! for `Part`, `AssetMesh` for `MeshPart`), and the properties the scene reads (`CFrame`, `Size`, `Color`, ...)
 //! are looked up by name once per class when the scene is made. Property ids are stable across subclasses, so the
 //! per-change cost is a table index, never a name lookup.
 //!
@@ -54,6 +54,8 @@ pub struct LightComponent {
 pub struct RenderComponents {
     components: Vec<MeshComponent>,
     lights: Vec<LightComponent>,
+    /// The components that draw a mesh asset (see [`RenderComponents::register_asset_mesh`]).
+    asset_meshes: Vec<&'static str>,
 }
 
 impl RenderComponents {
@@ -62,8 +64,9 @@ impl RenderComponents {
         Self::default()
     }
 
-    /// The built-in components: `PrimitiveMesh` (a part drawn as the built-in mesh for its `Shape`), the local
-    /// lights `PointLightEmitter` and `SpotLightEmitter`, and `DirectionalLightEmitter`, drawn as an extra sun
+    /// The built-in components: `PrimitiveMesh` (a part drawn as the built-in mesh for its `Shape`), `AssetMesh` (a
+    /// part drawn as the mesh asset its `MeshId` names, textured with its `TextureId`: `MeshPart`), the local lights
+    /// `PointLightEmitter` and `SpotLightEmitter`, and `DirectionalLightEmitter`, drawn as an extra sun
     /// ([`crate::lights`]).
     pub fn builtin() -> Self {
         let mut components = Self::empty();
@@ -71,6 +74,7 @@ impl RenderComponents {
             name: "PrimitiveMesh",
             mesh: primitive_mesh,
         });
+        components.register_asset_mesh("AssetMesh");
         components.register_light(LightComponent {
             name: "PointLightEmitter",
             kind: LightKind::Point,
@@ -84,6 +88,21 @@ impl RenderComponents {
             kind: LightKind::Directional,
         });
         components
+    }
+
+    /// Registers `name` as a component that draws a mesh asset: an instance of a class with it is drawn as the mesh
+    /// whose key its `MeshId` (a string property) holds, with the texture its `TextureId` holds, the unit mesh
+    /// stretched to its `Size` ([`crate::Renderer::add_mesh_asset`]). A class without `MeshId` draws nothing.
+    pub fn register_asset_mesh(&mut self, name: &'static str) {
+        self.register(MeshComponent { name, mesh: no_mesh });
+        if !self.asset_meshes.contains(&name) {
+            self.asset_meshes.push(name);
+        }
+    }
+
+    /// Whether `class` has a component that draws a mesh asset.
+    fn draws_asset(&self, class: &ClassInfo) -> bool {
+        self.asset_meshes.iter().any(|&name| class.has_component(name))
     }
 
     /// Adds (or replaces) the render side of the light component `component.name`.
@@ -167,11 +186,36 @@ impl PartProps {
     }
 }
 
+/// The properties naming a mesh asset and its texture, for a class with an asset-mesh component.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AssetProps {
+    /// `MeshId`.
+    pub(crate) mesh: PropId,
+    /// `TextureId` (none: untextured).
+    pub(crate) texture: Option<PropId>,
+}
+
+impl AssetProps {
+    fn resolve(class: &ClassInfo) -> Option<Self> {
+        let string = |name: &str| {
+            class
+                .prop_id(name)
+                .filter(|&id| class.prop(id).is_some_and(|p| matches!(p.meta.ty, PropType::String)))
+        };
+        Some(Self {
+            mesh: string("MeshId")?,
+            texture: string("TextureId"),
+        })
+    }
+}
+
 /// How the scene draws instances of one class.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ClassBinding {
     pub(crate) props: PartProps,
     pub(crate) mesh: MeshFn,
+    /// For a class drawn as a mesh asset: where it names the mesh and texture (its kind is the scene's).
+    pub(crate) asset: Option<AssetProps>,
 }
 
 /// The ids of the `Light` properties the scene reads, for one light class. Every one but `CFrame` is optional: a
@@ -236,6 +280,10 @@ impl ClassTable {
                 Some(ClassBinding {
                     props: PartProps::resolve(class)?,
                     mesh: component.mesh,
+                    asset: components
+                        .draws_asset(class)
+                        .then(|| AssetProps::resolve(class))
+                        .flatten(),
                 })
             })
             .collect();
@@ -282,6 +330,12 @@ impl ClassTable {
             .and_then(|row| u16::try_from(row).ok())
             .unwrap_or(0)
     }
+}
+
+/// An asset-mesh component's mesh before the scene picks its kind: nothing, stretched to the whole size (the unit
+/// mesh asset's bounds fill the part, as a `MeshPart` does).
+fn no_mesh(input: &MeshInput<'_>) -> (MeshKind, Vec3) {
+    (MeshKind::NONE, input.size)
 }
 
 /// `PrimitiveMesh`: the built-in mesh for the part's `Shape`, scaled as Roblox and the physics colliders do: a
