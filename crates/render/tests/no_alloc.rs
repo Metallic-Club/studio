@@ -65,6 +65,9 @@
 //! `DirectionalLight`s (#123) too: the lit frames' lamps hold four, drawn as extra suns through the frame uniform the
 //! frames already write (no wgpu call of their own), and their sync, turning with the moving lamps, allocates nothing.
 //!
+//! Viewport targets (#213) too: a frame drawn into one allocates no more than the same renderer's scene frame into the
+//! target's view, the same wgpu calls, and the heap does not grow over 100 such frames.
+//!
 //! Counters are per thread, so tests running in parallel do not see each other's allocations.
 //!
 //! The heap-growth tests ("nothing accumulates") measure frames that each end with the GPU idle, over two windows of
@@ -101,7 +104,7 @@ use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{GpuInstance, InstanceBinding, RenderComponents};
 use metallic_render::{
     Camera, DrawStats, GpuScene, InstanceScene, LightingReader, MAX_LOD_LEVELS, OffscreenTarget, PassId, PassSet,
-    RenderContext, Renderer, RendererSettings, SceneLighting, ShadowSettings, VisibleSet, wgpu,
+    RenderContext, Renderer, RendererSettings, SceneLighting, ShadowSettings, ViewportTarget, VisibleSet, wgpu,
 };
 
 thread_local! {
@@ -3961,4 +3964,99 @@ fn nothing_accumulates_over_lit_frames() {
         assert!(redrawn > 0, "no shadow tile was drawn");
         growth.assert_nothing_accumulates();
     }
+}
+
+/// A grid of parts on the GPU and a renderer for a viewport target of [`SIZE`] (#213), its pipelines compiled.
+fn viewport_frames(context: &RenderContext) -> (support::scenes::Game, GpuScene, Renderer, ViewportTarget) {
+    let mut game = support::scenes::Game::new();
+    support::scenes::grid(&mut game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
+    let scene = GpuScene::new(
+        context,
+        &mut game.dm,
+        Some(game.workspace),
+        &RenderComponents::builtin(),
+    )
+    .expect("a scene");
+    let target = ViewportTarget::new(context, SIZE, SIZE).expect("a viewport target");
+    let mut renderer =
+        Renderer::new(context, RendererSettings::new(ViewportTarget::FORMAT, SIZE, SIZE)).expect("a renderer");
+    renderer.wait_for_pipelines();
+    (game, scene, renderer, target)
+}
+
+/// A viewport frame (#213) makes exactly the wgpu calls of a scene frame into a view, so it allocates exactly what one
+/// does: the same renderer draws the same scene from the same orbiting camera into the viewport target
+/// ([`Renderer::render_viewport`]) and into the target's view ([`Renderer::render_scene`], held to the same calls by
+/// hand above), in alternating order, and the fewest allocations of each are compared. What the viewport adds (the
+/// check that the target matches the renderer, and looking for a resize when none is coming) allocates nothing.
+#[test]
+fn a_viewport_frame_allocates_what_a_scene_frame_does() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let _padding = pad_tracker_indices(&context);
+    let (mut game, mut scene, mut renderer, mut target) = viewport_frames(&context);
+    let view = target.view().clone();
+    let mut pacer = Pacer::new();
+    let mut viewport = Vec::with_capacity(FRAMES);
+    let mut plain = Vec::with_capacity(FRAMES);
+    for frame in 0..WARM_UP + FRAMES {
+        scene.sync(&mut game.dm);
+        let camera = orbiting_camera(frame);
+        for viewport_turn in [frame % 2 == 0, frame % 2 != 0] {
+            let (count, submission) = if viewport_turn {
+                allocations_in(|| {
+                    renderer
+                        .render_viewport(&mut target, &mut scene, Some(&camera))
+                        .expect("the target matches")
+                })
+            } else {
+                allocations_in(|| renderer.render_scene(&view, &mut scene, Some(&camera)))
+            };
+            pacer.submitted(context.device(), submission);
+            if frame >= WARM_UP {
+                if viewport_turn { &mut viewport } else { &mut plain }.push(count);
+            }
+        }
+    }
+    let (ours, floor) = (
+        *viewport.iter().min().expect("frames"),
+        *plain.iter().min().expect("frames"),
+    );
+    eprintln!(
+        "viewport frames: allocations per frame {ours}..{} (median {}); scene frames into its view {floor}..{} \
+         (median {})",
+        viewport.iter().max().expect("frames"),
+        median(viewport.clone()),
+        plain.iter().max().expect("frames"),
+        median(plain.clone())
+    );
+    report(
+        "viewport frame",
+        &context,
+        &[("viewport, against a scene frame", ours, floor)],
+    );
+    assert_eq!(target.generation(), 0, "nothing was resized");
+    assert!(
+        ours <= floor,
+        "a viewport frame allocates {ours}, a scene frame into the same texture {floor}"
+    );
+}
+
+/// The heap does not grow over viewport frames (#213) of a grid of parts seen from an orbiting camera.
+#[test]
+fn nothing_accumulates_over_viewport_frames() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let (mut game, mut scene, mut renderer, mut target) = viewport_frames(&context);
+    let mut pacer = Pacer::new();
+    let mut frame = |frame| {
+        scene.sync(&mut game.dm);
+        let camera = orbiting_camera(frame);
+        let submission = renderer
+            .render_viewport(&mut target, &mut scene, Some(&camera))
+            .expect("the target matches");
+        pacer.submitted(context.device(), submission);
+    };
+    (0..WARM_UP).for_each(&mut frame);
+    let growth = HeapGrowth::measure(context.device(), WARM_UP, frame);
+    eprintln!("viewport frames: {growth}");
+    growth.assert_nothing_accumulates();
 }

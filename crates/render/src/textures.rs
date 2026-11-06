@@ -1,6 +1,8 @@
 //! Large textures made off the frame (#152, ADR 0008 §9): the textures a settings change needs (the sun's shadow
 //! maps, the lights' shadow atlas, the scene's attachments) are made one a frame, in the background, while frames
-//! keep drawing with the ones they replace; each system switches to its new textures once all of them exist.
+//! keep drawing with the ones they replace; each system switches to its new textures once all of them exist. A viewport
+//! target's resize (#213, [`crate::Renderer::resize_viewport`]) makes its texture and the scene's attachments at the
+//! new size the same way, and switches once all of them exist.
 //!
 //! # Why
 //!

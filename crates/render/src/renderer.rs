@@ -15,7 +15,7 @@ use crate::post::{AntiAliasing, FinishParams, Post, PostSettings, PostStats};
 use crate::resolution::{DynamicResolution, ResolutionSettings, ResolutionStats, scaled_size};
 use crate::scene::{InstanceBinding, UploadStats};
 use crate::shadow::{MAX_CASCADES, ShadowSettings, ShadowStats};
-use crate::target::check_size;
+use crate::target::{ViewportTarget, check_size};
 use crate::textures::{Slot, TextureMaker, TextureSpec, TextureStats};
 use crate::timing::{GpuTimer, Timed};
 use crate::upscale::{Upscaler, upscale_params};
@@ -99,6 +99,25 @@ struct PendingAttachments {
     switch: Switch,
     attachments: Attachments,
     slots: [Option<Slot>; 3],
+}
+
+/// What a scene frame draws into: a view of the caller's (a window's image, an offscreen target), or a viewport
+/// target, which a viewport resize hands its new texture in the frame that switches.
+enum FrameTarget<'a> {
+    View(&'a wgpu::TextureView),
+    Viewport(&'a mut ViewportTarget),
+}
+
+/// A viewport target's new size while its textures are made off the frame ([`Renderer::resize_viewport`]): the
+/// target's texture and the scene's attachments at that size. Until all of them exist, frames draw at the old size
+/// into the old texture.
+struct PendingResize {
+    size: (u32, u32),
+    /// The settings the attachments are for: asked for again when a settings change takes effect meanwhile.
+    switch: Switch,
+    attachments: Attachments,
+    slots: [Option<Slot>; 3],
+    output: Slot,
 }
 
 /// The settings that choose pipelines: a change to any of them takes effect once the pipelines it needs are compiled.
@@ -230,6 +249,10 @@ pub struct Renderer {
     /// The scene format whose extra suns' pipelines are queued, at every MSAA count: none until a frame first draws
     /// a `DirectionalLight` ([`Renderer::prewarm_suns`]).
     suns_prewarmed: Option<wgpu::TextureFormat>,
+    /// A viewport target's new size, while its textures are made ([`Renderer::resize_viewport`]).
+    pending_resize: Option<PendingResize>,
+    /// The viewport target's texture at the size just switched to, handed to the target in the same frame.
+    new_output: Option<wgpu::Texture>,
 }
 
 impl Renderer {
@@ -318,6 +341,8 @@ impl Renderer {
             immediate: true,
             pending_attachments: None,
             suns_prewarmed: None,
+            pending_resize: None,
+            new_output: None,
         };
         // The rest of what the first frame draws (the post chain's passes it runs), all at once on the workers; then
         // the lit pipelines of the same target behind them, which a scene with lights waits for in its first frame,
@@ -593,7 +618,7 @@ impl Renderer {
         let attachments = if self.needs_rebuild(&next) {
             if self.pending_attachments.as_ref().is_none_or(|p| p.switch != next) {
                 self.cancel_attachments();
-                let attachments = self.attachments(&next);
+                let attachments = self.attachments(&next, (self.settings.width, self.settings.height));
                 let slots = attachments
                     .specs
                     .map(|spec| spec.map(|spec| Slot::new(self.maker.make(spec))));
@@ -822,6 +847,8 @@ impl Renderer {
         if width == 0 || height == 0 || width > self.max_texture_size || height > self.max_texture_size {
             return Err(RenderError::InvalidSize { width, height });
         }
+        // A viewport resize still coming is replaced by this one.
+        self.cancel_resize();
         if (width, height) != (self.settings.width, self.settings.height) {
             self.settings.width = width;
             self.settings.height = height;
@@ -830,6 +857,103 @@ impl Renderer {
             self.rebuild();
         }
         Ok(())
+    }
+
+    /// Resizes the viewport target this renderer draws ([`Renderer::render_viewport`]) to `width` x `height` pixels
+    /// without a black frame. The target's new texture and the scene's attachments at the new size are made as a
+    /// settings change's are (large ones off the frame once a scene's first frame is drawn, `textures`, #152), and
+    /// until all of them exist frames keep drawing at the old size into the old texture, which the caller keeps
+    /// showing. The frame that switches hands the target its new texture ([`ViewportTarget::generation`] changes);
+    /// before a scene's first frame, and for small sizes, that is the next frame. Waits for nothing.
+    ///
+    /// Asking again for the size still coming changes nothing; another size replaces it; the size drawn cancels it.
+    pub fn resize_viewport(&mut self, width: u32, height: u32) -> Result<(), RenderError> {
+        if width == 0 || height == 0 || width > self.max_texture_size || height > self.max_texture_size {
+            return Err(RenderError::InvalidSize { width, height });
+        }
+        if self
+            .pending_resize
+            .as_ref()
+            .is_some_and(|pending| pending.size == (width, height))
+        {
+            return Ok(());
+        }
+        self.cancel_resize();
+        if (width, height) == (self.settings.width, self.settings.height) {
+            return Ok(());
+        }
+        let switch = Switch::of(&self.settings);
+        let attachments = self.attachments(&switch, (width, height));
+        let slots = attachments
+            .specs
+            .map(|spec| spec.map(|spec| Slot::new(self.maker.make(spec))));
+        let spec = ViewportTarget::spec(self.settings.color_format, width, height);
+        self.pending_resize = Some(PendingResize {
+            size: (width, height),
+            switch,
+            attachments,
+            slots,
+            output: Slot::new(self.maker.make(spec)),
+        });
+        Ok(())
+    }
+
+    /// The size a viewport target is being resized to while its textures are made ([`Renderer::resize_viewport`]).
+    pub fn pending_viewport_size(&self) -> Option<(u32, u32)> {
+        self.pending_resize.as_ref().map(|pending| pending.size)
+    }
+
+    /// Moves a viewport resize on: once its textures exist, draws at its size from this frame on, and keeps the
+    /// target's new texture for [`Renderer::render_viewport`] to hand over. When a settings change took effect
+    /// meanwhile, its attachments are asked for again, at the new size.
+    fn advance_resize(&mut self) {
+        let Some(mut pending) = self.pending_resize.take() else {
+            return;
+        };
+        let current = Switch::of(&self.settings);
+        if pending.switch != current {
+            for slot in std::mem::take(&mut pending.slots).into_iter().flatten() {
+                slot.cancel(&self.maker);
+            }
+            pending.switch = current;
+            pending.attachments = self.attachments(&current, pending.size);
+            pending.slots = pending
+                .attachments
+                .specs
+                .map(|spec| spec.map(|spec| Slot::new(self.maker.make(spec))));
+        }
+        let mut here = pending.output.poll(&self.maker);
+        for slot in pending.slots.iter_mut().flatten() {
+            here &= slot.poll(&self.maker);
+        }
+        if !here {
+            self.pending_resize = Some(pending);
+            return;
+        }
+        let PendingResize {
+            size: (width, height),
+            attachments,
+            slots,
+            output,
+            ..
+        } = pending;
+        self.settings.width = width;
+        self.settings.height = height;
+        // Attachments being made for a waiting change are of the old size: asked for again at this one.
+        self.cancel_attachments();
+        self.rebuild_with(attachments, slots.map(|slot| slot.and_then(Slot::into_texture)));
+        self.new_output = output.into_texture();
+    }
+
+    /// Gives up a viewport resize still coming.
+    fn cancel_resize(&mut self) {
+        if let Some(pending) = self.pending_resize.take() {
+            for slot in pending.slots.into_iter().flatten() {
+                slot.cancel(&self.maker);
+            }
+            pending.output.cancel(&self.maker);
+        }
+        self.new_output = None;
     }
 
     /// Changes which passes run, once the pipelines they need are compiled (see [`Renderer`]).
@@ -1077,7 +1201,7 @@ impl Renderer {
         target: &wgpu::TextureView,
         prepare: impl FnOnce(&mut wgpu::CommandEncoder),
     ) -> wgpu::SubmissionIndex {
-        let (mut encoder, slot) = self.begin_frame();
+        let (mut encoder, slot) = self.begin_frame(false);
         prepare(&mut encoder);
         self.prepare_overlay();
         self.record_passes(&mut encoder, target, slot, None);
@@ -1099,10 +1223,58 @@ impl Renderer {
         scene: &mut GpuScene,
         camera: Option<&Camera>,
     ) -> wgpu::SubmissionIndex {
+        self.scene_frame(FrameTarget::View(target), scene, camera)
+    }
+
+    /// Renders one frame of `scene` from `camera` into a viewport target, as [`Renderer::render_scene`] does into a
+    /// view, and submits it: the frame Studio's viewport panel shows (ADR 0009). The renderer's colour format must be
+    /// the target's ([`ViewportTarget::FORMAT`]) and its size the target's; [`Renderer::resize_viewport`] changes
+    /// both, and the frame that switches hands `target` its new texture. Fails, drawing nothing, when the target does
+    /// not match the renderer.
+    ///
+    /// One renderer draws one viewport target: several viewports are several renderers on the same device (each with
+    /// its own [`GpuScene`] of the data model it shows).
+    pub fn render_viewport(
+        &mut self,
+        target: &mut ViewportTarget,
+        scene: &mut GpuScene,
+        camera: Option<&Camera>,
+    ) -> Result<wgpu::SubmissionIndex, RenderError> {
+        if target.format() != self.settings.color_format {
+            return Err(RenderError::UnsupportedTarget {
+                format: target.format(),
+                samples: 1,
+            });
+        }
+        let (width, height) = target.size();
+        if (width, height) != (self.settings.width, self.settings.height) {
+            return Err(RenderError::InvalidSize { width, height });
+        }
+        Ok(self.scene_frame(FrameTarget::Viewport(target), scene, camera))
+    }
+
+    /// [`Renderer::render_scene`] into `target`.
+    fn scene_frame(
+        &mut self,
+        mut target: FrameTarget<'_>,
+        scene: &mut GpuScene,
+        camera: Option<&Camera>,
+    ) -> wgpu::SubmissionIndex {
         if std::mem::take(&mut self.first_scene_frame) {
             self.wait_for_scene(scene);
         }
-        let (mut encoder, slot) = self.begin_frame();
+        let (mut encoder, slot) = self.begin_frame(matches!(target, FrameTarget::Viewport(_)));
+        // A viewport resize that switched in `begin_frame`: the target takes its texture of the new size now, so this
+        // frame draws into it.
+        if let FrameTarget::Viewport(viewport) = &mut target
+            && let Some(texture) = self.new_output.take()
+        {
+            viewport.replace(texture);
+        }
+        let target = match target {
+            FrameTarget::View(view) => view,
+            FrameTarget::Viewport(viewport) => viewport.view(),
+        };
         // Mesh assets and textures that arrived, before anything culls or draws the kinds they draw.
         self.parts.resolve_assets(scene, &self.maker);
         let cull = &self.settings.cull;
@@ -1368,9 +1540,9 @@ impl Renderer {
         }
     }
 
-    /// Starts a frame: the pipelines compiled since the last (and a settings change that waited for them), its GPU
-    /// timing slot, if any, and its encoder.
-    fn begin_frame(&mut self) -> (wgpu::CommandEncoder, Option<usize>) {
+    /// Starts a frame: the pipelines compiled since the last (and a settings change that waited for them), in a
+    /// `viewport` frame a viewport resize whose textures exist, its GPU timing slot, if any, and its encoder.
+    fn begin_frame(&mut self, viewport: bool) -> (wgpu::CommandEncoder, Option<usize>) {
         if self.compiler.busy() {
             self.take_compiled();
         }
@@ -1385,6 +1557,11 @@ impl Renderer {
         self.maker.begin_frame(&mut encoder);
         if self.waiting.is_some() {
             self.advance_switch();
+        }
+        // After the switch, which may have made a viewport resize's attachments stale. Only a viewport frame switches
+        // size: its target is handed the new texture.
+        if viewport && self.pending_resize.is_some() {
+            self.advance_resize();
         }
         let slot = match self.timer.as_mut() {
             Some(timer) => timer.begin_frame(&self.device),
@@ -1640,18 +1817,18 @@ impl Renderer {
     /// Plans the frame again and makes the attachments it needs, now. Runs on settings changes (made at once: a new
     /// target size, or a renderer's first settings), never per frame.
     fn rebuild(&mut self) {
-        let attachments = self.attachments(&Switch::of(&self.settings));
+        let size = (self.settings.width, self.settings.height);
+        let attachments = self.attachments(&Switch::of(&self.settings), size);
         let textures = attachments
             .specs
             .map(|spec| spec.map(|spec| spec.make_now(&self.device)));
         self.rebuild_with(attachments, textures);
     }
 
-    /// The frame plan of `switch` at the target's size, and the scene attachments it needs: the depth, the MSAA
-    /// colour and the scene colour.
-    fn attachments(&self, switch: &Switch) -> Attachments {
+    /// The frame plan of `switch` for a target of `width` x `height`, and the scene attachments it needs: the depth,
+    /// the MSAA colour and the scene colour.
+    fn attachments(&self, switch: &Switch, (width, height): (u32, u32)) -> Attachments {
         let plan = switch.plan();
-        let (width, height) = (self.settings.width, self.settings.height);
         let texture_size = if plan.scaled() {
             self.clamped_texture_size(switch.resolution.texture_size(width, height))
         } else {

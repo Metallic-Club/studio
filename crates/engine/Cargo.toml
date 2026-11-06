@@ -39,10 +39,18 @@ thiserror.workspace = true
 gungraun.workspace = true
 # The mesh-asset image test's reference image (`tests/mesh_assets.rs`).
 png.workspace = true
+# The viewport example's window (`examples/viewport_texture.rs`), which it owns as Studio does; the engine's own windows
+# come from `metallic_platform`.
+winit.workspace = true
 
 [[example]]
 name = "headless"
 required-features = ["luau"]
+
+# A game drawn into a viewport texture and shown in a window the example owns (#213).
+[[example]]
+name = "viewport_texture"
+required-features = ["render"]
 
 [[example]]
 name = "windowed"
