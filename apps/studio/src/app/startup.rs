@@ -1,0 +1,278 @@
+//! What Studio does while the splash shows: real startup work, one named step at a time, on a worker thread so the
+//! splash keeps drawing (ADR 0009, Screens).
+//!
+//! The render device is made before the splash, because the splash is drawn with it; the steps here are what comes
+//! after it. [`studio_steps`] lists them.
+
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread::JoinHandle;
+
+use metallic_engine::metallic_platform::{AppId, UserPaths};
+use metallic_engine::metallic_render::{RenderContext, Renderer, RendererSettings, wgpu};
+
+use crate::STUDIO_APP_ID;
+use crate::theme::Look;
+
+/// What the startup steps produce, handed to the screens after the splash.
+#[derive(Default)]
+pub struct Loaded {
+    /// The look from the settings.
+    pub look: Look,
+    /// The renderer the viewport will draw with, its first-frame pipelines compiled; `None` if it could not be made
+    /// (the error is logged, and Studio runs without a viewport).
+    pub viewport_renderer: Option<Renderer>,
+    /// The recently opened projects, most recent first.
+    pub recent_projects: Vec<PathBuf>,
+}
+
+impl std::fmt::Debug for Loaded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Loaded")
+            .field("look", &self.look)
+            .field("viewport_renderer", &self.viewport_renderer.is_some())
+            .field("recent_projects", &self.recent_projects)
+            .finish()
+    }
+}
+
+/// The work of one step.
+type Work = Box<dyn FnOnce(&mut Loaded) + Send>;
+
+/// One startup step: the name the splash shows while it runs, and its work.
+pub struct Step {
+    name: &'static str,
+    work: Work,
+}
+
+impl Step {
+    /// A step called `name` that does `work`.
+    pub fn new(name: &'static str, work: impl FnOnce(&mut Loaded) + Send + 'static) -> Self {
+        Self {
+            name,
+            work: Box::new(work),
+        }
+    }
+
+    /// The name the splash shows while it runs.
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl std::fmt::Debug for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Step").field(&self.name).finish()
+    }
+}
+
+/// What the worker reports.
+enum Progress {
+    /// Step `n` (from 0) is running.
+    Started(usize),
+    /// Every step is done.
+    Finished(Box<Loaded>),
+}
+
+/// The startup steps running on their worker thread, as last polled.
+#[derive(Debug)]
+pub struct Startup {
+    names: Vec<&'static str>,
+    receiver: Receiver<Progress>,
+    /// Steps done.
+    done: usize,
+    /// What the steps produced, once all are done and until it is taken.
+    loaded: Option<Loaded>,
+    finished: bool,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Startup {
+    /// Starts running `steps`, in order, on a worker thread.
+    pub fn spawn(steps: Vec<Step>) -> std::io::Result<Self> {
+        let names = steps.iter().map(Step::name).collect();
+        let (sender, receiver) = mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("studio startup".into())
+            .spawn(move || {
+                let mut loaded = Loaded::default();
+                for (n, step) in steps.into_iter().enumerate() {
+                    // The splash may already be gone (Studio closed): then nobody listens, and that is fine.
+                    let _ = sender.send(Progress::Started(n));
+                    let started = std::time::Instant::now();
+                    (step.work)(&mut loaded);
+                    log::info!("startup: {} in {:.0?}", step.name, started.elapsed());
+                }
+                let _ = sender.send(Progress::Finished(Box::new(loaded)));
+            })?;
+        Ok(Self {
+            names,
+            receiver,
+            done: 0,
+            loaded: None,
+            finished: false,
+            thread: Some(thread),
+        })
+    }
+
+    /// Reads what the worker reported since the last poll. Never blocks.
+    pub fn poll(&mut self) {
+        while !self.finished {
+            match self.receiver.try_recv() {
+                Ok(Progress::Started(n)) => self.done = n,
+                Ok(Progress::Finished(loaded)) => self.finish(*loaded),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    // A step panicked: Studio goes on with what a fresh install has.
+                    log::error!(
+                        "startup: the step `{}` stopped Studio's startup early; starting with defaults",
+                        self.names.get(self.done).copied().unwrap_or("?")
+                    );
+                    self.finish(Loaded::default());
+                }
+            }
+        }
+    }
+
+    fn finish(&mut self, loaded: Loaded) {
+        self.done = self.names.len();
+        self.loaded = Some(loaded);
+        self.finished = true;
+        if let Some(thread) = self.thread.take() {
+            // It has sent its last message (or died), so this returns at once.
+            let _ = thread.join();
+        }
+    }
+
+    /// The steps' names, in order.
+    pub fn names(&self) -> &[&'static str] {
+        &self.names
+    }
+
+    /// How many steps are done.
+    pub fn done(&self) -> usize {
+        self.done
+    }
+
+    /// Whether every step is done.
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// What the steps produced, once they are all done (only the first call gets it).
+    pub fn take_loaded(&mut self) -> Option<Loaded> {
+        self.loaded.take()
+    }
+}
+
+/// Studio's startup steps, on the render device the splash is drawn with.
+pub fn studio_steps(context: RenderContext, reduce_motion: bool) -> Vec<Step> {
+    vec![
+        Step::new("Reading settings", move |loaded| {
+            loaded.look = read_settings(reduce_motion);
+        }),
+        Step::new("Starting the renderer", move |loaded| {
+            loaded.viewport_renderer = start_renderer(&context);
+        }),
+        Step::new("Reading recent projects", |loaded| {
+            loaded.recent_projects = read_recent_projects();
+        }),
+    ]
+}
+
+/// The settings' look. A stub until the settings file exists (#212): it finds Studio's config folder and returns the
+/// defaults, with the system's reduced-motion preference.
+fn read_settings(reduce_motion: bool) -> Look {
+    match AppId::parse(STUDIO_APP_ID).and_then(|app| UserPaths::for_app(&app)) {
+        Ok(paths) => log::info!("settings: config folder {}", paths.config_dir().display()),
+        Err(error) => log::warn!("settings: no config folder ({error}); using the defaults"),
+    }
+    Look {
+        reduce_motion,
+        ..Look::default()
+    }
+}
+
+/// The viewport's renderer on the shared device, at a typical viewport size: it returns once the pipelines of its
+/// first frame are compiled and queues the rest in the background, so the editor's first frame does not wait for
+/// them. Where the device keeps a pipeline cache (Vulkan) the next start compiles less.
+fn start_renderer(context: &RenderContext) -> Option<Renderer> {
+    let settings = RendererSettings::new(wgpu::TextureFormat::Rgba8UnormSrgb, 1280, 720);
+    match Renderer::new(context, settings) {
+        Ok(renderer) => Some(renderer),
+        Err(error) => {
+            log::warn!("renderer: could not start the viewport's renderer: {error}");
+            None
+        }
+    }
+}
+
+/// The recent projects. A stub until the projects list exists (#215): there are none yet.
+fn read_recent_projects() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Polls until `startup` is finished, failing after a few seconds.
+#[cfg(test)]
+pub(crate) fn wait(startup: &mut Startup) {
+    for _ in 0..5000 {
+        startup.poll();
+        if startup.is_finished() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("the startup steps never finished");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn steps_run_in_order_and_report_progress() {
+        let (go, gate) = mpsc::channel::<()>();
+        let mut startup = Startup::spawn(vec![
+            Step::new("one", move |loaded| {
+                gate.recv().unwrap();
+                loaded.recent_projects.push("one".into());
+            }),
+            Step::new("two", |loaded| loaded.recent_projects.push("two".into())),
+        ])
+        .unwrap();
+        assert_eq!(startup.names(), ["one", "two"]);
+        startup.poll();
+        assert_eq!(startup.done(), 0);
+        assert!(!startup.is_finished());
+        assert!(startup.take_loaded().is_none());
+
+        go.send(()).unwrap();
+        wait(&mut startup);
+        assert_eq!(startup.done(), 2);
+        let loaded = startup.take_loaded().unwrap();
+        assert_eq!(loaded.recent_projects, [PathBuf::from("one"), PathBuf::from("two")]);
+        assert!(startup.take_loaded().is_none(), "taken once");
+    }
+
+    #[test]
+    fn a_failed_step_ends_startup_with_defaults() {
+        let mut startup = Startup::spawn(vec![
+            Step::new("breaks", |_| panic!("a broken step")),
+            Step::new("never runs", |loaded| loaded.recent_projects.push("no".into())),
+        ])
+        .unwrap();
+        wait(&mut startup);
+        let loaded = startup.take_loaded().unwrap();
+        assert!(loaded.recent_projects.is_empty());
+        assert_eq!(loaded.look, Look::default());
+    }
+
+    #[test]
+    fn the_settings_stub_keeps_the_system_motion_preference() {
+        assert!(read_settings(true).reduce_motion);
+        assert_eq!(read_settings(false), Look::default());
+        assert!(read_recent_projects().is_empty());
+    }
+}

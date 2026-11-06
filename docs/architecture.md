@@ -22,7 +22,7 @@ class is one file; none of those systems change. ([ADR 0002](adr/0002-object-mod
 | `metallic_platform` | `crates/platform` | window, input, paths, OS glue (the only crate with OS-specific code) |
 | `metallic_engine` | `crates/engine` | the runtime loop; wires everything above; what apps depend on |
 | `metallic_player` | `apps/player` | runs games; a library (embedded by Studio and Launcher) plus a binary |
-| `metallic_studio` | `apps/studio` | the editor (desktop only) |
+| `metallic_studio` | `apps/studio` | the editor (desktop only): egui on its own winit loop and the engine's device ([ADR 0009](adr/0009-studio-foundation.md)) |
 | `metallic_launcher` | `apps/launcher` | the website shell that runs Player and Studio |
 
 ## Dependency rules

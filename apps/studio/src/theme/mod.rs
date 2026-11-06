@@ -1,0 +1,450 @@
+//! Studio's look, after the Metallic website: the design [`tokens`], dark and light modes (or the system's), the
+//! user's accent colour, a high-contrast option, the bundled [`fonts`], and the `egui::Style` a look becomes (ADR
+//! 0009, Theme).
+//!
+//! [`ThemeState`] holds the look Studio wants and re-applies the style only when the look (or, in System mode, the
+//! system's mode) changes, so a frame never rebuilds it.
+
+pub mod fonts;
+pub mod tokens;
+
+use egui::epaint::{CornerRadius, Margin, Stroke};
+use egui::style::{Selection, WidgetVisuals, Widgets};
+use egui::{Color32, FontFamily, FontId, Pos2, Rect, TextStyle, Vec2, pos2, vec2};
+
+use tokens::{ACCENT_INK, Accent, Motion, Palette, radius, shadow, size, space, text};
+
+/// Dark, light, or whichever the system uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ThemeMode {
+    /// The default, and always the splash's.
+    #[default]
+    Dark,
+    /// The light mode.
+    Light,
+    /// Follows the system's setting (dark when the system says nothing).
+    System,
+}
+
+impl ThemeMode {
+    /// Every mode, in the order Settings lists them.
+    pub const ALL: [ThemeMode; 3] = [ThemeMode::Dark, ThemeMode::Light, ThemeMode::System];
+
+    /// The id the settings store.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemeMode::Dark => "dark",
+            ThemeMode::Light => "light",
+            ThemeMode::System => "system",
+        }
+    }
+
+    /// Reads an id in any letter case; `None` for an unknown one.
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.as_str().eq_ignore_ascii_case(id.trim()))
+    }
+
+    /// Whether it is dark, given whether the system is (`None`: the system did not say).
+    pub fn is_dark(self, system_dark: Option<bool>) -> bool {
+        match self {
+            ThemeMode::Dark => true,
+            ThemeMode::Light => false,
+            ThemeMode::System => system_dark.unwrap_or(true),
+        }
+    }
+}
+
+/// What the interface looks like.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Look {
+    /// Dark, light or the system's.
+    pub mode: ThemeMode,
+    /// The accent colour.
+    pub accent: Accent,
+    /// Secondary text as strong as body text, and stronger borders.
+    pub high_contrast: bool,
+    /// Turns off fades and eases.
+    pub reduce_motion: bool,
+}
+
+impl Look {
+    /// The durations this look moves with.
+    pub fn motion(self) -> Motion {
+        Motion::new(self.reduce_motion)
+    }
+
+    /// The colours of this look, given whether the system is dark.
+    pub fn colors(self, system_dark: Option<bool>) -> Colors {
+        let dark = self.mode.is_dark(system_dark);
+        let base = if dark { tokens::DARK } else { tokens::LIGHT };
+        Colors {
+            dark,
+            palette: if self.high_contrast {
+                base.high_contrast(dark)
+            } else {
+                base
+            },
+            accent: self.accent.on(dark),
+            accent_fill: self.accent.colors().color,
+            accent_hover: self.accent.colors().hover,
+        }
+    }
+}
+
+/// The resolved colours of a [`Look`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Colors {
+    /// Whether they are the dark mode's.
+    pub dark: bool,
+    /// The neutrals.
+    pub palette: Palette,
+    /// The accent as an outline or bar on this mode's ground.
+    pub accent: Color32,
+    /// The accent as a fill (text selection), with [`tokens::ACCENT_INK`] on it.
+    pub accent_fill: Color32,
+    /// The accent under the pointer.
+    pub accent_hover: Color32,
+}
+
+impl Default for Colors {
+    fn default() -> Self {
+        Look::default().colors(None)
+    }
+}
+
+/// The look Studio wants, and what was last applied to the egui context.
+#[derive(Debug, Default)]
+pub struct ThemeState {
+    wanted: Look,
+    applied: Option<Colors>,
+    applied_look: Option<Look>,
+}
+
+impl ThemeState {
+    /// A state that wants `look` and has applied nothing yet.
+    pub fn new(look: Look) -> Self {
+        Self {
+            wanted: look,
+            applied: None,
+            applied_look: None,
+        }
+    }
+
+    /// The look wanted.
+    pub fn look(&self) -> Look {
+        self.wanted
+    }
+
+    /// Asks for `look`; it is applied at the next [`ThemeState::apply`].
+    pub fn set(&mut self, look: Look) {
+        self.wanted = look;
+    }
+
+    /// The colours applied last ([`Colors::default`] before any).
+    pub fn colors(&self) -> Colors {
+        self.applied.unwrap_or_default()
+    }
+
+    /// Applies the wanted look to `ctx` unless it is already applied. Returns whether it did.
+    pub fn apply(&mut self, ctx: &egui::Context) -> bool {
+        let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
+        let colors = self.wanted.colors(system_dark);
+        if self.applied == Some(colors) && self.applied_look == Some(self.wanted) {
+            return false;
+        }
+        let egui_theme = if colors.dark {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        };
+        ctx.set_style_of(egui_theme, style(&colors, self.wanted.motion()));
+        ctx.set_theme(egui_theme);
+        ctx.data_mut(|data| data.insert_temp(colors_key(), colors));
+        self.applied = Some(colors);
+        self.applied_look = Some(self.wanted);
+        true
+    }
+}
+
+/// The colours `ctx` shows now ([`ThemeState::apply`] records them), the default look's before any.
+pub fn current_colors(ctx: &egui::Context) -> Colors {
+    ctx.data(|data| data.get_temp::<Colors>(colors_key()))
+        .unwrap_or_default()
+}
+
+/// Where the applied colours are kept in the context's memory.
+fn colors_key() -> egui::Id {
+    egui::Id::unique("metallic.theme")
+}
+
+/// The full `egui::Style` of `colors`, moving with `motion`.
+pub fn style(colors: &Colors, motion: Motion) -> egui::Style {
+    let mut style = egui::Style {
+        animation_time: motion.fast,
+        ..egui::Style::default()
+    };
+    style.text_styles = [
+        (TextStyle::Small, FontId::proportional(text::SMALL)),
+        (TextStyle::Body, FontId::proportional(text::BODY)),
+        (TextStyle::Button, fonts::named(fonts::STRONG, text::BODY)),
+        (TextStyle::Heading, fonts::named(fonts::HEADING, text::TITLE)),
+        (TextStyle::Monospace, FontId::new(text::MONO, FontFamily::Monospace)),
+    ]
+    .into();
+
+    let spacing = &mut style.spacing;
+    spacing.item_spacing = vec2(space::S4, space::S4);
+    spacing.button_padding = vec2(space::S6, space::S3);
+    spacing.interact_size = vec2(size::CONTROL, size::ROW);
+    spacing.window_margin = Margin::same(space::S5 as i8);
+    spacing.menu_margin = Margin::same(space::S2 as i8);
+    spacing.indent = space::S6;
+
+    style.visuals = visuals(colors);
+    style
+}
+
+fn visuals(colors: &Colors) -> egui::Visuals {
+    let p = &colors.palette;
+    let mut visuals = if colors.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    let widget = |fill: Color32, edge: Color32, ink: Color32| WidgetVisuals {
+        bg_fill: fill,
+        weak_bg_fill: fill,
+        bg_stroke: Stroke::new(size::BORDER, edge),
+        corner_radius: CornerRadius::same(radius::ITEM),
+        fg_stroke: Stroke::new(1.0, ink),
+        expansion: 0.0,
+    };
+    // Widgets are the secondary button's states: a surface with a 1 px border, whose border goes to `subtle` under
+    // the pointer. The primary and quiet buttons set their own fills ([`button`]).
+    visuals.widgets = Widgets {
+        noninteractive: widget(p.panel, p.border, p.muted),
+        inactive: widget(p.surface, p.border, p.text),
+        hovered: widget(p.surface_hover, p.subtle, p.text),
+        active: widget(p.surface_hover, colors.accent, p.text),
+        open: widget(p.surface, p.subtle, p.text),
+    };
+    visuals.selection = Selection {
+        bg_fill: colors.accent_fill,
+        stroke: Stroke::new(size::ACCENT_BAR, ACCENT_INK),
+    };
+    visuals.hyperlink_color = colors.accent;
+    visuals.faint_bg_color = p.panel;
+    visuals.extreme_bg_color = p.input;
+    visuals.text_edit_bg_color = Some(p.input);
+    visuals.code_bg_color = p.input;
+    visuals.window_fill = p.surface;
+    visuals.window_stroke = Stroke::new(size::BORDER, p.border);
+    visuals.window_corner_radius = CornerRadius::same(radius::DIALOG);
+    visuals.menu_corner_radius = CornerRadius::same(radius::PANEL);
+    visuals.panel_fill = p.bg;
+    visuals.popup_shadow = shadow::MENU;
+    visuals.window_shadow = shadow::MENU;
+    visuals.disabled_alpha = 0.48;
+    visuals
+}
+
+/// The outline of `rect` with every corner rounded by `radius`: clockwise from the top-right corner, convex, with
+/// `arc_segments` segments per corner. The splash's window region follows it.
+pub fn rounded_outline(rect: Rect, radius: f32, arc_segments: usize) -> Vec<Pos2> {
+    let r = radius.clamp(0.0, rect.width().min(rect.height()) / 2.0);
+    let n = arc_segments.max(1);
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let mut points = Vec::with_capacity(4 * (n + 1));
+    // Each corner is a quarter circle from its start angle (y grows downwards, so angles turn clockwise).
+    for (centre, start) in [
+        (pos2(rect.right() - r, rect.top() + r), -quarter),
+        (pos2(rect.right() - r, rect.bottom() - r), 0.0),
+        (pos2(rect.left() + r, rect.bottom() - r), quarter),
+        (pos2(rect.left() + r, rect.top() + r), 2.0 * quarter),
+    ] {
+        for i in 0..=n {
+            points.push(centre + r * Vec2::angled(start + quarter * i as f32 / n as f32));
+        }
+    }
+    points
+}
+
+/// A button's kind (the website's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// The one action of a view: neutral and bright, never the accent.
+    Primary,
+    /// The default: a surface with a border.
+    Secondary,
+    /// No fill, muted text.
+    Quiet,
+    /// Runs the game: green.
+    Play,
+}
+
+/// A button of `kind` labelled `label`.
+pub fn button(ui: &mut egui::Ui, kind: ButtonKind, label: &str) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let (fill, hover, ink) = match kind {
+        ButtonKind::Primary => (p.action, p.action_hover, p.action_text),
+        ButtonKind::Secondary => return ui.add(egui::Button::new(label).min_size(vec2(0.0, size::CONTROL))),
+        ButtonKind::Quiet => (Color32::TRANSPARENT, p.surface_hover, p.muted),
+        ButtonKind::Play => (tokens::play::FILL, tokens::play::HOVER, tokens::play::TEXT),
+    };
+    let id = ui.next_auto_id();
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    let text = egui::RichText::new(label)
+        .font(fonts::named(fonts::STRONG, text::BODY))
+        .color(ink);
+    ui.add(
+        egui::Button::new(text)
+            .fill(if hovered { hover } else { fill })
+            .stroke(Stroke::NONE)
+            .corner_radius(CornerRadius::same(radius::ITEM))
+            .min_size(vec2(0.0, size::CONTROL)),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modes_parse_and_resolve() {
+        for mode in ThemeMode::ALL {
+            assert_eq!(ThemeMode::parse(&mode.as_str().to_uppercase()), Some(mode));
+        }
+        assert_eq!(ThemeMode::parse("sepia"), None);
+        assert_eq!(ThemeMode::default(), ThemeMode::Dark);
+        assert!(ThemeMode::Dark.is_dark(Some(false)));
+        assert!(!ThemeMode::Light.is_dark(Some(true)));
+        assert!(ThemeMode::System.is_dark(Some(true)));
+        assert!(!ThemeMode::System.is_dark(Some(false)));
+        assert!(ThemeMode::System.is_dark(None), "dark when the system says nothing");
+    }
+
+    #[test]
+    fn a_look_resolves_its_colours() {
+        let dark = Look::default().colors(None);
+        assert!(dark.dark);
+        assert_eq!(dark.palette, tokens::DARK);
+        assert_eq!(dark.accent, tokens::Accent::Orange.colors().color);
+
+        let light = Look {
+            mode: ThemeMode::Light,
+            accent: Accent::Mint,
+            ..Look::default()
+        }
+        .colors(None);
+        assert!(!light.dark);
+        assert_eq!(light.palette, tokens::LIGHT);
+        assert_eq!(
+            light.accent,
+            Accent::Mint.colors().light,
+            "the light mode's darker accent"
+        );
+        assert_eq!(light.accent_fill, Accent::Mint.colors().color);
+
+        let strong = Look {
+            high_contrast: true,
+            ..Look::default()
+        }
+        .colors(None);
+        assert_eq!(strong.palette.muted, tokens::DARK.text);
+        assert_eq!(strong.palette.border, Color32::from_rgb(0x89, 0x89, 0x89));
+    }
+
+    #[test]
+    fn a_style_carries_its_colours() {
+        for look in [
+            Look::default(),
+            Look {
+                mode: ThemeMode::Light,
+                accent: Accent::Rose,
+                ..Look::default()
+            },
+        ] {
+            let colors = look.colors(None);
+            let style = style(&colors, look.motion());
+            let p = colors.palette;
+            assert_eq!(style.visuals.dark_mode, colors.dark);
+            assert_eq!(style.visuals.panel_fill, p.bg);
+            assert_eq!(style.visuals.widgets.inactive.bg_fill, p.surface);
+            assert_eq!(style.visuals.widgets.inactive.bg_stroke, Stroke::new(1.0, p.border));
+            assert_eq!(style.visuals.widgets.hovered.bg_stroke.color, p.subtle);
+            assert_eq!(style.visuals.widgets.inactive.corner_radius, CornerRadius::same(8));
+            assert_eq!(style.visuals.selection.bg_fill, colors.accent_fill);
+            assert_eq!(style.visuals.selection.stroke.color, ACCENT_INK);
+            assert_eq!(style.visuals.disabled_alpha, 0.48);
+            assert_eq!(style.animation_time, 0.12);
+            let button = &style.text_styles[&TextStyle::Button];
+            assert_eq!(button.family, FontFamily::Name(fonts::STRONG.into()));
+            assert_eq!(button.size, 14.0);
+        }
+        let reduced = style(&Colors::default(), Motion::new(true));
+        assert_eq!(reduced.animation_time, 0.0);
+    }
+
+    #[test]
+    fn the_style_is_applied_only_when_the_look_changes() {
+        let ctx = egui::Context::default();
+        let current = |ctx: &egui::Context| ctx.style_of(ctx.theme());
+        let mut state = ThemeState::new(Look::default());
+        assert!(state.apply(&ctx), "the first time");
+        assert!(!state.apply(&ctx), "nothing changed");
+        assert_eq!(current(&ctx).visuals.panel_fill, tokens::DARK.bg);
+        assert_eq!(current_colors(&ctx), state.colors());
+
+        state.set(Look {
+            mode: ThemeMode::Light,
+            ..Look::default()
+        });
+        assert!(state.apply(&ctx));
+        assert!(!state.apply(&ctx));
+        assert!(!current(&ctx).visuals.dark_mode);
+        assert_eq!(current(&ctx).visuals.panel_fill, tokens::LIGHT.bg);
+
+        state.set(Look {
+            mode: ThemeMode::Light,
+            reduce_motion: true,
+            ..Look::default()
+        });
+        assert!(state.apply(&ctx), "reduced motion is part of the look");
+        assert_eq!(current(&ctx).animation_time, 0.0);
+    }
+
+    #[test]
+    fn the_rounded_outline_is_convex_and_inside_its_rect() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(720.0, 420.0));
+        let points = rounded_outline(rect, 12.0, 4);
+        assert_eq!(points.len(), 20);
+        assert!(points.iter().all(|p| rect.expand(0.001).contains(*p)));
+        // Convex and clockwise on screen: every turn has the same sign.
+        let turns: Vec<f32> = (0..points.len())
+            .map(|i| {
+                let (a, b, c) = (
+                    points[i],
+                    points[(i + 1) % points.len()],
+                    points[(i + 2) % points.len()],
+                );
+                (b - a).x * (c - b).y - (b - a).y * (c - b).x
+            })
+            .filter(|t| t.abs() > 1e-3)
+            .collect();
+        assert!(turns.iter().all(|t| *t > 0.0), "{turns:?}");
+        // Every corner's tip is rounded off; no corner is cut.
+        let inside = |p: Pos2| {
+            (0..points.len()).all(|i| {
+                let (a, b) = (points[i], points[(i + 1) % points.len()]);
+                (b - a).x * (p - a).y - (b - a).y * (p - a).x >= 0.0
+            })
+        };
+        assert!(inside(rect.center()));
+        for corner in [pos2(0.5, 0.5), pos2(719.5, 0.5), pos2(719.5, 419.5), pos2(0.5, 419.5)] {
+            assert!(!inside(corner), "{corner:?}");
+        }
+        assert!(inside(pos2(716.0, 4.0)), "a rounded corner, not a chamfer");
+    }
+}
