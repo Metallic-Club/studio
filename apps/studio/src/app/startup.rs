@@ -8,17 +8,17 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
 
-use metallic_engine::metallic_platform::{AppId, UserPaths};
+use metallic_engine::metallic_platform::AppId;
 use metallic_engine::metallic_render::{RenderContext, Renderer, RendererSettings, wgpu};
 
 use crate::STUDIO_APP_ID;
-use crate::theme::Look;
+use crate::settings::{SettingsStore, settings_path};
 
 /// What the startup steps produce, handed to the screens after the splash.
 #[derive(Default)]
 pub struct Loaded {
-    /// The look from the settings.
-    pub look: Look,
+    /// The settings, read from `settings.toml` (in memory only if Studio has no config folder).
+    pub settings: SettingsStore,
     /// The renderer the viewport will draw with, its first-frame pipelines compiled; `None` if it could not be made
     /// (the error is logged, and Studio runs without a viewport).
     pub viewport_renderer: Option<Renderer>,
@@ -29,7 +29,7 @@ pub struct Loaded {
 impl std::fmt::Debug for Loaded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Loaded")
-            .field("look", &self.look)
+            .field("settings", &self.settings)
             .field("viewport_renderer", &self.viewport_renderer.is_some())
             .field("recent_projects", &self.recent_projects)
             .finish()
@@ -166,11 +166,9 @@ impl Startup {
 }
 
 /// Studio's startup steps, on the render device the splash is drawn with.
-pub fn studio_steps(context: RenderContext, reduce_motion: bool) -> Vec<Step> {
+pub fn studio_steps(context: RenderContext) -> Vec<Step> {
     vec![
-        Step::new("Reading settings", move |loaded| {
-            loaded.look = read_settings(reduce_motion);
-        }),
+        settings_step(studio_settings_path()),
         Step::new("Starting the renderer", move |loaded| {
             loaded.viewport_renderer = start_renderer(&context);
         }),
@@ -180,16 +178,27 @@ pub fn studio_steps(context: RenderContext, reduce_motion: bool) -> Vec<Step> {
     ]
 }
 
-/// The settings' look. A stub until the settings file exists (#212): it finds Studio's config folder and returns the
-/// defaults, with the system's reduced-motion preference.
-fn read_settings(reduce_motion: bool) -> Look {
-    match AppId::parse(STUDIO_APP_ID).and_then(|app| UserPaths::for_app(&app)) {
-        Ok(paths) => log::info!("settings: config folder {}", paths.config_dir().display()),
-        Err(error) => log::warn!("settings: no config folder ({error}); using the defaults"),
-    }
-    Look {
-        reduce_motion,
-        ..Look::default()
+/// The step that reads the settings at `path` (`None`: there is no config folder, so they live in memory).
+pub fn settings_step(path: Option<PathBuf>) -> Step {
+    Step::new("Reading settings", move |loaded| {
+        loaded.settings = match path {
+            Some(path) => {
+                log::info!("settings: {}", path.display());
+                SettingsStore::load(path)
+            }
+            None => SettingsStore::in_memory(),
+        };
+    })
+}
+
+/// Where Studio's settings file is, if the user has a config folder.
+fn studio_settings_path() -> Option<PathBuf> {
+    match AppId::parse(STUDIO_APP_ID).and_then(|app| settings_path(&app)) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            log::warn!("settings: no config folder ({error}); settings will not be saved");
+            None
+        }
     }
 }
 
@@ -266,13 +275,28 @@ mod tests {
         wait(&mut startup);
         let loaded = startup.take_loaded().unwrap();
         assert!(loaded.recent_projects.is_empty());
-        assert_eq!(loaded.look, Look::default());
+        assert_eq!(loaded.settings.settings(), &crate::settings::StudioSettings::default());
     }
 
     #[test]
-    fn the_settings_stub_keeps_the_system_motion_preference() {
-        assert!(read_settings(true).reduce_motion);
-        assert_eq!(read_settings(false), Look::default());
+    fn the_settings_step_reads_the_file() {
+        let dir = std::env::temp_dir().join(format!("metallic-studio-startup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(crate::settings::SETTINGS_FILE);
+        std::fs::write(&path, "[general]\nskip_sign_in = true\n").unwrap();
+
+        let mut startup = Startup::spawn(vec![settings_step(Some(path.clone())), settings_step(None)]).unwrap();
+        wait(&mut startup);
+        // The last step wins: no folder, settings in memory.
+        let loaded = startup.take_loaded().unwrap();
+        assert!(loaded.settings.path().is_none());
+
+        let mut startup = Startup::spawn(vec![settings_step(Some(path.clone()))]).unwrap();
+        wait(&mut startup);
+        let loaded = startup.take_loaded().unwrap();
+        assert_eq!(loaded.settings.path(), Some(path.as_path()));
+        assert!(loaded.settings.settings().general.skip_sign_in);
         assert!(read_recent_projects().is_empty());
     }
 }

@@ -4,16 +4,17 @@
 //! egui's own fonts are never loaded ([`definitions`] starts empty, and the workspace turns off egui's
 //! `default_fonts`): one of them is under the Ubuntu Font Licence, which `deny.toml` does not allow.
 //!
-//! The voices ([`STRONG`] for controls, [`HEADING`] for headings) are families of their own so that each can take a
-//! heavier Inter instance without touching the code that uses them. Only Inter's regular weight is bundled for now,
-//! so they share it and differ by size.
+//! Inter is its variable font, and egui 0.37 renders a variable font at the axis values a [`FontTweak`] names (it
+//! shapes and rasterises through `skrifa`/`harfrust` at that location). So each voice is the same font file at its
+//! own weight: body text at 400, controls ([`STRONG`]) at 650 and headings ([`HEADING`]) at 800 with Inter's display
+//! optical size, as ADR 0009's Theme says.
 
 use std::sync::Arc;
 
 use egui::epaint::text::VariationCoords;
 use egui::{FontData, FontDefinitions, FontFamily, FontId, FontTweak};
 
-const INTER: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
+const INTER: &[u8] = include_bytes!("../../assets/fonts/Inter-Variable.ttf");
 const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf");
 const PHOSPHOR: &[u8] = include_bytes!("../../assets/fonts/Phosphor.ttf");
 
@@ -24,12 +25,51 @@ pub const HEADING: &str = "heading";
 /// Phosphor's regular icons alone. Also the last fallback of every text family, so an icon can sit in a label.
 pub const ICONS: &str = "icons";
 
-/// The whole font set: Inter for proportional text and the voices, JetBrains Mono for monospace, each falling back
-/// to Phosphor; and the icon family.
+/// Inter's weights, on its `wght` axis.
+pub mod weight {
+    /// Body text.
+    pub const BODY: f32 = 400.0;
+    /// Controls ([`super::STRONG`]).
+    pub const STRONG: f32 = 650.0;
+    /// Headings ([`super::HEADING`]).
+    pub const HEADING: f32 = 800.0;
+}
+
+/// Inter's optical size for headings, on its `opsz` axis (14 to 32): the display cut, tighter and finer, as the
+/// website's browsers pick for large text.
+const HEADING_OPTICAL_SIZE: f32 = 32.0;
+
+/// Phosphor's regular icons Studio uses, by their code points in `Phosphor.ttf` (the package's `style.css`).
+pub mod icon {
+    /// A gear: settings.
+    pub const GEAR: char = '\u{E270}';
+    /// A magnifying glass: search.
+    pub const SEARCH: char = '\u{E30C}';
+    /// A warning triangle.
+    pub const WARNING: char = '\u{E4E0}';
+    /// A cross: close, dismiss.
+    pub const X: char = '\u{E4F6}';
+}
+
+/// Inter at the axis values `coords` names.
+fn inter(coords: &[(&[u8; 4], f32)]) -> Arc<FontData> {
+    Arc::new(FontData::from_static(INTER).tweak(FontTweak {
+        coords: VariationCoords::new(coords.iter().copied()),
+        ..FontTweak::default()
+    }))
+}
+
+/// The whole font set: Inter for proportional text and, at their weights, the voices, JetBrains Mono for
+/// monospace, each falling back to Phosphor; and the icon family.
 pub fn definitions() -> FontDefinitions {
     let mut defs = FontDefinitions::empty();
+    defs.font_data.insert("inter".into(), inter(&[(b"wght", weight::BODY)]));
     defs.font_data
-        .insert("inter".into(), Arc::new(FontData::from_static(INTER)));
+        .insert("inter-strong".into(), inter(&[(b"wght", weight::STRONG)]));
+    defs.font_data.insert(
+        "inter-heading".into(),
+        inter(&[(b"wght", weight::HEADING), (b"opsz", HEADING_OPTICAL_SIZE)]),
+    );
     defs.font_data
         .insert("phosphor".into(), Arc::new(FontData::from_static(PHOSPHOR)));
     defs.font_data.insert(
@@ -39,13 +79,13 @@ pub fn definitions() -> FontDefinitions {
             ..FontTweak::default()
         })),
     );
-    let text = || vec!["inter".to_owned(), "phosphor".to_owned()];
-    for family in [
-        FontFamily::Proportional,
-        FontFamily::Name(STRONG.into()),
-        FontFamily::Name(HEADING.into()),
+    for (family, inter) in [
+        (FontFamily::Proportional, "inter"),
+        (FontFamily::Name(STRONG.into()), "inter-strong"),
+        (FontFamily::Name(HEADING.into()), "inter-heading"),
     ] {
-        defs.families.insert(family, text());
+        defs.families
+            .insert(family, vec![inter.to_owned(), "phosphor".to_owned()]);
     }
     defs.families.insert(
         FontFamily::Monospace,
@@ -76,7 +116,10 @@ mod tests {
         // egui's defaults (Ubuntu-Light, Hack, the emoji fonts) are never in the set.
         let mut names: Vec<&String> = defs.font_data.keys().collect();
         names.sort();
-        assert_eq!(names, ["inter", "jetbrains-mono", "phosphor"]);
+        assert_eq!(
+            names,
+            ["inter", "inter-heading", "inter-strong", "jetbrains-mono", "phosphor"]
+        );
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             assert!(defs.families.contains_key(&family));
         }
@@ -86,11 +129,28 @@ mod tests {
         }
     }
 
+    /// The heading's optical size at body weight: what the heading would be if egui ignored `wght`.
+    const DISPLAY_REGULAR: &str = "display-regular";
+
+    /// Runs one pass of a context with the fonts installed, handing `check` its `Ui`.
+    fn with_fonts(check: impl FnMut(&mut egui::Ui)) {
+        let ctx = egui::Context::default();
+        let mut defs = definitions();
+        defs.font_data.insert(
+            DISPLAY_REGULAR.into(),
+            inter(&[(b"wght", weight::BODY), (b"opsz", HEADING_OPTICAL_SIZE)]),
+        );
+        defs.families
+            .insert(FontFamily::Name(DISPLAY_REGULAR.into()), vec![DISPLAY_REGULAR.into()]);
+        ctx.set_fonts(defs);
+        let mut output = ctx.run_ui(egui::RawInput::default(), check);
+        // Nothing paints this pass: the font atlas' upload is dropped on purpose.
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn every_family_lays_out_text() {
-        let ctx = egui::Context::default();
-        install(&ctx);
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        with_fonts(|ui| {
             for family in [
                 FontFamily::Proportional,
                 FontFamily::Monospace,
@@ -106,15 +166,47 @@ mod tests {
                 assert!(galley.size().x > 100.0, "{family:?}");
             }
         });
-        // Nothing paints this pass: the font atlas' upload is dropped on purpose.
-        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn the_voices_render_at_their_weights() {
+        // Inter's heavier instances have wider advances, so if egui ignored `wght` each pair would measure the
+        // same. The heading is compared at its own optical size, which is tighter than the body's.
+        with_fonts(|ui| {
+            let width = |family: FontFamily| {
+                ui.painter()
+                    .layout_no_wrap(
+                        "Metallic Studio settings".into(),
+                        FontId::new(14.0, family),
+                        egui::Color32::WHITE,
+                    )
+                    .size()
+                    .x
+            };
+            let body = width(FontFamily::Proportional);
+            let strong = width(FontFamily::Name(STRONG.into()));
+            let heading = width(FontFamily::Name(HEADING.into()));
+            assert!(body < strong, "400 {body} vs 650 {strong}");
+            let display = width(FontFamily::Name(DISPLAY_REGULAR.into()));
+            assert!(display < heading, "display 400 {display} vs 800 {heading}");
+        });
+    }
+
+    #[test]
+    fn the_icons_are_in_phosphor() {
+        with_fonts(|ui| {
+            for icon in [icon::GEAR, icon::SEARCH, icon::WARNING, icon::X] {
+                let has = ui.ctx().fonts_mut(|fonts| fonts.has_glyph(&named(ICONS, 16.0), icon));
+                assert!(has, "U+{:04X}", icon as u32);
+            }
+        });
     }
 
     #[test]
     fn licences_sit_beside_the_fonts() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
         for (font, licence) in [
-            ("Inter-Regular.ttf", "OFL-Inter.txt"),
+            ("Inter-Variable.ttf", "OFL-Inter.txt"),
             ("JetBrainsMono-Variable.ttf", "OFL-JetBrainsMono.txt"),
             ("Phosphor.ttf", "LICENSE-Phosphor.txt"),
         ] {

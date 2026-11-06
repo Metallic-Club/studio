@@ -1706,6 +1706,7 @@ dependencies = [
  "metallic_engine",
  "metallic_player",
  "thiserror 2.0.21",
+ "toml",
  "windows-sys 0.61.2",
  "winit",
 ]

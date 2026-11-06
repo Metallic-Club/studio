@@ -5,11 +5,13 @@ Studio draws all of its text and icons with the fonts in this folder (src/theme/
 never loaded. Each font keeps its licence text next to it, and packaging ships this folder's licence files with the
 app. Font files are not crates, so `cargo deny` does not see them: this file is their record.
 
-Inter-Regular.ttf
-  Inter, regular weight, unmodified: the interface font (the website's, Metallic-Club/website).
+Inter-Variable.ttf
+  Inter, variable (opsz 14-32, wght 100-900), unmodified, renamed from Inter[opsz,wght].ttf: the interface font
+  (the website's, Metallic-Club/website). Studio draws it at weights 400 (body), 650 (controls) and 800 (headings).
   Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter).
-  SIL Open Font License 1.1, see OFL-Inter.txt.
-  Taken from the cosmic-text 0.13.2 crate (fonts/Inter-Regular.ttf), which bundles it under that licence.
+  SIL Open Font License 1.1, see OFL-Inter.txt (the OFL.txt shipped beside the font).
+  Source: https://github.com/google/fonts/tree/main/ofl/inter, file Inter[opsz,wght].ttf (876,576 bytes,
+  sha256 29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031).
 
 JetBrainsMono-Variable.ttf
   JetBrains Mono, version 2.304, variable (wght 100-800), subset to Latin, Latin Extended, punctuation, symbols,

@@ -152,7 +152,7 @@ impl StudioWindow {
         let painter = egui_wgpu::Renderer::new(context.device(), surface.format(), RendererOptions::default());
 
         let reduce_motion = native::prefers_reduced_motion();
-        let startup = Startup::spawn(studio_steps(context.clone(), reduce_motion))?;
+        let startup = Startup::spawn(studio_steps(context.clone()))?;
         // The mark at its size on the splash, in the window's pixels, so it is drawn one texel to a pixel.
         let mark = emblem::render((splash::EMBLEM * window.scale_factor() as f32).round() as u32);
         let image = ColorImage::from_rgba_unmultiplied([mark.width as usize, mark.height as usize], &mark.rgba);

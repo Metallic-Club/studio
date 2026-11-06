@@ -6,9 +6,10 @@
 //! |---|---|
 //! | [`app`] | the window's screens as a state machine ([`app::Studio`]), the splash and its startup steps, and the shell that runs them on Studio's own winit loop and the engine's render device |
 //! | [`theme`] | the website's design tokens, dark and light modes, accents, the bundled fonts |
+//! | [`settings`] | `StudioSettings`, `settings.toml` in the config folder, and the Settings window |
 //! | [`emblem`] | the Metallic mark: the splash's emblem and the window icon |
 //!
-//! Later issues add `settings`, `keymap`, `dock`, `panels`, `viewport` and `projects` beside them.
+//! Later issues add `keymap`, `dock`, `panels`, `viewport` and `projects` beside them.
 
 // The one place Studio calls the operating system itself (`app::native`, Windows only): shaping the splash window
 // and reading the system's animation switch need Win32 calls, which are unsafe. Each block says why it is sound.
@@ -16,6 +17,7 @@
 
 pub mod app;
 pub mod emblem;
+pub mod settings;
 pub mod theme;
 
 pub use app::{Screen, Studio, run};
