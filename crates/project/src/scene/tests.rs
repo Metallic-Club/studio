@@ -526,3 +526,42 @@ fn bytes_load_like_text() {
         Err(SceneError::Syntax(_))
     ));
 }
+
+#[test]
+fn mesh_parts_keep_their_asset_ids() {
+    let mut dm = game();
+    let workspace = service(&dm, "Workspace");
+    let statue = new_in(&mut dm, "MeshPart", workspace, "Statue");
+    let mesh = "00112233445566778899aabbccddeeff";
+    let texture = "ffeeddccbbaa99887766554433221100";
+    dm.set_by_name(statue, "MeshId", Value::String(mesh.into())).unwrap();
+    dm.set_by_name(statue, "TextureId", Value::String(texture.into()))
+        .unwrap();
+    dm.set_by_name(statue, "Size", Value::Vector3(Vector3::new(2.0, 3.0, 4.0)))
+        .unwrap();
+    // A mesh part without a texture leaves `TextureId` out of the file.
+    let plain = new_in(&mut dm, "MeshPart", workspace, "Plain");
+    dm.set_by_name(plain, "MeshId", Value::String(mesh.into())).unwrap();
+
+    let text = save(&dm);
+    let parsed = doc(&text);
+    assert_eq!(named(&parsed, "Statue")["properties"]["MeshId"], json!(mesh));
+    assert_eq!(named(&parsed, "Statue")["properties"]["TextureId"], json!(texture));
+    assert!(named(&parsed, "Plain")["properties"].get("TextureId").is_none());
+
+    let (loaded_dm, loaded) = load(&text);
+    assert_eq!(loaded.warnings, []);
+    assert_eq!(save(&loaded_dm), text, "save, load, save gives the same file");
+    let workspace = service(&loaded_dm, "Workspace");
+    let statue = loaded_dm.find_first_child(workspace, "Statue", false).unwrap().unwrap();
+    assert_eq!(loaded_dm.class_name(statue), Ok("MeshPart"));
+    assert_eq!(loaded_dm.get_by_name(statue, "MeshId"), Ok(Value::String(mesh.into())));
+    assert_eq!(
+        loaded_dm.get_by_name(statue, "TextureId"),
+        Ok(Value::String(texture.into()))
+    );
+    assert_eq!(
+        loaded_dm.get_by_name(statue, "Size"),
+        Ok(Value::Vector3(Vector3::new(2.0, 3.0, 4.0)))
+    );
+}

@@ -900,6 +900,14 @@ end
 declare extern type LocalScript extends BaseScript with
 end
 
+--- A part drawn as an imported mesh with a texture, which you size, colour and place like any part.
+declare extern type MeshPart extends BasePart with
+    --- The id of the project's mesh asset (a glTF or GLB model) the part is drawn as. Its bounds are stretched to the part's Size. Empty draws nothing.
+    MeshId: string
+    --- The id of the project's image asset (PNG or JPEG) the mesh is coloured with, multiplied by Color. Empty uses Color alone.
+    TextureId: string
+end
+
 --- The basic building block: a block, ball, cylinder or wedge that you size, colour and place.
 declare extern type Part extends BasePart with
     --- The part's shape. A Ball's diameter is the smallest side of Size; a Cylinder runs along X; a Wedge slopes down towards -Z.
@@ -935,6 +943,7 @@ declare Instance: {
         & ((className: "StringValue", parent: Instance?) -> StringValue)
         & ((className: "DirectionalLight", parent: Instance?) -> DirectionalLight)
         & ((className: "LocalScript", parent: Instance?) -> LocalScript)
+        & ((className: "MeshPart", parent: Instance?) -> MeshPart)
         & ((className: "Part", parent: Instance?) -> Part)
         & ((className: "PointLight", parent: Instance?) -> PointLight)
         & ((className: "Script", parent: Instance?) -> Script)

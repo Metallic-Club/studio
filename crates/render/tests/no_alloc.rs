@@ -2002,6 +2002,8 @@ struct HandParts {
     /// Group 0 and 1 of each pipeline (automatic layouts cannot be shared).
     opaque_groups: [wgpu::BindGroup; 2],
     transparent_groups: [wgpu::BindGroup; 2],
+    /// Group 2 of each pipeline: the white base-colour texture (#189).
+    texture_groups: [wgpu::BindGroup; 2],
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     frame: wgpu::Buffer,
@@ -2457,9 +2459,10 @@ impl HandParts {
         let pulled_vertices = buffer(32 * 4096, storage);
         let frame = buffer(FRAME_UNIFORM_SIZE, wgpu::BufferUsages::UNIFORM);
         let materials = buffer(8192, wgpu::BufferUsages::UNIFORM);
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        // Position, normal and texture coordinates (#189), as `MeshVertex` lays them out.
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 9 => Float32x2];
         let mesh_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: 24,
+            array_stride: 32,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &attributes,
         })];
@@ -2538,6 +2541,41 @@ impl HandParts {
             &transparent,
             &[(0, &regions[0]), (1, &regions[1]), (3, &sorted), (4, &pulled_vertices)],
         );
+        // The base-colour texture every draw but a mesh asset's binds (#189): white, sampled nearest.
+        let white = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("hand white"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let nearest = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let texture_group = |pipeline: &wgpu::RenderPipeline| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hand white"),
+                layout: &pipeline.get_bind_group_layout(2),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&white),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&nearest),
+                    },
+                ],
+            })
+        };
+        let texture_groups = [texture_group(&opaque), texture_group(&transparent)];
         let depth = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("hand depth"),
@@ -2603,7 +2641,8 @@ impl HandParts {
             sky_group,
             opaque_groups,
             transparent_groups,
-            vertices: buffer(24 * 1024, wgpu::BufferUsages::VERTEX),
+            texture_groups,
+            vertices: buffer(32 * 1024, wgpu::BufferUsages::VERTEX),
             indices: buffer(4 * 4096, wgpu::BufferUsages::INDEX),
             frame,
             sorted,
@@ -2724,6 +2763,7 @@ impl HandParts {
                     // Every see-through instance in one draw, with no vertex or index buffer.
                     if vertices > 0 {
                         pass.set_pipeline(&self.transparent);
+                        pass.set_bind_group(2, &self.texture_groups[1], &[]);
                         pass.set_bind_group(0, &self.transparent_groups[0], &[]);
                         pass.set_bind_group(1, &self.transparent_groups[1], &[]);
                         pass.draw(0..vertices, 0..1);
@@ -2746,6 +2786,8 @@ impl HandParts {
             pass.set_vertex_buffer(0, self.vertices.slice(..));
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_bind_group(1, &groups[1], &[]);
+            // Every draw is a primitive's: the white texture, bound once.
+            pass.set_bind_group(2, &self.texture_groups[0], &[]);
             for draw in 0..draws {
                 pass.draw_indexed(0..36, 0, draw..draw + 1);
             }

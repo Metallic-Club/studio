@@ -124,7 +124,9 @@
 //!
 //! A game saved as a `.mtproj` project ([`metallic_project::Project`]) runs by making the engine with the
 //! project's scripts as its sources ([`project_sources`]) and loading its start scene into the game before
-//! [`Engine::start`] ([`Project::load_start_scene`](metallic_project::Project::load_start_scene)).
+//! [`Engine::start`] ([`Project::load_start_scene`](metallic_project::Project::load_start_scene)). Under `render`,
+//! the meshes and textures its `MeshPart`s name are loaded off the main thread and drawn once they are here: hand
+//! [`SceneRenderer::set_assets`] the project's [`AssetReader`](metallic_project::AssetReader) (`MeshAssets`).
 
 #[cfg(feature = "render")]
 pub mod calibration;
@@ -137,6 +139,8 @@ pub mod graphics;
 mod hooks;
 #[cfg(feature = "render")]
 mod input;
+#[cfg(feature = "render")]
+mod mesh_assets;
 mod output;
 #[cfg(feature = "render")]
 pub mod perf;
@@ -157,6 +161,8 @@ pub use hooks::{FrameStats, NoSimulation, Simulation};
 pub use hooks::{RenderFrame, RenderHook, RenderHookError};
 #[cfg(feature = "render")]
 pub use input::InputEvent;
+#[cfg(feature = "render")]
+pub use mesh_assets::MeshAssets;
 pub use output::StdOutput;
 pub use project::project_sources;
 #[cfg(feature = "render")]

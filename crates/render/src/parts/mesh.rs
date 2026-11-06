@@ -1,10 +1,11 @@
-//! The built-in primitive meshes (Block, Ball, Cylinder, Wedge) in one shared vertex and index pool.
+//! The built-in primitive meshes (Block, Ball, Cylinder, Wedge) and the mesh assets in one shared vertex and index
+//! pool.
 //!
 //! Every mesh is unit-sized, centred on the origin, and stretched to the part by the instance's affine transform
 //! (`Size`, with the Ball and Cylinder rules applied by the scene's `PrimitiveMesh`). All of them live in one
 //! vertex buffer and one index buffer, so the draws of every kind share their bindings and only the index range
-//! changes; mesh assets join the same pool later (ADR 0008 §4). Indices are absolute (`u32`, base vertex 0), which
-//! GLES needs: it has no base vertex.
+//! changes; mesh assets join the same pool (ADR 0008 §4, `MeshPool::add_asset`). Indices are absolute (`u32`,
+//! base vertex 0), which GLES needs: it has no base vertex.
 //!
 //! The Ball and the Cylinder have levels of detail ([`crate::lod`]): at full detail they are tessellated finely
 //! enough that their silhouettes stay round at the sizes parts are usually seen at (32 segments around, 16 rings for
@@ -13,15 +14,18 @@
 //! level in turn ([`MeshPool::level_starts`]), so a vertex's index alone says which level it belongs to (the debug
 //! tint of [`crate::Renderer::set_lod_tint`]).
 
+use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use metallic_core::glam::Vec3;
 
+use crate::context::Submitter;
 use crate::lod::{BALL_SEGMENTS, CYLINDER_SEGMENTS, MAX_LOD_LEVELS};
 use crate::scene::MeshKind;
 
-/// One vertex of a primitive mesh: position and unit normal in the unit mesh's own space.
+/// One vertex of a mesh: position, unit normal and texture coordinates in the unit mesh's own space.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct MeshVertex {
@@ -29,11 +33,25 @@ pub struct MeshVertex {
     pub position: [f32; 3],
     /// Unit normal.
     pub normal: [f32; 3],
+    /// Texture coordinates, (0, 0) at the texture's top left: a mesh asset's base-colour texture is sampled there.
+    /// The primitives have none (0, 0), and draw with a white texture.
+    pub uv: [f32; 2],
 }
 
 impl MeshVertex {
-    /// The vertex buffer layout: position at location 0, normal at location 1.
-    pub const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    /// A vertex at `position` facing `normal`, without texture coordinates.
+    pub const fn new(position: [f32; 3], normal: [f32; 3]) -> Self {
+        Self {
+            position,
+            normal,
+            uv: [0.0; 2],
+        }
+    }
+
+    /// The vertex buffer layout: position at location 0, normal at location 1, and texture coordinates at location 9
+    /// (after the vertex-buffer path's instance attributes, 2 to 8).
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 9 => Float32x2];
 
     /// The layout of the pool's vertex buffer, stepped per vertex.
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -79,10 +97,8 @@ impl MeshData {
     fn polygon(&mut self, corners: &[Vec3], normal: Vec3) {
         let base = self.next_index();
         for corner in corners {
-            self.vertices.push(MeshVertex {
-                position: corner.to_array(),
-                normal: normal.to_array(),
-            });
+            self.vertices
+                .push(MeshVertex::new(corner.to_array(), normal.to_array()));
         }
         let Some((&first, rest)) = corners.split_first() else {
             return;
@@ -169,10 +185,8 @@ fn ball(segments: u32, rings: u32) -> MeshData {
         for segment in 0..=segments {
             let theta = TAU * segment as f32 / segments as f32;
             let normal = Vec3::new(phi.sin() * theta.cos(), phi.cos(), phi.sin() * theta.sin());
-            mesh.vertices.push(MeshVertex {
-                position: (normal * 0.5).to_array(),
-                normal: normal.to_array(),
-            });
+            mesh.vertices
+                .push(MeshVertex::new((normal * 0.5).to_array(), normal.to_array()));
         }
     }
     let stride = segments + 1;
@@ -202,10 +216,7 @@ fn cylinder(segments: u32) -> MeshData {
     for segment in 0..=segments {
         let (c, s) = around(segment);
         for x in [-0.5f32, 0.5] {
-            mesh.vertices.push(MeshVertex {
-                position: [x, c * 0.5, s * 0.5],
-                normal: [0.0, c, s],
-            });
+            mesh.vertices.push(MeshVertex::new([x, c * 0.5, s * 0.5], [0.0, c, s]));
         }
     }
     for segment in 0..segments {
@@ -215,16 +226,11 @@ fn cylinder(segments: u32) -> MeshData {
     for sign in [-1.0f32, 1.0] {
         let normal = (Vec3::X * sign).to_array();
         let centre = mesh.next_index();
-        mesh.vertices.push(MeshVertex {
-            position: [0.5 * sign, 0.0, 0.0],
-            normal,
-        });
+        mesh.vertices.push(MeshVertex::new([0.5 * sign, 0.0, 0.0], normal));
         for segment in 0..segments {
             let (c, s) = around(segment);
-            mesh.vertices.push(MeshVertex {
-                position: [0.5 * sign, c * 0.5, s * 0.5],
-                normal,
-            });
+            mesh.vertices
+                .push(MeshVertex::new([0.5 * sign, c * 0.5, s * 0.5], normal));
         }
         for segment in 0..segments {
             let next = (segment + 1) % segments;
@@ -260,12 +266,21 @@ pub struct MeshRange {
     pub index_count: u32,
 }
 
-/// Every built-in mesh, at every level of detail, in one vertex buffer and one index buffer.
+/// Every built-in mesh, at every level of detail, and the mesh assets added since, in one vertex buffer and one index
+/// buffer.
 ///
 /// Where the transparent pass pulls its vertices ([`MeshPool::pulled`]), the pool also holds every mesh
 /// **unindexed**: the vertex of each of its indices in turn, two `vec4<f32>` each (position and normal.x, then
-/// normal.yz), so a vertex shader finds a mesh's `n`th vertex with one read, at the mesh's
+/// normal.yz and the texture coordinates), so a vertex shader finds a mesh's `n`th vertex with one read, at the mesh's
 /// [`MeshRange::first_index`] (the unindexed copy keeps the index buffer's layout).
+///
+/// # Mesh assets
+///
+/// Mesh assets (`MeshPool::add_asset`, #189) are appended after the built-in meshes, each one level of detail, and
+/// found by their key ([`MeshPool::asset`]). The buffers grow by doubling, the old contents copied on the GPU, so an
+/// asset added later costs one copy and one upload, never a rebuild. Which mesh kind draws which asset is the scene's
+/// choice ([`crate::InstanceScene::mesh_assets`]); the renderer points those kinds at the assets' ranges
+/// (`MeshPool::set_kind`) once they are here, and until then they have none and draw nothing.
 #[derive(Debug)]
 pub struct MeshPool {
     vertices: wgpu::Buffer,
@@ -276,7 +291,17 @@ pub struct MeshPool {
     ranges: Vec<[MeshRange; MAX_LOD_LEVELS]>,
     /// The first vertex of each level.
     level_starts: [u32; MAX_LOD_LEVELS],
+    /// Vertices and indices in use (the buffers may hold more).
+    vertex_len: u32,
+    index_len: u32,
+    /// Every mesh asset's range, by key.
+    assets: HashMap<Arc<str>, MeshRange>,
+    /// Changes whenever a kind's range changes.
+    revision: u64,
 }
+
+/// The size of one unindexed vertex: two `vec4<f32>`.
+const PULLED_VERTEX: u64 = 32;
 
 /// The vertices of every index of `indices`, in order, as the pulled pool lays them out: two `vec4<f32>` each.
 fn unindexed(vertices: &[MeshVertex], indices: &[u32]) -> Vec<[f32; 8]> {
@@ -284,10 +309,24 @@ fn unindexed(vertices: &[MeshVertex], indices: &[u32]) -> Vec<[f32; 8]> {
         .iter()
         .map(|&i| {
             let v = vertices.get(i as usize).copied().unwrap_or_default();
-            let ([px, py, pz], [nx, ny, nz]) = (v.position, v.normal);
-            [px, py, pz, nx, ny, nz, 0.0, 0.0]
+            let ([px, py, pz], [nx, ny, nz], [u, w]) = (v.position, v.normal, v.uv);
+            [px, py, pz, nx, ny, nz, u, w]
         })
         .collect()
+}
+
+const VERTICES_LABEL: &str = "metallic mesh vertices";
+const INDICES_LABEL: &str = "metallic mesh indices";
+const PULLED_LABEL: &str = "metallic mesh vertices (unindexed)";
+
+/// One of the pool's buffers, `size` bytes, for `usage`, written through the queue and copied from when it grows.
+fn pool_buffer(device: &wgpu::Device, label: &'static str, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: usage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    })
 }
 
 /// The pool's contents: every built-in mesh level by level, the ranges and where each level's vertices start.
@@ -333,18 +372,13 @@ impl MeshPool {
     pub(crate) fn with_pulled(device: &wgpu::Device, queue: &wgpu::Queue, pulled: bool) -> Self {
         let (vertices, indices, ranges, level_starts) = pool_data();
         let buffer = |label, contents: &[u8], usage| {
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: contents.len() as u64,
-                usage: usage | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let buffer = pool_buffer(device, label, contents.len() as u64, usage);
             queue.write_buffer(&buffer, 0, contents);
             buffer
         };
         let pulled = pulled.then(|| {
             buffer(
-                "metallic mesh vertices (unindexed)",
+                PULLED_LABEL,
                 bytemuck::cast_slice(&unindexed(&vertices, &indices)),
                 wgpu::BufferUsages::STORAGE,
             )
@@ -352,18 +386,168 @@ impl MeshPool {
         Self {
             pulled,
             vertices: buffer(
-                "metallic mesh vertices",
+                VERTICES_LABEL,
                 bytemuck::cast_slice(&vertices),
                 wgpu::BufferUsages::VERTEX,
             ),
-            indices: buffer(
-                "metallic mesh indices",
-                bytemuck::cast_slice(&indices),
-                wgpu::BufferUsages::INDEX,
-            ),
+            indices: buffer(INDICES_LABEL, bytemuck::cast_slice(&indices), wgpu::BufferUsages::INDEX),
             ranges,
             level_starts,
+            vertex_len: u32::try_from(vertices.len()).unwrap_or(u32::MAX),
+            index_len: u32::try_from(indices.len()).unwrap_or(u32::MAX),
+            assets: HashMap::new(),
+            revision: 0,
         }
+    }
+
+    /// Adds the mesh asset `key` (a unit mesh, like the primitives: see [`crate::scene::RenderComponents`]), or
+    /// replaces it. Its kinds draw it once `MeshPool::set_kind` points them at it. Grows the buffers when they are
+    /// full, copying what they hold on the GPU (one submission through `submitter`); the new mesh's data is written
+    /// through the queue, so it lands before the next frame. Refuses an empty mesh, an index past its vertices, and a
+    /// mesh the device's largest buffer cannot hold.
+    pub(crate) fn add_asset(
+        &mut self,
+        (device, queue, submitter): (&wgpu::Device, &wgpu::Queue, &Submitter),
+        key: &str,
+        mesh: &MeshData,
+    ) -> Result<MeshRange, String> {
+        if mesh.indices.is_empty() || !mesh.indices.len().is_multiple_of(3) {
+            return Err("the mesh has no whole triangles".into());
+        }
+        if let Some(&index) = mesh.indices.iter().find(|&&i| i as usize >= mesh.vertices.len()) {
+            return Err(format!("index {index} is past its {} vertices", mesh.vertices.len()));
+        }
+        let too_large = || "the mesh does not fit in the device's largest buffer".to_owned();
+        let vertex_count = u32::try_from(mesh.vertices.len()).map_err(|_| too_large())?;
+        let index_count = u32::try_from(mesh.indices.len()).map_err(|_| too_large())?;
+        let vertex_len = self.vertex_len.checked_add(vertex_count).ok_or_else(too_large)?;
+        let index_len = self.index_len.checked_add(index_count).ok_or_else(too_large)?;
+        let max = device.limits().max_buffer_size;
+        let vertex_size = size_of::<MeshVertex>() as u64;
+        let ends = [
+            u64::from(vertex_len) * vertex_size,
+            u64::from(index_len) * 4,
+            u64::from(index_len) * PULLED_VERTEX,
+        ];
+        if ends[0] > max || ends[1] > max || (self.pulled.is_some() && ends[2] > max) {
+            return Err(too_large());
+        }
+        let mut encoder = None;
+        let mut grow = |buffer: &mut wgpu::Buffer, used: u64, end: u64, label: &'static str, usage| {
+            if end <= buffer.size() {
+                return;
+            }
+            let bigger = pool_buffer(
+                device,
+                label,
+                end.next_power_of_two().max(buffer.size() * 2).min(max),
+                usage,
+            );
+            let encoder = encoder.get_or_insert_with(|| {
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("metallic mesh pool growth"),
+                })
+            });
+            encoder.copy_buffer_to_buffer(buffer, 0, &bigger, 0, used);
+            *buffer = bigger;
+        };
+        grow(
+            &mut self.vertices,
+            u64::from(self.vertex_len) * vertex_size,
+            ends[0],
+            VERTICES_LABEL,
+            wgpu::BufferUsages::VERTEX,
+        );
+        grow(
+            &mut self.indices,
+            u64::from(self.index_len) * 4,
+            ends[1],
+            INDICES_LABEL,
+            wgpu::BufferUsages::INDEX,
+        );
+        if let Some(pulled) = self.pulled.as_mut() {
+            grow(
+                pulled,
+                u64::from(self.index_len) * PULLED_VERTEX,
+                ends[2],
+                PULLED_LABEL,
+                wgpu::BufferUsages::STORAGE,
+            );
+        }
+        if let Some(encoder) = encoder {
+            // Before the writes below land (at the next submission): they go past what the copy covers anyway.
+            submitter.submit(std::iter::once(encoder.finish()));
+        }
+        let base = self.vertex_len;
+        let indices: Vec<u32> = mesh.indices.iter().map(|&i| base + i).collect();
+        queue.write_buffer(
+            &self.vertices,
+            u64::from(self.vertex_len) * vertex_size,
+            bytemuck::cast_slice(&mesh.vertices),
+        );
+        queue.write_buffer(
+            &self.indices,
+            u64::from(self.index_len) * 4,
+            bytemuck::cast_slice(&indices),
+        );
+        if let Some(pulled) = self.pulled.as_ref() {
+            queue.write_buffer(
+                pulled,
+                u64::from(self.index_len) * PULLED_VERTEX,
+                bytemuck::cast_slice(&unindexed(&mesh.vertices, &mesh.indices)),
+            );
+        }
+        let range = MeshRange {
+            first_index: self.index_len,
+            index_count,
+        };
+        self.vertex_len = vertex_len;
+        self.index_len = index_len;
+        self.assets.insert(Arc::from(key), range);
+        Ok(range)
+    }
+
+    /// The range of the mesh asset `key`, once added.
+    pub fn asset(&self, key: &str) -> Option<MeshRange> {
+        self.assets.get(key).copied()
+    }
+
+    /// Draws `kind` (a mesh asset's kind) with `range` at full detail, or with nothing. Allocates only when `kind` is
+    /// higher than any before.
+    pub(crate) fn set_kind(&mut self, kind: MeshKind, range: Option<MeshRange>) {
+        let index = usize::from(kind.0);
+        if index < usize::from(MeshKind::BUILTIN_COUNT) {
+            return;
+        }
+        let mut levels = [MeshRange::default(); MAX_LOD_LEVELS];
+        levels[0] = range.unwrap_or_default();
+        if index >= self.ranges.len() {
+            self.ranges.resize(index + 1, [MeshRange::default(); MAX_LOD_LEVELS]);
+        }
+        if self.ranges[index] != levels {
+            self.ranges[index] = levels;
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Draws nothing with the mesh-asset kinds from `kind` on (another scene's, which numbered its kinds itself).
+    pub(crate) fn forget_kinds_from(&mut self, kind: usize) {
+        let keep = kind.max(usize::from(MeshKind::BUILTIN_COUNT));
+        if self.ranges.len() > keep {
+            self.ranges.truncate(keep);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// How many mesh assets the pool holds.
+    pub fn assets_len(&self) -> usize {
+        self.assets.len()
+    }
+
+    /// Changes whenever a kind's range changed (`MeshPool::set_kind`): what was drawn with the old ranges (a sorted
+    /// transparent list) must be made again.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// The vertex buffer ([`MeshVertex`]).

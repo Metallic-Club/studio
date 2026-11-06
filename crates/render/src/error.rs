@@ -54,6 +54,15 @@ pub enum RenderError {
         /// The sample count asked for.
         samples: u32,
     },
+    /// A mesh or texture asset was refused ([`crate::Renderer::add_mesh_asset`],
+    /// [`crate::Renderer::add_texture_asset`]).
+    #[error("asset `{key}` was refused: {reason}")]
+    Asset {
+        /// The asset's key.
+        key: String,
+        /// Why.
+        reason: String,
+    },
 }
 
 #[cfg(test)]

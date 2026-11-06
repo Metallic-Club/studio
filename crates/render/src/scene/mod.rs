@@ -51,6 +51,13 @@
 //! instances; when the origin moves, or the scene is rebuilt, or more than [`MAX_SHADOW_CHANGES`] pile up, the scene
 //! bumps [`InstanceScene::shadow_epoch`] instead, which redraws every cascade.
 //!
+//! # Mesh assets
+//!
+//! A class with the `AssetMesh` component (`MeshPart`) is drawn as the mesh asset its `MeshId` names, textured with
+//! its `TextureId`: each pair is a mesh kind of its own, numbered as the scene meets it ([`MeshAssetKey`],
+//! [`InstanceScene::mesh_assets`]), so its parts are listed, culled, sorted and drawn like any kind's. Reading the ids
+//! is kept out of the parts' path: a primitive part's change pays one test for it.
+//!
 //! # Lights
 //!
 //! `PointLight`s and `SpotLight`s in the world are kept as dense records ([`SceneLight`], [`InstanceScene::lights`])
@@ -59,6 +66,7 @@
 //! `DirectionalLight`s are kept the same way in a set of their own ([`InstanceScene::directional_lights`]): they
 //! reach everywhere, so they are drawn beside the sun as extra suns, never clustered.
 
+mod assets;
 mod components;
 mod gpu;
 mod grid;
@@ -70,6 +78,7 @@ mod sync;
 #[cfg(test)]
 mod tests;
 
+pub use assets::{MAX_MESH_ASSET_KINDS, MeshAssetKey};
 pub use components::{LightComponent, MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
 pub(crate) use gpu::TransparentEntries;
 pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};

@@ -416,6 +416,11 @@ impl GpuScene {
         self.scene.cull_casters(view, casters, out)
     }
 
+    /// Counts every shadow as changed (see [`InstanceScene::shadow_epoch`]): a mesh asset arrived.
+    pub(crate) fn invalidate_shadows(&mut self) {
+        self.scene.invalidate_shadows();
+    }
+
     /// Forgets the scene's noted shadow-caster changes (see [`InstanceScene::clear_shadow_changes`]).
     pub fn clear_shadow_changes(&mut self) {
         self.scene.clear_shadow_changes();

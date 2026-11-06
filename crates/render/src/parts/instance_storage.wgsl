@@ -17,6 +17,10 @@ struct Instance {
 @group(1) @binding(1) var<storage, read> dynamics: array<Instance>;
 @group(1) @binding(2) var<storage, read> entries: array<u32>;
 
+// The draw's base-colour texture (parts/assets.rs): a mesh asset's, or white.
+@group(2) @binding(0) var base_texture: texture_2d<f32>;
+@group(2) @binding(1) var base_sampler: sampler;
+
 fn instance_of(entry: u32) -> Instance {
     let slot = entry & 0x7fffffffu;
     if (entry >> 31u) == 0u {
@@ -29,6 +33,7 @@ fn instance_of(entry: u32) -> Instance {
 fn vs_main(
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(9) uv: vec2<f32>,
     @builtin(instance_index) index: u32,
     @builtin(vertex_index) vertex: u32,
 ) -> VertexOut {
@@ -37,6 +42,7 @@ fn vs_main(
         pool_level(vertex),
         position,
         normal,
+        uv,
         instance.r0,
         instance.r1,
         instance.r2,
@@ -96,6 +102,7 @@ fn vs_pulled(@builtin(vertex_index) vertex: u32) -> VertexOut {
         mesh >> 30u,
         a.xyz,
         vec3<f32>(a.w, b.xy),
+        b.zw,
         instance.r0,
         instance.r1,
         instance.r2,

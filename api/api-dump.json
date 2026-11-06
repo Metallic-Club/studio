@@ -2769,6 +2769,60 @@
       "callbacks": []
     },
     {
+      "name": "MeshPart",
+      "parent": "BasePart",
+      "description": "A part drawn as an imported mesh with a texture, which you size, colour and place like any part.",
+      "category": "Parts",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [
+        "AssetMesh"
+      ],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "MeshId",
+          "type": "String",
+          "default": "",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "MeshPart",
+          "description": "The id of the project's mesh asset (a glTF or GLB model) the part is drawn as. Its bounds are stretched to the part's Size. Empty draws nothing.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "TextureId",
+          "type": "String",
+          "default": "",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "MeshPart",
+          "description": "The id of the project's image asset (PNG or JPEG) the mesh is coloured with, multiplied by Color. Empty uses Color alone.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
       "name": "Part",
       "parent": "BasePart",
       "description": "The basic building block: a block, ball, cylinder or wedge that you size, colour and place.",
@@ -3638,6 +3692,14 @@
     }
   ],
   "components": [
+    {
+      "name": "AssetMesh",
+      "description": "Draws the part as the mesh asset its MeshId names, textured with TextureId, stretched so the mesh's bounds fill its Size.",
+      "requires": [
+        "Transform"
+      ],
+      "properties": []
+    },
     {
       "name": "DirectionalLightEmitter",
       "description": "Lights the whole world with parallel rays along the light's forward direction (-Z), however far.",

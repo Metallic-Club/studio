@@ -879,3 +879,70 @@ fn moves_queue_each_slot_once_until_a_cull_and_recolours_none() {
     assert_cull_matches_brute_force(&mut scene, &view);
     assert_eq!(scene.culling_queue(), 0);
 }
+
+/// A `MeshPart` in `game`'s workspace drawing `mesh` with `texture`.
+fn mesh_part(game: &mut Game, mesh: &str, texture: &str) -> Id {
+    let class = game.dm.registry().class_id("MeshPart").expect("MeshPart");
+    let id = game.dm.create(class).expect("a mesh part");
+    game.dm.set_parent(id, Some(game.workspace)).expect("parented");
+    game.dm.set_by_name(id, "MeshId", Value::String(mesh.into())).unwrap();
+    game.dm
+        .set_by_name(id, "TextureId", Value::String(texture.into()))
+        .unwrap();
+    id
+}
+
+#[test]
+fn mesh_parts_get_a_kind_per_mesh_and_texture() {
+    let mut game = Game::new();
+    let mut scene = game.scene();
+    let block = game.part();
+    let a = mesh_part(&mut game, "rock", "moss");
+    let b = mesh_part(&mut game, "rock", "moss");
+    let c = mesh_part(&mut game, "rock", "");
+    let empty = mesh_part(&mut game, "", "moss");
+    let revision = scene.mesh_asset_revision();
+    frame(&mut scene, &mut game.dm);
+    assert_ne!(scene.mesh_asset_revision(), revision, "kinds were made");
+    let first = MeshKind(MeshKind::BUILTIN_COUNT);
+    let second = MeshKind(MeshKind::BUILTIN_COUNT + 1);
+    assert_eq!(scene.mesh_assets().len(), 2);
+    assert_eq!(
+        (&*scene.mesh_assets()[0].mesh, &*scene.mesh_assets()[0].texture),
+        ("rock", "moss")
+    );
+    assert_eq!(&*scene.mesh_assets()[1].texture, "");
+    assert_eq!(instance(&scene, a).mesh(), first);
+    assert_eq!(instance(&scene, b).mesh(), first);
+    assert_eq!(instance(&scene, c).mesh(), second);
+    assert_eq!(instance(&scene, block).mesh(), MeshKind::BLOCK);
+    // A mesh part without a mesh keeps its slot but is on no list: nothing to draw.
+    assert_eq!(instance(&scene, empty).mesh(), MeshKind::NONE);
+    assert_eq!(scene.draw_list(first).len(), 2);
+    assert_eq!(scene.draw_list(second).len(), 1);
+    assert_eq!(scene.culling_items(), 4, "the block and three mesh parts");
+    // Like a Block, the unit mesh fills the part's size.
+    let size = Vec3::new(2.0, 3.0, 4.0);
+    game.dm.set_by_name(a, "Size", Value::Vector3(size)).unwrap();
+    frame(&mut scene, &mut game.dm);
+    let rows = instance(&scene, a).rows;
+    assert_eq!((rows[0][0], rows[1][1], rows[2][2]), (2.0, 3.0, 4.0));
+
+    // A new texture is another kind; the old kind keeps its number.
+    let revision = scene.mesh_asset_revision();
+    game.dm
+        .set_by_name(b, "TextureId", Value::String("bark".into()))
+        .unwrap();
+    frame(&mut scene, &mut game.dm);
+    assert_ne!(scene.mesh_asset_revision(), revision);
+    assert_eq!(instance(&scene, b).mesh(), MeshKind(MeshKind::BUILTIN_COUNT + 2));
+    assert_eq!(scene.draw_list(first).len(), 1);
+    // Back to a known pair: no new kind.
+    let revision = scene.mesh_asset_revision();
+    game.dm
+        .set_by_name(b, "TextureId", Value::String("moss".into()))
+        .unwrap();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(scene.mesh_asset_revision(), revision);
+    assert_eq!(scene.draw_list(first).len(), 2);
+}

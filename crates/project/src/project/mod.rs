@@ -34,7 +34,8 @@ use zip::result::ZipError;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
-use crate::asset_index::{AssetId, AssetIndex, AssetIndexError, Fingerprint, INDEX_FILE, IndexReport};
+use crate::asset_index::{AssetId, AssetIndex, AssetIndexError, Fingerprint, INDEX_FILE, IndexReport, is_asset};
+use crate::assets::AssetReader;
 use crate::manifest::{ENGINE_VERSION, MANIFEST_FILE, Manifest, ManifestError, ManifestWarning};
 use crate::scene::{LoadedScene, SceneError, load_scene_bytes};
 
@@ -327,6 +328,19 @@ impl Project {
             })?;
         self.set_assets(assets);
         Ok(report)
+    }
+
+    /// A reader of the project's assets by id that works on any thread ([`AssetReader`]), for decoding meshes and
+    /// images off the frame. It sees the asset index and the asset members as they are now, unsaved edits included;
+    /// later edits are not seen by it.
+    pub fn asset_reader(&self) -> AssetReader {
+        let edits = self
+            .edits
+            .iter()
+            .filter(|(member, _)| is_asset(member))
+            .map(|(member, bytes)| (member.clone(), bytes.clone()))
+            .collect();
+        AssetReader::new(&self.path, self.assets.clone(), edits)
     }
 
     /// Drops the asset `id` from the index ([`AssetIndex::forget`]), for a missing asset that is not coming back.
