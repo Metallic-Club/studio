@@ -6,11 +6,10 @@ use egui::{Align, Layout, RichText};
 use crate::theme::tokens::{space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
-/// Draws a placeholder screen filling `ui`. Returns whether its button was clicked.
-pub(crate) fn placeholder(ui: &mut egui::Ui, section: &str, title: &str, line: &str, action: &str) -> bool {
+/// Draws a placeholder screen filling `ui`. Returns its button's response.
+pub(crate) fn placeholder(ui: &mut egui::Ui, section: &str, title: &str, line: &str, action: &str) -> egui::Response {
     let p = current_colors(ui.ctx()).palette;
     ui.painter().rect_filled(ui.max_rect(), 0.0, p.bg);
-    let mut clicked = false;
     ui.with_layout(Layout::top_down(Align::Center), |ui| {
         ui.add_space((ui.available_height() / 2.0 - 2.0 * space::S11).max(space::S9));
         ui.label(
@@ -29,7 +28,7 @@ pub(crate) fn placeholder(ui: &mut egui::Ui, section: &str, title: &str, line: &
         ui.add_space(space::S3);
         ui.label(RichText::new(line).size(text::BODY_LG).color(p.muted));
         ui.add_space(space::S8);
-        clicked = button(ui, ButtonKind::Primary, action).clicked();
-    });
-    clicked
+        button(ui, ButtonKind::Primary, action)
+    })
+    .inner
 }

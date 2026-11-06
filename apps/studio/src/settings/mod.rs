@@ -1,10 +1,11 @@
 //! Studio's settings (ADR 0009, Settings): one typed [`StudioSettings`] in categories (General, Appearance,
 //! Rendering, Keybinds), stored as `settings.toml` in Studio's config folder ([`store`]) and edited in the Settings
-//! window ([`window`]).
+//! window ([`window`], with the Keybinds page in [`keybinds`]).
 //!
 //! Reading never fails: every field has a default, a value of the wrong kind takes it, and a value out of range is
 //! clamped. Keys Studio does not know are kept in the file, so a newer Studio's settings survive a downgrade.
 
+pub mod keybinds;
 pub mod store;
 pub mod window;
 
@@ -13,8 +14,10 @@ use metallic_engine::metallic_render::resolution::{MAX_SCALE, MIN_SCALE};
 use metallic_engine::metallic_render::settings::GraphicsSettings;
 use toml::{Table, Value};
 
+use crate::keymap::{Overrides, read_overrides, write_overrides};
 use crate::theme::tokens::Accent;
 use crate::theme::{Look, ThemeMode};
+pub use keybinds::KeybindsPage;
 pub use store::{SETTINGS_FILE, SettingsStore, settings_path};
 pub use window::{Category, SettingsWindow};
 
@@ -146,10 +149,14 @@ impl MotionPreference {
     }
 }
 
-/// The Keybinds category: a placeholder until the keymap lands (#214). Until then the file's `[keybinds]` table is
-/// kept exactly as it is, with every other key Studio does not know.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Keybinds {}
+/// The Keybinds category: the keymap's overrides ([`crate::keymap`]), `[keybinds]` in the file. Only bindings that
+/// differ from the defaults are stored (`"file.save" = ["Primary+S"]`, `[]` for unbound); ids this Studio does not
+/// know are kept, so a newer Studio's bindings survive a downgrade.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Keybinds {
+    /// Command id to binding texts.
+    pub overrides: Overrides,
+}
 
 /// The `[rendering]` keys Studio owns: [`GraphicsSettings`]' file keys, less the calibration (Auto's measurement,
 /// which is the player's and not a user setting).
@@ -222,6 +229,9 @@ impl StudioSettings {
         if let Some(rendering) = section("rendering") {
             settings.rendering = rendering_from(rendering);
         }
+        if let Some(keybinds) = section("keybinds") {
+            settings.keybinds.overrides = read_overrides(keybinds);
+        }
         settings.clamp();
         settings
     }
@@ -248,6 +258,9 @@ impl StudioSettings {
                 rendering.remove(key);
             }
             rendering.extend(rendering_to(&self.rendering));
+        });
+        with_section(&mut document, "keybinds", |keybinds| {
+            write_overrides(&self.keybinds.overrides, keybinds);
         });
         document
     }
@@ -478,6 +491,30 @@ mod tests {
             "an override cleared is removed"
         );
         assert_eq!(out["keybinds"]["file.save"][0].as_str(), Some("Primary+S"));
+    }
+
+    #[test]
+    fn keybinds_round_trip_and_keep_unknown_ids() {
+        let base: Table = "[keybinds]\n\"future.teleport\" = [\"Primary+J\"]\n\"settings.open\" = [\"F10\"]\nodd = 5\n"
+            .parse()
+            .unwrap();
+        let mut settings = StudioSettings::from_document(&base);
+        assert_eq!(settings.keybinds.overrides["settings.open"], ["F10"]);
+        assert_eq!(settings.keybinds.overrides["future.teleport"], ["Primary+J"]);
+        // Settings back to its default, Zoom unbound.
+        settings.keybinds.overrides.remove("settings.open");
+        settings.keybinds.overrides.insert("viewport.zoom".into(), Vec::new());
+        let out = settings.to_document(&base);
+        let keybinds = out["keybinds"].as_table().unwrap();
+        assert!(keybinds.get("settings.open").is_none(), "only overrides are stored");
+        assert_eq!(keybinds["viewport.zoom"].as_array().map(Vec::len), Some(0));
+        assert_eq!(keybinds["future.teleport"][0].as_str(), Some("Primary+J"));
+        assert_eq!(
+            keybinds["odd"].as_integer(),
+            Some(5),
+            "a value that is not bindings stays"
+        );
+        assert_eq!(StudioSettings::from_document(&out), settings);
     }
 
     #[test]

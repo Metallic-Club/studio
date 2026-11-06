@@ -13,10 +13,11 @@ pub mod startup;
 use std::time::Instant;
 
 use egui::{
-    Align, Align2, Color32, ColorImage, CornerRadius, Frame, Id, Key, KeyboardShortcut, Label, Layout, Modifiers,
-    RichText, Stroke, TextureHandle, TextureOptions, pos2, vec2,
+    Align, Align2, Color32, ColorImage, CornerRadius, Frame, Id, Label, Layout, RichText, Stroke, TextureHandle,
+    TextureOptions, pos2, vec2,
 };
 
+use crate::keymap::{ActivationKind, Context, Focus, Keymap, Overrides, ids};
 use crate::settings::{SettingsStore, SettingsWindow, StudioSettings};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
@@ -44,24 +45,29 @@ pub enum WindowRequest {
     BecomeMainWindow,
 }
 
-/// Opens and closes the Settings window. TODO(#214): the keymap's command for it; until the keymap lands this is the
-/// one shortcut read directly. `COMMAND` is "Primary": Cmd on macOS, Ctrl elsewhere.
-const SETTINGS_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+/// Something Studio tells the user at the bottom of the window until it is dismissed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Notice {
+    title: &'static str,
+    body: String,
+}
 
 /// Studio's interface state: the screen shown, the theme, the settings and what startup loaded.
 pub struct Studio {
     screen: Screen,
     splash: Splash,
     startup: Startup,
-    /// What the startup steps produced, once the splash is done: the renderer the viewport will use (#214) and the
+    /// What the startup steps produced, once the splash is done: the renderer the viewport will use (#217) and the
     /// recent projects (#215).
     loaded: Option<Loaded>,
     theme: ThemeState,
     /// The settings: in memory until the splash has read them, then the file's.
     settings: SettingsStore,
     settings_window: SettingsWindow,
-    /// What to tell the user about the settings file, until dismissed.
-    notice: Option<String>,
+    /// Every shortcut's command and bindings: the settings' overrides over the defaults.
+    keymap: Keymap,
+    /// What to tell the user (about the settings file, or a new default shortcut left out), first shown first.
+    notices: Vec<Notice>,
     /// Whether the system asks for reduced motion (the Appearance setting can follow it).
     system_reduces_motion: bool,
     /// The interface scale last applied.
@@ -98,7 +104,8 @@ impl Studio {
             }),
             settings: SettingsStore::in_memory(),
             settings_window: SettingsWindow::default(),
-            notice: None,
+            keymap: Keymap::studio(&Overrides::new()),
+            notices: Vec::new(),
             system_reduces_motion: reduce_motion,
             applied_scale: None,
             emblem_image: emblem,
@@ -141,9 +148,14 @@ impl Studio {
         &mut self.settings_window
     }
 
-    /// What Studio is telling the user about the settings file, until it is dismissed.
+    /// What Studio is telling the user (about the settings file, or the keymap), until it is dismissed.
     pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+        self.notices.first().map(|notice| notice.body.as_str())
+    }
+
+    /// The keymap.
+    pub fn keymap(&self) -> &Keymap {
+        &self.keymap
     }
 
     /// Draws one frame into `ui`, the whole window, at `now`.
@@ -154,6 +166,10 @@ impl Studio {
             self.apply_settings(&ctx);
         }
         self.theme.apply(&ctx);
+        if self.screen != Screen::Splash {
+            // Before anything is drawn, so a key a command used reaches nothing else.
+            self.run_keymap(&ctx);
+        }
         match self.screen {
             Screen::Splash => self.splash(ui, now),
             Screen::SignIn => {
@@ -163,7 +179,9 @@ impl Studio {
                     "Sign in",
                     "Online services aren't available yet.",
                     "Continue offline",
-                ) {
+                )
+                .clicked()
+                {
                     self.screen = Screen::Projects;
                 }
             }
@@ -174,18 +192,25 @@ impl Studio {
                     "Projects",
                     "Your projects will be listed here.",
                     "Open the editor",
-                ) {
+                )
+                .clicked()
+                {
                     self.screen = Screen::Editor;
                 }
             }
             Screen::Editor => {
-                if screens::placeholder(
+                let close = screens::placeholder(
                     ui,
                     "Project",
                     "Editor",
                     "The editor's panels will be here.",
                     "Close the project",
-                ) {
+                );
+                let close = match self.keymap.shortcut_text(ids::PROJECT_CLOSE) {
+                    Some(keys) => close.on_hover_text(format!("Close project ({keys})")),
+                    None => close,
+                };
+                if close.clicked() {
                     self.screen = Screen::Projects;
                 }
             }
@@ -224,25 +249,59 @@ impl Studio {
             .fill(if hovered { p.surface_hover } else { Color32::TRANSPARENT })
             .stroke(Stroke::NONE)
             .corner_radius(CornerRadius::same(radius::ITEM));
-        let shortcut = ui.ctx().format_shortcut(&SETTINGS_SHORTCUT);
-        if ui
-            .put(at, gear)
-            .on_hover_text(format!("Settings ({shortcut})"))
-            .clicked()
-        {
-            let open = self.settings_window.is_open();
-            self.settings_window.set_open(!open);
+        // Every binding of the command, not just the first.
+        let tip = match self.keymap.shortcut_text(ids::SETTINGS_OPEN) {
+            Some(keys) => format!("Settings ({keys})"),
+            None => "Settings".to_owned(),
+        };
+        if ui.put(at, gear).on_hover_text(tip).clicked() {
+            self.toggle_settings();
         }
     }
 
-    /// The Settings window and its shortcut, the settings file's notice, and saving what changed.
-    fn settings_ui(&mut self, ctx: &egui::Context) {
-        if ctx.input_mut(|input| input.consume_shortcut(&SETTINGS_SHORTCUT)) {
-            let open = self.settings_window.is_open();
-            self.settings_window.set_open(!open);
+    fn toggle_settings(&mut self) {
+        let open = self.settings_window.is_open();
+        self.settings_window.set_open(!open);
+    }
+
+    /// Runs the frame's input through the keymap and does what the commands ask. Every Studio shortcut is here; no
+    /// screen or panel reads keys itself.
+    fn run_keymap(&mut self, ctx: &egui::Context) {
+        if self.settings_window.is_capturing() {
+            // The capture dialog is recording a key: it must not also run a command.
+            return;
         }
+        // Panels arrive with docking (#216) and set the focused panel's context; until then the editor's own.
+        let focus = Focus {
+            context: if self.screen == Screen::Editor {
+                Context::Editor
+            } else {
+                Context::Global
+            },
+            hovered: None,
+            typing: ctx.egui_wants_keyboard_input(),
+        };
+        for activation in self.keymap.dispatch(ctx, focus) {
+            if activation.kind != ActivationKind::Press {
+                continue;
+            }
+            match activation.command {
+                ids::SETTINGS_OPEN => self.toggle_settings(),
+                ids::PROJECT_CLOSE if self.screen == Screen::Editor => self.screen = Screen::Projects,
+                // The viewport's navigation, for #217.
+                _ => {}
+            }
+        }
+    }
+
+    /// The Settings window, the notices, and saving what changed.
+    fn settings_ui(&mut self, ctx: &egui::Context) {
         let before = self.settings.settings().clone();
-        self.settings_window.show(ctx, self.settings.settings_mut());
+        self.settings_window
+            .show(ctx, self.settings.settings_mut(), &mut self.keymap);
+        if self.keymap.take_changed() {
+            self.settings.settings_mut().keybinds.overrides = self.keymap.overrides().clone();
+        }
         if *self.settings.settings() != before {
             // Restyled at the start of the next pass, which this asks for at once.
             ctx.request_repaint();
@@ -256,9 +315,9 @@ impl Studio {
         }
     }
 
-    /// The settings file's notice, if any, at the bottom of the window until dismissed.
+    /// The first notice, if any, at the bottom of the window until dismissed.
     fn show_notice(&mut self, ctx: &egui::Context) {
-        let Some(notice) = self.notice.as_deref() else {
+        let Some(Notice { title, body: notice }) = self.notices.first() else {
             return;
         };
         let colors = current_colors(ctx);
@@ -283,12 +342,12 @@ impl Studio {
                                     .color(colors.accent),
                             );
                             ui.label(
-                                RichText::new("Settings were reset")
+                                RichText::new(*title)
                                     .font(fonts::named(fonts::STRONG, text::BODY_LG))
                                     .color(p.text),
                             );
                         });
-                        ui.add(Label::new(RichText::new(notice).color(p.muted)).wrap());
+                        ui.add(Label::new(RichText::new(notice.as_str()).color(p.muted)).wrap());
                         ui.add_space(space::S4);
                         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                             dismissed = button(ui, ButtonKind::Secondary, "Dismiss").clicked();
@@ -296,7 +355,22 @@ impl Studio {
                     });
             });
         if dismissed {
-            self.notice = None;
+            self.notices.remove(0);
+        }
+    }
+
+    /// Builds the keymap from the settings' overrides. A new default that would take one of the user's keys is left
+    /// out: the user is told, and the choice is saved so it is told once.
+    fn load_keymap(&mut self) {
+        self.keymap = Keymap::studio(&self.settings.settings().keybinds.overrides);
+        for body in self.keymap.take_notices() {
+            self.notices.push(Notice {
+                title: "A new shortcut was left out",
+                body,
+            });
+        }
+        if self.keymap.take_changed() {
+            self.settings.settings_mut().keybinds.overrides = self.keymap.overrides().clone();
         }
     }
 
@@ -315,7 +389,13 @@ impl Studio {
         if self.splash.finished(self.startup.is_finished(), now) {
             let mut loaded = self.startup.take_loaded().unwrap_or_default();
             self.settings = std::mem::take(&mut loaded.settings);
-            self.notice = self.settings.take_notice();
+            if let Some(body) = self.settings.take_notice() {
+                self.notices.push(Notice {
+                    title: "Settings were reset",
+                    body,
+                });
+            }
+            self.load_keymap();
             self.loaded = Some(loaded);
             self.screen = if self.settings.settings().general.skip_sign_in {
                 Screen::Projects
@@ -336,7 +416,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use egui::Role;
+    use egui::{Key, Modifiers, Role};
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
@@ -621,11 +701,199 @@ mod tests {
         settle(&mut harness);
         harness.get_by_label_contains("No settings match");
 
+        // Keybinds are found too: by key, by name, by description.
+        harness.state_mut().studio.settings_window().set_query("wheel");
+        settle(&mut harness);
+        harness.get_by_label("KEYBINDS");
+        harness.get_by_label("Zoom");
+        harness.get_by_label("Fly speed");
+        assert!(harness.query_by_label("Look around").is_none());
+
         // Picking a category clears the search.
         harness.get_by_role_and_label(Role::Tab, "Keybinds").click();
         settle(&mut harness);
         assert_eq!(harness.state_mut().studio.settings_window().query(), "");
-        harness.get_by_label_contains("coming in #214");
+        harness.get_by_label("Fly forward");
+        harness.get_by_label("VIEWPORT NAVIGATION");
+    }
+
+    /// Studio past the splash, on the Editor screen, with Settings open on the Keybinds page.
+    fn on_the_keybinds_page(path: PathBuf) -> Harness<'static, Test> {
+        let mut harness = past_the_splash(path);
+        harness.state_mut().studio.screen = Screen::Editor;
+        let window = harness.state_mut().studio.settings_window();
+        window.set_open(true);
+        window.show_category(Category::Keybinds);
+        settle(&mut harness);
+        harness
+    }
+
+    /// The label of command `id`'s first binding, as this platform shows it.
+    fn label_of(harness: &Harness<'_, Test>, id: &str) -> String {
+        let keymap = harness.state().studio.keymap();
+        keymap.label(&keymap.bindings(id)[0])
+    }
+
+    #[test]
+    fn a_focused_text_field_keeps_its_keys_from_commands() {
+        let mut harness = on_the_keybinds_page(settings_file("typing", None));
+        harness.get_by_label("Close the project");
+        // In the search box, Primary+W is text editing, not Close project.
+        harness.get_all_by_role(Role::TextInput).next().unwrap().click();
+        settle(&mut harness);
+        assert!(harness.ctx.egui_wants_keyboard_input());
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Editor);
+        // Settings is marked "while typing": it still closes.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_open());
+        // Nothing focused now: Primary+W closes the project.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+    }
+
+    #[test]
+    fn a_shortcut_is_captured_and_saved() {
+        let path = settings_file("capture", None);
+        let mut harness = on_the_keybinds_page(path.clone());
+        let settings = label_of(&harness, ids::SETTINGS_OPEN);
+        harness.get_by_label(&settings).click();
+        settle(&mut harness);
+        assert!(harness.state_mut().studio.settings_window().is_capturing());
+        harness.get_by_label("Change a shortcut for Settings");
+        // While capturing, the keymap does not run: Primary+, is recorded (the default again), not obeyed.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_capturing());
+        assert!(harness.state_mut().studio.settings_window().is_open());
+        assert!(harness.state().studio.keymap().is_default(ids::SETTINGS_OPEN));
+
+        harness.get_by_label(&settings).click();
+        settle(&mut harness);
+        harness.key_press(Key::F10);
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_capturing());
+        let studio = &harness.state().studio;
+        assert_eq!(
+            studio.keymap().shortcut_text(ids::SETTINGS_OPEN).as_deref(),
+            Some("F10")
+        );
+        assert_eq!(studio.settings().keybinds.overrides[ids::SETTINGS_OPEN], ["F10"]);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"settings.open\" = [\"F10\"]"), "{text}");
+        harness.get_by_label("Reset");
+
+        // The new key works, and the old one no longer does.
+        harness.key_press(Key::F10);
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_open());
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_open());
+        harness.key_press(Key::F10);
+        settle(&mut harness);
+        assert!(harness.state_mut().studio.settings_window().is_open());
+
+        // Esc cancels a capture and changes nothing.
+        harness.get_by_label("F10").click();
+        settle(&mut harness);
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_capturing());
+        assert_eq!(
+            harness.state().studio.settings().keybinds.overrides[ids::SETTINGS_OPEN],
+            ["F10"]
+        );
+
+        // A two-step sequence, in place of F10.
+        harness.get_by_label("F10").click();
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::CheckBox, "Two-step sequence (such as Ctrl+K, then S)")
+            .click();
+        settle(&mut harness);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::K);
+        settle(&mut harness);
+        assert!(
+            harness.state_mut().studio.settings_window().is_capturing(),
+            "waits for the second key"
+        );
+        harness.key_press(Key::S);
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.settings().keybinds.overrides[ids::SETTINGS_OPEN],
+            ["Primary+K, S"]
+        );
+
+        // Reset gives the default back and removes the override from the file.
+        harness.get_by_label("Reset").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.keymap().is_default(ids::SETTINGS_OPEN));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("settings.open"), "{text}");
+    }
+
+    #[test]
+    fn a_conflict_offers_replace_swap_and_cancel() {
+        let mut harness = on_the_keybinds_page(settings_file("conflict", None));
+        let settings = label_of(&harness, ids::SETTINGS_OPEN);
+        let close = label_of(&harness, ids::PROJECT_CLOSE);
+        // Clicks the chip labelled `chip`, presses Primary+W, and expects it to clash with `owner`.
+        let capture = |harness: &mut Harness<'_, Test>, chip: &str, owner: &str| {
+            harness.get_by_label(chip).click();
+            settle(harness);
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
+            settle(harness);
+            harness.get_by_label(&format!("{close} is already used by"));
+            harness.get_by_label(owner);
+        };
+        capture(&mut harness, &settings, "Close project (Editor)");
+        harness.get_by_label("Cancel").click();
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_capturing());
+        assert!(
+            harness.state().studio.keymap().is_default(ids::SETTINGS_OPEN),
+            "cancelled"
+        );
+
+        // Swap: Settings takes Primary+W, Close project gets Primary+, .
+        capture(&mut harness, &settings, "Close project (Editor)");
+        harness.get_by_label("Swap").click();
+        settle(&mut harness);
+        let keymap = harness.state().studio.keymap();
+        assert_eq!(keymap.shortcut_text(ids::SETTINGS_OPEN), Some(close.clone()));
+        assert_eq!(keymap.shortcut_text(ids::PROJECT_CLOSE), Some(settings.clone()));
+
+        // Replace: Close project takes Primary+W back from Settings, which is left unbound.
+        capture(&mut harness, &settings, "Settings (Global)");
+        harness.get_by_label("Replace").click();
+        settle(&mut harness);
+        let keymap = harness.state().studio.keymap();
+        assert_eq!(keymap.shortcut_text(ids::PROJECT_CLOSE), Some(close));
+        assert!(keymap.bindings(ids::SETTINGS_OPEN).is_empty());
+        harness.get_by_label("Unbound");
+        assert_eq!(
+            harness.state().studio.settings().keybinds.overrides[ids::SETTINGS_OPEN],
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_new_default_that_would_take_a_users_key_is_left_out_and_told_once() {
+        let path = settings_file("stolen", Some("[keybinds]\n\"settings.open\" = [\"Primary+W\"]\n"));
+        let harness = past_the_splash(path.clone());
+        harness.get_by_label("A new shortcut was left out");
+        harness.get_by_label_contains("Close project");
+        assert!(harness.state().studio.keymap().bindings(ids::PROJECT_CLOSE).is_empty());
+        // Saved, so the next start is quiet.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"project.close\" = []"), "{text}");
+        let again = past_the_splash(path);
+        assert!(again.state().studio.notice().is_none());
+        assert!(again.state().studio.keymap().bindings(ids::PROJECT_CLOSE).is_empty());
     }
 
     #[test]
