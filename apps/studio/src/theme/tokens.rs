@@ -145,6 +145,13 @@ impl Accent {
         }
     }
 
+    /// Reads an id in any letter case; `None` for an unknown one.
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|accent| accent.as_str().eq_ignore_ascii_case(id.trim()))
+    }
+
     /// The name people see.
     pub fn label(self) -> &'static str {
         match self {
@@ -386,6 +393,7 @@ mod tests {
     fn accents_have_ids_and_names() {
         for accent in Accent::ALL {
             assert!(!accent.label().is_empty());
+            assert_eq!(Accent::parse(&accent.as_str().to_uppercase()), Some(accent));
             assert_eq!(Accent::ALL.iter().filter(|a| a.as_str() == accent.as_str()).count(), 1);
             let c = accent.colors();
             assert!(c.color != c.hover && c.color != c.light);

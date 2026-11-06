@@ -19,6 +19,7 @@ egui-winit.workspace = true
 egui-wgpu.workspace = true
 winit.workspace = true
 log.workspace = true
+toml.workspace = true
 thiserror.workspace = true
 
 # The splash's window shape and the system's animation switch (src/app/native.rs).
