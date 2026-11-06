@@ -14,11 +14,11 @@ use metallic_render::settings::{Calibration, Calibrator, GraphicsSettings, Quali
 use metallic_render::{
     AntiAliasing, CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings,
     LightingReader, LodSettings, PassId, PassSet, RenderContext, RenderError, RenderSurface, Renderer,
-    RendererSettings, SceneLighting, ShadowSettings, wgpu,
+    RendererSettings, SceneLighting, ShadowSettings, SurfaceFrame, ViewportTarget, wgpu,
 };
 
 use crate::calibration::{AutoCalibration, CALIBRATION_SIZE, CALIBRATION_WORKLOAD, CalibrationOutcome, GameFrame};
-use crate::hooks::{RenderFrame, RenderHook, RenderHookError};
+use crate::hooks::{FrameStats, RenderFrame, RenderHook, RenderHookError};
 use crate::mesh_assets::MeshAssets;
 use crate::perf::{FrameSample, GraphicsStatus, PerfStats, PerfSummary, draw_overlay};
 use metallic_project::AssetReader;
@@ -61,6 +61,17 @@ struct Device {
 /// are made again without waiting for the GPU (the old ones are freed once it is done with them), and every pipeline
 /// is compiled off the frame, in the background from the renderer's creation: a switch whose pipelines are still
 /// compiling takes effect in the first frame after they are ([`metallic_render::pipelines`]).
+///
+/// # A viewport in a caller's UI
+///
+/// Instead of a window of its own, it can draw into a texture for an editor to show (Studio's viewport panel, ADR
+/// 0009): the caller makes the [`RenderContext`] for the window it owns ([`RenderContext::new_with_window`]) and
+/// shares its device and queue with its UI renderer (egui-wgpu), which draws onto the window's surface;
+/// [`SceneRenderer::attach_viewport`] makes a [`ViewportTarget`] on that device, [`SceneRenderer::render_viewport`]
+/// draws the game into it each frame through the same frame as a window's (graphics settings, anti-aliasing,
+/// dynamic resolution and the overlay included; the frame cap is the caller's to apply, as the Player's is), and
+/// [`SceneRenderer::resize_viewport`] resizes it without a black frame. One `SceneRenderer` draws one viewport;
+/// several viewports are several of them on the same device.
 pub struct SceneRenderer {
     options: ContextOptions,
     clear_color: wgpu::Color,
@@ -92,7 +103,12 @@ pub struct SceneRenderer {
     settings_changed: bool,
     device: Option<Device>,
     surface: Option<RenderSurface>,
+    /// The texture drawn into instead of a surface, once attached to a caller's device
+    /// ([`SceneRenderer::attach_viewport`]).
+    viewport: Option<ViewportTarget>,
     scene: Option<GpuScene>,
+    /// The scene was made on a device no longer drawn with: made again at the next frame.
+    scene_stale: bool,
     /// `Workspace`, the root of what is drawn and the owner of `CurrentCamera`.
     world: Option<Id>,
     camera: CameraReader,
@@ -150,7 +166,9 @@ impl SceneRenderer {
             settings_changed: false,
             device: None,
             surface: None,
+            viewport: None,
             scene: None,
+            scene_stale: false,
             world: None,
             camera: CameraReader::new(),
             lighting_service: None,
@@ -667,16 +685,21 @@ impl SceneRenderer {
 
     /// Attaches the scene to `dm` when it is not attached to it yet (the first frame, or a new game).
     fn ensure_scene(&mut self, dm: &mut DataModel) -> Result<(), RenderError> {
-        if self
+        let attached = self
             .scene
             .as_ref()
-            .is_some_and(|scene| scene.scene().is_attached_to(dm))
-        {
+            .is_some_and(|scene| scene.scene().is_attached_to(dm));
+        if attached && !self.scene_stale {
             return Ok(());
         }
         let Some(device) = self.device.as_ref() else {
             return Ok(());
         };
+        // One of this game made on another device: its change consumer goes with it.
+        if attached && let Some(stale) = self.scene.take() {
+            stale.detach(dm);
+        }
+        self.scene_stale = false;
         let registry = dm.registry().clone();
         self.world = registry.class_id("Workspace").and_then(|class| dm.service(class));
         self.lighting_service = registry.class_id("Lighting").and_then(|class| dm.service(class));
@@ -699,6 +722,104 @@ impl SceneRenderer {
     pub fn lighting(&self) -> SceneLighting {
         self.lighting
     }
+
+    /// Draws into a `width` x `height` (physical pixels) [`ViewportTarget`] on `context`'s device from now on, instead
+    /// of a window: for an editor that owns its window and shares the device with its UI renderer (see "A viewport in
+    /// a caller's UI" above). Makes the renderer (waiting for its first frame's pipelines, as attaching to a window
+    /// does) and applies the settings set so far, starting Auto's calibration when it needs one. A window this
+    /// renderer drew into is let go. A zero size is drawn as 1 x 1.
+    pub fn attach_viewport(&mut self, context: &RenderContext, width: u32, height: u32) -> Result<(), RenderError> {
+        let (width, height) = (width.max(1), height.max(1));
+        let target = ViewportTarget::new(context, width, height)?;
+        let renderer = Renderer::new(context, self.settings(ViewportTarget::FORMAT, width, height))?;
+        self.adopt_viewport(context, renderer, target);
+        Ok(())
+    }
+
+    /// [`SceneRenderer::attach_viewport`] with a renderer made already on `context`'s device, at the viewport's
+    /// size in [`ViewportTarget::FORMAT`]: Studio makes one while its splash shows, so its first frame's pipelines are
+    /// compiled before the editor opens. It is given the settings set here (those it lacks compile in the
+    /// background, as any settings change's do). Fails, keeping what was attached, when its format is another.
+    pub fn attach_viewport_with(&mut self, context: &RenderContext, mut renderer: Renderer) -> Result<(), RenderError> {
+        let settings = *renderer.settings();
+        if settings.color_format != ViewportTarget::FORMAT {
+            return Err(RenderError::UnsupportedTarget {
+                format: settings.color_format,
+                samples: 1,
+            });
+        }
+        let target = ViewportTarget::new(context, settings.width, settings.height)?;
+        renderer.set_clear_color(self.clear_color);
+        renderer.set_cull(self.cull);
+        renderer.set_shadows(self.shadows);
+        renderer.set_lights(self.lights);
+        renderer.set_lod(self.lod);
+        renderer.set_resolution(self.resolution);
+        renderer.set_post(self.drawn_post());
+        renderer.set_passes(self.passes(self.anti_aliasing.mlaa()));
+        self.adopt_viewport(context, renderer, target);
+        Ok(())
+    }
+
+    /// Draws with `renderer` into `target` from now on (see [`SceneRenderer::attach_viewport`]).
+    fn adopt_viewport(&mut self, context: &RenderContext, mut renderer: Renderer, target: ViewportTarget) {
+        renderer.set_lighting(self.lighting);
+        renderer.set_overlay_enabled(self.overlay);
+        renderer.set_lod_tint(self.lod_tint);
+        // A renderer is made without MSAA (its sample counts are known once it exists), then given its own.
+        apply_anti_aliasing(&mut renderer, self.anti_aliasing);
+        let old = self.device.replace(Device {
+            context: context.clone(),
+            renderer,
+        });
+        if let Some(old) = old {
+            // The new renderer has none of the mesh assets, and a scene made on another device cannot be drawn here.
+            if let Some(assets) = self.assets.as_mut() {
+                assets.reload();
+            }
+            self.scene_stale |= old.context.device() != context.device();
+        } else {
+            self.attached_at = Some(Instant::now());
+        }
+        self.surface = None;
+        self.viewport = Some(target);
+        // Time spent away (setting up) is not a frame.
+        self.frame_start = None;
+        // Auto calibrates on the adapter it now knows; other settings apply as they are.
+        self.start_graphics();
+    }
+
+    /// Resizes the viewport target to `width` x `height` physical pixels (the panel's new size) without a black frame:
+    /// until its textures at the new size exist (large ones are made off the frame), frames keep drawing into the old
+    /// texture, which stays the one to show ([`Renderer::resize_viewport`]). A zero size (a collapsed panel) keeps
+    /// the old size. Nothing happens without a viewport.
+    pub fn resize_viewport(&mut self, width: u32, height: u32) {
+        let (Some(device), Some(_)) = (self.device.as_mut(), self.viewport.as_ref()) else {
+            return;
+        };
+        if width > 0
+            && height > 0
+            && let Err(error) = device.renderer.resize_viewport(width, height)
+        {
+            log::warn!("render: could not resize the viewport to {width}x{height}: {error}");
+        }
+    }
+
+    /// Draws a frame of `dm` into the viewport target, as [`RenderHook::render`] draws one into a window: the scene
+    /// synced with the game's changes, seen from `Workspace.CurrentCamera`, with `stats` (the engine's numbers for
+    /// the frame, for the frame statistics) recorded. Submits it and waits for nothing; the caller then draws its UI,
+    /// which samples [`SceneRenderer::viewport`]'s view, and presents. Nothing happens without a viewport.
+    pub fn render_viewport(&mut self, dm: &mut DataModel, stats: FrameStats) {
+        if self.viewport.is_some() {
+            self.draw(dm, stats);
+        }
+    }
+
+    /// The viewport target, once attached ([`SceneRenderer::attach_viewport`]): the texture to show, its size, and
+    /// whether a resize replaced it ([`ViewportTarget::generation`]).
+    pub fn viewport(&self) -> Option<&ViewportTarget> {
+        self.viewport.as_ref()
+    }
 }
 
 impl Default for SceneRenderer {
@@ -711,6 +832,7 @@ impl std::fmt::Debug for SceneRenderer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SceneRenderer")
             .field("attached", &self.surface.is_some())
+            .field("viewport", &self.viewport.as_ref().map(ViewportTarget::size))
             .field("last_sync", &self.last_sync)
             .field("last_upload", &self.last_upload)
             .field("overlay", &self.overlay)
@@ -757,6 +879,7 @@ impl RenderHook for SceneRenderer {
             }
         }
         self.surface = Some(surface);
+        self.viewport = None;
         // Time spent away (suspended, opening the window) is not a frame.
         self.frame_start = None;
         if created {
@@ -784,28 +907,45 @@ impl RenderHook for SceneRenderer {
     }
 
     fn render(&mut self, frame: &mut RenderFrame<'_>) {
+        self.draw(frame.dm, frame.stats);
+    }
+}
+
+/// Where a frame goes.
+enum Output<'a> {
+    /// A window's image, presented once drawn.
+    Image(SurfaceFrame),
+    /// The viewport target.
+    Viewport(&'a mut ViewportTarget),
+    /// Nowhere (the window is minimised or occluded): only the scene's upload goes out.
+    Skipped,
+}
+
+impl SceneRenderer {
+    /// Draws a frame of `dm` into the window's surface or the viewport target, and records its statistics.
+    fn draw(&mut self, dm: &mut DataModel, stats: FrameStats) {
         let start = Instant::now();
         let frame_time = self.frame_start.replace(start).map(|previous| start - previous);
-        if let Err(error) = self.ensure_scene(frame.dm) {
+        if let Err(error) = self.ensure_scene(dm) {
             log::error!("render: {error}");
             return;
         }
         let status = self.overlay.then(|| self.graphics_status());
-        let camera = self.world.and_then(|world| self.camera.read(frame.dm, world));
+        let camera = self.world.and_then(|world| self.camera.read(dm, world));
         let (Some(device), Some(scene)) = (self.device.as_mut(), self.scene.as_mut()) else {
             return;
         };
         if let Some(camera) = camera {
-            scene.set_camera_position(frame.dm, camera.position);
+            scene.set_camera_position(dm, camera.position);
         }
-        self.last_sync = scene.sync(frame.dm);
+        self.last_sync = scene.sync(dm);
         if let Some(assets) = self.assets.as_mut() {
             assets.update(scene.scene(), &mut device.renderer);
         }
         if self.last_sync.watched > 0
             && let Some(lighting) = self.lighting_service
         {
-            self.lighting = self.lighting_reader.read(frame.dm, lighting);
+            self.lighting = self.lighting_reader.read(dm, lighting);
             device.renderer.set_lighting(self.lighting);
         }
         if let Some(status) = status {
@@ -816,31 +956,46 @@ impl RenderHook for SceneRenderer {
             draw_overlay(device.renderer.overlay_mut(), &self.perf, &self.summary, &status);
         }
         let acquire_start = Instant::now();
-        let image = match self.surface.as_mut().map(|surface| surface.acquire(&device.context)) {
-            Some(Ok(image)) => image,
-            Some(Err(error)) => {
-                log::error!("render: {error}");
-                None
-            }
-            None => None,
+        let output = match (self.viewport.as_mut(), self.surface.as_mut()) {
+            (Some(viewport), _) => Output::Viewport(viewport),
+            (None, Some(surface)) => match surface.acquire(&device.context) {
+                Ok(Some(image)) => Output::Image(image),
+                Ok(None) => Output::Skipped,
+                Err(error) => {
+                    log::error!("render: {error}");
+                    Output::Skipped
+                }
+            },
+            (None, None) => Output::Skipped,
         };
         // Waiting for an image is mostly vsync, not work: it is left out of the render time.
         let acquire = acquire_start.elapsed();
-        let render_cpu;
-        let draws;
-        let cull;
-        let presented = image.is_some();
-        match image {
-            Some(image) => {
+        // The render CPU time of a frame drawn (before its present).
+        let drawn = match output {
+            Output::Image(image) => {
                 device.renderer.render_scene(image.view(), scene, camera.as_ref());
-                render_cpu = start.elapsed().saturating_sub(acquire);
+                let render_cpu = start.elapsed().saturating_sub(acquire);
                 image.present(&device.context);
+                Some(render_cpu)
+            }
+            Output::Viewport(viewport) => match device.renderer.render_viewport(viewport, scene, camera.as_ref()) {
+                Ok(_) => Some(start.elapsed().saturating_sub(acquire)),
+                Err(error) => {
+                    log::error!("render: the viewport: {error}");
+                    None
+                }
+            },
+            Output::Skipped => None,
+        };
+        let presented = drawn.is_some();
+        let (render_cpu, draws, cull) = match drawn {
+            Some(render_cpu) => {
                 if let Some(attached) = self.attached_at.take() {
                     self.first_frame_ms = Some(attached.elapsed().as_secs_f32() * 1000.0);
                 }
                 self.last_upload = device.renderer.upload_stats();
-                draws = device.renderer.draw_stats();
-                cull = device.renderer.cull_stats().cpu_time + device.renderer.shadow_stats().cull_time;
+                let cull = device.renderer.cull_stats().cpu_time + device.renderer.shadow_stats().cull_time;
+                (render_cpu, device.renderer.draw_stats(), cull)
             }
             None => {
                 // No image this frame (minimised, occluded): the upload still goes out, or it would be lost.
@@ -852,30 +1007,25 @@ impl RenderHook for SceneRenderer {
                     });
                 self.last_upload = scene.upload(&mut encoder);
                 device.context.submit(std::iter::once(encoder.finish()));
-                render_cpu = start.elapsed().saturating_sub(acquire);
-                draws = DrawStats::default();
-                cull = Duration::ZERO;
+                (
+                    start.elapsed().saturating_sub(acquire),
+                    DrawStats::default(),
+                    Duration::ZERO,
+                )
             }
-        }
+        };
         if let Some(frame_time) = frame_time {
-            let sample = FrameSample::new(
-                frame_time,
-                frame.stats.script_cpu,
-                frame.stats.simulation_cpu,
-                render_cpu,
-            )
-            .with_cull(cull)
-            .with_render_scale(device.renderer.resolution_stats().scale);
+            let sample = FrameSample::new(frame_time, stats.script_cpu, stats.simulation_cpu, render_cpu)
+                .with_cull(cull)
+                .with_render_scale(device.renderer.resolution_stats().scale);
             self.perf.record(sample, device.renderer.gpu_timings(), draws);
         }
-        // The workload is drawn after a presented frame only: the swapchain paces it then.
+        // The workload is drawn after a presented frame only: the swapchain (the caller's, for a viewport) paces it then.
         if presented {
             self.advance_calibration(frame_time);
         }
     }
-}
 
-impl SceneRenderer {
     fn settings(&self, format: wgpu::TextureFormat, width: u32, height: u32) -> RendererSettings {
         RendererSettings {
             clear_color: self.clear_color,

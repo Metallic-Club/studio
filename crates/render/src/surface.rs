@@ -140,6 +140,33 @@ impl RenderSurface {
         mode
     }
 
+    /// The alpha mode the window composites the images with: opaque by default.
+    pub fn alpha_mode(&self) -> wgpu::CompositeAlphaMode {
+        self.config.alpha_mode
+    }
+
+    /// Asks for an alpha mode, for a window whose clear colour should show through where it is transparent (Studio's
+    /// splash, with rounded corners): `PreMultiplied` or `PostMultiplied` where the platform composites them. A mode
+    /// the surface does not support leaves the one in use; Direct3D 12 window swapchains, for example, are always
+    /// opaque. Returns the mode now in use.
+    pub fn set_alpha_mode(
+        &mut self,
+        context: &RenderContext,
+        mode: wgpu::CompositeAlphaMode,
+    ) -> wgpu::CompositeAlphaMode {
+        let supported = mode == wgpu::CompositeAlphaMode::Auto
+            || self
+                .surface
+                .get_capabilities(context.adapter())
+                .alpha_modes
+                .contains(&mode);
+        if supported && mode != self.config.alpha_mode {
+            self.config.alpha_mode = mode;
+            self.configure(context);
+        }
+        self.config.alpha_mode
+    }
+
     /// Applies a new window size in pixels. A zero width or height leaves the surface unconfigured until the window
     /// has an area again.
     pub fn resize(&mut self, context: &RenderContext, width: u32, height: u32) {

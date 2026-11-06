@@ -13,6 +13,9 @@
 //! - [`RenderContext`]: the instance, adapter, device and queue, created under a process-wide lock, with the
 //!   adapter's [`Capabilities`]. It renders offscreen ([`RenderContext::new_offscreen`]) or to a window
 //!   ([`RenderContext::new_with_window`], which also returns the window's [`RenderSurface`]).
+//! - [`ViewportTarget`]: a texture a scene is drawn into for an editor's UI to show (Studio's viewport, sampled by
+//!   egui-wgpu on the same device: [`RenderContext::device`], [`RenderContext::queue`], [`RenderSurface::format`]),
+//!   drawn by [`Renderer::render_viewport`] and resized without a black frame by [`Renderer::resize_viewport`].
 //! - [`Renderer`]: runs one frame as a fixed list of passes ([`PassId`]) with explicit attachments; load and store
 //!   operations come from [`FramePlan`], which discards whatever no later pass reads.
 //! - Reverse-Z depth ([`depth`]): `Depth32Float`, cleared to 0, tested with `Greater`.
@@ -92,7 +95,7 @@ pub use renderer::{Renderer, RendererSettings};
 pub use scene::{GpuScene, InstanceScene};
 pub use shadow::{CascadeStats, MAX_CASCADES, ShadowSettings, ShadowStats};
 pub use surface::{RenderSurface, SurfaceFrame};
-pub use target::OffscreenTarget;
+pub use target::{OffscreenTarget, ViewportTarget};
 pub use textures::TextureStats;
 pub use timing::{FrameTimings, PassTiming, TIMING_RING_SIZE};
 

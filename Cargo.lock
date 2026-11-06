@@ -1595,6 +1595,7 @@ dependencies = [
  "png",
  "profiling",
  "thiserror 2.0.21",
+ "winit",
 ]
 
 [[package]]
