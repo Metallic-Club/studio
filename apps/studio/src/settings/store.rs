@@ -171,7 +171,7 @@ impl SettingsStore {
 }
 
 /// Writes `text` to `path` through a temporary file beside it, making its folder first.
-fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder)?;
     }
@@ -183,7 +183,7 @@ fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
 }
 
 /// The first of `<file>.bak`, `<file>.bak.2`, ... that does not exist, so an older backup is never replaced.
-fn backup_path(path: &Path) -> Option<PathBuf> {
+pub(crate) fn backup_path(path: &Path) -> Option<PathBuf> {
     (1..=99)
         .map(|n| backup_name(path, n))
         .find(|candidate| !candidate.exists())

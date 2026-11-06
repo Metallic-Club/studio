@@ -12,6 +12,7 @@ use metallic_engine::metallic_platform::AppId;
 use metallic_engine::metallic_render::{RenderContext, Renderer, RendererSettings, wgpu};
 
 use crate::STUDIO_APP_ID;
+use crate::projects::{ProjectList, TemplateInfo, list_templates, projects_path, templates_dir};
 use crate::settings::{SettingsStore, settings_path};
 
 /// What the startup steps produce, handed to the screens after the splash.
@@ -22,8 +23,10 @@ pub struct Loaded {
     /// The renderer the viewport will draw with, its first-frame pipelines compiled; `None` if it could not be made
     /// (the error is logged, and Studio runs without a viewport).
     pub viewport_renderer: Option<Renderer>,
-    /// The recently opened projects, most recent first.
-    pub recent_projects: Vec<PathBuf>,
+    /// The projects list, read from `projects.toml`, most recently opened first, its missing files marked.
+    pub projects: ProjectList,
+    /// The templates a new project can start from.
+    pub templates: Vec<TemplateInfo>,
 }
 
 impl std::fmt::Debug for Loaded {
@@ -31,7 +34,8 @@ impl std::fmt::Debug for Loaded {
         f.debug_struct("Loaded")
             .field("settings", &self.settings)
             .field("viewport_renderer", &self.viewport_renderer.is_some())
-            .field("recent_projects", &self.recent_projects)
+            .field("projects", &self.projects)
+            .field("templates", &self.templates)
             .finish()
     }
 }
@@ -172,10 +176,29 @@ pub fn studio_steps(context: RenderContext) -> Vec<Step> {
         Step::new("Starting the renderer", move |loaded| {
             loaded.viewport_renderer = start_renderer(&context);
         }),
-        Step::new("Reading recent projects", |loaded| {
-            loaded.recent_projects = read_recent_projects();
-        }),
+        projects_step(studio_projects_path(), templates_dir()),
     ]
+}
+
+/// The step that reads the projects list at `list` (`None`: there is no config folder, so it lives in memory) and
+/// the templates in `templates`.
+pub fn projects_step(list: Option<PathBuf>, templates: Option<PathBuf>) -> Step {
+    Step::new("Reading recent projects", move |loaded| {
+        loaded.projects = match list {
+            Some(path) => {
+                log::info!("projects: {}", path.display());
+                ProjectList::load(path)
+            }
+            None => ProjectList::in_memory(),
+        };
+        loaded.templates = match templates {
+            Some(dir) => list_templates(&dir),
+            None => {
+                log::warn!("templates: no templates folder was found; New project has nothing to start from");
+                Vec::new()
+            }
+        };
+    })
 }
 
 /// The step that reads the settings at `path` (`None`: there is no config folder, so they live in memory).
@@ -216,9 +239,15 @@ fn start_renderer(context: &RenderContext) -> Option<Renderer> {
     }
 }
 
-/// The recent projects. A stub until the projects list exists (#215): there are none yet.
-fn read_recent_projects() -> Vec<PathBuf> {
-    Vec::new()
+/// Where Studio's projects list is, if the user has a config folder.
+fn studio_projects_path() -> Option<PathBuf> {
+    match AppId::parse(STUDIO_APP_ID).and_then(|app| projects_path(&app)) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            log::warn!("projects: no config folder ({error}); the projects list will not be saved");
+            None
+        }
+    }
 }
 
 /// Polls until `startup` is finished, failing after a few seconds.
@@ -246,9 +275,9 @@ mod tests {
         let mut startup = Startup::spawn(vec![
             Step::new("one", move |loaded| {
                 gate.recv().unwrap();
-                loaded.recent_projects.push("one".into());
+                loaded.templates.push(template("one"));
             }),
-            Step::new("two", |loaded| loaded.recent_projects.push("two".into())),
+            Step::new("two", |loaded| loaded.templates.push(template("two"))),
         ])
         .unwrap();
         assert_eq!(startup.names(), ["one", "two"]);
@@ -261,7 +290,7 @@ mod tests {
         wait(&mut startup);
         assert_eq!(startup.done(), 2);
         let loaded = startup.take_loaded().unwrap();
-        assert_eq!(loaded.recent_projects, [PathBuf::from("one"), PathBuf::from("two")]);
+        assert_eq!(loaded.templates, [template("one"), template("two")]);
         assert!(startup.take_loaded().is_none(), "taken once");
     }
 
@@ -269,12 +298,13 @@ mod tests {
     fn a_failed_step_ends_startup_with_defaults() {
         let mut startup = Startup::spawn(vec![
             Step::new("breaks", |_| panic!("a broken step")),
-            Step::new("never runs", |loaded| loaded.recent_projects.push("no".into())),
+            Step::new("never runs", |loaded| loaded.templates.push(template("no"))),
         ])
         .unwrap();
         wait(&mut startup);
         let loaded = startup.take_loaded().unwrap();
-        assert!(loaded.recent_projects.is_empty());
+        assert!(loaded.templates.is_empty());
+        assert!(loaded.projects.entries().is_empty());
         assert_eq!(loaded.settings.settings(), &crate::settings::StudioSettings::default());
     }
 
@@ -297,6 +327,56 @@ mod tests {
         let loaded = startup.take_loaded().unwrap();
         assert_eq!(loaded.settings.path(), Some(path.as_path()));
         assert!(loaded.settings.settings().general.skip_sign_in);
-        assert!(read_recent_projects().is_empty());
+    }
+
+    #[test]
+    fn the_projects_step_reads_the_list_and_the_templates() {
+        let dir = std::env::temp_dir().join(format!("metallic-studio-startup-projects-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(crate::projects::PROJECTS_FILE);
+        let there = dir.join("There.mtproj");
+        std::fs::write(&there, "a project").unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "[[project]]\npath = '{}'\nname = \"There\"\nlast_opened = 20\n[[project]]\npath = '{}'\nname = \
+                 \"Gone\"\nlast_opened = 10\n",
+                there.display(),
+                dir.join("Gone.mtproj").display()
+            ),
+        )
+        .unwrap();
+
+        let mut startup = Startup::spawn(vec![projects_step(Some(path.clone()), templates_dir())]).unwrap();
+        assert_eq!(startup.names(), ["Reading recent projects"]);
+        wait(&mut startup);
+        let loaded = startup.take_loaded().unwrap();
+        assert_eq!(loaded.projects.path(), Some(path.as_path()));
+        let names: Vec<_> = loaded
+            .projects
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, ["There", "Gone"]);
+        let missing: Vec<_> = loaded.projects.entries().iter().map(|entry| entry.missing).collect();
+        assert_eq!(missing, [false, true]);
+        assert!(loaded.templates.iter().any(|template| template.id == "baseplate-3d"));
+
+        let mut startup = Startup::spawn(vec![projects_step(None, None)]).unwrap();
+        wait(&mut startup);
+        let loaded = startup.take_loaded().unwrap();
+        assert!(loaded.projects.path().is_none());
+        assert!(loaded.templates.is_empty());
+    }
+
+    fn template(id: &str) -> TemplateInfo {
+        TemplateInfo {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            kind: "3d".to_owned(),
+            dir: PathBuf::from(id),
+        }
     }
 }

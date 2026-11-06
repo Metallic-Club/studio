@@ -8,9 +8,10 @@
 //! | [`theme`] | the website's design tokens, dark and light modes, accents, the bundled fonts |
 //! | [`settings`] | `StudioSettings`, `settings.toml` in the config folder, and the Settings window |
 //! | [`keymap`] | the command registry, focus contexts and bindings (keys, mouse, wheel) every shortcut goes through |
+//! | [`projects`] | the projects page, `projects.toml`, the templates, and the file dialogs behind a trait |
 //! | [`emblem`] | the Metallic mark: the splash's emblem and the window icon |
 //!
-//! Later issues add `dock`, `panels`, `viewport` and `projects` beside them.
+//! Later issues add `dock`, `panels` and `viewport` beside them.
 
 // The one place Studio calls the operating system itself (`app::native`, Windows only): shaping the splash window
 // and reading the system's animation switch need Win32 calls, which are unsafe. Each block says why it is sound.
@@ -19,6 +20,7 @@
 pub mod app;
 pub mod emblem;
 pub mod keymap;
+pub mod projects;
 pub mod settings;
 pub mod theme;
 
