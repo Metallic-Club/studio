@@ -283,6 +283,34 @@ impl AssetIndex {
         Some(path)
     }
 
+    /// Indexes the asset at `path` as `id` with `fingerprint`, replacing what was indexed at `path`. Refuses an id
+    /// another path has.
+    pub(crate) fn insert(&mut self, path: &str, id: AssetId, fingerprint: Fingerprint) -> Result<(), AssetIndexError> {
+        if let Some(other) = self.by_id.get(&id).filter(|other| *other != path) {
+            return Err(AssetIndexError::DuplicateId {
+                id,
+                first: other.clone(),
+                second: path.to_owned(),
+            });
+        }
+        if let Some(old) = self.by_path.insert(path.to_owned(), Entry { id, fingerprint }) {
+            self.by_id.remove(&old.id);
+        }
+        self.by_id.insert(id, path.to_owned());
+        Ok(())
+    }
+
+    /// Records that the asset at `from` is now at `to`, keeping its id. A missing asset indexed at `to` is dropped:
+    /// the moved one takes its place. Returns the moved asset's id, or `None` when nothing is indexed at `from`.
+    pub(crate) fn rename(&mut self, from: &str, to: &str) -> Option<AssetId> {
+        let entry = self.by_path.remove(from)?;
+        if let Some(replaced) = self.by_path.insert(to.to_owned(), entry) {
+            self.by_id.remove(&replaced.id);
+        }
+        self.by_id.insert(entry.id, to.to_owned());
+        Some(entry.id)
+    }
+
     /// Brings the index up to date with `members`, a project's members by path with their fingerprints, and says
     /// what changed (see the [module docs](self)). Members that are not assets ([`is_asset`]) are skipped. `new_id`
     /// makes the id of each added asset, in path order ([`AssetId::random`] in a project). On an error the index is

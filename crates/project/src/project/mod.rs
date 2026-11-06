@@ -6,6 +6,9 @@
 //! [`Project::create`] makes a new project from a [`Template`]. The asset index (`assets.json`) is read on open
 //! ([`Project::assets`]) and brought up to date by [`Project::refresh_assets`].
 //!
+//! The file operations ([`Project::create_member`], [`Project::rename_member`], [`Project::rename_folder`],
+//! [`Project::delete_member`]) keep asset ids and rewrite the paths that name a moved member; see `file_ops.rs`.
+//!
 //! # Writing an archive
 //!
 //! - **Crash-safe:** a save writes a complete new archive beside the old one (`MyGame.mtproj.tmp`), flushes it to
@@ -22,11 +25,12 @@
 //! drive letter, uses `\`, or has an empty, `.` or `..` part is refused ([`check_member_path`]): opening an archive
 //! with such a member fails, so nothing read from a project can point outside it.
 
+mod file_ops;
 mod template;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use metallic_core::DataModel;
@@ -39,6 +43,7 @@ use crate::assets::AssetReader;
 use crate::manifest::{ENGINE_VERSION, MANIFEST_FILE, Manifest, ManifestError, ManifestWarning};
 use crate::scene::{LoadedScene, SceneError, load_scene_bytes};
 
+pub use file_ops::{MemberMove, MoveReport, References};
 pub use template::Template;
 
 /// The file name extension of a project (`MyGame.mtproj`).
@@ -548,6 +553,24 @@ pub enum ProjectError {
         /// The member path.
         member: String,
     },
+    /// A file operation would put a member where there already is one.
+    #[error("{}: there is already a member `{member}`", path.display())]
+    MemberExists {
+        /// The project's file.
+        path: PathBuf,
+        /// The member path.
+        member: String,
+    },
+    /// [`Project::rename_folder`] was asked to move a folder into itself.
+    #[error("{}: cannot move the folder `{from}` into itself (`{to}`)", path.display())]
+    FolderIntoItself {
+        /// The project's file.
+        path: PathBuf,
+        /// The folder.
+        from: String,
+        /// Where it was to go.
+        to: String,
+    },
     /// The new archive could not be written. The project's file on disk is unchanged.
     #[error("{}: could not save, the file on disk is unchanged: {source}", path.display())]
     Save {
@@ -626,7 +649,7 @@ fn index(archive: &Archive, path: &Path) -> Result<BTreeMap<String, usize>, Proj
 }
 
 /// Writes one member, compressed as [`compression_for`] says, dated 1980-01-01 so archives are deterministic.
-fn write_member(writer: &mut ZipWriter<BufWriter<File>>, member: &str, bytes: &[u8]) -> Result<(), ZipError> {
+fn write_member(writer: &mut ZipWriter<BufWriter<Sink>>, member: &str, bytes: &[u8]) -> Result<(), ZipError> {
     let options = SimpleFileOptions::default()
         .compression_method(compression_for(member))
         .last_modified_time(DateTime::default())
@@ -640,22 +663,22 @@ fn write_member(writer: &mut ZipWriter<BufWriter<File>>, member: &str, bytes: &[
 /// `path`. On an error the temporary file is removed and `path` is untouched.
 fn write_archive(
     path: &Path,
-    fill: impl FnOnce(&mut ZipWriter<BufWriter<File>>) -> Result<(), ZipError>,
+    fill: impl FnOnce(&mut ZipWriter<BufWriter<Sink>>) -> Result<(), ZipError>,
 ) -> Result<(), ProjectError> {
     let mut temp = path.as_os_str().to_owned();
     temp.push(TEMP_SUFFIX);
     let temp = PathBuf::from(temp);
     let write = || -> io::Result<()> {
-        let mut writer = ZipWriter::new(BufWriter::new(File::create(&temp)?));
+        let mut writer = ZipWriter::new(BufWriter::new(Sink::create(&temp)?));
         fill(&mut writer).map_err(zip_to_io)?;
-        let file = writer
+        let sink = writer
             .finish()
             .map_err(zip_to_io)?
             .into_inner()
             .map_err(io::IntoInnerError::into_error)?;
         // On disk before the rename, so a crash cannot leave a renamed but empty project.
-        file.sync_all()?;
-        drop(file);
+        sink.file.sync_all()?;
+        drop(sink);
         fs::rename(&temp, path)
     };
     write().map_err(|source| {
@@ -665,6 +688,62 @@ fn write_archive(
             source,
         }
     })
+}
+
+/// The temporary archive a save writes. In unit tests it can be made to fail part-way ([`fail_saves_after`]), to
+/// show that such a save leaves the project's file as it was.
+struct Sink {
+    file: File,
+    /// How many more bytes may be written before every write fails.
+    #[cfg(test)]
+    budget: Option<usize>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The budget of the next [`Sink`]s made on this thread.
+    static FAIL_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Makes every save on this thread fail once it has written `bytes` bytes of its temporary archive (`None`: never).
+#[cfg(test)]
+pub(crate) fn fail_saves_after(bytes: Option<usize>) {
+    FAIL_AFTER.with(|budget| budget.set(bytes));
+}
+
+impl Sink {
+    fn create(path: &Path) -> io::Result<Self> {
+        Ok(Self {
+            file: File::create(path)?,
+            #[cfg(test)]
+            budget: FAIL_AFTER.with(std::cell::Cell::get),
+        })
+    }
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        #[cfg(test)]
+        if let Some(budget) = &mut self.budget {
+            if *budget == 0 {
+                return Err(io::Error::other("injected failure part-way through the save"));
+            }
+            let written = self.file.write(&buf[..buf.len().min(*budget)])?;
+            *budget -= written;
+            return Ok(written);
+        }
+        self.file.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Seek for Sink {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.file.seek(pos)
+    }
 }
 
 /// A zip error as an I/O error (the zip crate's own I/O errors unwrapped).
