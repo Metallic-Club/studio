@@ -93,6 +93,46 @@ engine = "0.1"         # engine version the project was last saved with
 - **Standalone:** the `.mtproj` is packed into one binary file (`game.pak`, read-only, built by `xtask` or Studio) and shipped next to the player executable.
 - **Platform:** the project is uploaded to the platform and the player streams it. Designed in M10, but the pak format is shared.
 
+#### `game.pak` (#191)
+
+A pak holds every member of the `.mtproj` (the manifest, `assets.json`, scenes, scripts and assets), so asset ids
+resolve as in the project. Nothing is stripped: machine-local data is never in the `.mtproj` to begin with. The
+engine reads a pak and a project through one interface (`metallic_project::GameFiles`), and a pak's `AssetReader`
+reads assets by id like a project's, so a game runs the same from either.
+
+**Our own layout, not a zip.** The pak is read, never edited, and read in place: by a seek and a read now,
+memory-mapped or by HTTP range requests later (platform streaming). A zip does not give that directly: a member's
+bytes start after a local header whose length is only known by reading it, aligning them means padding extra fields,
+and an asset id would need a custom extra field. Our layout puts every member at an offset the index states, aligned
+to 16 bytes, with its id beside it, and is about 300 lines with no new dependency. Members are stored, never
+compressed; the reserved flag bits leave room for compression if a later version needs it.
+
+Every number is little-endian:
+
+| Bytes | What |
+|---|---|
+| 0..8 | magic `MTLCPAK\0` |
+| 8..12 | format version, now 1; a newer version is refused with a clear error |
+| 12..16 | number of members |
+| 16..24 | where the index starts |
+| 24..28 | the index's length |
+| 28..32 | the index's CRC-32 |
+| 32.. | the members' bytes, each as it is in the project, each starting at a multiple of 16 (zero bytes between) |
+| last | the index, at a multiple of 16, ending the file |
+
+The index has one entry per member, sorted by path: offset (8 bytes), length (8), CRC-32 (4, the same checksum
+`assets.json` and the zip use), flags (1: bit 0 means the member is an asset with an id), the asset id (16, most
+significant byte first; zero without one), the path's length (2) and the path (UTF-8).
+
+- **Reading:** opening a pak reads and checks the header and the index, then `metallic.toml` and `assets.json`. Every
+  other member is read when asked for, by path or by asset id, with one seek and one read, and checked against its
+  CRC-32. Nothing is unpacked to disk.
+- **Errors:** a file that is not a pak (bad magic), a pak from a newer engine, a truncated pak, a damaged index (its
+  checksum, an unsorted or duplicated path, an unsafe path), an entry outside the members' bytes and a member that
+  fails its checksum each give a clear error naming the file, never a panic or wrong data.
+- **Deterministic:** packing the same project twice gives the same bytes (members sorted, no dates or machine data).
+- **Writing** is crash-safe like a project save: a complete `game.pak.tmp`, flushed, then renamed over the old pak.
+
 ### Mode changes player behaviour, not the file format
 
 Standalone and platform projects use the same `.mtproj` format. Only the player's behaviour differs (platform UI, server connection, asset source).

@@ -40,8 +40,10 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 use crate::asset_index::{AssetId, AssetIndex, AssetIndexError, Fingerprint, INDEX_FILE, IndexReport, is_asset};
 use crate::assets::AssetReader;
+use crate::game_files::GameFiles;
 use crate::manifest::{ENGINE_VERSION, MANIFEST_FILE, Manifest, ManifestError, ManifestWarning};
-use crate::scene::{LoadedScene, SceneError, load_scene_bytes};
+use crate::pak::PakError;
+use crate::scene::{LoadedScene, SceneError};
 
 pub use file_ops::{MemberMove, MoveReport, References};
 pub use template::Template;
@@ -244,10 +246,7 @@ impl Project {
 
     /// [`Project::read`] for a text member (a script, a scene), which must be UTF-8.
     pub fn read_text(&mut self, member: &str) -> Result<String, ProjectError> {
-        String::from_utf8(self.read(member)?).map_err(|_| ProjectError::NotText {
-            path: self.path.clone(),
-            member: member.to_owned(),
-        })
+        GameFiles::read_text(self, member)
     }
 
     /// Sets the contents of `member`, adding it if it is new (in memory until [`Project::save`]). Writing
@@ -400,16 +399,7 @@ impl Project {
     /// Loads the start scene ([`Manifest::start_scene`]) into `dm`, which must be a whole game (see
     /// [`load_scene_bytes`]). On an error `dm` is unchanged.
     pub fn load_start_scene(&mut self, dm: &mut DataModel) -> Result<LoadedScene, ProjectError> {
-        let scene = self.manifest.start_scene.clone();
-        let bytes = self.read(&scene).map_err(|error| match error {
-            ProjectError::MissingMember { path, member } => ProjectError::MissingStartScene { path, scene: member },
-            other => other,
-        })?;
-        load_scene_bytes(dm, &bytes).map_err(|source| ProjectError::Scene {
-            path: self.path.clone(),
-            scene,
-            source,
-        })
+        GameFiles::load_start_scene(self, dm)
     }
 
     /// Refuses `member` if its path is unsafe.
@@ -419,6 +409,32 @@ impl Project {
             member: member.to_owned(),
             reason,
         })
+    }
+}
+
+impl GameFiles for Project {
+    fn path(&self) -> &Path {
+        Project::path(self)
+    }
+
+    fn manifest(&self) -> &Manifest {
+        Project::manifest(self)
+    }
+
+    fn members(&self) -> Vec<&str> {
+        Project::members(self)
+    }
+
+    fn read(&mut self, member: &str) -> Result<Vec<u8>, ProjectError> {
+        Project::read(self, member)
+    }
+
+    fn assets(&self) -> &AssetIndex {
+        Project::assets(self)
+    }
+
+    fn asset_reader(&self) -> AssetReader {
+        Project::asset_reader(self)
     }
 }
 
@@ -571,7 +587,23 @@ pub enum ProjectError {
         /// Where it was to go.
         to: String,
     },
-    /// The new archive could not be written. The project's file on disk is unchanged.
+    /// A `game.pak` is not one this engine reads, or is damaged ([`Pak`](crate::Pak)).
+    #[error("{}: {source}", path.display())]
+    Pak {
+        /// The pak's file.
+        path: PathBuf,
+        /// What is wrong with it.
+        source: PakError,
+    },
+    /// No asset has the id.
+    #[error("{}: no asset {id}", path.display())]
+    UnknownAsset {
+        /// The project's or the pak's file.
+        path: PathBuf,
+        /// The id.
+        id: AssetId,
+    },
+    /// The new archive (or pak) could not be written. The file on disk is unchanged.
     #[error("{}: could not save, the file on disk is unchanged: {source}", path.display())]
     Save {
         /// The project's file.

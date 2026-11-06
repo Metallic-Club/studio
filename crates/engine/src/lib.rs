@@ -126,7 +126,9 @@
 //! project's scripts as its sources ([`project_sources`]) and loading its start scene into the game before
 //! [`Engine::start`] ([`Project::load_start_scene`](metallic_project::Project::load_start_scene)). Under `render`,
 //! the meshes and textures its `MeshPart`s name are loaded off the main thread and drawn once they are here: hand
-//! [`SceneRenderer::set_assets`] the project's [`AssetReader`](metallic_project::AssetReader) (`MeshAssets`).
+//! [`SceneRenderer::set_assets`] the project's [`AssetReader`](metallic_project::AssetReader) (`MeshAssets`). A
+//! built game, a `game.pak` ([`metallic_project::Pak`]), runs the same way: both are read through
+//! [`GameFiles`](metallic_project::GameFiles).
 
 #[cfg(feature = "render")]
 pub mod calibration;

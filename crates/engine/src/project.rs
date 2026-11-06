@@ -1,7 +1,8 @@
-//! Games from `.mtproj` projects ([`metallic_project::Project`], ADR 0006).
+//! Games from `.mtproj` projects ([`metallic_project::Project`], ADR 0006) or from their builds (`game.pak`,
+//! [`metallic_project::Pak`]), both read through [`GameFiles`].
 //!
-//! An app opens a project, makes its engine with the project's scripts as its sources ([`project_sources`]), then
-//! loads the start scene into the engine's game before starting it:
+//! An app opens a project (or a pak), makes its engine with the game's scripts as its sources ([`project_sources`]),
+//! then loads the start scene into the engine's game before starting it:
 //!
 //! ```no_run
 //! # #[cfg(feature = "luau")] {
@@ -17,15 +18,16 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use metallic_project::{Project, ProjectError};
+use metallic_project::{GameFiles, ProjectError};
 use metallic_script::MemorySources;
 
 /// The file name extension of a script member: scripts' `Source` names such members (`Scripts/Door.luau`).
 const SCRIPT_EXTENSION: &str = ".luau";
 
-/// Every script in `project` (its `.luau` members, which must be UTF-8), by member path, for
+/// Every script in `project` (a [`Project`](metallic_project::Project) or a [`Pak`](metallic_project::Pak): its
+/// `.luau` members, which must be UTF-8), by member path, for
 /// [`EngineConfig::with_sources`](crate::EngineConfig::with_sources).
-pub fn project_sources(project: &mut Project) -> Result<MemorySources, ProjectError> {
+pub fn project_sources<G: GameFiles + ?Sized>(project: &mut G) -> Result<MemorySources, ProjectError> {
     let scripts: Vec<String> = project
         .members()
         .into_iter()
