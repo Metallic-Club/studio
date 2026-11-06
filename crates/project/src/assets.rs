@@ -1,7 +1,7 @@
 //! Reading and decoding a project's models and textures (#189): glTF and GLB meshes, PNG and JPEG images.
 //!
-//! [`Project::asset_reader`](crate::Project::asset_reader) makes an [`AssetReader`], which reads assets by
-//! [`AssetId`] on any thread (the engine decodes on a worker, never on the frame). [`decode_mesh`] and
+//! [`GameFiles::asset_reader`](crate::GameFiles::asset_reader) (a project's or a `game.pak`'s) makes an
+//! [`AssetReader`], which reads assets by [`AssetId`] on any thread (the engine decodes on a worker, never on the frame). [`decode_mesh`] and
 //! [`decode_image`] turn a member's bytes into plain data the engine hands to the renderer: this crate never depends
 //! on the renderer (ADR 0001).
 //!
@@ -35,6 +35,7 @@ use metallic_core::glam::{Mat3, Mat4, Vec3};
 use zip::ZipArchive;
 
 use crate::asset_index::{AssetId, AssetIndex};
+use crate::pak::PakFile;
 
 /// The most vertices a mesh may have, all of its primitives together: more is refused rather than risking the
 /// memory (a mesh this large wants the levels of detail made at import, ADR 0008 §5).
@@ -526,15 +527,26 @@ pub enum AssetError {
     },
 }
 
-/// Reads a project's assets by id on any thread, from the project file and the edits not saved when it was made
-/// ([`Project::asset_reader`](crate::Project::asset_reader)). It opens the file again on first use, so it never shares
-/// a file handle with the project.
+/// Reads a game's assets by id on any thread: a project's, from its file and the edits not saved when the reader was
+/// made ([`Project::asset_reader`](crate::Project::asset_reader)), or a `game.pak`'s
+/// ([`GameFiles::asset_reader`](crate::GameFiles::asset_reader) on a [`Pak`](crate::Pak)). It opens the file again on
+/// first use, so it never shares a file handle with the project or the pak.
 pub struct AssetReader {
-    path: PathBuf,
     index: AssetIndex,
-    /// Asset members edited or removed in memory when the reader was made.
-    edits: BTreeMap<String, Option<Vec<u8>>>,
-    archive: Option<ZipArchive<BufReader<File>>>,
+    store: Store,
+}
+
+/// Where an [`AssetReader`] reads members from.
+enum Store {
+    /// A `.mtproj` and its unsaved edits.
+    Project {
+        path: PathBuf,
+        /// Asset members edited or removed in memory when the reader was made.
+        edits: BTreeMap<String, Option<Vec<u8>>>,
+        archive: Option<ZipArchive<BufReader<File>>>,
+    },
+    /// A `game.pak`.
+    Pak(PakFile),
 }
 
 impl AssetReader {
@@ -542,16 +554,29 @@ impl AssetReader {
     /// what the file holds.
     pub(crate) fn new(path: &Path, index: AssetIndex, edits: BTreeMap<String, Option<Vec<u8>>>) -> Self {
         Self {
-            path: path.to_path_buf(),
             index,
-            edits,
-            archive: None,
+            store: Store::Project {
+                path: path.to_path_buf(),
+                edits,
+                archive: None,
+            },
         }
     }
 
-    /// The project's file.
+    /// A reader of the pak `file` with `index`.
+    pub(crate) fn from_pak(index: AssetIndex, file: PakFile) -> Self {
+        Self {
+            index,
+            store: Store::Pak(file),
+        }
+    }
+
+    /// The file the assets are read from: the project's or the pak's.
     pub fn path(&self) -> &Path {
-        &self.path
+        match &self.store {
+            Store::Project { path, .. } => path,
+            Store::Pak(file) => file.path(),
+        }
     }
 
     /// The member path of the asset `id` names (32 hex digits).
@@ -597,17 +622,21 @@ impl AssetReader {
 
     /// The bytes of `member`: its edit, or what the file holds. `NotFound` when it has neither.
     fn read_member(&mut self, member: &str) -> io::Result<Vec<u8>> {
-        match self.edits.get(member) {
+        let (path, edits, archive) = match &mut self.store {
+            Store::Project { path, edits, archive } => (path, edits, archive),
+            Store::Pak(file) => return Ok(file.read(member)?),
+        };
+        match edits.get(member) {
             Some(Some(bytes)) => return Ok(bytes.clone()),
             Some(None) => return Err(io::ErrorKind::NotFound.into()),
             None => {}
         }
-        let archive = match self.archive.as_mut() {
+        let archive = match archive.as_mut() {
             Some(archive) => archive,
             None => {
-                let file = File::open(&self.path)?;
-                let archive = ZipArchive::new(BufReader::new(file)).map_err(io::Error::other)?;
-                self.archive.insert(archive)
+                let file = File::open(&*path)?;
+                let opened = ZipArchive::new(BufReader::new(file)).map_err(io::Error::other)?;
+                archive.insert(opened)
             }
         };
         let mut file = match archive.by_name(member) {
@@ -625,7 +654,7 @@ impl AssetReader {
 impl std::fmt::Debug for AssetReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AssetReader")
-            .field("path", &self.path)
+            .field("path", &self.path())
             .field("assets", &self.index.len())
             .finish_non_exhaustive()
     }
