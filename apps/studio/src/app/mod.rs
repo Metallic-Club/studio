@@ -7,9 +7,11 @@
 mod native;
 mod screens;
 mod shell;
+pub mod sign_in;
 pub mod splash;
 pub mod startup;
 
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use egui::{
@@ -17,7 +19,9 @@ use egui::{
     TextureOptions, pos2, vec2,
 };
 
+use crate::emblem;
 use crate::keymap::{ActivationKind, Context, Focus, Keymap, Overrides, ids};
+use crate::projects::{FileDialog, Projects, RAIL_MARK, name_from_path};
 use crate::settings::{SettingsStore, SettingsWindow, StudioSettings};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
@@ -57,9 +61,13 @@ pub struct Studio {
     screen: Screen,
     splash: Splash,
     startup: Startup,
-    /// What the startup steps produced, once the splash is done: the renderer the viewport will use (#217) and the
-    /// recent projects (#215).
+    /// What the startup steps produced, once the splash is done: the renderer the viewport will use (#217). The
+    /// projects list and the templates move from it to `projects`.
     loaded: Option<Loaded>,
+    /// The projects page and its list.
+    projects: Projects,
+    /// The project the Editor screen shows.
+    open_project: Option<PathBuf>,
     theme: ThemeState,
     /// The settings: in memory until the splash has read them, then the file's.
     settings: SettingsStore,
@@ -75,6 +83,8 @@ pub struct Studio {
     /// The emblem, until the first frame uploads it.
     emblem_image: Option<ColorImage>,
     emblem: Option<TextureHandle>,
+    /// The mark at the sizes the screens after the splash show it, in pixels: drawn for each, never scaled.
+    marks: Vec<(u32, TextureHandle)>,
     requests: Vec<WindowRequest>,
 }
 
@@ -84,6 +94,8 @@ impl std::fmt::Debug for Studio {
             .field("screen", &self.screen)
             .field("startup", &self.startup)
             .field("loaded", &self.loaded)
+            .field("projects", &self.projects)
+            .field("open_project", &self.open_project)
             .finish_non_exhaustive()
     }
 }
@@ -97,6 +109,8 @@ impl Studio {
             splash: Splash::new(),
             startup,
             loaded: None,
+            projects: Projects::new(),
+            open_project: None,
             // The splash's look: the default dark mode and accent, before the settings are read.
             theme: ThemeState::new(Look {
                 reduce_motion,
@@ -110,8 +124,55 @@ impl Studio {
             applied_scale: None,
             emblem_image: emblem,
             emblem: None,
+            marks: Vec::new(),
             requests: Vec::new(),
         }
+    }
+
+    /// Asks `dialog` for files and folders (the shell gives the system's; until then every dialog is cancelled).
+    pub fn set_file_dialog(&mut self, dialog: Box<dyn FileDialog>) {
+        self.projects.set_file_dialog(dialog);
+    }
+
+    /// The projects page and its list.
+    pub fn projects(&self) -> &Projects {
+        &self.projects
+    }
+
+    /// The projects page and its list, to change.
+    pub fn projects_mut(&mut self) -> &mut Projects {
+        &mut self.projects
+    }
+
+    /// The project the Editor screen shows.
+    pub fn open_project(&self) -> Option<&Path> {
+        self.open_project.as_deref()
+    }
+
+    /// Goes to the projects page, looking at the projects' files again.
+    fn show_projects(&mut self) {
+        self.projects.refresh();
+        self.screen = Screen::Projects;
+    }
+
+    /// Goes to the Editor screen with the project at `path`.
+    fn open(&mut self, path: PathBuf) {
+        log::info!("projects: opening {}", path.display());
+        self.open_project = Some(path);
+        self.screen = Screen::Editor;
+    }
+
+    /// The mark, `points` square at `ctx`'s scale, drawn for that size the first time it is asked for.
+    fn mark(&mut self, ctx: &egui::Context, points: f32) -> TextureHandle {
+        let pixels = (points * ctx.pixels_per_point()).round().max(1.0) as u32;
+        if let Some((_, texture)) = self.marks.iter().find(|(size, _)| *size == pixels) {
+            return texture.clone();
+        }
+        let mark = emblem::render(pixels);
+        let image = ColorImage::from_rgba_unmultiplied([mark.width as usize, mark.height as usize], &mark.rgba);
+        let texture = ctx.load_texture(format!("mark-{pixels}"), image, TextureOptions::LINEAR);
+        self.marks.push((pixels, texture.clone()));
+        texture
     }
 
     /// The screen shown.
@@ -173,37 +234,31 @@ impl Studio {
         match self.screen {
             Screen::Splash => self.splash(ui, now),
             Screen::SignIn => {
-                if screens::placeholder(
-                    ui,
-                    "Welcome",
-                    "Sign in",
-                    "Online services aren't available yet.",
-                    "Continue offline",
-                )
-                .clicked()
-                {
-                    self.screen = Screen::Projects;
+                let mark = self.mark(&ctx, sign_in::MARK);
+                let skip = &mut self.settings.settings_mut().general.skip_sign_in;
+                if sign_in::show(ui, Some(&mark), skip) == sign_in::SignIn::Offline {
+                    self.show_projects();
                 }
             }
             Screen::Projects => {
-                if screens::placeholder(
-                    ui,
-                    "Studio",
-                    "Projects",
-                    "Your projects will be listed here.",
-                    "Open the editor",
-                )
-                .clicked()
-                {
-                    self.screen = Screen::Editor;
+                let mark = self.mark(&ctx, RAIL_MARK);
+                if let Some(path) = self.projects.show(ui, Some(&mark), &self.keymap) {
+                    self.open(path);
                 }
             }
             Screen::Editor => {
+                let path = self.open_project.clone().unwrap_or_default();
+                let name = self
+                    .projects
+                    .list()
+                    .get(&path)
+                    .map_or_else(|| name_from_path(&path), |entry| entry.name.clone());
+                let location = path.display().to_string();
                 let close = screens::placeholder(
                     ui,
                     "Project",
-                    "Editor",
-                    "The editor's panels will be here.",
+                    &name,
+                    &[&location, "The editor's panels will be here."],
                     "Close the project",
                 );
                 let close = match self.keymap.shortcut_text(ids::PROJECT_CLOSE) {
@@ -211,7 +266,7 @@ impl Studio {
                     None => close,
                 };
                 if close.clicked() {
-                    self.screen = Screen::Projects;
+                    self.show_projects();
                 }
             }
         }
@@ -271,13 +326,15 @@ impl Studio {
             // The capture dialog is recording a key: it must not also run a command.
             return;
         }
-        // Panels arrive with docking (#216) and set the focused panel's context; until then the editor's own.
+        // Panels arrive with docking (#216) and set the focused panel's context; until then the editor's own. The
+        // projects page has the focus unless a dialog or the Settings window is over it.
+        let context = match self.screen {
+            Screen::Editor => Context::Editor,
+            Screen::Projects if !self.projects.is_creating() && !self.settings_window.is_open() => Context::Projects,
+            _ => Context::Global,
+        };
         let focus = Focus {
-            context: if self.screen == Screen::Editor {
-                Context::Editor
-            } else {
-                Context::Global
-            },
+            context,
             hovered: None,
             typing: ctx.egui_wants_keyboard_input(),
         };
@@ -287,7 +344,12 @@ impl Studio {
             }
             match activation.command {
                 ids::SETTINGS_OPEN => self.toggle_settings(),
-                ids::PROJECT_CLOSE if self.screen == Screen::Editor => self.screen = Screen::Projects,
+                ids::PROJECT_CLOSE if self.screen == Screen::Editor => self.show_projects(),
+                id @ (ids::PROJECTS_OPEN | ids::PROJECTS_NEW | ids::PROJECTS_ADD) if context == Context::Projects => {
+                    if let Some(path) = self.projects.run(id) {
+                        self.open(path);
+                    }
+                }
                 // The viewport's navigation, for #217.
                 _ => {}
             }
@@ -396,6 +458,15 @@ impl Studio {
                 });
             }
             self.load_keymap();
+            let mut list = std::mem::take(&mut loaded.projects);
+            if let Some(body) = list.take_notice() {
+                self.notices.push(Notice {
+                    title: "The projects list was reset",
+                    body,
+                });
+            }
+            self.projects.set_list(list);
+            self.projects.set_templates(std::mem::take(&mut loaded.templates));
             self.loaded = Some(loaded);
             self.screen = if self.settings.settings().general.skip_sign_in {
                 Screen::Projects
@@ -420,8 +491,10 @@ mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
-    use super::startup::{Step, settings_step, wait};
+    use super::startup::{Step, projects_step, settings_step, wait};
     use super::*;
+    use crate::projects::dialog::ScriptedDialog;
+    use crate::projects::{PROJECTS_FILE, View, templates_dir};
     use crate::settings::{Category, SETTINGS_FILE};
     use crate::theme::tokens::{self, Accent};
     use crate::theme::{ThemeMode, fonts};
@@ -458,9 +531,11 @@ mod tests {
             )
     }
 
-    /// The real settings step over `path`, and a quick second step.
+    /// The real settings step over `path`, and the real projects step over `projects.toml` beside it and the
+    /// repository's templates.
     fn steps_reading(path: PathBuf) -> Vec<Step> {
-        vec![settings_step(Some(path)), Step::new("Reading recent projects", |_| {})]
+        let list = path.with_file_name(PROJECTS_FILE);
+        vec![settings_step(Some(path)), projects_step(Some(list), templates_dir())]
     }
 
     /// Steps whose settings file says light and mint.
@@ -477,7 +552,8 @@ mod tests {
         let mut harness = harness(steps_reading(path));
         finish_steps(&mut harness, splash::MIN_TIME);
         harness.set_size(egui::vec2(1280.0, 800.0));
-        harness.step();
+        // The sign-in card centres itself by its height in the frame before.
+        settle(&mut harness);
         harness
     }
 
@@ -575,11 +651,15 @@ mod tests {
         };
         click(&mut harness, "Continue offline");
         assert_eq!(harness.state().studio.screen(), Screen::Projects);
-        harness.get_by_label("Projects");
+        harness.get_by_role_and_label(Role::Tab, "Recent");
+        harness.get_by_label("No projects yet");
 
-        click(&mut harness, "Open the editor");
+        let path = std::env::temp_dir().join("A Game.mtproj");
+        harness.state_mut().studio.open(path.clone());
+        settle(&mut harness);
         assert_eq!(harness.state().studio.screen(), Screen::Editor);
-        harness.get_by_label("Editor");
+        harness.get_by_label("A Game");
+        harness.get_by_label(&path.display().to_string());
 
         click(&mut harness, "Close the project");
         assert_eq!(harness.state().studio.screen(), Screen::Projects);
@@ -909,5 +989,536 @@ mod tests {
         settle(&mut harness);
         assert!(harness.state().studio.notice().is_none());
         assert!(harness.query_by_label("Settings were reset").is_none());
+    }
+
+    // The sign-in screen and the projects page (#215).
+
+    /// A folder of its own for `test`, holding `settings.toml` (`settings`) and `projects.toml` (`projects`) when
+    /// given. Returns the settings file's path; the projects list is beside it.
+    fn config(test: &str, settings: Option<&str>, projects: Option<&str>) -> PathBuf {
+        let path = settings_file(test, settings);
+        if let Some(projects) = projects {
+            std::fs::write(path.with_file_name(PROJECTS_FILE), projects).unwrap();
+        }
+        path
+    }
+
+    /// A real project called `name` in `dir`, made from the repository's Baseplate template.
+    fn make_project(dir: &Path, name: &str) -> PathBuf {
+        let template =
+            metallic_engine::metallic_project::Template::from_dir(templates_dir().unwrap().join("baseplate-3d"))
+                .unwrap();
+        let path = dir.join(format!("{name}.mtproj"));
+        metallic_engine::metallic_project::Project::create(&path, &template, name).unwrap();
+        path
+    }
+
+    /// `projects.toml` text listing `projects` (path, name), most recent first.
+    fn list_of(projects: &[(&Path, &str)]) -> String {
+        projects
+            .iter()
+            .enumerate()
+            .map(|(n, (path, name))| {
+                format!(
+                    "[[project]]\npath = '{}'\nname = \"{name}\"\nlast_opened = {}\n",
+                    path.display(),
+                    1_700_000_000 - n * 3600
+                )
+            })
+            .collect()
+    }
+
+    /// Clicks the node labelled `label` twice, a frame apart: a double-click.
+    fn double_click(harness: &mut Harness<'_, Test>, label: &str) {
+        harness.get_by_label(label).click();
+        harness.step();
+        // The harness's clock jumps by whole repaint delays between frames; a double-click is two clicks 50 ms
+        // apart.
+        let time = harness.ctx.input(|input| input.time);
+        harness.input_mut().time = Some(time + 0.05);
+        harness.get_by_label(label).click();
+        settle(harness);
+        harness.input_mut().time = None;
+    }
+
+    /// Studio past the splash on the projects page, asking `dialog` for files.
+    fn on_the_projects_page(path: PathBuf, dialog: &ScriptedDialog) -> Harness<'static, Test> {
+        let mut harness = past_the_splash(path);
+        harness.state_mut().studio.set_file_dialog(Box::new(dialog.clone()));
+        if harness.state().studio.screen() == Screen::SignIn {
+            harness.get_by_label("Continue offline").click();
+            settle(&mut harness);
+        }
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        harness
+    }
+
+    #[test]
+    fn continuing_offline_goes_to_the_projects_and_saves_nothing() {
+        let path = config("offline", None, None);
+        let mut harness = past_the_splash(path.clone());
+        assert_eq!(harness.state().studio.screen(), Screen::SignIn);
+        harness.get_by_label("Sign in to Metallic");
+        let sign_in = harness.get_by_role_and_label(Role::Button, "Sign in");
+        assert!(
+            egui_kittest::kittest::NodeT::accesskit_node(&sign_in).is_disabled(),
+            "there are no servers yet"
+        );
+        harness.get_by_label("Online services aren't available yet.");
+
+        harness.get_by_label("Continue offline").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        assert!(!harness.state().studio.settings().general.skip_sign_in);
+        assert!(!path.exists(), "nothing changed, nothing written");
+        // Opened again, it asks again.
+        assert_eq!(past_the_splash(path).state().studio.screen(), Screen::SignIn);
+    }
+
+    #[test]
+    fn dont_ask_again_is_saved_and_skips_sign_in_from_then_on() {
+        let path = config("dont-ask", None, None);
+        let mut harness = past_the_splash(path.clone());
+        harness.get_by_role_and_label(Role::CheckBox, "Don't ask again").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.settings().general.skip_sign_in);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("skip_sign_in = true"), "{text}");
+        harness.get_by_label("Continue offline").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+
+        assert_eq!(past_the_splash(path).state().studio.screen(), Screen::Projects);
+    }
+
+    #[test]
+    fn a_new_project_is_made_from_a_template_listed_and_opened() {
+        let path = config("new", Some("[general]\nskip_sign_in = true\n"), None);
+        let folder = path.with_file_name("Made here");
+        let dialog = ScriptedDialog::new([Some(folder.clone())]);
+        let mut harness = on_the_projects_page(path.clone(), &dialog);
+
+        // Primary+N opens the dialog, Cancel closes it.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::N);
+        settle(&mut harness);
+        assert!(harness.state().studio.projects().is_creating());
+        harness.get_by_label("Create a project");
+        harness.get_by_label("Cancel").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.projects().is_creating());
+
+        harness.get_by_label("New project").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::RadioButton, "Baseplate").click();
+        let name = harness.get_all_by_role(Role::TextInput).next().unwrap();
+        name.set_text_value_accesskit("Space Race");
+        settle(&mut harness);
+        harness.get_by_label("Browse\u{2026}").click();
+        settle(&mut harness);
+        assert_eq!(dialog.asked(), ["folder"]);
+        let made = folder.join("Space Race.mtproj");
+        harness.get_by_label(&format!("Makes {}", made.display()));
+
+        harness.get_by_label("Create").click();
+        settle(&mut harness);
+        let studio = &harness.state().studio;
+        assert_eq!(studio.screen(), Screen::Editor);
+        let opened = studio.open_project().unwrap().to_path_buf();
+        assert_eq!(opened, std::path::absolute(&made).unwrap());
+        let project = metallic_engine::metallic_project::Project::open(&opened).unwrap();
+        assert_eq!(project.manifest().name, "Space Race");
+        assert_eq!(studio.projects().list().entries()[0].path, opened);
+        harness.get_by_label("Space Race");
+        let list = std::fs::read_to_string(path.with_file_name(PROJECTS_FILE)).unwrap();
+        assert!(list.contains("name = \"Space Race\""), "{list}");
+
+        // Making it again refuses to replace the file, and says so in the dialog.
+        harness.get_by_label("Close the project").click();
+        settle(&mut harness);
+        harness.get_by_label("New project").click();
+        settle(&mut harness);
+        harness
+            .state_mut()
+            .studio
+            .projects_mut()
+            .set_new_project("Space Race", &folder);
+        harness.get_by_label("Create").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        harness.get_by_label_contains("a file is already there");
+    }
+
+    #[test]
+    fn adding_a_project_lists_and_opens_it_and_a_non_project_is_refused() {
+        let path = config("add", Some("[general]\nskip_sign_in = true\n"), None);
+        let dir = path.parent().unwrap().to_path_buf();
+        let project = make_project(&dir, "Added Game");
+        let not_a_project = dir.join("notes.mtproj");
+        std::fs::write(&not_a_project, "just text").unwrap();
+        let dialog = ScriptedDialog::new([None, Some(not_a_project), Some(project.clone())]);
+        let mut harness = on_the_projects_page(path.clone(), &dialog);
+
+        // Cancelled: nothing happens.
+        harness.get_by_label("Add project").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        assert!(harness.state().studio.projects().list().entries().is_empty());
+
+        // Not a project: refused, and said why.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::O);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        harness.get_by_label_contains("Could not add that project");
+        assert!(harness.state().studio.projects().list().entries().is_empty());
+
+        harness.get_by_label("Add project").click();
+        settle(&mut harness);
+        assert_eq!(dialog.asked(), ["project", "project", "project"]);
+        let studio = &harness.state().studio;
+        assert_eq!(studio.screen(), Screen::Editor);
+        assert_eq!(studio.open_project(), Some(project.as_path()));
+        let entry = &studio.projects().list().entries()[0];
+        assert_eq!(entry.name, "Added Game");
+        assert!(entry.last_opened.is_some());
+        let list = std::fs::read_to_string(path.with_file_name(PROJECTS_FILE)).unwrap();
+        assert!(list.contains("Added Game"), "{list}");
+    }
+
+    #[test]
+    fn a_missing_project_is_marked_and_does_not_open() {
+        let dir = std::env::temp_dir().join(format!("metallic-studio-app-missing-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let here = make_project_once(&dir, "Still Here");
+        let gone = dir.join("Gone Game.mtproj");
+        let path = config(
+            "missing",
+            Some("[general]\nskip_sign_in = true\n"),
+            Some(&list_of(&[(&gone, "Gone Game"), (&here, "Still Here")])),
+        );
+        let mut harness = on_the_projects_page(path, &ScriptedDialog::default());
+        harness.get_by_label("Gone Game");
+        harness.get_by_label("Still Here");
+        assert_eq!(harness.query_all_by_label("File missing").count(), 1);
+
+        double_click(&mut harness, "Gone Game");
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        harness.get_by_label_contains("is not at");
+        harness.get_by_label("Dismiss").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.projects().error().is_none());
+    }
+
+    /// A real project called `name` in `dir`, made the first time it is asked for.
+    fn make_project_once(dir: &Path, name: &str) -> PathBuf {
+        let path = dir.join(format!("{name}.mtproj"));
+        if path.is_file() { path } else { make_project(dir, name) }
+    }
+
+    #[test]
+    fn removing_a_project_takes_it_off_the_list_and_keeps_its_file() {
+        let dir = std::env::temp_dir().join(format!("metallic-studio-app-remove-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keep = make_project_once(&dir, "Keep Me");
+        let other = make_project_once(&dir, "Other");
+        let path = config(
+            "remove",
+            Some("[general]\nskip_sign_in = true\n"),
+            Some(&list_of(&[(&keep, "Keep Me"), (&other, "Other")])),
+        );
+        let mut harness = on_the_projects_page(path.clone(), &ScriptedDialog::default());
+        harness.get_by_label("Keep Me").click_secondary();
+        settle(&mut harness);
+        harness.get_by_label("Remove from list").click();
+        settle(&mut harness);
+
+        assert!(harness.query_by_label("Keep Me").is_none());
+        harness.get_by_label("Other");
+        assert!(keep.is_file(), "the file is left alone");
+        let list = std::fs::read_to_string(path.with_file_name(PROJECTS_FILE)).unwrap();
+        assert!(!list.contains("Keep Me") && list.contains("Other"), "{list}");
+    }
+
+    #[test]
+    fn opening_a_project_moves_to_the_editor_with_its_path() {
+        let dir = std::env::temp_dir().join(format!("metallic-studio-app-open-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = make_project_once(&dir, "First");
+        let second = make_project_once(&dir, "Second");
+        let path = config(
+            "open",
+            Some("[general]\nskip_sign_in = true\n"),
+            Some(&list_of(&[(&first, "First"), (&second, "Second")])),
+        );
+        let mut harness = on_the_projects_page(path.clone(), &ScriptedDialog::default());
+
+        // A click selects.
+        harness.get_by_label("Second").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.projects().selected(), Some(second.as_path()));
+
+        // A double-click opens.
+        double_click(&mut harness, "Second");
+        let studio = &harness.state().studio;
+        assert_eq!(studio.screen(), Screen::Editor);
+        assert_eq!(studio.open_project(), Some(second.as_path()));
+        harness.get_by_label(&second.display().to_string());
+        // It moved to the front of the list, with the time.
+        let entries = harness.state().studio.projects().list().entries();
+        assert_eq!(entries[0].path, second);
+        assert!(entries[0].last_opened.unwrap() > 1_700_000_000);
+
+        // Enter opens the selected card.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        harness.get_by_label("First").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.projects().selected(), Some(first.as_path()));
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Editor);
+        assert_eq!(harness.state().studio.open_project(), Some(first.as_path()));
+    }
+
+    #[test]
+    fn the_templates_view_starts_a_new_project() {
+        let path = config("templates", Some("[general]\nskip_sign_in = true\n"), None);
+        let mut harness = on_the_projects_page(path, &ScriptedDialog::default());
+        harness.get_by_role_and_label(Role::Tab, "Templates").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.projects().view(), View::Templates);
+        harness.get_by_label("3D template").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.projects().is_creating());
+        harness.get_by_role_and_label(Role::RadioButton, "Baseplate");
+    }
+
+    #[test]
+    fn a_corrupt_projects_list_is_kept_as_bak_and_the_list_starts_empty() {
+        let path = config(
+            "corrupt-list",
+            Some("[general]\nskip_sign_in = true\n"),
+            Some("[[project]\npath = "),
+        );
+        let list = path.with_file_name(PROJECTS_FILE);
+        let harness = past_the_splash(path);
+        assert!(list.with_extension("toml.bak").is_file());
+        assert!(!list.exists());
+        assert!(harness.state().studio.projects().list().entries().is_empty());
+        harness.get_by_label("The projects list was reset");
+        harness.get_by_label_contains("projects.toml.bak");
+        harness.get_by_label("No projects yet");
+    }
+
+    /// Runs `studio` for `frames` frames of `size` points at `pixels_per_point`, drawn by egui-wgpu on the engine's
+    /// offscreen device as the shell draws them, calling `before(studio, frame)` before each. Returns the last frame
+    /// as RGBA rows.
+    fn render_offscreen(
+        studio: &mut Studio,
+        size: egui::Vec2,
+        pixels_per_point: f32,
+        frames: usize,
+        mut before: impl FnMut(&mut Studio, usize),
+    ) -> (u32, u32, Vec<u8>) {
+        use metallic_engine::metallic_render::{ContextOptions, RenderContext, wgpu};
+
+        let context = RenderContext::new_offscreen(&ContextOptions::default()).expect("an offscreen device");
+        let (device, queue) = (context.device(), context.queue());
+        let ctx = egui::Context::default();
+        fonts::install(&ctx);
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut painter = egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default());
+        let (width, height) = (
+            (size.x * pixels_per_point).round() as u32,
+            (size.y * pixels_per_point).round() as u32,
+        );
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio screenshot"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let start = Instant::now();
+        for frame in 0..frames {
+            before(studio, frame);
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                time: Some(frame as f64 / 60.0),
+                ..Default::default()
+            };
+            input
+                .viewports
+                .entry(egui::ViewportId::ROOT)
+                .or_default()
+                .native_pixels_per_point = Some(pixels_per_point);
+            // The splash shows in the first frame, and its minimum time is out by the second.
+            let now = match frame {
+                0 => start,
+                _ => start + splash::MIN_TIME + Duration::from_millis(16 * frame as u64),
+            };
+            let mut output = ctx.run_ui(input, |ui| studio.ui(ui, now));
+            let mut textures = std::mem::take(&mut output.textures_delta);
+            for (id, deltas) in textures.set.drain() {
+                for delta in &deltas {
+                    painter.update_texture(device, queue, id, delta);
+                }
+            }
+            let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
+            let screen = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [width, height],
+                pixels_per_point: output.pixels_per_point,
+            };
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let mut buffers = painter.update_buffers(device, queue, &mut encoder, &jobs, &screen);
+            let clear = egui::Rgba::from(studio.clear_color());
+            {
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("studio screenshot"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: f64::from(clear.r()),
+                                    g: f64::from(clear.g()),
+                                    b: f64::from(clear.b()),
+                                    a: f64::from(clear.a()),
+                                }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    })
+                    .forget_lifetime();
+                painter.render(&mut pass, &jobs, &screen);
+            }
+            buffers.push(encoder.finish());
+            context.submit(buffers);
+            for id in textures.free.drain() {
+                painter.free_texture(&id);
+            }
+        }
+
+        let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio screenshot readback"),
+            size: u64::from(padded * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            target.size(),
+        );
+        context.submit(Some(encoder.finish()));
+        buffer.map_async(wgpu::MapMode::Read, .., |result| result.expect("map the readback"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("wait for the readback");
+        let data = buffer.get_mapped_range(..).expect("mapped");
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for row in data.chunks_exact(padded as usize) {
+            pixels.extend_from_slice(&row[..(width * 4) as usize]);
+        }
+        (width, height, pixels)
+    }
+
+    /// Writes RGBA rows to `path` as a PNG.
+    fn write_png(path: &Path, (width, height, pixels): (u32, u32, Vec<u8>)) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::High);
+        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+    }
+
+    /// Studio over `steps`, the steps done, so its second frame is past the splash.
+    fn studio_after_startup(steps: Vec<Step>) -> Studio {
+        let mut studio = Studio::new(Startup::spawn(steps).unwrap(), None, false);
+        wait(&mut studio.startup);
+        studio
+    }
+
+    /// The screenshots in `docs/screenshots` (`cargo test -p metallic_studio -- --ignored screenshots`). Offscreen:
+    /// no window, no real input, and the scripted file dialog.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshots_of_the_sign_in_and_projects_screens() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let size = egui::vec2(1280.0, 800.0);
+
+        let path = config("shot-sign-in", None, None);
+        let mut studio = studio_after_startup(steps_reading(path));
+        let shot = render_offscreen(&mut studio, size, 1.25, 40, |_, _| {});
+        assert_eq!(studio.screen(), Screen::SignIn);
+        write_png(&out.join("215-sign-in.png"), shot);
+
+        let dir = std::env::temp_dir().join(format!("metallic-studio-shot-projects-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let samples = [
+            ("Space Race", 2 * 3600, true),
+            ("Obby Tower", 26 * 3600, true),
+            ("Kart Prototype", 4 * 86_400, true),
+            ("Old Jam Game", 70 * 86_400, false),
+            ("Lighting Tests", 200 * 86_400, true),
+        ];
+        let mut list = String::new();
+        for (name, ago, exists) in samples {
+            let file = if exists {
+                make_project_once(&dir, name)
+            } else {
+                dir.join(format!("{name}.mtproj"))
+            };
+            list.push_str(&format!(
+                "[[project]]\npath = '{}'\nname = \"{name}\"\nlast_opened = {}\n",
+                file.display(),
+                now - ago
+            ));
+        }
+        let path = config("shot-projects", Some("[general]\nskip_sign_in = true\n"), Some(&list));
+        let mut studio = studio_after_startup(steps_reading(path));
+        let selected = dir.join("Obby Tower.mtproj");
+        let shot = render_offscreen(&mut studio, size, 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.projects_mut().select(selected.clone());
+            }
+        });
+        assert_eq!(studio.screen(), Screen::Projects);
+        write_png(&out.join("215-projects.png"), shot);
+
+        let shot = render_offscreen(&mut studio, size, 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                let projects = studio.projects_mut();
+                projects.new_project(None);
+                projects.set_new_project("Space Race 2", Path::new("C:/Users/me/Documents/Metallic"));
+            }
+        });
+        assert!(studio.projects().is_creating());
+        write_png(&out.join("215-new-project.png"), shot);
     }
 }

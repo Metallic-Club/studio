@@ -4,6 +4,7 @@
 //! The window opens as the splash (720 × 420, borderless, centred, hidden until its first frame is drawn), and on
 //! [`WindowRequest::BecomeMainWindow`] the same window becomes the main one.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -11,6 +12,7 @@ use egui::{ColorImage, ViewportId};
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use metallic_engine::graphics::pipeline_cache_dir;
 use metallic_engine::metallic_platform::AppId;
+use metallic_engine::metallic_project::PROJECT_EXTENSION;
 use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderSurface, wgpu};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -21,6 +23,7 @@ use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
 use super::startup::{Startup, studio_steps};
 use super::{Studio, WindowRequest, native, splash};
+use crate::projects::FileDialog;
 use crate::theme::tokens::radius;
 use crate::theme::{fonts, rounded_outline};
 use crate::{STUDIO_APP_ID, StudioError, emblem};
@@ -156,7 +159,10 @@ impl StudioWindow {
         // The mark at its size on the splash, in the window's pixels, so it is drawn one texel to a pixel.
         let mark = emblem::render((splash::EMBLEM * window.scale_factor() as f32).round() as u32);
         let image = ColorImage::from_rgba_unmultiplied([mark.width as usize, mark.height as usize], &mark.rgba);
-        let studio = Studio::new(startup, Some(image), reduce_motion);
+        let mut studio = Studio::new(startup, Some(image), reduce_motion);
+        studio.set_file_dialog(Box::new(NativeDialog {
+            window: Arc::clone(&window),
+        }));
 
         let mut this = Self {
             window,
@@ -290,6 +296,32 @@ impl StudioWindow {
         }
         window.focus_window();
         window.request_redraw();
+    }
+}
+
+/// The system's file dialogs (`rfd`), in front of Studio's window. Each blocks until the user answers, as a modal
+/// dialog does; the window is redrawn when it closes.
+struct NativeDialog {
+    window: Arc<Window>,
+}
+
+impl FileDialog for NativeDialog {
+    fn pick_project(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Add a project")
+            .add_filter("Metallic project", &[PROJECT_EXTENSION])
+            .set_parent(&*self.window)
+            .pick_file()
+    }
+
+    fn pick_folder(&mut self, start: Option<&Path>) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Choose a folder for the project")
+            .set_parent(&*self.window);
+        if let Some(start) = start {
+            dialog = dialog.set_directory(start);
+        }
+        dialog.pick_folder()
     }
 }
 

@@ -104,6 +104,9 @@ egui-winit = { version = "0.37.0", default-features = false, features = ["x11", 
 egui-wgpu = { version = "0.37.0", default-features = false }
 # Studio's UI tests (dev-dependency): feeds input to egui and queries its widgets through AccessKit, no GPU.
 egui_kittest = { version = "0.37.0", default-features = false }
+# Studio's native file dialogs (pick a `.mtproj`, pick a folder). Desktop only, like egui. On Linux it asks the XDG
+# desktop portal over D-Bus (no GTK); on Windows and macOS it shows the system's own dialogs. MIT.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 # Windows-only dev-dependency of `metallic_render`'s allocation tests, which keep the Direct3D 12 debug layer's
 # messages away from wgpu-hal's message handler (crates/render/tests/no_alloc.rs, #125). Already in the tree via wgpu.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }

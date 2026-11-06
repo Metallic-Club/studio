@@ -581,7 +581,8 @@ fn row(ui: &mut Ui, entry: &Entry, settings: &mut StudioSettings) {
 }
 
 /// A category in the list: muted text, or for the selected one a surface with the accent's 3 × 19 bar on its left.
-fn category_item(ui: &mut Ui, label: &str, selected: bool) -> Response {
+/// The projects page's rail uses it too.
+pub(crate) fn category_item(ui: &mut Ui, label: &str, selected: bool) -> Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::CONTROL), Sense::click());

@@ -5,12 +5,14 @@ use std::collections::HashMap;
 
 use super::binding::{Binding, KeyKind, Trigger};
 
-/// Where a command applies. Contexts nest: Global, then Editor, then the panel that has focus. A command applies in
-/// its contexts and every context inside them, and the most specific binding wins.
+/// Where a command applies. Contexts nest: Global, then the projects page or the Editor, then the panel that has
+/// focus. A command applies in its contexts and every context inside them, and the most specific binding wins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Context {
     /// Anywhere in Studio.
     Global,
+    /// The projects page, with no dialog over it.
+    Projects,
     /// With a project open.
     Editor,
     /// The 3D viewport has focus (or, for navigation, the pointer is over it).
@@ -27,8 +29,9 @@ pub enum Context {
 
 impl Context {
     /// Every context, outermost first.
-    pub const ALL: [Context; 7] = [
+    pub const ALL: [Context; 8] = [
         Context::Global,
+        Context::Projects,
         Context::Editor,
         Context::Viewport,
         Context::Explorer,
@@ -41,14 +44,14 @@ impl Context {
     pub fn parent(self) -> Option<Context> {
         match self {
             Context::Global => None,
-            Context::Editor => Some(Context::Global),
+            Context::Projects | Context::Editor => Some(Context::Global),
             Context::Viewport | Context::Explorer | Context::Properties | Context::Assets | Context::Output => {
                 Some(Context::Editor)
             }
         }
     }
 
-    /// How deep it is: Global is 0, Editor 1, a panel 2. Deeper is more specific.
+    /// How deep it is: Global is 0, Projects and Editor 1, a panel 2. Deeper is more specific.
     pub fn depth(self) -> u8 {
         self.parent().map_or(0, |parent| parent.depth() + 1)
     }
@@ -74,6 +77,7 @@ impl Context {
     pub fn label(self) -> &'static str {
         match self {
             Context::Global => "Global",
+            Context::Projects => "Projects",
             Context::Editor => "Editor",
             Context::Viewport => "Viewport",
             Context::Explorer => "Explorer",
@@ -141,6 +145,12 @@ pub mod ids {
     pub const SETTINGS_OPEN: &str = "settings.open";
     /// Closes the open project.
     pub const PROJECT_CLOSE: &str = "project.close";
+    /// Opens the project selected on the projects page.
+    pub const PROJECTS_OPEN: &str = "projects.open";
+    /// Starts a new project from a template.
+    pub const PROJECTS_NEW: &str = "projects.new";
+    /// Adds an existing project file to the list.
+    pub const PROJECTS_ADD: &str = "projects.add";
     /// Flies the editor camera forward while held.
     pub const FLY_FORWARD: &str = "viewport.fly_forward";
     /// Flies the editor camera back while held.
@@ -216,6 +226,36 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Close project",
             "Project",
             "Closes the project and goes back to your projects.",
+        )
+    },
+    Command {
+        contexts: &[Context::Projects],
+        defaults: &["Enter"],
+        ..Command::new(
+            ids::PROJECTS_OPEN,
+            "Open project",
+            "Projects",
+            "Opens the project selected on the projects page.",
+        )
+    },
+    Command {
+        contexts: &[Context::Projects],
+        defaults: &["Primary+N"],
+        ..Command::new(
+            ids::PROJECTS_NEW,
+            "New project",
+            "Projects",
+            "Starts a new project from a template.",
+        )
+    },
+    Command {
+        contexts: &[Context::Projects],
+        defaults: &["Primary+O"],
+        ..Command::new(
+            ids::PROJECTS_ADD,
+            "Add project",
+            "Projects",
+            "Adds a project file you already have to the list, and opens it.",
         )
     },
     fly(
@@ -371,6 +411,12 @@ mod tests {
         assert!(
             !Context::Viewport.overlaps(Context::Explorer),
             "sibling panels never clash"
+        );
+        assert_eq!(Context::Projects.depth(), 1);
+        assert!(Context::Projects.overlaps(Context::Global));
+        assert!(
+            !Context::Projects.overlaps(Context::Viewport),
+            "the projects page and the editor are never shown together"
         );
     }
 

@@ -286,10 +286,20 @@ pub enum ButtonKind {
 
 /// A button of `kind` labelled `label`.
 pub fn button(ui: &mut egui::Ui, kind: ButtonKind, label: &str) -> egui::Response {
+    button_of_width(ui, kind, label, 0.0)
+}
+
+/// A button of `kind` labelled `label`, as wide as the space it is in (a card's stacked actions).
+pub fn wide_button(ui: &mut egui::Ui, kind: ButtonKind, label: &str) -> egui::Response {
+    let width = ui.available_width();
+    button_of_width(ui, kind, label, width)
+}
+
+fn button_of_width(ui: &mut egui::Ui, kind: ButtonKind, label: &str, width: f32) -> egui::Response {
     let p = current_colors(ui.ctx()).palette;
     let (fill, hover, ink) = match kind {
         ButtonKind::Primary => (p.action, p.action_hover, p.action_text),
-        ButtonKind::Secondary => return ui.add(egui::Button::new(label).min_size(vec2(0.0, size::CONTROL))),
+        ButtonKind::Secondary => return ui.add(egui::Button::new(label).min_size(vec2(width, size::CONTROL))),
         ButtonKind::Quiet => (Color32::TRANSPARENT, p.surface_hover, p.muted),
         ButtonKind::Play => (tokens::play::FILL, tokens::play::HOVER, tokens::play::TEXT),
     };
@@ -303,7 +313,7 @@ pub fn button(ui: &mut egui::Ui, kind: ButtonKind, label: &str) -> egui::Respons
             .fill(if hovered { hover } else { fill })
             .stroke(Stroke::NONE)
             .corner_radius(CornerRadius::same(radius::ITEM))
-            .min_size(vec2(0.0, size::CONTROL)),
+            .min_size(vec2(width, size::CONTROL)),
     )
 }
 

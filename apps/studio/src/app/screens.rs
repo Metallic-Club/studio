@@ -1,5 +1,5 @@
-//! The screens after the splash. Placeholders for now: a section label, a title, a line and the button that goes on.
-//! Their own issues replace each one (sign-in, the projects page, the editor).
+//! Placeholder screens: a section label, a title, a few lines and the button that goes on. The Editor screen is one
+//! until the editor issue (#216) replaces it.
 
 use egui::{Align, Layout, RichText};
 
@@ -7,7 +7,13 @@ use crate::theme::tokens::{space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
 /// Draws a placeholder screen filling `ui`. Returns its button's response.
-pub(crate) fn placeholder(ui: &mut egui::Ui, section: &str, title: &str, line: &str, action: &str) -> egui::Response {
+pub(crate) fn placeholder(
+    ui: &mut egui::Ui,
+    section: &str,
+    title: &str,
+    lines: &[&str],
+    action: &str,
+) -> egui::Response {
     let p = current_colors(ui.ctx()).palette;
     ui.painter().rect_filled(ui.max_rect(), 0.0, p.bg);
     ui.with_layout(Layout::top_down(Align::Center), |ui| {
@@ -26,7 +32,9 @@ pub(crate) fn placeholder(ui: &mut egui::Ui, section: &str, title: &str, line: &
                 .color(p.text),
         );
         ui.add_space(space::S3);
-        ui.label(RichText::new(line).size(text::BODY_LG).color(p.muted));
+        for line in lines {
+            ui.label(RichText::new(*line).size(text::BODY_LG).color(p.muted));
+        }
         ui.add_space(space::S8);
         button(ui, ButtonKind::Primary, action)
     })
