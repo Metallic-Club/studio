@@ -90,6 +90,20 @@ gltf = { version = "1.4", default-features = false, features = ["utils"] }
 # Decodes JPEG textures (`metallic_project`'s asset decoding, #189). Pure Rust; its SIMD paths are chosen at run time
 # on x86 and are plain NEON on ARM.
 zune-jpeg = "0.5"
+# Studio's interface (ADR 0009): egui 0.37, built for wgpu 30, drawn by `egui-wgpu` on the engine's device and fed
+# by `egui-winit` from Studio's own winit loop (not eframe, which owns the device and the loop). Desktop only: these
+# are Studio's alone, and the Android and iOS checks exclude it. `default_fonts` is off: Studio bundles its own OFL
+# fonts (apps/studio/assets/fonts), and egui's include one under the Ubuntu Font Licence, which deny.toml rejects.
+egui = { version = "0.37.0", default-features = false }
+# Without its defaults, which turn on winit's (the titled Wayland decorations, RUSTSEC-2026-0192), opening links,
+# and the system clipboard (arboard, whose Windows backend `clipboard-win` is BSL-1.0, not on deny.toml's list).
+# egui keeps copied text inside Studio until a later issue decides on the system clipboard.
+egui-winit = { version = "0.37.0", default-features = false, features = ["x11", "wayland"] }
+# Without its defaults (wgpu's default features, WebGL). Only `egui_wgpu::Renderer` is used: the surface is the
+# engine's `RenderSurface`.
+egui-wgpu = { version = "0.37.0", default-features = false }
+# Studio's UI tests (dev-dependency): feeds input to egui and queries its widgets through AccessKit, no GPU.
+egui_kittest = { version = "0.37.0", default-features = false }
 # Windows-only dev-dependency of `metallic_render`'s allocation tests, which keep the Direct3D 12 debug layer's
 # messages away from wgpu-hal's message handler (crates/render/tests/no_alloc.rs, #125). Already in the tree via wgpu.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }

@@ -29,7 +29,8 @@ Two references were studied:
   that draws into the window, so it cannot carry over to our engine. Its keymap (one action table with stable ids,
   override-only storage, a key-capture flow) is a good start with known weaknesses, listed under "Keybinds".
 - **The archive** (the owner's earlier Studio): egui 0.37 / eframe on **wgpu 30**, our version. It has a specified
-  splash, design tokens and three themes (Graphite, Titanium, Light) with OFL fonts. It never built docking, sign-in,
+  splash, design tokens and three themes (Graphite, Titanium, Light) with OFL fonts. Its splash layout is kept; its
+  look is replaced by the website's (see Theme). It never built docking, sign-in,
   a launcher or file association.
 
 ## Decision
@@ -54,10 +55,11 @@ only when a second app needs it.
 One window, one state machine: **Splash → Sign in → Projects → Editor**. Opening a `.mtproj` from the command line goes
 **Splash → Editor**.
 
-- **Splash** (the archive's design, recreated, not copied; the archive is the owner's own work, so its tokens and
-  placeholder emblem may be reused). A 720×420 borderless, centred window with one chamfered corner. Titanium panel
-  with the emblem on the left; a dark body with the two-line "Metallic / Studio" wordmark, the version line, the real
-  step name, "n of N" and a 2 px accent bar. It fades in, and it is always Graphite (shown before settings load). Its
+- **Splash** (the archive's layout, recreated, not copied, and restyled with the website's tokens; see Theme). A
+  720×420 borderless, centred window with 12 px rounded corners. A light neutral panel with the Metallic mark (the
+  website's `favicon.svg`, also the window icon) on the left; a dark body with the two-line "Metallic / Studio"
+  wordmark, the version line, the real step name, "n of N" and a 2 px accent bar. It fades in, and it is always the
+  dark mode with the default accent (shown before settings load). Its
   steps are **real work only**: settings and fonts, the render device, the first-frame pipelines (#86), the recent
   projects list. It stays at least 700 ms so it never flashes. Then the same window becomes the main window, centred
   where the splash was.
@@ -90,13 +92,34 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
 
 ### Theme
 
-- **Design tokens in one Rust module:** colours, spacing (2–96), radii (3/4/6/10), chamfers (6/10/14), row height 24,
-  control height 32, motion 0.09–0.32 s. Three themes: **Graphite** (the default: bg `#16151B`, panel `#1C1B22`,
-  text `#E6E4EA`, accent `#9D8BE0`, …), Titanium and Light. A theme becomes a full `egui::Style`, re-applied only
-  when it changes.
-- **Fonts:** Archivo, JetBrains Mono and Noto Sans (all OFL 1.1), bundled with their licence files. egui's default
-  fonts are replaced, because one of them is under a licence `deny.toml` rejects. Phosphor icons (MIT).
-- **Reduced motion:** a setting turns off fades and eases.
+The reference is the **Metallic website** (`Metallic-Club/website`: `src/design.css`, which overrides
+`src/reference.css`, and `src/themes.js`), so Studio and the site look like one product. It replaces the archive's
+Graphite look (decided by the owner on 2026-11-06, in #211).
+
+- **Design tokens in one Rust module** (`apps/studio/src/theme/tokens.rs`). A look becomes a full `egui::Style`,
+  re-applied only when it (or, in System mode, the system's mode) changes.
+- **Dark** (the default): bg `#161616`, header `#1d1d1d`, panel `#1b1b1b`, surface `#262626`, surface-hover
+  `#333333`, input `#1c1c1c`, border `#414141`; text `#f6f6f6`, muted `#c1c1c1`, subtle `#adadad`.
+- **Light:** bg `#f5f5f5`, header and surface `#fff`, surface-hover `#efefef`, input `#f7f7f7`, border `#cfcfcf`;
+  text `#262626`, muted `#565656`, subtle `#646464`.
+- **Modes:** Dark, Light and System (follows the OS, dark when it says nothing). A **high-contrast** option makes
+  muted and subtle text the body colour and the border `#898989` (dark) or `#6d6d6d` (light).
+- **Accent, chosen by the user:** orange `#ff9b54` by default (hover `#ffb47f`, light mode `#a34506`), or blue
+  `#82b5ff`, violet `#ba9aff`, mint `#72d9b1` or rose `#ff9bb5` (their hovers and light-mode values as in
+  `themes.js`); ink on an accent fill `#24160d`. Used sparingly: the 3 px focus outline, the active tab's 3 px
+  underline, the selected list item's 3×19 px left bar, text selection (accent fill, ink text), progress. **Never a
+  button's fill.**
+- **Buttons:** primary is neutral (`#ebebeb` with `#242424` text, white on hover; `#303030`/white in light mode);
+  secondary is a surface with a 1 px border that goes to subtle on hover; quiet is transparent with muted text; "play"
+  (run) is green `#39b878` (hover `#53d08f`, text `#0d281a`). Disabled is 48 % opacity.
+- **Shape:** **no chamfered corners anywhere.** Radii 8 (buttons, items), 9 (inputs), 12 (panels, cards, the
+  splash), 15 (dialogs); 1 px borders. Shadows only on what floats: menus and popovers (`0 8 24 #0005`) and dialogs.
+- **Type:** **Inter** (OFL 1.1) for the interface: heavy headings with tight negative tracking, body 14–15 px,
+  controls 14 px (weight 650 once a variable Inter is bundled), uppercase 10–11 px section labels with +1.3 px
+  tracking. JetBrains Mono (OFL 1.1) for code. Phosphor icons (MIT). All bundled with their licence files. egui's
+  default fonts are replaced, because one of them is under a licence `deny.toml` rejects.
+- **Motion:** 0.12–0.2 s, eased. **Reduced motion** (a setting, and the OS's switch where Studio can read it) turns
+  off fades and eases.
 
 ### Settings
 
