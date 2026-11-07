@@ -1190,6 +1190,17 @@ mod tests {
             Accent::Blue.colors().light
         );
 
+        // #263: the custom colour, after the swatches, shows the palette and does nothing until there is a picker.
+        let custom = harness.get_by_role_and_label(Role::Button, "Custom colour");
+        assert!(egui_kittest::kittest::NodeT::accesskit_node(&custom).is_disabled());
+        let blue = harness
+            .get_by_role_and_label(Role::RadioButton, Accent::Blue.label())
+            .rect();
+        assert!(custom.rect().left() > blue.right(), "after the swatches");
+        custom.click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.settings().appearance.accent, Accent::Blue);
+
         harness.get_by_role_and_label(Role::CheckBox, "High contrast").click();
         settle(&mut harness);
         assert_eq!(harness.state().studio.theme.colors().palette.muted, tokens::LIGHT.text);

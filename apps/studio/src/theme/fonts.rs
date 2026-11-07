@@ -51,6 +51,8 @@ pub mod icon {
     pub const WARNING: char = '\u{E193}';
     /// `x`: close, dismiss.
     pub const X: char = '\u{E1B2}';
+    /// `palette`: a colour of your own.
+    pub const PALETTE: char = '\u{E1DD}';
 }
 
 /// Inter at the axis values `coords` names.
@@ -197,7 +199,7 @@ mod tests {
     #[test]
     fn the_icons_are_in_lucide() {
         with_fonts(|ui| {
-            for icon in [icon::GEAR, icon::SEARCH, icon::WARNING, icon::X] {
+            for icon in [icon::GEAR, icon::SEARCH, icon::WARNING, icon::X, icon::PALETTE] {
                 let has = ui.ctx().fonts_mut(|fonts| fonts.has_glyph(&named(ICONS, 16.0), icon));
                 assert!(has, "U+{:04X}", icon as u32);
             }
