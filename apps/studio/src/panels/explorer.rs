@@ -180,7 +180,7 @@ impl Panel for Explorer {
     }
 
     fn zone(&self) -> Zone {
-        Zone::Left
+        Zone::Right
     }
 
     fn context(&self) -> Context {

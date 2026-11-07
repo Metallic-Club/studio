@@ -207,11 +207,86 @@ fn areas(tree: &Tree<PanelId>) -> Vec<(TileId, Rect)> {
     areas
 }
 
-/// Whether `at` is on a tab bar of `tree` (`tab_bar` high), where egui_tiles' own drop reorders and joins tabs.
-pub(crate) fn on_tab_bar(tree: &Tree<PanelId>, at: Pos2, tab_bar: f32) -> bool {
-    areas(tree)
-        .into_iter()
-        .any(|(_, area)| Rect::from_min_max(area.min, pos2(area.right(), area.top() + tab_bar)).contains(at))
+/// A place in a tab bar where a dragged tab goes when dropped: the dock moves it there itself, so a drop on a tab bar
+/// always joins that bar, however close the bar is to the edge of a split (egui_tiles' own nearest-place guess would
+/// split there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TabDrop {
+    /// The tab bar's container.
+    pub container: TileId,
+    /// The bar.
+    pub bar: Rect,
+    /// The place among its tabs other than the dragged one.
+    pub index: usize,
+    /// Where that place is along the bar: the marker's x.
+    pub x: f32,
+}
+
+/// The drop into the tab bar (`tab_bar` high) under `at`, from where the last frame drew each tab (`tabs`). `None`
+/// off the tab bars, and over the bar of a group being dragged or inside one.
+pub(crate) fn tab_drop(
+    tree: &Tree<PanelId>,
+    dragged: TileId,
+    at: Pos2,
+    tab_bar: f32,
+    tabs: &[(TileId, Rect)],
+) -> Option<TabDrop> {
+    let (container, bar) = areas(tree).into_iter().find_map(|(container, area)| {
+        let bar = Rect::from_min_max(area.min, pos2(area.right(), area.top() + tab_bar));
+        bar.contains(at).then_some((container, bar))
+    })?;
+    if is_within(tree, container, dragged) {
+        return None;
+    }
+    let Some(Tile::Container(Container::Tabs(bar_tabs))) = tree.tiles.get(container) else {
+        return None;
+    };
+    let others: Vec<Rect> = bar_tabs
+        .children
+        .iter()
+        .filter(|&&child| child != dragged)
+        .filter_map(|child| tabs.iter().find(|(tile, _)| tile == child).map(|(_, rect)| *rect))
+        .collect();
+    let index = others.iter().filter(|rect| rect.center().x < at.x).count();
+    let x = match others.get(index) {
+        Some(rect) => rect.left(),
+        None => others.last().map_or(bar.left(), |rect| rect.right()),
+    };
+    Some(TabDrop {
+        container,
+        bar,
+        index,
+        x,
+    })
+}
+
+/// Moves `dragged` into `drop`'s tab bar at its place, in front. Nothing happens when that would put a group inside
+/// itself.
+pub(crate) fn drop_into_tabs(tree: &mut Tree<PanelId>, dragged: TileId, drop: &TabDrop) {
+    if is_within(tree, drop.container, dragged) {
+        return;
+    }
+    for (_, tile) in tree.tiles.iter_mut() {
+        if let Tile::Container(parent) = tile {
+            parent.remove_child(dragged);
+        }
+    }
+    if let Some(Tile::Container(Container::Tabs(tabs))) = tree.tiles.get_mut(drop.container) {
+        let index = drop.index.min(tabs.children.len());
+        tabs.children.insert(index, dragged);
+        tabs.set_active(dragged);
+    }
+    layout::tidy(tree);
+}
+
+/// Draws where a tab dropped now would go in its bar: the bar tinted, and an accent marker at the place.
+pub(crate) fn paint_tab_drop(painter: &Painter, colors: &Colors, drop: &TabDrop) {
+    painter.rect_filled(drop.bar, CornerRadius::ZERO, colors.accent.gamma_multiply(0.18));
+    let marker = Rect::from_min_max(
+        pos2(drop.x - 1.0, drop.bar.top()),
+        pos2(drop.x + 1.0, drop.bar.bottom()),
+    );
+    painter.rect_filled(marker, CornerRadius::ZERO, colors.accent);
 }
 
 /// The guides to show while `dragged` is over `at`: over the innermost dock area there, unless docking into it could

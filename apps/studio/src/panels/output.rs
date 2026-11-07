@@ -168,6 +168,11 @@ impl Panel for Output {
         Zone::Bottom
     }
 
+    fn in_front_by_default(&self) -> bool {
+        // Assets and Output share the bottom bar; Output is the one open (#256).
+        true
+    }
+
     fn context(&self) -> Context {
         Context::Output
     }

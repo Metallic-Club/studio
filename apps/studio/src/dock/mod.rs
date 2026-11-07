@@ -37,8 +37,10 @@ pub enum Zone {
     Centre,
     /// The left column.
     Left,
-    /// The right column.
+    /// The right column's upper part (the Explorer, #256).
     Right,
+    /// The right column's lower part, under [`Zone::Right`] (Properties, #256).
+    RightBelow,
     /// Along the bottom, under the centre.
     Bottom,
 }
@@ -66,6 +68,11 @@ pub trait Panel: Sync {
     /// Whether the default layout has it.
     fn open_by_default(&self) -> bool {
         true
+    }
+    /// Whether the default layout shows it in front of the other tabs of its zone (Output, before Assets: #256).
+    /// Otherwise the zone's first panel is in front.
+    fn in_front_by_default(&self) -> bool {
+        false
     }
     /// Whether Studio alone opens and closes it (the Game tab, while a game runs): it is not in the View menu, and
     /// the layout is saved without it.
@@ -107,6 +114,8 @@ pub struct Dock {
     focus: DockFocus,
     /// Where the pointer last was: a release can come with the pointer leaving, and a drop needs the place.
     pointer: Option<Pos2>,
+    /// Each tab as the last frame drew it: where a dragged tab goes in the bar it is over.
+    tab_rects: Vec<(TileId, Rect)>,
 }
 
 impl std::fmt::Debug for Dock {
@@ -136,6 +145,7 @@ impl Dock {
             path: None,
             focus: DockFocus::default(),
             pointer: None,
+            tab_rects: Vec::new(),
         }
     }
 
@@ -149,6 +159,7 @@ impl Dock {
             path: Some(path),
             focus: DockFocus::default(),
             pointer: None,
+            tab_rects: Vec::new(),
         }
     }
 
@@ -221,9 +232,29 @@ impl Dock {
                 let parent = tiles.parent_of(tile)?;
                 matches!(tiles.get(parent), Some(Tile::Container(Container::Tabs(_)))).then_some(parent)
             });
+        // The right column's two parts stack: a panel of one part goes over or under the other's tab bar.
+        let stack = match panel.zone() {
+            Zone::Right => Some((Zone::RightBelow, guides::Side::Top)),
+            Zone::RightBelow => Some((Zone::Right, guides::Side::Bottom)),
+            _ => None,
+        }
+        .and_then(|(zone, side)| {
+            let bar = self
+                .panels
+                .iter()
+                .filter(|other| other.zone() == zone)
+                .find_map(|other| tiles.find_pane(&PanelId::of(*other)))
+                .and_then(|tile| tiles.parent_of(tile))?;
+            Some((bar, side))
+        });
         if let Some(Tile::Container(Container::Tabs(tabs))) = neighbour.and_then(|parent| tiles.get_mut(parent)) {
             tabs.add_child(pane);
             tabs.set_active(pane);
+        } else if neighbour.is_none()
+            && let Some((bar, side)) = stack
+        {
+            guides::dock(&mut self.tree, pane, bar, side);
+            return;
         } else {
             let tabs = tiles.insert_tab_tile(vec![pane]);
             self.tree.root = Some(match self.tree.root {
@@ -232,7 +263,7 @@ impl Dock {
                     let tiles = &mut self.tree.tiles;
                     match panel.zone() {
                         Zone::Left => layout::split(tiles, LinearDir::Horizontal, &[(tabs, 1.0), (root, 3.0)]),
-                        Zone::Right | Zone::Centre => {
+                        Zone::Right | Zone::RightBelow | Zone::Centre => {
                             layout::split(tiles, LinearDir::Horizontal, &[(root, 3.0), (tabs, 1.0)])
                         }
                         Zone::Bottom => layout::split(tiles, LinearDir::Vertical, &[(root, 3.0), (tabs, 1.0)]),
@@ -303,11 +334,13 @@ impl Dock {
         }
         // What is dragged and where, from the last frame's layout, before the tree moves anything this frame.
         let drag = self.tree.dragged_id(&ctx).zip(self.pointer);
-        let on_tab_bar = drag.is_some_and(|(_, at)| guides::on_tab_bar(&self.tree, at, TAB_HEIGHT));
+        let tab_drop =
+            drag.and_then(|(dragged, at)| guides::tab_drop(&self.tree, dragged, at, TAB_HEIGHT, &self.tab_rects));
         let guides = drag.and_then(|(dragged, at)| guides::over(&self.tree, dragged, at));
         let released = ctx.input(|input| input.pointer.any_released());
-        // egui_tiles drops a released tab at the nearest place it knows; off the tab bars that guess is undone.
-        let before = (drag.is_some() && released && !on_tab_bar).then(|| self.tree.clone());
+        // egui_tiles drops a released tab at the nearest place it knows; the dock undoes that guess and docks where its
+        // guides or a tab bar say (or nowhere).
+        let before = (drag.is_some() && released).then(|| self.tree.clone());
         let colors = current_colors(&ctx);
         let mut behavior = DockBehavior {
             panels: self.panels,
@@ -318,16 +351,19 @@ impl Dock {
             },
             close: Vec::new(),
             colors,
-            tiles_preview: on_tab_bar,
+            tabs: Vec::new(),
         };
         self.tree.ui(&mut behavior, ui);
-        let DockBehavior { focus, close, .. } = behavior;
+        let DockBehavior { focus, close, tabs, .. } = behavior;
         self.focus = focus;
+        self.tab_rects = tabs;
         if let Some((dragged, at)) = drag
             && !released
         {
             let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::unique("metallic.dock.guides")));
-            if let Some(guides) = &guides {
+            if let Some(drop) = &tab_drop {
+                guides::paint_tab_drop(&painter, &colors, drop);
+            } else if let Some(guides) = &guides {
                 guides.paint(&painter, &colors, Some(at));
             }
             let (title, icon) = match self.tree.tiles.get(dragged) {
@@ -341,7 +377,9 @@ impl Dock {
         }
         if let (Some(before), Some((dragged, at))) = (before, drag) {
             self.tree = before;
-            if let Some(guides) = guides
+            if let Some(drop) = tab_drop {
+                guides::drop_into_tabs(&mut self.tree, dragged, &drop);
+            } else if let Some(guides) = guides
                 && let Some(side) = guides.side_at(at)
             {
                 guides::dock(&mut self.tree, dragged, guides.container, side);
@@ -412,9 +450,8 @@ struct DockBehavior<'a, 'b> {
     close: Vec<TileId>,
     /// The theme's colours: the behaviour's colour hooks are not given a context.
     colors: crate::theme::Colors,
-    /// Whether egui_tiles' own drop preview shows: over a tab bar only, where its drop is the one that happens.
-    /// Elsewhere the dock guides show where a tab goes.
-    tiles_preview: bool,
+    /// Each tab drawn this frame and where: where a dragged tab goes in a bar it is dropped on.
+    tabs: Vec<(TileId, Rect)>,
 }
 
 impl DockBehavior<'_, '_> {
@@ -535,6 +572,7 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
         };
         let (title, _) = self.label(pane.as_ref());
         let (response, close) = tab_button(ui, id, &title, state);
+        self.tabs.push((tile, response.rect));
         if close {
             self.close.push(tile);
         }
@@ -543,26 +581,12 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
 
     fn paint_drag_preview(
         &self,
-        visuals: &egui::Visuals,
-        painter: &egui::Painter,
-        parent_rect: Option<Rect>,
-        preview_rect: Rect,
+        _visuals: &egui::Visuals,
+        _painter: &egui::Painter,
+        _parent_rect: Option<Rect>,
+        _preview_rect: Rect,
     ) {
-        if !self.tiles_preview {
-            return;
-        }
-        // egui_tiles' own preview, over a tab bar: where the tab will go in it.
-        let stroke = self.drag_preview_stroke(visuals);
-        if let Some(parent_rect) = parent_rect {
-            painter.rect_stroke(parent_rect, 1.0, stroke, egui::StrokeKind::Inside);
-        }
-        painter.rect(
-            preview_rect,
-            1.0,
-            self.drag_preview_color(visuals),
-            stroke,
-            egui::StrokeKind::Inside,
-        );
+        // egui_tiles' guess is never the drop: the dock's guides and tab bar marker show where a tab goes.
     }
 
     fn drag_ui(&mut self, _tiles: &Tiles<PanelId>, _ui: &mut Ui, _tile: TileId) {
@@ -649,22 +673,44 @@ mod tests {
             dock.open_panels(),
             [ids::VIEWPORT, ids::EXPLORER, ids::ASSETS, ids::PROPERTIES, ids::OUTPUT]
         );
-        assert_eq!(tab_bar(&dock, ids::EXPLORER), [ids::EXPLORER, ids::ASSETS]);
-        // Left | (Viewport over Output) | Properties.
+        // #256: (Viewport over [Assets, Output]) | (Explorer over Properties); Output in front.
+        assert_eq!(tab_bar(&dock, ids::OUTPUT), [ids::ASSETS, ids::OUTPUT]);
+        assert_eq!(tab_bar(&dock, ids::EXPLORER), [ids::EXPLORER]);
+        assert_eq!(tab_bar(&dock, ids::PROPERTIES), [ids::PROPERTIES]);
         let tiles = &dock.tree().tiles;
+        let bar = |id: &str| tiles.parent_of(dock.tile_of(id).unwrap()).unwrap();
+        let Some(Tile::Container(Container::Tabs(bottom))) = tiles.get(bar(ids::OUTPUT)) else {
+            panic!("the bottom is not a tab bar");
+        };
+        assert_eq!(bottom.active, dock.tile_of(ids::OUTPUT), "Output is open");
         let Some(Tile::Container(Container::Linear(columns))) = dock.tree().root().and_then(|root| tiles.get(root))
         else {
             panic!("the root is not a split");
         };
         assert_eq!(columns.dir, LinearDir::Horizontal);
-        assert_eq!(columns.children.len(), 3);
-        let Some(Tile::Container(Container::Linear(middle))) = tiles.get(columns.children[1]) else {
-            panic!("the middle is not a split");
+        assert_eq!(columns.children.len(), 2, "no left column");
+        let split = |tile: TileId| match tiles.get(tile) {
+            Some(Tile::Container(Container::Linear(linear))) => (linear.dir, linear.children.clone()),
+            _ => panic!("not a split"),
         };
-        assert_eq!(middle.dir, LinearDir::Vertical);
-        let viewport = tiles.parent_of(dock.tile_of(ids::VIEWPORT).unwrap()).unwrap();
-        let output = tiles.parent_of(dock.tile_of(ids::OUTPUT).unwrap()).unwrap();
-        assert_eq!(middle.children, [viewport, output]);
+        assert_eq!(
+            split(columns.children[0]),
+            (LinearDir::Vertical, vec![bar(ids::VIEWPORT), bar(ids::OUTPUT)])
+        );
+        assert_eq!(
+            split(columns.children[1]),
+            (LinearDir::Vertical, vec![bar(ids::EXPLORER), bar(ids::PROPERTIES)])
+        );
+    }
+
+    /// The split directly holding the tab bar of panel `id`: its direction and children.
+    fn split_of(dock: &Dock, id: &str) -> (LinearDir, Vec<TileId>) {
+        let tiles = &dock.tree().tiles;
+        let bar = tiles.parent_of(dock.tile_of(id).unwrap()).unwrap();
+        match tiles.parent_of(bar).and_then(|split| tiles.get(split)) {
+            Some(Tile::Container(Container::Linear(linear))) => (linear.dir, linear.children.clone()),
+            _ => panic!("{id}'s bar is not in a split"),
+        }
     }
 
     #[test]
@@ -735,14 +781,35 @@ mod tests {
         assert!(dock.is_open(ids::PROPERTIES));
         assert_eq!(tab_bar(&dock, ids::PROPERTIES), [ids::PROPERTIES]);
 
+        // The right column's parts stack again when one comes back: Explorer over Properties, Properties under it.
+        let bar = |dock: &Dock, id: &str| {
+            let tiles = &dock.tree().tiles;
+            tiles.parent_of(dock.tile_of(id).unwrap()).unwrap()
+        };
+        let column = |dock: &Dock| {
+            (
+                LinearDir::Vertical,
+                vec![bar(dock, ids::EXPLORER), bar(dock, ids::PROPERTIES)],
+            )
+        };
+        assert_eq!(
+            split_of(&dock, ids::PROPERTIES),
+            column(&dock),
+            "Properties under the Explorer"
+        );
         dock.toggle(ids::EXPLORER);
         assert!(!dock.is_open(ids::EXPLORER));
         dock.toggle(ids::EXPLORER);
+        assert_eq!(tab_bar(&dock, ids::EXPLORER), [ids::EXPLORER]);
         assert_eq!(
-            tab_bar(&dock, ids::EXPLORER),
-            [ids::ASSETS, ids::EXPLORER],
-            "beside Assets"
+            split_of(&dock, ids::EXPLORER),
+            column(&dock),
+            "the Explorer over Properties"
         );
+        // Assets beside Output.
+        dock.close(ids::ASSETS);
+        dock.open(ids::ASSETS);
+        assert_eq!(tab_bar(&dock, ids::ASSETS), [ids::OUTPUT, ids::ASSETS]);
 
         dock.open("teleporter");
         assert!(!dock.is_open("teleporter"));
