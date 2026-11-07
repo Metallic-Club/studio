@@ -3063,7 +3063,9 @@ mod tests {
 
         click_label(&mut harness, "Clear");
         assert!(harness.query_by_label("attempt to index nil").is_none());
-        harness.get_by_label("The output is empty.");
+        // Empty, and no note says so (#286).
+        assert!(harness.query_by_label_contains("output is empty").is_none());
+        assert!(harness.query_by_label("No lines match the filter.").is_none());
     }
 
     // Tab bars above their panels (#236), and striped Properties rows (#230).

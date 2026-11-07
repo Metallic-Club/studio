@@ -209,12 +209,10 @@ impl Panel for Output {
         ui.add_space(space::S3);
         let visible = state.visible();
         if visible.is_empty() {
-            let line = if state.lines.is_empty() {
-                "The output is empty."
-            } else {
-                "No lines match the filter."
-            };
-            empty_note(ui, line);
+            // An empty Output is just empty (#286); a filter that hides every line says so.
+            if !state.lines.is_empty() {
+                empty_note(ui, "No lines match the filter.");
+            }
             return;
         }
         let row = text::MONO + space::S3;
