@@ -3417,6 +3417,41 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_explorer_row_is_plain() {
+        let mut harness = editing(settings_file("explorer-plain", None), "Plain Selection Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        let row = harness.get_by_role_and_label(Role::TreeItem, "Baseplate").rect();
+        let colors = current_colors(&harness.ctx);
+        let output = harness.output();
+        let in_row: Vec<&egui::epaint::RectShape> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if row.expand(0.5).contains_rect(rect.rect) => Some(rect),
+                _ => None,
+            })
+            .collect();
+        // No accent bar (#300).
+        assert!(
+            in_row.iter().all(|rect| rect.fill != colors.accent),
+            "an accent mark on the row"
+        );
+        // A square raised fill over the whole row.
+        let fill = in_row
+            .iter()
+            .find(|rect| rect.fill == colors.palette.surface_hover)
+            .expect("the selected fill");
+        assert_eq!(fill.corner_radius, egui::CornerRadius::ZERO);
+        // The icon keeps its group's colour.
+        let part = Icon::ExplorerPart.color(&colors);
+        let tints = icon_meshes(&harness, Icon::ExplorerPart);
+        assert!(tints.iter().all(|&tint| tint == part), "{tints:?} vs {part:?}");
+        assert_ne!(part, colors.accent);
+    }
+
+    #[test]
     fn explorer_rows_touch_and_alternate_shades() {
         let mut harness = editing(settings_file("explorer-stripes", None), "Explorer Stripes Game");
         harness.set_size(egui::vec2(1280.0, 800.0));
