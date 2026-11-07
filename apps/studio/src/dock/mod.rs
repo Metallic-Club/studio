@@ -24,8 +24,8 @@ use egui_tiles::{Container, LinearDir, TabState, Tile, TileId, Tiles, Tree, UiRe
 use serde::{Deserialize, Serialize};
 
 use crate::editor::EditorState;
-use crate::keymap::{Context, Keymap};
-use crate::settings::{SettingsWindow, StudioSettings};
+use crate::keymap::Context;
+use crate::settings::StudioSettings;
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{current_colors, fonts};
 pub use layout::{LAYOUT_FILE, LAYOUT_VERSION, LayoutError};
@@ -43,16 +43,12 @@ pub enum Zone {
     Bottom,
 }
 
-/// What a panel draws with: the open project and the panels' own state, and Studio's settings and keymap.
+/// What a panel draws with: the open project and the panels' own state, and Studio's settings.
 pub struct PanelContext<'a> {
     /// The open project, its data model, and every panel's state.
     pub editor: &'a mut EditorState,
-    /// Studio's settings (the Settings panel changes them).
+    /// Studio's settings (the viewport reads its Rendering settings).
     pub settings: &'a mut StudioSettings,
-    /// The keymap (the Settings panel's Keybinds page changes it).
-    pub keymap: &'a mut Keymap,
-    /// The Settings page's own state: its category, search and capture dialog.
-    pub settings_page: &'a mut SettingsWindow,
 }
 
 /// A dockable panel. Implementations are unit types; their state lives in [`EditorState`].
@@ -661,7 +657,8 @@ mod tests {
     fn a_layout_round_trips_through_its_json() {
         let mut dock = Dock::in_memory(PANELS);
         dock.close(ids::OUTPUT);
-        dock.open(ids::SETTINGS);
+        dock.close(ids::EXPLORER);
+        dock.open(ids::EXPLORER);
         let json = to_json(dock.tree());
         assert!(json.contains("\"version\": 1"), "{json}");
         let back = from_json(&json, PANELS).unwrap();
@@ -674,8 +671,10 @@ mod tests {
         let first = tiles.insert_pane(PanelId(ids::EXPLORER.into()));
         let again = tiles.insert_pane(PanelId(ids::EXPLORER.into()));
         let unknown = tiles.insert_pane(PanelId("teleporter".into()));
+        // The Settings panel of #216, a window since #238.
+        let settings = tiles.insert_pane(PanelId("settings".into()));
         let output = tiles.insert_pane(PanelId(ids::OUTPUT.into()));
-        let left = tiles.insert_tab_tile(vec![first, again, unknown]);
+        let left = tiles.insert_tab_tile(vec![first, again, unknown, settings]);
         let bottom = tiles.insert_tab_tile(vec![output]);
         let root = tiles.insert_horizontal_tile(vec![left, bottom]);
         let json = to_json(&Tree::new(tree_id(), root, tiles));
@@ -683,6 +682,7 @@ mod tests {
         let repaired = from_json(&json, PANELS).unwrap();
         assert_eq!(panes(&repaired), [ids::EXPLORER, ids::OUTPUT]);
         assert!(repaired.tiles.get(again).is_none() && repaired.tiles.get(unknown).is_none());
+        assert!(repaired.tiles.get(settings).is_none());
         assert!(repaired.tiles.get(first).is_some(), "the first copy is kept");
     }
 
@@ -730,12 +730,6 @@ mod tests {
             "beside Assets"
         );
 
-        dock.open(ids::SETTINGS);
-        assert_eq!(
-            tab_bar(&dock, ids::SETTINGS),
-            [ids::VIEWPORT, ids::SETTINGS],
-            "beside the viewport"
-        );
         dock.open("teleporter");
         assert!(!dock.is_open("teleporter"));
 

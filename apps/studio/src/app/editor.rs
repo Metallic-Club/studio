@@ -35,7 +35,7 @@ pub(crate) enum MenuAction {
     Toggle(&'static str),
     /// View, Reset layout.
     ResetLayout,
-    /// The gear: open or close Settings.
+    /// The gear: open or close the Settings window.
     Settings,
 }
 
@@ -96,13 +96,15 @@ pub(crate) fn opening_overlay(ui: &mut Ui, name: &str, step: usize) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 }
 
-/// The top bar: the mark, the File and View menus, the project's name, and the gear. Returns what was asked for.
+/// The top bar: the mark, the File and View menus, the project's name, and the gear (raised while the Settings
+/// window is open, `settings_open`). Returns what was asked for.
 pub(crate) fn top_bar(
     ui: &mut Ui,
     mark: Option<&egui::TextureHandle>,
     editor: &EditorState,
     dock: &Dock,
     keymap: &Keymap,
+    settings_open: bool,
 ) -> Option<MenuAction> {
     let p = current_colors(ui.ctx()).palette;
     let rect = ui.max_rect();
@@ -144,10 +146,7 @@ pub(crate) fn top_bar(
                             ui.set_min_width(MENU_WIDTH);
                             for panel in dock.panels() {
                                 let open = dock.is_open(panel.id());
-                                let keys = (panel.id() == panels::ids::SETTINGS)
-                                    .then(|| keymap.shortcut_text(ids::SETTINGS_OPEN))
-                                    .flatten();
-                                if menu_item(ui, panel.title(), keys, Some(open)).clicked() {
+                                if menu_item(ui, panel.title(), None, Some(open)).clicked() {
                                     action = Some(MenuAction::Toggle(panel.id()));
                                 }
                             }
@@ -176,10 +175,7 @@ pub(crate) fn top_bar(
                     Some(keys) => format!("Settings ({keys})"),
                     None => "Settings".to_owned(),
                 };
-                if gear(ui, dock.is_open(panels::ids::SETTINGS))
-                    .on_hover_text(tip)
-                    .clicked()
-                {
+                if gear(ui, settings_open).on_hover_text(tip).clicked() {
                     action = Some(MenuAction::Settings);
                 }
             });

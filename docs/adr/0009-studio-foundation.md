@@ -79,8 +79,9 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
   - **Decided in #216: `egui_tiles` 0.18.** egui_dock had no release for egui 0.37 (its newest, 0.21, is built for
     egui 0.36), and egui_tiles 0.18 is (the egui authors' own docking crate: tabs and splits, MIT or Apache-2.0). It
     has no floating windows, so a panel lives in a tab bar of the main window; Settings opens as a tab beside the
-    viewport, and stays a floating window on the screens before the editor. Tab cycling with Ctrl+Tab is turned
-    off, because every shortcut goes through the keymap.
+    viewport, and stays a floating window on the screens before the editor (since #238 it is a floating window in
+    the editor too; see Settings). Tab cycling with Ctrl+Tab is turned off, because every shortcut goes through the
+    keymap.
 - **A panel registry:** every panel implements one trait (stable id, title, icon, default zone, `ui()`), and one list
   registers them. Adding a panel is one new type plus one line, not an enum, a match arm and zone logic (Forge's pain
   point).
@@ -135,6 +136,9 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
 - **Applied live;** written atomically (temp file and rename) only when something changed. **A corrupt file is never
   overwritten:** it is renamed to `settings.toml.bak`, Studio starts on defaults and says so once.
 - **The Settings window** is a dockable panel with a category list and a search box over every setting.
+  - **Amended in #238 (owner, 2026-11-07):** Settings is a **floating window** on every screen, the editor's included,
+    and never a docked panel. It is moved, resized and closed like a window. While the user's last click was in it,
+    the panels under it get no shortcuts, but the editor's own commands (save, close, reset layout) still run.
 
 ### Keybinds (improving on Forge's)
 
