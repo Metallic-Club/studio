@@ -163,10 +163,13 @@ fn a_renderer_made_ahead_draws_the_viewport() {
     let Some(context) = gpu() else { return };
     let mut dm = red_wall();
     let mut renderer = SceneRenderer::new(ContextOptions::default());
-    let linear =
-        Renderer::new(&context, RendererSettings::new(wgpu::TextureFormat::Rgba8Unorm, 64, 64)).expect("a renderer");
+    let srgb = Renderer::new(
+        &context,
+        RendererSettings::new(wgpu::TextureFormat::Rgba8UnormSrgb, 64, 64),
+    )
+    .expect("a renderer");
     assert!(matches!(
-        renderer.attach_viewport_with(&context, linear),
+        renderer.attach_viewport_with(&context, srgb),
         Err(RenderError::UnsupportedTarget { .. })
     ));
     assert!(renderer.viewport().is_none());

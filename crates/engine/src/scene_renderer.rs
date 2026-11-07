@@ -824,7 +824,7 @@ impl SceneRenderer {
     /// synced with the game's changes, seen from `Workspace.CurrentCamera` (or [`SceneRenderer::set_camera`]'s), with
     /// `stats` (the engine's numbers for the frame, for the frame statistics) recorded. Submits it and waits for
     /// nothing; the caller then draws its UI, which samples [`SceneRenderer::viewport`]'s
-    /// [`ViewportTarget::ui_view`], and presents. Nothing happens without a viewport.
+    /// [`ViewportTarget::view`], and presents. Nothing happens without a viewport.
     pub fn render_viewport(&mut self, dm: &mut DataModel, stats: FrameStats) {
         if self.viewport.is_some() {
             self.draw(dm, stats);

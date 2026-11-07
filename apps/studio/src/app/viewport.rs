@@ -91,13 +91,13 @@ impl ViewportRenderer {
             Some((id, shown)) if shown == generation => viewport.texture = Some(id),
             Some((id, _)) => {
                 let _turn = context.descriptor_heap_turn();
-                painter.update_egui_texture_from_wgpu_texture(device, target.ui_view(), FILTER, id);
+                painter.update_egui_texture_from_wgpu_texture(device, target.view(), FILTER, id);
                 self.texture = Some((id, generation));
                 viewport.texture = Some(id);
             }
             None => {
                 let _turn = context.descriptor_heap_turn();
-                let id = painter.register_native_texture(device, target.ui_view(), FILTER);
+                let id = painter.register_native_texture(device, target.view(), FILTER);
                 self.texture = Some((id, generation));
                 viewport.texture = Some(id);
             }

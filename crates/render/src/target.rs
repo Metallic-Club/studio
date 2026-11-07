@@ -75,10 +75,10 @@ impl OffscreenTarget {
 /// HDR scene colour, the post chain, the finish pass), and
 /// [`Renderer::resize_viewport`](crate::Renderer::resize_viewport) resizes it without a black frame: the old texture
 /// is drawn into and shown until the new one exists. Its texture is [`ViewportTarget::FORMAT`] with
-/// [`ViewportTarget::USAGE`]. The UI shows it through [`ViewportTarget::ui_view`]: the same bytes read as `Rgba8Unorm`,
-/// undecoded, which is how `egui_wgpu::Renderer::register_native_texture` expects a texture (egui-wgpu keeps its own in
-/// gamma space and would otherwise show the scene too dark). After a resize, [`ViewportTarget::generation`] changes
-/// and the caller registers the new [`ViewportTarget::ui_view`] again (`update_egui_texture_from_wgpu_texture`).
+/// [`ViewportTarget::USAGE`], which `egui_wgpu::Renderer::register_native_texture` samples as it samples its own
+/// textures: 8-bit `Rgba8Unorm` holding gamma-encoded colour, read without decoding. After a resize,
+/// [`ViewportTarget::generation`] changes and the caller registers the new [`ViewportTarget::view`] again
+/// (`update_egui_texture_from_wgpu_texture`).
 ///
 /// One renderer draws one target; nothing in the renderer knows of "the" viewport, so several are several renderers
 /// (and targets) on the same device.
@@ -86,14 +86,15 @@ impl OffscreenTarget {
 pub struct ViewportTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    ui_view: wgpu::TextureView,
     generation: u64,
 }
 
 impl ViewportTarget {
-    /// The texture's format: 8-bit sRGB, the renderer writing it encoded. Make the renderer that draws it with this
-    /// format ([`crate::RendererSettings::color_format`]).
-    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+    /// The texture's format: 8-bit, not an sRGB format, so the finish pass writes gamma-encoded colour itself. That is
+    /// what egui-wgpu samples: it keeps its own textures in gamma space, and an sRGB texture, decoded to linear when
+    /// read, shows far too dark there. Make the renderer that draws it with this format
+    /// ([`crate::RendererSettings::color_format`]).
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
     /// The texture's usages: drawn into, sampled by the UI, and copied out (screenshots, thumbnails, tests).
     pub const USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -110,23 +111,13 @@ impl ViewportTarget {
     /// What a target's texture of `width` x `height` in `format` is made from.
     pub(crate) fn spec(format: wgpu::TextureFormat, width: u32, height: u32) -> TextureSpec {
         TextureSpec::new("metallic viewport target", (width, height, 1), format, Self::USAGE)
-            .viewed_as(format.remove_srgb_suffix())
     }
 
     fn with_texture(texture: wgpu::Texture, generation: u64) -> Self {
-        let (view, ui_view) = in_heap_turn(|| {
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let ui_view = texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("metallic viewport target (ui)"),
-                format: Some(texture.format().remove_srgb_suffix()),
-                ..Default::default()
-            });
-            (view, ui_view)
-        });
+        let view = in_heap_turn(|| texture.create_view(&wgpu::TextureViewDescriptor::default()));
         Self {
             texture,
             view,
-            ui_view,
             generation,
         }
     }
@@ -136,20 +127,15 @@ impl ViewportTarget {
         *self = Self::with_texture(texture, self.generation + 1);
     }
 
-    /// The texture (for copies; the UI samples [`ViewportTarget::ui_view`]).
+    /// The texture (for copies; the UI samples [`ViewportTarget::view`]).
     pub fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
 
-    /// The view the renderer draws into, in [`ViewportTarget::FORMAT`].
+    /// The view to show: register it with the UI renderer, and again whenever [`ViewportTarget::generation`]
+    /// changes.
     pub fn view(&self) -> &wgpu::TextureView {
         &self.view
-    }
-
-    /// The view to show: the texture's bytes as `Rgba8Unorm`, undecoded, as egui-wgpu samples its own textures.
-    /// Register it with the UI renderer, and again whenever [`ViewportTarget::generation`] changes.
-    pub fn ui_view(&self) -> &wgpu::TextureView {
-        &self.ui_view
     }
 
     /// The colour format ([`ViewportTarget::FORMAT`]).

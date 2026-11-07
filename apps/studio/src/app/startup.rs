@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
 
 use metallic_engine::metallic_platform::AppId;
-use metallic_engine::metallic_render::{RenderContext, Renderer, RendererSettings, wgpu};
+use metallic_engine::metallic_render::{RenderContext, Renderer, RendererSettings, ViewportTarget};
 
 use crate::STUDIO_APP_ID;
 use crate::dock::{Dock, LAYOUT_FILE};
@@ -237,7 +237,7 @@ fn studio_settings_path() -> Option<PathBuf> {
 /// first frame are compiled and queues the rest in the background, so the editor's first frame does not wait for
 /// them. Where the device keeps a pipeline cache (Vulkan) the next start compiles less.
 fn start_renderer(context: &RenderContext) -> Option<Renderer> {
-    let settings = RendererSettings::new(wgpu::TextureFormat::Rgba8UnormSrgb, 1280, 720);
+    let settings = RendererSettings::new(ViewportTarget::FORMAT, 1280, 720);
     match Renderer::new(context, settings) {
         Ok(renderer) => Some(renderer),
         Err(error) => {
