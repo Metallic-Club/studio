@@ -14,9 +14,9 @@ use egui::{Align, Label, Layout, RichText, TextEdit, Ui, vec2};
 use metallic_engine::metallic_core::{ClassId, Registry};
 
 use crate::dock::Panel;
+use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{space, text};
-use crate::theme::{current_colors, fonts};
 
 /// Every panel, in the order the View menu lists them and the default layout's tabs take.
 pub static PANELS: &[&dyn Panel] = &[
@@ -102,37 +102,6 @@ pub(crate) fn search_box(ui: &mut Ui, query: &mut String, hint: &str) -> bool {
         .changed()
     })
     .inner
-}
-
-/// The strip at the top of the Explorer and Properties while they show the running game (live editing, ADR 0010
-/// §5): the accent's soft tint, the game controller, and what Stop does.
-pub(crate) fn playing_banner(ui: &mut Ui) {
-    let colors = current_colors(ui.ctx());
-    let p = colors.palette;
-    egui::Frame::new()
-        .fill(colors.accent.gamma_multiply(0.14))
-        .stroke(egui::Stroke::new(
-            crate::theme::tokens::size::BORDER,
-            colors.accent.gamma_multiply(0.5),
-        ))
-        .corner_radius(egui::CornerRadius::same(crate::theme::tokens::radius::ITEM))
-        .inner_margin(egui::Margin::symmetric(space::S3 as i8, space::S2 as i8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                icons::show(ui, Icon::PanelGame, text::BODY, colors.accent);
-                ui.add(
-                    Label::new(
-                        RichText::new("Running game")
-                            .font(fonts::named(fonts::STRONG, text::SMALL))
-                            .color(p.text),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text("These are the running game's. Stop puts the scene back as it was before Play.");
-            });
-        });
-    ui.add_space(space::S3);
 }
 
 /// Where a list row's background goes (#301): the row `rect` stretched past the panel's inset to its sides, and a

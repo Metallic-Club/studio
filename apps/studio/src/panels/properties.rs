@@ -12,7 +12,7 @@ use egui::{
 };
 use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, ResolvedProp, Value};
 
-use super::{class_icon, empty_note, ids, playing_banner};
+use super::{class_icon, empty_note, ids};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::settings::window::section_label;
@@ -173,8 +173,7 @@ impl Panel for Properties {
         // The running game's values while one runs, live (ADR 0010 §5).
         let scene = cx.editor.scene();
         if scene.playing {
-            playing_banner(ui);
-            // The values change as the game runs.
+            // The values change as the game runs. No banner says so (#309).
             ui.ctx().request_repaint();
         }
         let dm: &_ = scene.dm;
