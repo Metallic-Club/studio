@@ -1,0 +1,662 @@
+//! The editor's toolbar (#232; ADR 0009, Toolbar): a row of tabs, and under it the front tab's toolbar of tools,
+//! spacers and separators.
+//!
+//! - **Tabs** (Home, Model, UI, Scripts and Plugins by default) can be added (the + after them), renamed, deleted
+//!   and moved (right-click, or drag one along the row). Switching tab changes the toolbar only, unless the tab's
+//!   "Load a layout for this tab" box is ticked: then the dock shows that tab's own layout while it is in front.
+//! - **Elements** come from the [`ToolRegistry`] ([`tools`]): right-click the toolbar to add one (a tool, a spacer
+//!   or a separator), right-click one to add another before it, move it or remove it, or drag it along the row.
+//! - **Saved** as `toolbar.json` beside the settings ([`model`]), each tab's own layout in it.
+//!
+//! The toolbar runs nothing itself: a click reports the tool's [`ToolAction`] ([`ToolbarEvent::Run`]) for Studio
+//! to carry out, which is also how a plugin's tool will reach its plugin.
+
+pub mod model;
+pub mod tools;
+
+use std::path::{Path, PathBuf};
+
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Id, Rect, Response, Role, Sense, Stroke, Ui, WidgetInfo, pos2, vec2,
+};
+
+use crate::dock::Panel;
+use crate::theme::icons::{self, Icon};
+use crate::theme::tokens::{size, space, text};
+use crate::theme::{current_colors, fonts};
+pub use model::{Element, TOOLBAR_FILE, TOOLBAR_VERSION, TabConfig, ToolbarConfig};
+pub use tools::{StudioCommand, Tool, ToolAction, ToolError, ToolRegistry};
+
+/// The tab row's height.
+pub const TAB_ROW: f32 = 28.0;
+/// The tool row's height.
+pub const TOOL_ROW: f32 = 54.0;
+/// The toolbar's whole height.
+pub const TOOLBAR_HEIGHT: f32 = TAB_ROW + TOOL_ROW;
+/// A tool button's narrowest width.
+const TOOL_WIDTH: f32 = 52.0;
+/// A spacer's width.
+const SPACER_WIDTH: f32 = 24.0;
+/// A separator's width (the line in its middle).
+const SEPARATOR_WIDTH: f32 = 13.0;
+/// A tool's icon size.
+const TOOL_ICON: f32 = 20.0;
+
+/// What happened in the toolbar this frame, for Studio to act on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolbarEvent {
+    /// A tool was clicked: do what it does.
+    Run(ToolAction),
+}
+
+/// A change asked for this frame, applied once the toolbar is drawn.
+enum Change {
+    SelectTab(usize),
+    AddTab,
+    StartRename(usize),
+    FinishRename,
+    CancelRename,
+    RemoveTab(usize),
+    MoveTab(usize, usize),
+    SetOwnLayout(usize, bool),
+    Insert(usize, Element),
+    Remove(usize),
+    MoveElement(usize, usize),
+}
+
+/// The toolbar: what it holds (saved), Studio's and plugins' tools, and what is being edited.
+#[derive(Debug)]
+pub struct Toolbar {
+    config: ToolbarConfig,
+    /// What was last read or written.
+    saved: ToolbarConfig,
+    /// The file, unless the toolbar lives in memory.
+    path: Option<PathBuf>,
+    registry: ToolRegistry,
+    /// The tab being renamed, by index, and its new name so far.
+    renaming: Option<(usize, String)>,
+}
+
+impl Default for Toolbar {
+    /// The default toolbar with Studio's panels' tools, in memory.
+    fn default() -> Self {
+        Self::in_memory(crate::panels::PANELS)
+    }
+}
+
+impl Toolbar {
+    /// The default toolbar with `panels`' tools, kept in memory only.
+    pub fn in_memory(panels: &[&dyn Panel]) -> Self {
+        let config = ToolbarConfig::default();
+        Self {
+            saved: config.clone(),
+            config,
+            path: None,
+            registry: ToolRegistry::studio(panels),
+            renaming: None,
+        }
+    }
+
+    /// The toolbar saved at `path` (the default when there is none), with `panels`' tools.
+    pub fn load(path: PathBuf, panels: &[&dyn Panel]) -> Self {
+        let config = ToolbarConfig::load(&path);
+        Self {
+            saved: config.clone(),
+            config,
+            path: Some(path),
+            registry: ToolRegistry::studio(panels),
+            renaming: None,
+        }
+    }
+
+    /// The file it is saved in, unless it lives in memory.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// What it holds.
+    pub fn config(&self) -> &ToolbarConfig {
+        &self.config
+    }
+
+    /// What it holds, to change ([`Toolbar::save_if_changed`] writes it).
+    pub fn config_mut(&mut self) -> &mut ToolbarConfig {
+        &mut self.config
+    }
+
+    /// The tools it can hold.
+    pub fn registry(&self) -> &ToolRegistry {
+        &self.registry
+    }
+
+    /// The tools it can hold, to register more (the plugin API, later).
+    pub fn registry_mut(&mut self) -> &mut ToolRegistry {
+        &mut self.registry
+    }
+
+    /// Brings tab `index` to the front.
+    pub fn select_tab(&mut self, index: usize) {
+        if index < self.config.tabs.len() {
+            self.config.active = index;
+        }
+    }
+
+    /// The tab whose own layout the dock should show now: the front tab's id, when it has one.
+    pub fn layout_tab(&self) -> Option<u32> {
+        let tab = self.config.active_tab();
+        tab.own_layout.then_some(tab.id)
+    }
+
+    /// Writes the toolbar if it changed, unless `busy` (a drag is going on). Returns whether it wrote.
+    pub fn save_if_changed(&mut self, busy: bool) -> std::io::Result<bool> {
+        if busy || self.config == self.saved {
+            return Ok(false);
+        }
+        self.saved = self.config.clone();
+        let Some(path) = &self.path else {
+            return Ok(false);
+        };
+        crate::settings::store::write_atomically(path, &self.config.to_json())?;
+        Ok(true)
+    }
+
+    /// Draws the toolbar filling `ui`'s rect. `enabled` says whether a tool can be used now, `checked` whether it is
+    /// on (a panel that is open). Returns what was clicked.
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        enabled: impl Fn(&ToolAction) -> bool,
+        checked: impl Fn(&ToolAction) -> bool,
+    ) -> Vec<ToolbarEvent> {
+        let p = current_colors(ui.ctx()).palette;
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 0.0, p.header);
+        // One physical pixel under it, as the dock's lines (#287).
+        let pixel = 1.0 / ui.ctx().pixels_per_point();
+        let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - pixel), rect.right_bottom());
+        ui.painter().rect_filled(line, 0.0, p.border);
+        let tabs = Rect::from_min_size(rect.min, vec2(rect.width(), TAB_ROW));
+        let tools = Rect::from_min_max(pos2(rect.left(), tabs.bottom()), rect.max);
+        let mut changes = Vec::new();
+        let mut events = Vec::new();
+        self.tab_row(ui, tabs, &mut changes);
+        self.tool_row(ui, tools, &enabled, &checked, &mut changes, &mut events);
+        for change in changes {
+            self.apply(change);
+        }
+        events
+    }
+
+    fn apply(&mut self, change: Change) {
+        let config = &mut self.config;
+        match change {
+            Change::SelectTab(index) => {
+                if index < config.tabs.len() {
+                    config.active = index;
+                }
+            }
+            Change::AddTab => {
+                let index = config.add_tab("New tab");
+                config.active = index;
+                self.renaming = Some((index, "New tab".to_owned()));
+            }
+            Change::StartRename(index) => {
+                if let Some(tab) = config.tabs.get(index) {
+                    self.renaming = Some((index, tab.name.clone()));
+                }
+            }
+            Change::FinishRename => {
+                if let Some((index, name)) = self.renaming.take() {
+                    let name = name.trim();
+                    if let (Some(tab), false) = (config.tabs.get_mut(index), name.is_empty()) {
+                        name.clone_into(&mut tab.name);
+                    }
+                }
+            }
+            Change::CancelRename => self.renaming = None,
+            Change::RemoveTab(index) => {
+                config.remove_tab(index);
+                self.renaming = None;
+            }
+            Change::MoveTab(from, to) => {
+                config.move_tab(from, to);
+                self.renaming = None;
+            }
+            Change::SetOwnLayout(index, on) => {
+                if let Some(tab) = config.tabs.get_mut(index) {
+                    tab.own_layout = on;
+                }
+            }
+            Change::Insert(at, element) => config.insert_element(config.active, at, element),
+            Change::Remove(index) => config.remove_element(config.active, index),
+            Change::MoveElement(from, to) => config.move_element(config.active, from, to),
+        }
+    }
+
+    /// The tabs, the + after them, and a tab being dragged.
+    fn tab_row(&mut self, ui: &mut Ui, rect: Rect, changes: &mut Vec<Change>) {
+        let colors = current_colors(ui.ctx());
+        let p = colors.palette;
+        let font = fonts::named(fonts::STRONG, text::SMALL + 1.0);
+        let mut x = rect.left() + space::S3;
+        let mut rects = Vec::new();
+        let mut dragged = None;
+        for (index, tab) in self.config.tabs.iter().enumerate() {
+            let id = ui.scope_id().with(("metallic.toolbar.tab", tab.id));
+            if let Some((_, name)) = self.renaming.as_mut().filter(|(at, _)| *at == index) {
+                let field = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(120.0, rect.height() - 6.0));
+                let response = ui.put(
+                    field,
+                    egui::TextEdit::singleline(name)
+                        .id(id.with("rename"))
+                        .font(font.clone())
+                        .margin(vec2(space::S2, 0.0)),
+                );
+                if !response.has_focus() && !response.lost_focus() {
+                    response.request_focus();
+                }
+                if response.lost_focus() {
+                    let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                    changes.push(if escape {
+                        Change::CancelRename
+                    } else {
+                        Change::FinishRename
+                    });
+                }
+                rects.push(field);
+                x = field.right() + space::S1;
+                continue;
+            }
+            let galley = ui.painter().layout_no_wrap(tab.name.clone(), font.clone(), p.text);
+            let tab_rect = Rect::from_min_size(
+                pos2(x, rect.top()),
+                vec2(galley.size().x + 2.0 * space::S5, rect.height()),
+            );
+            let response = ui.interact(tab_rect, id, Sense::click_and_drag());
+            let active = index == self.config.active;
+            response.widget_info(|| WidgetInfo::selected(Role::Tab, true, active, &tab.name));
+            if ui.is_rect_visible(tab_rect) {
+                let fill = if active {
+                    crate::dock::active_tab_fill(&p)
+                } else if response.hovered() {
+                    p.header.lerp_to_gamma(p.surface_hover, 0.2)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                ui.painter().rect_filled(tab_rect, CornerRadius::ZERO, fill);
+                let ink = if active || response.hovered() { p.text } else { p.muted };
+                ui.painter().galley(
+                    pos2(tab_rect.left() + space::S5, tab_rect.center().y - galley.size().y / 2.0),
+                    galley,
+                    ink,
+                );
+            }
+            if response.clicked() {
+                changes.push(Change::SelectTab(index));
+            }
+            if response.double_clicked() {
+                changes.push(Change::StartRename(index));
+            }
+            if response.dragged() {
+                dragged = Some(index);
+            }
+            if response.drag_stopped() {
+                let to = drop_index(
+                    &rects_after(ui, &self.config.tabs, rect, &font),
+                    ui.ctx().pointer_latest_pos(),
+                );
+                if let Some(to) = to {
+                    changes.push(Change::MoveTab(index, to));
+                }
+            }
+            let tabs = self.config.tabs.len();
+            response.context_menu(|ui| {
+                if ui.button("Rename").clicked() {
+                    changes.push(Change::StartRename(index));
+                }
+                let mut own = tab.own_layout;
+                if crate::theme::checkbox(ui, &mut own, "Load a layout for this tab").clicked() {
+                    changes.push(Change::SetOwnLayout(index, own));
+                }
+                ui.separator();
+                if ui.add_enabled(index > 0, egui::Button::new("Move left")).clicked() {
+                    changes.push(Change::MoveTab(index, index - 1));
+                }
+                if ui
+                    .add_enabled(index + 1 < tabs, egui::Button::new("Move right"))
+                    .clicked()
+                {
+                    changes.push(Change::MoveTab(index, index + 1));
+                }
+                ui.separator();
+                if ui.add_enabled(tabs > 1, egui::Button::new("Delete")).clicked() {
+                    changes.push(Change::RemoveTab(index));
+                }
+            });
+            rects.push(tab_rect);
+            x = tab_rect.right() + space::S1;
+        }
+        // The + that adds a tab.
+        let plus = Rect::from_center_size(pos2(x + 14.0, rect.center().y), vec2(22.0, 22.0));
+        let response = ui.interact(plus, ui.scope_id().with("metallic.toolbar.add_tab"), Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "New tab"));
+        if response.hovered() {
+            ui.painter().rect_filled(plus, CornerRadius::same(4), p.surface_hover);
+        }
+        icons::paint_at(
+            ui.painter(),
+            plus.center(),
+            Align2::CENTER_CENTER,
+            Icon::UiAdd,
+            text::BODY,
+            if response.hovered() { p.text } else { p.subtle },
+        );
+        if response.on_hover_text("New tab").clicked() {
+            changes.push(Change::AddTab);
+        }
+        if dragged.is_some() {
+            paint_drop_marker(ui, &rects, colors.accent);
+        }
+    }
+
+    /// The front tab's elements; right-click on the row to add one.
+    fn tool_row(
+        &self,
+        ui: &mut Ui,
+        rect: Rect,
+        enabled: &impl Fn(&ToolAction) -> bool,
+        checked: &impl Fn(&ToolAction) -> bool,
+        changes: &mut Vec<Change>,
+        events: &mut Vec<ToolbarEvent>,
+    ) {
+        let colors = current_colors(ui.ctx());
+        let p = colors.palette;
+        // The row itself, under the elements: right-click it to add one at the end.
+        let row = ui.interact(rect, ui.scope_id().with("metallic.toolbar.row"), Sense::click());
+        row.widget_info(|| WidgetInfo::labeled(Role::Toolbar, true, "Toolbar"));
+        let elements = &self.config.active_tab().elements;
+        row.context_menu(|ui| {
+            add_menu(ui, &self.registry, elements.len(), "Add", changes);
+        });
+        if elements.is_empty() {
+            ui.painter().text(
+                pos2(rect.left() + space::S5, rect.center().y),
+                Align2::LEFT_CENTER,
+                "Right-click to add tools.",
+                FontId::proportional(text::SMALL),
+                p.subtle,
+            );
+        }
+        let mut x = rect.left() + space::S3;
+        let mut rects = Vec::new();
+        let mut dragged = false;
+        for (index, element) in elements.iter().enumerate() {
+            let (width, label) = match element {
+                Element::Tool { id } => {
+                    let label = self.registry.get(id).map_or(id.as_str(), |tool| tool.label.as_str());
+                    let galley =
+                        ui.painter()
+                            .layout_no_wrap(label.to_owned(), FontId::proportional(text::SMALL), p.text);
+                    ((galley.size().x + 2.0 * space::S3).max(TOOL_WIDTH), label.to_owned())
+                }
+                Element::Spacer => (SPACER_WIDTH, "Spacer".to_owned()),
+                Element::Separator => (SEPARATOR_WIDTH, "Separator".to_owned()),
+            };
+            let at = Rect::from_min_size(
+                pos2(x, rect.top() + space::S1),
+                vec2(width, rect.height() - 2.0 * space::S1),
+            );
+            let response = self.element(ui, index, element, at, &label, enabled, checked, events);
+            if response.dragged() {
+                dragged = true;
+            }
+            if response.drag_stopped() {
+                let pointer = ui.ctx().pointer_latest_pos();
+                if let Some(to) = drop_index_in_row(&rects, at, pointer, elements.len())
+                    && to != index
+                {
+                    changes.push(Change::MoveElement(index, to));
+                }
+            }
+            response.context_menu(|ui| {
+                add_menu(ui, &self.registry, index, "Add before", changes);
+                ui.separator();
+                if ui.add_enabled(index > 0, egui::Button::new("Move left")).clicked() {
+                    changes.push(Change::MoveElement(index, index - 1));
+                }
+                if ui
+                    .add_enabled(index + 1 < elements.len(), egui::Button::new("Move right"))
+                    .clicked()
+                {
+                    changes.push(Change::MoveElement(index, index + 1));
+                }
+                ui.separator();
+                if ui.button("Remove").clicked() {
+                    changes.push(Change::Remove(index));
+                }
+            });
+            rects.push(at);
+            x = at.right() + space::S1;
+        }
+        if dragged {
+            paint_drop_marker(ui, &rects, colors.accent);
+        }
+    }
+
+    /// One element: a tool's button (icon over label), a spacer or a separator. Returns its response, for its menu
+    /// and dragging.
+    #[allow(clippy::too_many_arguments)]
+    fn element(
+        &self,
+        ui: &mut Ui,
+        index: usize,
+        element: &Element,
+        rect: Rect,
+        label: &str,
+        enabled: &impl Fn(&ToolAction) -> bool,
+        checked: &impl Fn(&ToolAction) -> bool,
+        events: &mut Vec<ToolbarEvent>,
+    ) -> Response {
+        let p = current_colors(ui.ctx()).palette;
+        let id = ui
+            .scope_id()
+            .with(("metallic.toolbar.element", self.config.active_tab().id, index));
+        let response = ui.interact(rect, id, Sense::click_and_drag());
+        match element {
+            Element::Tool { id } => {
+                let tool = self.registry.get(id);
+                let usable = tool.is_some_and(|tool| enabled(&tool.action));
+                let on = tool.is_some_and(|tool| checked(&tool.action));
+                // "Play tool": apart from the top bar's Play, for screen readers too.
+                response.widget_info(|| WidgetInfo::labeled(Role::Button, usable, format!("{label} tool")));
+                if ui.is_rect_visible(rect) {
+                    if on || (usable && response.hovered()) {
+                        let fill = if on { p.surface_hover } else { p.surface };
+                        ui.painter().rect_filled(rect, CornerRadius::same(4), fill);
+                    }
+                    let ink = if usable { p.text } else { p.text.gamma_multiply(0.48) };
+                    let colors = current_colors(ui.ctx());
+                    let icon = tool.map_or(Icon::ToolbarPlugin, |tool| tool.icon);
+                    let tint = if usable { icon.color(&colors) } else { ink };
+                    icons::paint_at(
+                        ui.painter(),
+                        pos2(rect.center().x, rect.top() + space::S2),
+                        Align2::CENTER_TOP,
+                        icon,
+                        TOOL_ICON,
+                        tint,
+                    );
+                    ui.painter().text(
+                        pos2(rect.center().x, rect.bottom() - space::S2),
+                        Align2::CENTER_BOTTOM,
+                        label,
+                        FontId::proportional(text::SMALL),
+                        ink,
+                    );
+                }
+                let response = match tool {
+                    Some(tool) if !tool.description.is_empty() => response.on_hover_text(&tool.description),
+                    Some(_) => response,
+                    None => response.on_hover_text(format!("`{id}` is not available: its plugin is not loaded.")),
+                };
+                if usable
+                    && response.clicked()
+                    && let Some(tool) = tool
+                {
+                    events.push(ToolbarEvent::Run(tool.action.clone()));
+                }
+                response
+            }
+            Element::Spacer => {
+                response.widget_info(|| WidgetInfo::labeled(Role::Unknown, true, "Spacer"));
+                if response.hovered() {
+                    // Shown only under the pointer, so it can be found to move or remove.
+                    ui.painter().rect_stroke(
+                        rect.shrink(2.0),
+                        CornerRadius::same(3),
+                        Stroke::new(size::BORDER, p.border),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                response
+            }
+            Element::Separator => {
+                response.widget_info(|| WidgetInfo::labeled(Role::Unknown, true, "Separator"));
+                let line = Rect::from_center_size(rect.center(), vec2(size::BORDER, rect.height() - 2.0 * space::S3));
+                ui.painter().rect_filled(line, 0.0, p.border);
+                response
+            }
+        }
+    }
+}
+
+/// The Add menu: every tool (Studio's, then the plugins'), a spacer and a separator, put at `at`.
+fn add_menu(ui: &mut Ui, registry: &ToolRegistry, at: usize, title: &str, changes: &mut Vec<Change>) {
+    ui.menu_button(title, |ui| {
+        let (plugins, studio): (Vec<&Tool>, Vec<&Tool>) = registry.tools().iter().partition(|tool| tool.is_plugin());
+        for tool in studio {
+            if ui.button(&tool.label).on_hover_text(&tool.description).clicked() {
+                changes.push(Change::Insert(at, Element::tool(&tool.id)));
+            }
+        }
+        if !plugins.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new("Plugins").size(text::SMALL));
+            for tool in plugins {
+                if ui.button(&tool.label).on_hover_text(&tool.description).clicked() {
+                    changes.push(Change::Insert(at, Element::tool(&tool.id)));
+                }
+            }
+        }
+        ui.separator();
+        if ui.button("Spacer").clicked() {
+            changes.push(Change::Insert(at, Element::Spacer));
+        }
+        if ui.button("Separator").clicked() {
+            changes.push(Change::Insert(at, Element::Separator));
+        }
+    });
+}
+
+/// Where the tabs are, laid out as the row draws them (for a tab dropped after the ones drawn so far).
+fn rects_after(ui: &Ui, tabs: &[TabConfig], rect: Rect, font: &FontId) -> Vec<Rect> {
+    let mut x = rect.left() + space::S3;
+    tabs.iter()
+        .map(|tab| {
+            let width = ui
+                .painter()
+                .layout_no_wrap(tab.name.clone(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+                + 2.0 * space::S5;
+            let at = Rect::from_min_size(pos2(x, rect.top()), vec2(width, rect.height()));
+            x = at.right() + space::S1;
+            at
+        })
+        .collect()
+}
+
+/// The index a thing dropped at `pointer` goes to among `rects` (left to right): before the first whose middle is
+/// right of it, else the last.
+fn drop_index(rects: &[Rect], pointer: Option<egui::Pos2>) -> Option<usize> {
+    let pointer = pointer?;
+    if rects.is_empty() {
+        return None;
+    }
+    Some(
+        rects
+            .iter()
+            .position(|rect| pointer.x < rect.center().x)
+            .unwrap_or(rects.len() - 1),
+    )
+}
+
+/// Where an element dropped at `pointer` goes, from the elements drawn before it (`before`), itself (`at`) and how
+/// many the row has: before an earlier element whose middle is right of the pointer, else at the pointer's place
+/// counted in element widths after it.
+fn drop_index_in_row(before: &[Rect], at: Rect, pointer: Option<egui::Pos2>, count: usize) -> Option<usize> {
+    let pointer = pointer?;
+    if let Some(earlier) = before.iter().position(|rect| pointer.x < rect.center().x) {
+        return Some(earlier);
+    }
+    if pointer.x < at.right() {
+        return Some(before.len());
+    }
+    // Past itself: one place per element width further on.
+    let steps = ((pointer.x - at.right()) / at.width().max(1.0)).ceil() as usize;
+    Some((before.len() + steps).min(count.saturating_sub(1)))
+}
+
+/// The accent line where a dragged tab or element would go: at the pointer's nearest gap among `rects`.
+fn paint_drop_marker(ui: &Ui, rects: &[Rect], accent: Color32) {
+    let Some(pointer) = ui.ctx().pointer_latest_pos() else {
+        return;
+    };
+    let Some(first) = rects.first() else {
+        return;
+    };
+    let x = rects
+        .iter()
+        .find(|rect| pointer.x < rect.center().x)
+        .map_or_else(|| rects.last().map_or(first.right(), Rect::right), Rect::left);
+    let line = Rect::from_center_size(pos2(x, first.center().y), vec2(2.0, first.height()));
+    ui.ctx()
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            Id::unique("metallic.toolbar.drop"),
+        ))
+        .rect_filled(line, 0.0, accent);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drops_land_between_their_neighbours() {
+        let rect = |x: f32| Rect::from_min_size(pos2(x, 0.0), vec2(50.0, 20.0));
+        let rects = [rect(0.0), rect(52.0), rect(104.0)];
+        assert_eq!(drop_index(&rects, Some(pos2(10.0, 5.0))), Some(0));
+        assert_eq!(drop_index(&rects, Some(pos2(90.0, 5.0))), Some(2));
+        assert_eq!(
+            drop_index(&rects, Some(pos2(500.0, 5.0))),
+            Some(2),
+            "past the end: the last place"
+        );
+        assert_eq!(drop_index(&rects, None), None);
+        // An element dragged from the middle: back over the first, or on past the last.
+        assert_eq!(
+            drop_index_in_row(&rects[..1], rects[1], Some(pos2(10.0, 5.0)), 3),
+            Some(0)
+        );
+        assert_eq!(
+            drop_index_in_row(&rects[..1], rects[1], Some(pos2(160.0, 5.0)), 3),
+            Some(2)
+        );
+        assert_eq!(
+            drop_index_in_row(&rects[..1], rects[1], Some(pos2(60.0, 5.0)), 3),
+            Some(1),
+            "on itself"
+        );
+    }
+}

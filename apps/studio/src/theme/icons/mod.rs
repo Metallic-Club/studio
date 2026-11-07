@@ -265,6 +265,14 @@ icons! {
     ToolbarStop = "toolbar.stop", Run, "square";
     /// The gear that opens Settings.
     ToolbarSettings = "toolbar.settings", Studio, "settings";
+    /// The toolbar's Save tool.
+    ToolbarSave = "toolbar.save", Studio, "save";
+    /// The toolbar's Close project tool.
+    ToolbarClose = "toolbar.close", Studio, "folder-x";
+    /// The toolbar's Reset layout tool.
+    ToolbarResetLayout = "toolbar.reset_layout", Scene, "rotate-ccw";
+    /// A plugin's tool that brings no icon of its own.
+    ToolbarPlugin = "toolbar.plugin", Studio, "puzzle";
     /// A search box.
     UiSearch = "ui.search", Interface, "search";
     /// Close, dismiss.

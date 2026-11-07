@@ -12,6 +12,7 @@
 //! | [`editor`] | the open project, its game, and its panels' state; opening it off the UI thread |
 //! | [`dock`] | the panel registry, the docked layout (egui_tiles) and `layout.json` |
 //! | [`panels`] | the panels: Viewport, Explorer, Properties, Assets, Output, Settings |
+//! | [`toolbar`] | the editor's toolbar: tabs of tools, spacers and separators, `toolbar.json`, and the tool registry plugins will add to |
 //! | [`logging`] | the log the Output panel shows: the engine's `log` lines and the scripts' output |
 //! | [`viewport`] | the editor camera, and the viewport's state between its panel and the shell that draws the game |
 //! | [`emblem`] | the Metallic mark: the splash's emblem and the window icon |
@@ -34,6 +35,7 @@ pub mod panels;
 pub mod projects;
 pub mod settings;
 pub mod theme;
+pub mod toolbar;
 pub mod viewport;
 
 pub use app::{Screen, Studio, run};
