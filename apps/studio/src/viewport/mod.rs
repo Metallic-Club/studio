@@ -37,6 +37,8 @@ pub struct ViewportState {
     pub shown: bool,
     /// The engine's render, registered with the UI renderer, once the shell has drawn one.
     pub texture: Option<TextureId>,
+    /// That render's size in pixels: while a resize is under way it differs from [`ViewportState::pixels`] (#311).
+    pub texture_pixels: Option<(u32, u32)>,
     /// Why the engine cannot draw the viewport, when it cannot (no renderer could be made).
     pub error: Option<String>,
 }
@@ -50,6 +52,7 @@ impl ViewportState {
             pixels: None,
             shown: false,
             texture: None,
+            texture_pixels: None,
             error: None,
         }
     }

@@ -210,6 +210,7 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
 ### Viewport: the engine renders, the UI shows it
 
 - The viewport panel asks the engine to render the open scene into a **texture of the panel's size** (physical pixels)
+  (while a resize is under way, #311: the last frame is drawn at its own size, centred, never stretched)
   on the **shared device**. Studio registers that texture with `egui-wgpu` and draws it as an image, so the UI can draw
   overlays on top, which Forge's hole could not. The engine side is a new render API, filed for `area:render` (#213).
 - When the panel is resized, the target is recreated through #152's off-the-frame path and the old one is kept until

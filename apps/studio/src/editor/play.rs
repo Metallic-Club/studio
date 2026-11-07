@@ -74,6 +74,8 @@ pub struct GameView {
     pub shown: bool,
     /// The game's render, registered with the UI renderer, once the shell has drawn one.
     pub texture: Option<TextureId>,
+    /// That render's size in pixels: while a resize is under way it differs from [`GameView::pixels`] (#311).
+    pub texture_pixels: Option<(u32, u32)>,
     /// Why the game cannot be drawn, when it cannot.
     pub error: Option<String>,
 }

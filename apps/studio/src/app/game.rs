@@ -84,6 +84,7 @@ impl GameRenderer {
                 view.texture = Some(id);
             }
         }
+        view.texture_pixels = Some(target.size());
         target.size() != (width, height)
     }
 }

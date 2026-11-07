@@ -4,7 +4,7 @@
 //! the texture the shell draws the game into (`app::game`).
 
 use egui::emath::GuiRounding;
-use egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2};
+use egui::{Align2, FontId, Sense, Ui};
 
 use super::ids;
 use crate::dock::{Panel, PanelContext, Zone};
@@ -64,12 +64,8 @@ impl Panel for Game {
                 view.shown = true;
                 match view.texture {
                     Some(texture) => {
-                        ui.painter().image(
-                            texture,
-                            rect,
-                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
+                        // At its own size while a resize is under way (#311).
+                        super::draw_render(ui, texture, view.texture_pixels, rect, p.bg);
                         None
                     }
                     None => Some(

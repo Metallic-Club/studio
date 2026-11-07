@@ -3232,6 +3232,39 @@ mod tests {
     }
 
     #[test]
+    fn the_viewport_never_stretches_a_frame_while_it_resizes() {
+        let mut harness = editing(settings_file("viewport-resize", None), "Resize Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let texture = egui::TextureId::User(77);
+        let image_rect = |harness: &Harness<'_, Test>| {
+            harness.output().shapes.iter().find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+        };
+        // A frame of the panel's own size fills it.
+        let wanted = harness.state().studio.editor().unwrap().viewport.pixels.unwrap();
+        let viewport = &mut harness.state_mut().studio.editor_mut().unwrap().viewport;
+        viewport.texture = Some(texture);
+        viewport.texture_pixels = Some(wanted);
+        harness.step();
+        let panel = harness.state().studio.editor().unwrap().viewport.rect.unwrap();
+        assert_eq!(image_rect(&harness), Some(panel));
+        // Mid-resize, an older, smaller frame: drawn at its own size, centred, not stretched (#311).
+        let viewport = &mut harness.state_mut().studio.editor_mut().unwrap().viewport;
+        viewport.texture_pixels = Some((wanted.0 - 200, wanted.1 - 100));
+        harness.step();
+        let drawn = image_rect(&harness).expect("the old frame");
+        assert!((drawn.width() - (wanted.0 - 200) as f32).abs() < 0.01, "{drawn:?}");
+        assert!((drawn.height() - (wanted.1 - 100) as f32).abs() < 0.01, "{drawn:?}");
+        assert!(
+            (drawn.center() - panel.center()).length() < 1.0,
+            "{drawn:?} in {panel:?}"
+        );
+    }
+
+    #[test]
     fn the_top_bar_has_no_mark() {
         let mut harness = editing(settings_file("bar-no-mark", None), "Bar Game");
         harness.set_size(egui::vec2(1280.0, 800.0));
