@@ -8,24 +8,20 @@
 //!   [`EditorState`], so closing and reopening a panel, or resetting the layout, loses nothing.
 //! - **Persistence.** The layout is `layout.json` in the config folder ([`layout`]), repaired on load, and written
 //!   only when it changed and nothing is being dragged.
-//! - **Tab bars at the bottom or the top** (#230, Settings → Appearance → Panel tabs; the bottom by default).
-//!   egui_tiles only draws a tab bar above its content, so for the bottom the dock hides egui_tiles' bar and draws
-//!   the strip itself under the open panel ([`bottom`]), with the same tabs, close buttons and dragging.
 
-mod bottom;
 pub mod layout;
 
 use std::path::{Path, PathBuf};
 
 use egui::{
-    Align2, Color32, CornerRadius, Id, Pos2, Rect, Response, Role, Sense, Stroke, Ui, UiBuilder, WidgetInfo, pos2, vec2,
+    Align2, Color32, CornerRadius, Id, Rect, Response, Role, Sense, Stroke, Ui, UiBuilder, WidgetInfo, pos2, vec2,
 };
 use egui_tiles::{Container, LinearDir, TabState, Tile, TileId, Tiles, Tree, UiResponse};
 use serde::{Deserialize, Serialize};
 
 use crate::editor::EditorState;
 use crate::keymap::{Context, Keymap};
-use crate::settings::{SettingsWindow, StudioSettings, TabPosition};
+use crate::settings::{SettingsWindow, StudioSettings};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{current_colors, fonts};
 pub use layout::{LAYOUT_FILE, LAYOUT_VERSION, LayoutError};
@@ -104,8 +100,6 @@ pub struct Dock {
     saved: Tree<PanelId>,
     path: Option<PathBuf>,
     focus: DockFocus,
-    /// Where the pointer last was: a release can come with the pointer leaving, and a drop needs the place.
-    pointer: Option<Pos2>,
 }
 
 impl std::fmt::Debug for Dock {
@@ -134,7 +128,6 @@ impl Dock {
             tree,
             path: None,
             focus: DockFocus::default(),
-            pointer: None,
         }
     }
 
@@ -147,7 +140,6 @@ impl Dock {
             tree,
             path: Some(path),
             focus: DockFocus::default(),
-            pointer: None,
         }
     }
 
@@ -294,22 +286,8 @@ impl Dock {
         self.focus.focused = id;
     }
 
-    /// Draws the dock filling `ui`, its tab bars where the Appearance settings put them.
+    /// Draws the dock filling `ui`.
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
-        let ctx = ui.ctx().clone();
-        let tabs_at_bottom = cx.settings.appearance.tab_position == TabPosition::Bottom;
-        if let Some(at) = ctx.input(|input| input.pointer.latest_pos()) {
-            self.pointer = Some(at);
-        }
-        // What was dragged, read before the tree drops it this frame.
-        let dragged = self.tree.dragged_id(&ctx);
-        let released = ctx.input(|input| input.pointer.any_released());
-        let strips = if tabs_at_bottom {
-            layout::tidy(&mut self.tree);
-            bottom::strips(&self.tree)
-        } else {
-            Vec::new()
-        };
         let mut behavior = DockBehavior {
             panels: self.panels,
             cx,
@@ -318,37 +296,11 @@ impl Dock {
                 hovered: None,
             },
             close: Vec::new(),
-            colors: current_colors(&ctx),
-            tabs_at_bottom,
-            strips,
-            drops: Vec::new(),
-            activate: Vec::new(),
-            pointer: self.pointer,
-            dragged,
+            colors: current_colors(ui.ctx()),
         };
         self.tree.ui(&mut behavior, ui);
-        let DockBehavior {
-            focus,
-            close,
-            drops,
-            activate,
-            ..
-        } = behavior;
+        let DockBehavior { focus, close, .. } = behavior;
         self.focus = focus;
-        // A tab dropped on a bottom tab bar joins it where it was dropped. egui_tiles, which does not know the bar,
-        // has already put it at the nearest place it knows; this moves it on from there.
-        if let (Some(dragged), true, Some(at)) = (dragged, released, self.pointer)
-            && let Some(drop) = drops.iter().find(|drop| drop.rect.contains(at))
-        {
-            bottom::drop_into(&mut self.tree, dragged, drop, at);
-        }
-        for (container, child) in activate {
-            if let Some(Tile::Container(Container::Tabs(tabs))) = self.tree.tiles.get_mut(container)
-                && tabs.children.contains(&child)
-            {
-                tabs.set_active(child);
-            }
-        }
         for tile in close {
             self.tree.remove_recursively(tile);
         }
@@ -386,7 +338,7 @@ impl Dock {
 }
 
 /// The dock's [`egui_tiles::Behavior`]: draws each panel and its tab in the website's style, and notes focus and
-/// closes. With the tab bars at the bottom it also draws them ([`bottom`]) and notes what they asked for.
+/// closes.
 struct DockBehavior<'a, 'b> {
     panels: &'static [&'static dyn Panel],
     cx: &'a mut PanelContext<'b>,
@@ -395,18 +347,6 @@ struct DockBehavior<'a, 'b> {
     close: Vec<TileId>,
     /// The theme's colours: the behaviour's colour hooks are not given a context.
     colors: crate::theme::Colors,
-    /// Whether the tab bars sit under their panels, drawn by the dock.
-    tabs_at_bottom: bool,
-    /// The bottom tab bars to draw this frame: one per tab container whose open tab is a panel.
-    strips: Vec<bottom::Strip>,
-    /// The bottom tab bars drawn this frame, where a dragged tab can be dropped.
-    drops: Vec<bottom::Drop>,
-    /// Tabs clicked in a bottom tab bar (their container, the tab), opened after the frame.
-    activate: Vec<(TileId, TileId)>,
-    /// Where the pointer is.
-    pointer: Option<Pos2>,
-    /// The tile being dragged, if any.
-    dragged: Option<TileId>,
 }
 
 impl DockBehavior<'_, '_> {
@@ -433,25 +373,9 @@ const TAB_GAP: f32 = 6.0;
 /// The close button's size.
 const CLOSE_SIZE: f32 = 18.0;
 
-/// Which edge of a tab faces its panel, and so carries the active tab's accent bar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Facing {
-    /// The tab bar is above the panel.
-    Down,
-    /// The tab bar is under the panel.
-    Up,
-}
-
 /// Draws one tab (icon, title, close button) filling the bar's height, interacting as `id`. Returns its response
 /// and whether its close button was clicked.
-fn tab_button(
-    ui: &mut Ui,
-    id: Id,
-    title: &str,
-    icon: Option<char>,
-    state: &TabState,
-    facing: Facing,
-) -> (Response, bool) {
+fn tab_button(ui: &mut Ui, id: Id, title: &str, icon: Option<char>, state: &TabState) -> (Response, bool) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let title_font = fonts::named(fonts::STRONG, text::SMALL + 1.0);
@@ -471,14 +395,9 @@ fn tab_button(
         let hovered = response.hovered() || close.hovered();
         if state.active {
             ui.painter().rect_filled(rect, CornerRadius::ZERO, p.panel);
-            // The active tab's 3 px accent bar, on the edge that meets its panel.
-            let bar = match facing {
-                Facing::Down => {
-                    Rect::from_min_max(pos2(rect.left(), rect.bottom() - size::ACCENT_BAR), rect.right_bottom())
-                }
-                Facing::Up => Rect::from_min_max(rect.left_top(), pos2(rect.right(), rect.top() + size::ACCENT_BAR)),
-            };
-            ui.painter().rect_filled(bar, CornerRadius::ZERO, colors.accent);
+            // The active tab's 3 px accent underline, where it meets its panel.
+            let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - size::ACCENT_BAR), rect.right_bottom());
+            ui.painter().rect_filled(line, CornerRadius::ZERO, colors.accent);
         } else if hovered {
             ui.painter().rect_filled(rect, CornerRadius::ZERO, p.surface);
         }
@@ -514,27 +433,10 @@ fn tab_button(
 }
 
 impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
-    fn pane_ui(&mut self, ui: &mut Ui, tile: TileId, pane: &mut PanelId) -> UiResponse {
+    fn pane_ui(&mut self, ui: &mut Ui, _tile: TileId, pane: &mut PanelId) -> UiResponse {
         let p = current_colors(ui.ctx()).palette;
-        let full = ui.max_rect();
-        ui.painter().rect_filled(full, 0.0, p.panel);
-        // With the tab bars at the bottom, this panel's bar takes the bottom of its area.
-        let strip = if self.tabs_at_bottom {
-            self.strips.iter().find(|strip| strip.pane == tile).cloned()
-        } else {
-            None
-        };
-        let rect = match &strip {
-            Some(_) => Rect::from_min_max(
-                full.min,
-                pos2(full.right(), (full.bottom() - TAB_HEIGHT).max(full.top())),
-            ),
-            None => full,
-        };
-        if let Some(strip) = strip {
-            let bar = Rect::from_min_max(pos2(full.left(), rect.bottom()), full.max);
-            self.strip_ui(ui, &strip, bar);
-        }
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 0.0, p.panel);
         let Some(panel) = self.panel(pane) else {
             return UiResponse::None;
         };
@@ -568,18 +470,13 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
         true
     }
 
-    fn is_tab_bar_visible(&self, tile: TileId, _tabs: &egui_tiles::Tabs) -> bool {
-        // egui_tiles' own bar (always above) shows unless the dock draws this container's bar at the bottom.
-        !(self.tabs_at_bottom && self.strips.iter().any(|strip| strip.container == tile))
-    }
-
     fn tab_ui(&mut self, tiles: &mut Tiles<PanelId>, ui: &mut Ui, id: Id, tile: TileId, state: &TabState) -> Response {
         let pane = match tiles.get(tile) {
             Some(Tile::Pane(pane)) => Some(pane.clone()),
             _ => None,
         };
         let (title, icon) = self.label(pane.as_ref());
-        let (response, close) = tab_button(ui, id, &title, icon, state, Facing::Down);
+        let (response, close) = tab_button(ui, id, &title, icon, state);
         if close {
             self.close.push(tile);
         }
@@ -593,16 +490,6 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
         parent_rect: Option<Rect>,
         preview_rect: Rect,
     ) {
-        // Over a bottom tab bar the tab goes where the bar says, not where egui_tiles would put it.
-        if let Some(at) = self.pointer
-            && let Some(drop) = self.drops.iter().find(|drop| drop.rect.contains(at))
-        {
-            let x = drop.insertion_x(self.dragged, at);
-            let marker = Rect::from_min_max(pos2(x - 1.0, drop.rect.top()), pos2(x + 1.0, drop.rect.bottom()));
-            painter.rect_filled(drop.rect, CornerRadius::ZERO, self.drag_preview_color(visuals));
-            painter.rect_filled(marker, CornerRadius::ZERO, self.colors.accent);
-            return;
-        }
         let stroke = self.drag_preview_stroke(visuals);
         if let Some(parent_rect) = parent_rect {
             painter.rect_stroke(parent_rect, 1.0, stroke, egui::StrokeKind::Inside);
