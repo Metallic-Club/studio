@@ -1,5 +1,6 @@
 //! Studio's typefaces, bundled (`apps/studio/assets/fonts`, licences beside them; see `NOTICE.txt` there): Inter for
-//! the interface, as on the website, JetBrains Mono for code and changing numbers, and Phosphor for icons.
+//! the interface, as on the website, JetBrains Mono for code and changing numbers, and Lucide (https://lucide.dev) for
+//! icons (#257).
 //!
 //! egui's own fonts are never loaded ([`definitions`] starts empty, and the workspace turns off egui's
 //! `default_fonts`): one of them is under the Ubuntu Font Licence, which `deny.toml` does not allow.
@@ -16,13 +17,13 @@ use egui::{FontData, FontDefinitions, FontFamily, FontId, FontTweak};
 
 const INTER: &[u8] = include_bytes!("../../assets/fonts/Inter-Variable.ttf");
 const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf");
-const PHOSPHOR: &[u8] = include_bytes!("../../assets/fonts/Phosphor.ttf");
+const LUCIDE: &[u8] = include_bytes!("../../assets/fonts/Lucide.ttf");
 
 /// Controls: button text, labels, names.
 pub const STRONG: &str = "strong";
 /// Headings, titles and the wordmark.
 pub const HEADING: &str = "heading";
-/// Phosphor's regular icons alone. Also the last fallback of every text family, so an icon can sit in a label.
+/// Lucide's icons alone. Also the last fallback of every text family, so an icon can sit in a label.
 pub const ICONS: &str = "icons";
 
 /// Inter's weights, on its `wght` axis.
@@ -39,16 +40,17 @@ pub mod weight {
 /// website's browsers pick for large text.
 const HEADING_OPTICAL_SIZE: f32 = 32.0;
 
-/// Phosphor's regular icons Studio uses, by their code points in `Phosphor.ttf` (the package's `style.css`).
+/// Lucide icons the whole interface uses, by their code points in `Lucide.ttf` (`lucide-static` 1.70.0's
+/// `font/codepoints.json`). Each names the Lucide icon it is.
 pub mod icon {
-    /// A gear: settings.
-    pub const GEAR: char = '\u{E270}';
-    /// A magnifying glass: search.
-    pub const SEARCH: char = '\u{E30C}';
-    /// A warning triangle.
-    pub const WARNING: char = '\u{E4E0}';
-    /// A cross: close, dismiss.
-    pub const X: char = '\u{E4F6}';
+    /// `settings` (a gear).
+    pub const GEAR: char = '\u{E154}';
+    /// `search`.
+    pub const SEARCH: char = '\u{E151}';
+    /// `triangle-alert`: a warning.
+    pub const WARNING: char = '\u{E193}';
+    /// `x`: close, dismiss.
+    pub const X: char = '\u{E1B2}';
 }
 
 /// Inter at the axis values `coords` names.
@@ -60,7 +62,7 @@ fn inter(coords: &[(&[u8; 4], f32)]) -> Arc<FontData> {
 }
 
 /// The whole font set: Inter for proportional text and, at their weights, the voices, JetBrains Mono for
-/// monospace, each falling back to Phosphor; and the icon family.
+/// monospace, each falling back to Lucide; and the icon family.
 pub fn definitions() -> FontDefinitions {
     let mut defs = FontDefinitions::empty();
     defs.font_data.insert("inter".into(), inter(&[(b"wght", weight::BODY)]));
@@ -71,7 +73,7 @@ pub fn definitions() -> FontDefinitions {
         inter(&[(b"wght", weight::HEADING), (b"opsz", HEADING_OPTICAL_SIZE)]),
     );
     defs.font_data
-        .insert("phosphor".into(), Arc::new(FontData::from_static(PHOSPHOR)));
+        .insert("lucide".into(), Arc::new(FontData::from_static(LUCIDE)));
     defs.font_data.insert(
         "jetbrains-mono".into(),
         Arc::new(FontData::from_static(JETBRAINS_MONO).tweak(FontTweak {
@@ -85,14 +87,14 @@ pub fn definitions() -> FontDefinitions {
         (FontFamily::Name(HEADING.into()), "inter-heading"),
     ] {
         defs.families
-            .insert(family, vec![inter.to_owned(), "phosphor".to_owned()]);
+            .insert(family, vec![inter.to_owned(), "lucide".to_owned()]);
     }
     defs.families.insert(
         FontFamily::Monospace,
-        vec!["jetbrains-mono".into(), "inter".into(), "phosphor".into()],
+        vec!["jetbrains-mono".into(), "inter".into(), "lucide".into()],
     );
     defs.families
-        .insert(FontFamily::Name(ICONS.into()), vec!["phosphor".into()]);
+        .insert(FontFamily::Name(ICONS.into()), vec!["lucide".into()]);
     defs
 }
 
@@ -118,7 +120,7 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            ["inter", "inter-heading", "inter-strong", "jetbrains-mono", "phosphor"]
+            ["inter", "inter-heading", "inter-strong", "jetbrains-mono", "lucide"]
         );
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             assert!(defs.families.contains_key(&family));
@@ -193,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn the_icons_are_in_phosphor() {
+    fn the_icons_are_in_lucide() {
         with_fonts(|ui| {
             for icon in [icon::GEAR, icon::SEARCH, icon::WARNING, icon::X] {
                 let has = ui.ctx().fonts_mut(|fonts| fonts.has_glyph(&named(ICONS, 16.0), icon));
@@ -208,12 +210,12 @@ mod tests {
         for (font, licence) in [
             ("Inter-Variable.ttf", "OFL-Inter.txt"),
             ("JetBrainsMono-Variable.ttf", "OFL-JetBrainsMono.txt"),
-            ("Phosphor.ttf", "LICENSE-Phosphor.txt"),
+            ("Lucide.ttf", "LICENSE-Lucide.txt"),
         ] {
             assert!(dir.join(font).is_file(), "{font}");
             let text = std::fs::read_to_string(dir.join(licence)).unwrap();
             assert!(
-                text.contains("Open Font License") || text.contains("MIT License"),
+                text.contains("Open Font License") || text.contains("ISC License"),
                 "{licence}"
             );
         }
