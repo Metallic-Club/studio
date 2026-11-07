@@ -1,4 +1,4 @@
-//! Studio's built-in icons (#291): Lucide SVGs in the `icons` folder beside the executable, not compiled into it.
+//! Studio's built-in icons (#291, #312): Lucide SVGs in Studio's icons folder, not compiled into the executable.
 //!
 //! The folder holds one SVG per Lucide icon Studio uses (`box.svg`, `scroll.svg`), Lucide's licence, and
 //! `icons.json`, which says which file each of Studio's icon ids uses (`"explorer.part": { "file": "box.svg" }`), with a
@@ -72,9 +72,28 @@ pub fn manifest_json() -> String {
     text
 }
 
-/// The icons folder beside the executable, or beside the folder it is in (where tests and examples run from), if
-/// there is one.
+/// The folder Studio reads its icons from (#312): `icons` in its own folder (`%APPDATA%\Metallic\Studio\icons`),
+/// which startup fills from the icons shipped beside the executable ([`crate::folders::prepare`]) and the user may
+/// edit; the shipped folder itself if that one is not there. Tests always read the shipped one.
 pub fn folder() -> Option<&'static Path> {
+    static FOLDER_USED: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FOLDER_USED
+        .get_or_init(|| {
+            let installed = if cfg!(test) {
+                None
+            } else {
+                crate::folders::icons_folder()
+            };
+            installed
+                .filter(|dir| dir.join(MANIFEST).is_file())
+                .or_else(|| shipped_folder().map(Path::to_path_buf))
+        })
+        .as_deref()
+}
+
+/// The icons folder shipped beside the executable, or beside the folder it is in (where tests and examples run
+/// from), if there is one.
+pub fn shipped_folder() -> Option<&'static Path> {
     static FOLDER_FOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
     FOLDER_FOUND
         .get_or_init(|| {

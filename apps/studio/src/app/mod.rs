@@ -941,6 +941,7 @@ impl Studio {
             }
             self.projects.set_list(list);
             self.projects.set_templates(std::mem::take(&mut loaded.templates));
+            self.projects.set_games_folder(loaded.games_folder.clone());
             self.dock = std::mem::take(&mut loaded.layout);
             self.loaded = Some(loaded);
             self.screen = if self.settings.settings().general.skip_sign_in {
@@ -1016,7 +1017,10 @@ mod tests {
     /// repository's templates.
     fn steps_reading(path: PathBuf) -> Vec<Step> {
         let list = path.with_file_name(PROJECTS_FILE);
-        vec![settings_step(Some(path)), projects_step(Some(list), templates_dir())]
+        vec![
+            settings_step(Some(path)),
+            projects_step(Some(list), templates_dir(), None),
+        ]
     }
 
     /// Steps whose settings file says light and mint.

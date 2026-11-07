@@ -14,7 +14,9 @@ use metallic_engine::metallic_render::{RenderContext, Renderer, RendererSettings
 use crate::STUDIO_APP_ID;
 use crate::dock::{Dock, LAYOUT_FILE};
 use crate::panels::PANELS;
-use crate::projects::{ProjectList, TemplateInfo, list_templates, projects_path, templates_dir};
+use crate::projects::{
+    ProjectEntry, ProjectList, TemplateInfo, list_templates, name_from_path, projects_path, templates_dir,
+};
 use crate::settings::{SettingsStore, settings_path};
 
 /// What the startup steps produce, handed to the screens after the splash.
@@ -29,6 +31,9 @@ pub struct Loaded {
     pub projects: ProjectList,
     /// The templates a new project can start from.
     pub templates: Vec<TemplateInfo>,
+    /// The games folder (`Documents\Metallic`, #312), whose games the list was given; `None` when Studio was started
+    /// without one (tests).
+    pub games_folder: Option<PathBuf>,
     /// The editor's dock layout, read from `layout.json` beside the settings (the default one in memory if Studio has no
     /// config folder).
     pub layout: Dock,
@@ -41,6 +46,7 @@ impl std::fmt::Debug for Loaded {
             .field("viewport_renderer", &self.viewport_renderer.is_some())
             .field("projects", &self.projects)
             .field("templates", &self.templates)
+            .field("games_folder", &self.games_folder)
             .field("layout", &self.layout)
             .finish()
     }
@@ -178,17 +184,24 @@ impl Startup {
 /// Studio's startup steps, on the render device the splash is drawn with.
 pub fn studio_steps(context: RenderContext) -> Vec<Step> {
     vec![
+        Step::new("Preparing folders", |_| {
+            crate::folders::prepare(crate::theme::icons::builtin::shipped_folder());
+        }),
         settings_step(studio_settings_path()),
         Step::new("Starting the renderer", move |loaded| {
             loaded.viewport_renderer = start_renderer(&context);
         }),
-        projects_step(studio_projects_path(), templates_dir()),
+        projects_step(
+            studio_projects_path(),
+            templates_dir(),
+            Some(crate::folders::games_folder()),
+        ),
     ]
 }
 
-/// The step that reads the projects list at `list` (`None`: there is no config folder, so it lives in memory) and
-/// the templates in `templates`.
-pub fn projects_step(list: Option<PathBuf>, templates: Option<PathBuf>) -> Step {
+/// The step that reads the projects list at `list` (`None`: there is no config folder, so it lives in memory), adds
+/// every game in the `games` folder it does not list yet (#312), and reads the templates in `templates`.
+pub fn projects_step(list: Option<PathBuf>, templates: Option<PathBuf>, games: Option<PathBuf>) -> Step {
     Step::new("Reading recent projects", move |loaded| {
         loaded.projects = match list {
             Some(path) => {
@@ -197,6 +210,18 @@ pub fn projects_step(list: Option<PathBuf>, templates: Option<PathBuf>) -> Step 
             }
             None => ProjectList::in_memory(),
         };
+        if let Some(games) = &games {
+            let mut added = 0;
+            for game in crate::folders::find_games(games) {
+                let name = name_from_path(&game);
+                added += usize::from(loaded.projects.push(ProjectEntry::new(game, name)));
+            }
+            if added > 0 {
+                log::info!("projects: {added} games in {}", games.display());
+                loaded.projects.save_or_log();
+            }
+        }
+        loaded.games_folder = games;
         loaded.templates = match templates {
             Some(dir) => list_templates(&dir),
             None => {
@@ -356,7 +381,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut startup = Startup::spawn(vec![projects_step(Some(path.clone()), templates_dir())]).unwrap();
+        let mut startup = Startup::spawn(vec![projects_step(Some(path.clone()), templates_dir(), None)]).unwrap();
         assert_eq!(startup.names(), ["Reading recent projects"]);
         wait(&mut startup);
         let loaded = startup.take_loaded().unwrap();
@@ -372,11 +397,47 @@ mod tests {
         assert_eq!(missing, [false, true]);
         assert!(loaded.templates.iter().any(|template| template.id == "baseplate-3d"));
 
-        let mut startup = Startup::spawn(vec![projects_step(None, None)]).unwrap();
+        let mut startup = Startup::spawn(vec![projects_step(None, None, None)]).unwrap();
         wait(&mut startup);
         let loaded = startup.take_loaded().unwrap();
         assert!(loaded.projects.path().is_none());
         assert!(loaded.templates.is_empty());
+    }
+
+    #[test]
+    fn every_game_in_the_games_folder_is_listed() {
+        let dir = std::env::temp_dir().join(format!("metallic-games-step-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let games = dir.join("Metallic");
+        std::fs::create_dir_all(games.join("Space Race")).unwrap();
+        std::fs::write(games.join("Space Race").join("Space Race.mtproj"), "").unwrap();
+        std::fs::write(games.join("Racer.mtproj"), "").unwrap();
+        let list = dir.join("projects.toml");
+        let mut startup = Startup::spawn(vec![projects_step(Some(list.clone()), None, Some(games.clone()))]).unwrap();
+        wait(&mut startup);
+        let loaded = startup.take_loaded().unwrap();
+        // Both, never opened, and saved so the list keeps them (#312).
+        let names: Vec<&str> = loaded
+            .projects
+            .entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, ["Racer", "Space Race"]);
+        assert!(
+            loaded
+                .projects
+                .entries()
+                .iter()
+                .all(|entry| entry.last_opened.is_none())
+        );
+        assert_eq!(loaded.games_folder.as_deref(), Some(games.as_path()));
+        assert!(std::fs::read_to_string(&list).unwrap().contains("Space Race.mtproj"));
+        // A second start adds nothing twice.
+        let mut again = Startup::spawn(vec![projects_step(Some(list), None, Some(games))]).unwrap();
+        wait(&mut again);
+        assert_eq!(again.take_loaded().unwrap().projects.entries().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn template(id: &str) -> TemplateInfo {

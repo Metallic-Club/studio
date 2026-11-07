@@ -68,15 +68,17 @@ impl AppId {
 ///
 /// | | config | data | cache |
 /// |---|---|---|---|
-/// | Windows | `%APPDATA%\metallic\Player\config` | `%LOCALAPPDATA%\metallic\Player\data` | `%LOCALAPPDATA%\metallic\Player\cache` |
+/// | Windows | `%APPDATA%\Metallic\Player\config` | `%LOCALAPPDATA%\Metallic\Player\data` | `%LOCALAPPDATA%\Metallic\Player\cache` |
 /// | macOS | `~/Library/Application Support/dev.metallic.Player` | (same as config) | `~/Library/Caches/dev.metallic.Player` |
 /// | Linux, BSD | `$XDG_CONFIG_HOME/metallic/player` | `$XDG_DATA_HOME/metallic/player` | `$XDG_CACHE_HOME/metallic/player` |
 ///
+/// On Windows the organization folder is capitalised (`Metallic`), as Windows apps name theirs.
 /// Config roams with the user on Windows; data and cache stay on the machine. On macOS config and data are one
 /// folder, so file names in them must not collide. The XDG variables default to `~/.config`, `~/.local/share`
 /// and `~/.cache`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserPaths {
+    app: PathBuf,
     config: PathBuf,
     data: PathBuf,
     cache: PathBuf,
@@ -85,7 +87,18 @@ pub struct UserPaths {
 impl UserPaths {
     /// Folders a backend found by other means (a mobile sandbox, a console's save-data API).
     pub fn new(config: PathBuf, data: PathBuf, cache: PathBuf) -> Self {
-        Self { config, data, cache }
+        Self {
+            app: config.clone(),
+            config,
+            data,
+            cache,
+        }
+    }
+
+    /// The app's own roaming folder, which holds its config folder: `%APPDATA%\Metallic\Studio` on Windows. Elsewhere it
+    /// is the config folder itself. Files the user may browse to and edit (Studio's icons) go here.
+    pub fn app_dir(&self) -> &Path {
+        &self.app
     }
 
     /// The folders for `app` for the current user on the OS this build targets. Fails with
@@ -133,6 +146,15 @@ fn current_convention() -> Option<Convention> {
     }
 }
 
+/// `name` with its first letter in capitals (`metallic` → `Metallic`).
+fn capitalised(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// Applies `convention`'s rules for `app`, reading environment variables through `var`.
 fn resolve(
     convention: Convention,
@@ -153,12 +175,13 @@ fn resolve(
                 Some(path) => path,
                 None => profile()?.join("AppData").join("Local"),
             };
-            let folder = Path::new(app.organization()).join(app.application());
-            Ok(UserPaths::new(
-                roaming.join(&folder).join("config"),
-                local.join(&folder).join("data"),
-                local.join(&folder).join("cache"),
-            ))
+            let folder = Path::new(&capitalised(app.organization())).join(app.application());
+            Ok(UserPaths {
+                app: roaming.join(&folder),
+                config: roaming.join(&folder).join("config"),
+                data: local.join(&folder).join("data"),
+                cache: local.join(&folder).join("cache"),
+            })
         }
         Convention::MacOs => {
             let library = home()?.join("Library");
@@ -244,7 +267,8 @@ mod tests {
         let (roaming, local) = (root("Roaming"), root("Local"));
         let vars = env(&[("APPDATA", roaming.clone()), ("LOCALAPPDATA", local.clone())]);
         let paths = resolve(Convention::Windows, &player(), vars).unwrap();
-        let app = Path::new("metallic").join("Player");
+        let app = Path::new("Metallic").join("Player");
+        assert_eq!(paths.app_dir(), roaming.join(&app));
         assert_eq!(paths.config_dir(), roaming.join(&app).join("config"));
         assert_eq!(paths.data_dir(), local.join(&app).join("data"));
         assert_eq!(paths.cache_dir(), local.join(&app).join("cache"));
@@ -260,11 +284,11 @@ mod tests {
             profile
                 .join("AppData")
                 .join("Roaming")
-                .join("metallic")
+                .join("Metallic")
                 .join("Player")
                 .join("config")
         );
-        assert_eq!(paths.cache_dir(), local.join("metallic").join("Player").join("cache"));
+        assert_eq!(paths.cache_dir(), local.join("Metallic").join("Player").join("cache"));
         assert!(matches!(
             resolve(Convention::Windows, &player(), env(&[])),
             Err(PlatformError::NoHomeDir)

@@ -947,7 +947,7 @@ tracks a fixed workload). Under vsync the GPU runs at lower clocks, so it measur
 numbers below (3.93 ms against 3.08 on `many_lights` at Ultra), which only makes it more careful.
 
 **The file** is `graphics.toml` in the user's config folder (`metallic_platform::UserPaths::config_dir`; on Windows
-`%APPDATA%\metallic\Player\config`): `key = value` lines, a small subset of TOML written and read by
+`%APPDATA%\Metallic\Player\config`): `key = value` lines, a small subset of TOML written and read by
 `GraphicsSettings::to_text` and `from_text` (no dependency), every key not set listed as a comment with the preset's
 value, and a `[calibration]` section. The Player makes it with the Auto preset the first time, falls back to Auto with
 a warning when it cannot be read or understood (leaving the file as it is), applies `--preset` on top for one run, and

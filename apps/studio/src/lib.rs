@@ -16,6 +16,7 @@
 //! | [`viewport`] | the editor camera, and the viewport's state between its panel and the shell that draws the game |
 //! | [`emblem`] | the Metallic mark: the splash's emblem and the window icon |
 //! | [`cli`] | the command line: a project to open straight into the editor, and registering `.mtproj` files |
+//! | [`folders`] | Studio's folders: its own (`%APPDATA%\Metallic\Studio`, the icons in it) and the games folder (`Documents\Metallic`) |
 
 // The one place Studio calls the operating system itself (`app::native`, Windows only): shaping the splash window
 // and reading the system's animation switch need Win32 calls, which are unsafe. Each block says why it is sound.
@@ -26,6 +27,7 @@ pub mod cli;
 pub mod dock;
 pub mod editor;
 pub mod emblem;
+pub mod folders;
 pub mod keymap;
 pub mod logging;
 pub mod panels;

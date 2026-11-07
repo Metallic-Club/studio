@@ -2,9 +2,9 @@
 
 <!-- Generated from apps/studio/src/theme/icons/mod.rs by `cargo test -p metallic_studio write_the_icon_docs -- --ignored`. Do not edit by hand. -->
 
-Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https://lucide.dev/icons/) SVG (ISC licence) in the `icons` folder beside Studio's executable, drawn in its group's colour.
+Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https://lucide.dev/icons/) SVG (ISC licence) in Studio's icons folder, drawn in its group's colour.
 
-**The icons folder:** `icons/icons.json` says which SVG file each icon id uses, with a line on what it marks. To change an icon for good, put an SVG in the folder and point its entry's `file` at it. A file that is missing or cannot be read falls back to the default, with one warning in Output.
+**The icons folder** is `icons` in Studio's own folder: `%APPDATA%\Metallic\Studio\icons` on Windows. Studio ships its icons beside its executable and copies any file missing there on start, so your edits are kept. `icons.json` in it says which SVG file each icon id uses, with a line on what it marks. To change an icon for good, put an SVG in the folder and point its entry's `file` at it. A file that is missing or cannot be read falls back to the default, with one warning in Output.
 
 **Custom icons:** set a folder in Settings → Appearance → Icon folder. A file in it named after an icon's id, `<icon-id>.svg` or `<icon-id>.png` (the SVG wins when both are there), replaces that icon. Icons without a file keep the built-in one, and a file that cannot be read keeps it too, with one warning in Output. Studio reads the folder in the background when it is set and when you press **Reload**. A monochrome image (one colour on transparency, such as Lucide's own SVGs) is drawn in its group's colour; a coloured one is drawn as it is.
 
