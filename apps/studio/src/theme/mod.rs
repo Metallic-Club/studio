@@ -306,6 +306,101 @@ pub fn wide_button(ui: &mut egui::Ui, kind: ButtonKind, label: &str) -> egui::Re
     button_of_width(ui, kind, label, width)
 }
 
+/// A drop-down's arrow, for [`egui::ComboBox::icon`]: Lucide's chevron in place of egui's triangle (#278), in the
+/// widget's text colour.
+pub fn combo_icon(ui: &egui::Ui, rect: Rect, visuals: &WidgetVisuals, _open: bool) {
+    let side = rect.height().min(rect.width()).max(text::SMALL);
+    icons::paint(
+        ui.painter(),
+        icons::Icon::UiCollapse,
+        Rect::from_center_size(rect.center(), Vec2::splat(side)),
+        visuals.fg_stroke.color,
+    );
+}
+
+/// The header of one of Studio's windows (#278), drawn in it in place of egui's title bar: `title` centred, and a
+/// Lucide close button on the right, labelled "Close `title`", which sets `open` to false. A line under it, as
+/// egui's.
+pub fn window_header(ui: &mut egui::Ui, title: &str, open: &mut bool) {
+    let p = current_colors(ui.ctx()).palette;
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), WINDOW_HEADER), egui::Sense::hover());
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        title,
+        fonts::named(fonts::HEADING, text::BODY_LG),
+        p.text,
+    );
+    let close = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), Vec2::splat(24.0));
+    let response = ui.interact(close, ui.scope_id().with(("close", title)), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Close {title}")));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(close, CornerRadius::same(radius::ITEM / 2), p.surface_hover);
+    }
+    icons::paint_at(
+        ui.painter(),
+        close.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::Icon::UiClose,
+        text::BODY_LG,
+        if response.hovered() { p.text } else { p.muted },
+    );
+    if response.clicked() {
+        *open = false;
+    }
+    ui.separator();
+}
+
+/// The height of [`window_header`]'s row.
+const WINDOW_HEADER: f32 = 32.0;
+
+/// A checkbox (#278): a rounded box, filled with the primary action's colour and Lucide's check when `on`, then
+/// `label`. Clicking either toggles it.
+pub fn checkbox(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), FontId::proportional(text::BODY), p.text);
+    let box_side = 16.0;
+    let size = vec2(box_side + space::S3 + galley.size().x, box_side.max(galley.size().y));
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
+    if ui.is_rect_visible(rect) {
+        let mark = Rect::from_min_size(
+            pos2(rect.left(), rect.center().y - box_side / 2.0),
+            Vec2::splat(box_side),
+        );
+        let edge = if *on {
+            p.action
+        } else if response.hovered() {
+            p.subtle
+        } else {
+            p.border
+        };
+        ui.painter().rect(
+            mark,
+            CornerRadius::same(4),
+            if *on { p.action } else { p.input },
+            Stroke::new(size::BORDER, edge),
+            egui::StrokeKind::Inside,
+        );
+        if *on {
+            icons::paint(ui.painter(), icons::Icon::UiCheck, mark.shrink(2.0), p.action_text);
+        }
+        ui.painter().galley(
+            pos2(mark.right() + space::S3, rect.center().y - galley.size().y / 2.0),
+            galley,
+            p.text,
+        );
+    }
+    response
+}
+
 fn button_of_width(ui: &mut egui::Ui, kind: ButtonKind, label: &str, width: f32) -> egui::Response {
     let p = current_colors(ui.ctx()).palette;
     let (fill, hover, ink) = match kind {

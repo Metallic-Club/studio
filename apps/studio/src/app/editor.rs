@@ -584,12 +584,14 @@ pub(crate) fn about_window(ctx: &egui::Context, open: &mut bool, mark: Option<&e
         .id(Id::unique("metallic.about"))
         .pivot(Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
-        .open(&mut keep)
+        // Its own header, with Lucide's close button (#278), in place of egui's title bar.
+        .title_bar(false)
         .collapsible(false)
         .resizable(false)
         .default_width(ABOUT_WIDTH)
         .show(ctx, |ui| {
             ui.set_width(ABOUT_WIDTH);
+            crate::theme::window_header(ui, "About Metallic Studio", &mut keep);
             ui.vertical_centered(|ui| {
                 ui.add_space(space::S4);
                 if let Some(mark) = mark {
