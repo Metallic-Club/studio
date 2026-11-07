@@ -5,22 +5,24 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use metallic_engine::graphics::save_graphics_settings;
+use metallic_engine::metallic_classes::input::feed::CursorState;
 use metallic_engine::metallic_core::{DataModel, DmError};
 use metallic_engine::metallic_platform::{
     AppHandler, ButtonState, DeviceEvent, EventLoopContext, GamepadEvent, KeyCode, Platform, PlatformError,
     WindowEvent, WindowId,
 };
 use metallic_engine::metallic_project::{Project, ProjectError};
-use metallic_engine::metallic_render::ContextOptions;
+use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderError};
 use metallic_engine::metallic_script::OutputSink;
 use metallic_engine::perf::PerfSummary;
 use metallic_engine::stress::{StressError, StressScene};
 use metallic_engine::{
-    Engine, EngineConfig, EngineError, EngineMode, FrameStats, RunContext, SceneRenderer, StdOutput, WindowedApp,
-    WindowedOptions, project_sources,
+    Engine, EngineConfig, EngineError, EngineMode, FrameStats, RunContext, SceneRenderer, SourceLoader, StdOutput,
+    WindowedApp, WindowedOptions, project_sources,
 };
 
-use crate::config::PlayerConfig;
+use crate::config::{GraphicsSettings, PlayerConfig};
+use crate::scene::Scene;
 use crate::stats::Report;
 
 /// Why a [`Player`] could not be made or stopped early.
@@ -44,6 +46,9 @@ pub enum PlayerError {
     /// The project ([`PlayerConfig::project`]) could not be opened or its start scene loaded.
     #[error(transparent)]
     Project(#[from] ProjectError),
+    /// The renderer could not draw into the host's viewport ([`Player::attach_viewport`]).
+    #[error(transparent)]
+    Render(#[from] RenderError),
 }
 
 /// Loads `project`'s start scene into `dm`, logging what its manifest and scene skipped.
@@ -168,6 +173,71 @@ impl<O: OutputSink> Player<O> {
             renderer,
             stress,
         })
+    }
+
+    /// A player of `game`, a game its host hands over with its scene loaded (Studio's copy of the scene it edits,
+    /// ADR 0010 §1), whose scripts are read from `sources` and print to `output`. It is a local game with
+    /// `RunService:IsStudio()` true, drawn with `graphics` (the host's settings, not the user's `graphics.toml`), and
+    /// started: its scripts' top-level code has run when this returns.
+    ///
+    /// It has no window. The host draws it into a texture on its own render device ([`Player::attach_viewport`]),
+    /// pushes its input ([`Engine::push_input`]), runs a [`Player::frame`] and then [`Player::render_viewport`] once
+    /// per loop iteration, and holds its own cursor as [`Player::cursor`] says. Its [`Player::config`] holds only the
+    /// graphics settings; it has no scene or window of its own.
+    pub fn hosted(
+        game: DataModel,
+        sources: impl SourceLoader + 'static,
+        graphics: GraphicsSettings,
+        output: O,
+    ) -> Result<Self, PlayerError> {
+        let engine_config = EngineConfig::new(RunContext::Local)
+            .with_mode(EngineMode::Windowed)
+            .with_studio(true)
+            .with_sources(sources);
+        let mut engine = Engine::with_data_model(game, engine_config, output)?;
+        // The host paces its loop; the Player caps nothing.
+        let config = PlayerConfig {
+            graphics: graphics.clone(),
+            frame_cap: None,
+            ..PlayerConfig::new(Scene::Demo)
+        };
+        let mut renderer = SceneRenderer::new(ContextOptions::default());
+        renderer.set_graphics(graphics);
+        renderer.write_user_settings(engine.data_model_mut());
+        engine.start()?;
+        Ok(Self {
+            engine,
+            config,
+            renderer: Rc::new(RefCell::new(renderer)),
+            stress: None,
+        })
+    }
+
+    /// Draws into a `width` x `height` (physical pixels) texture on `context`'s device from now on: the host's device,
+    /// shared with its UI so the texture is shown without a copy. Use [`Player::render_viewport`] after each frame,
+    /// and read the texture from [`Player::renderer`]'s [`SceneRenderer::viewport`].
+    pub fn attach_viewport(&mut self, context: &RenderContext, width: u32, height: u32) -> Result<(), PlayerError> {
+        self.renderer.borrow_mut().attach_viewport(context, width, height)?;
+        Ok(())
+    }
+
+    /// Resizes the viewport texture to the host's new `width` x `height` (physical pixels), without a black frame.
+    pub fn resize_viewport(&mut self, width: u32, height: u32) {
+        self.renderer.borrow_mut().resize_viewport(width, height);
+    }
+
+    /// Draws the game as the last frame left it into the viewport texture, from `Workspace.CurrentCamera`. Nothing
+    /// happens before [`Player::attach_viewport`].
+    pub fn render_viewport(&mut self) {
+        let stats = self.engine.last_frame();
+        self.renderer
+            .borrow_mut()
+            .render_viewport(self.engine.data_model_mut(), stats);
+    }
+
+    /// What the game asks of the cursor (`MouseBehavior`, `MouseIconEnabled`), for a host that holds its own cursor.
+    pub fn cursor(&self) -> CursorState {
+        self.engine.cursor()
     }
 
     /// The settings it was made with.

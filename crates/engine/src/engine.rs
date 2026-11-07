@@ -483,6 +483,13 @@ impl<O: OutputSink> Engine<O> {
         self.input.frame_events()
     }
 
+    /// What the game's scripts ask of the cursor now (`MouseBehavior`, `MouseIconEnabled`): for a host that draws
+    /// the game in its own window (Studio's Game tab, ADR 0010), which must hold or hide its cursor itself. An
+    /// attached window is told by the engine.
+    pub fn cursor(&self) -> metallic_classes::input::feed::CursorState {
+        self.user_input.cursor(&self.dm)
+    }
+
     /// The frame's input step: the queued events become the frame's, `UserInputService` takes them (firing its
     /// events only when the game runs this frame, `firing`), and the cursor state scripts asked for reaches the
     /// window (the engine holds the cursor itself where the window cannot lock it).
