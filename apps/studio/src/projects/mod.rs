@@ -26,6 +26,7 @@ use metallic_engine::metallic_project::{PROJECT_EXTENSION, Project, Template};
 
 use crate::keymap::{Keymap, ids};
 use crate::settings::window::category_item;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 pub use dialog::{FileDialog, NoDialog};
@@ -643,11 +644,7 @@ impl Projects {
                 if let Some(error) = &new.error {
                     ui.add_space(space::S2);
                     ui.horizontal_top(|ui| {
-                        ui.label(
-                            RichText::new(fonts::icon::WARNING.to_string())
-                                .font(fonts::named(fonts::ICONS, text::BODY_LG))
-                                .color(colors.accent),
-                        );
+                        icons::show(ui, Icon::UiWarning, text::BODY_LG, colors.accent);
                         ui.add(Label::new(RichText::new(error.as_str()).color(p.text)).wrap());
                     });
                 }
@@ -766,20 +763,13 @@ fn missing_badge(ui: &mut Ui, rect: Rect, path: &Path) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let painter = ui.painter();
-    let icon = painter.layout_no_wrap(
-        fonts::icon::WARNING.to_string(),
-        fonts::named(fonts::ICONS, text::BODY),
-        colors.accent,
-    );
+    let icon = Vec2::splat(text::BODY);
     let label = painter.layout_no_wrap(
         "File missing".to_owned(),
         fonts::named(fonts::STRONG, text::SMALL),
         p.text,
     );
-    let inner = vec2(
-        icon.size().x + space::S2 + label.size().x,
-        icon.size().y.max(label.size().y),
-    );
+    let inner = vec2(icon.x + space::S2 + label.size().x, icon.y.max(label.size().y));
     let badge = Rect::from_min_size(
         rect.min + vec2(space::S4, space::S4),
         inner + vec2(2.0 * space::S3, 2.0 * space::S2),
@@ -792,16 +782,16 @@ fn missing_badge(ui: &mut Ui, rect: Rect, path: &Path) {
         StrokeKind::Inside,
     );
     let left = badge.left() + space::S3;
-    painter.galley(
-        pos2(left, badge.center().y - icon.size().y / 2.0),
-        icon.clone(),
+    icons::paint_at(
+        painter,
+        pos2(left, badge.center().y),
+        egui::Align2::LEFT_CENTER,
+        Icon::UiWarning,
+        text::BODY,
         colors.accent,
     );
     painter.galley(
-        pos2(
-            left + icon.size().x + space::S2,
-            badge.center().y - label.size().y / 2.0,
-        ),
+        pos2(left + icon.x + space::S2, badge.center().y - label.size().y / 2.0),
         label,
         p.text,
     );
@@ -828,11 +818,7 @@ fn error_banner(ui: &mut Ui, error: &str) -> bool {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 dismissed = button(ui, ButtonKind::Secondary, "Dismiss").clicked();
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(fonts::icon::WARNING.to_string())
-                            .font(fonts::named(fonts::ICONS, text::TITLE))
-                            .color(colors.accent),
-                    );
+                    icons::show(ui, Icon::UiWarning, text::TITLE, colors.accent);
                     ui.add(Label::new(RichText::new(error).color(p.text)).wrap());
                 });
             });

@@ -6,10 +6,11 @@
 use egui::emath::GuiRounding;
 use egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2};
 
-use super::{icon, ids};
+use super::ids;
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::theme::current_colors;
+use crate::theme::icons::Icon;
 use crate::theme::tokens::text;
 
 /// The Game panel.
@@ -25,8 +26,8 @@ impl Panel for Game {
         "Game"
     }
 
-    fn icon(&self) -> char {
-        icon::GAME_CONTROLLER
+    fn icon(&self) -> Icon {
+        Icon::PanelGame
     }
 
     fn zone(&self) -> Zone {

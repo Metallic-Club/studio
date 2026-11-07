@@ -19,6 +19,7 @@ use metallic_engine::metallic_platform::{AppId, UserPaths};
 use super::window::{CONTROL_WIDTH, section_label};
 use crate::STUDIO_APP_ID;
 use crate::keymap::{Binding, Chord, Command, Context, Keymap, Mods, MouseButton, Resolution, Trigger};
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
@@ -380,17 +381,14 @@ fn section_header(ui: &mut Ui, section: &Section, keymap: &mut Keymap, open: boo
     });
     if ui.is_rect_visible(rect) {
         let ink = if toggle.hovered() { p.text } else { p.muted };
-        let chevron = if open {
-            crate::panels::icon::CARET_DOWN
-        } else {
-            crate::panels::icon::CARET_RIGHT
-        };
+        let chevron = if open { Icon::UiCollapse } else { Icon::UiExpand };
         let mut x = rect.left();
-        ui.painter().text(
+        icons::paint_at(
+            ui.painter(),
             egui::pos2(x, rect.center().y),
             egui::Align2::LEFT_CENTER,
             chevron,
-            fonts::named(fonts::ICONS, text::BODY),
+            text::BODY,
             ink,
         );
         x += text::BODY + space::S3;
@@ -749,11 +747,7 @@ fn warning_line(ui: &mut Ui, line: &str) {
     let colors = current_colors(ui.ctx());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = space::S2;
-        ui.label(
-            RichText::new(fonts::icon::WARNING.to_string())
-                .font(fonts::named(fonts::ICONS, text::SMALL))
-                .color(colors.accent),
-        );
+        icons::show(ui, Icon::UiWarning, text::SMALL, colors.accent);
         ui.add(Label::new(RichText::new(line).size(text::SMALL).color(colors.palette.text)).wrap());
     });
 }
@@ -871,11 +865,12 @@ fn add_button(ui: &mut Ui, title: &str) -> Response {
             ui.painter()
                 .rect_filled(rect, CornerRadius::same(radius::ITEM / 2), p.surface_hover);
         }
-        ui.painter().text(
+        icons::paint_at(
+            ui.painter(),
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            fonts::icon::PLUS,
-            fonts::named(fonts::ICONS, text::BODY),
+            Icon::UiAdd,
+            text::BODY,
             if hovered { p.text } else { p.subtle },
         );
     }

@@ -14,8 +14,7 @@ use egui::{
 use crate::dock::Dock;
 use crate::editor::{EditorState, STEPS};
 use crate::keymap::{Keymap, ids};
-use crate::panels;
-use crate::panels::icon;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{self, radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
@@ -341,15 +340,15 @@ pub(crate) fn top_bar(
                 // Right to left: the buttons read Play, Pause, Step, Stop.
                 ui.spacing_mut().item_spacing.x = space::S1;
                 let pause = if play.paused {
-                    (icon::PLAY, "Resume")
+                    (Icon::ToolbarPlay, "Resume")
                 } else {
-                    (icon::PAUSE, "Pause")
+                    (Icon::ToolbarPause, "Pause")
                 };
                 for (kind, glyph, label, command) in [
-                    (MenuAction::Stop, icon::STOP, "Stop", ids::TEST_STOP),
-                    (MenuAction::Step, icon::STEP, "Step", ids::TEST_STEP),
+                    (MenuAction::Stop, Icon::ToolbarStop, "Stop", ids::TEST_STOP),
+                    (MenuAction::Step, Icon::ToolbarStep, "Step", ids::TEST_STEP),
                     (MenuAction::Pause, pause.0, pause.1, ids::TEST_PAUSE),
-                    (MenuAction::Play, icon::PLAY, "Play", ids::TEST_PLAY),
+                    (MenuAction::Play, Icon::ToolbarPlay, "Play", ids::TEST_PLAY),
                 ] {
                     let tip = match keymap.shortcut_text(command) {
                         Some(keys) => format!("{label} ({keys})"),
@@ -372,8 +371,9 @@ pub(crate) fn top_bar(
 
 /// A play control in the top bar: `glyph` in a square button labelled `label`, the theme's green play fill when
 /// `green`, at the disabled strength and inert unless `enabled`.
-fn play_button(ui: &mut Ui, glyph: char, label: &str, enabled: bool, green: bool) -> Response {
-    let p = current_colors(ui.ctx()).palette;
+fn play_button(ui: &mut Ui, glyph: Icon, label: &str, enabled: bool, green: bool) -> Response {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(TITLE_HEIGHT + 4.0, TITLE_HEIGHT), sense);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
@@ -382,17 +382,19 @@ fn play_button(ui: &mut Ui, glyph: char, label: &str, enabled: bool, green: bool
         let (fill, ink) = match (green, enabled) {
             (true, true) if hovered => (tokens::play::HOVER, tokens::play::TEXT),
             (true, true) => (tokens::play::FILL, tokens::play::TEXT),
-            (_, true) if hovered => (p.surface_hover, p.text),
-            (_, true) => (Color32::TRANSPARENT, p.text),
+            // The others in the Run group's colour (#231).
+            (_, true) if hovered => (p.surface_hover, glyph.color(&colors)),
+            (_, true) => (Color32::TRANSPARENT, glyph.color(&colors)),
             // The website's disabled strength: 48 %.
             (_, false) => (Color32::TRANSPARENT, p.text.gamma_multiply(0.48)),
         };
         ui.painter().rect_filled(rect, CornerRadius::same(radius::ITEM), fill);
-        ui.painter().text(
+        icons::paint_at(
+            ui.painter(),
             rect.center(),
             Align2::CENTER_CENTER,
             glyph,
-            fonts::named(fonts::ICONS, text::BODY_LG),
+            text::BODY_LG,
             ink,
         );
     }
@@ -410,11 +412,12 @@ fn gear(ui: &mut Ui, open: bool) -> Response {
         Color32::TRANSPARENT
     };
     ui.painter().rect_filled(rect, CornerRadius::same(radius::ITEM), fill);
-    ui.painter().text(
+    icons::paint_at(
+        ui.painter(),
         rect.center(),
         Align2::CENTER_CENTER,
-        fonts::icon::GEAR,
-        fonts::named(fonts::ICONS, text::BODY_LG + 2.0),
+        Icon::ToolbarSettings,
+        text::BODY_LG + 2.0,
         if open || response.hovered() { p.text } else { p.muted },
     );
     response
@@ -479,11 +482,12 @@ fn menu_item(ui: &mut Ui, label: &str, shortcut: Option<String>, checked: Option
         let mut x = rect.left() + space::S4;
         if checked.is_some() {
             if checked == Some(true) {
-                ui.painter().text(
+                icons::paint_at(
+                    ui.painter(),
                     pos2(x, rect.center().y),
                     Align2::LEFT_CENTER,
-                    panels::icon::CHECK,
-                    fonts::named(fonts::ICONS, text::BODY),
+                    Icon::UiCheck,
+                    text::BODY,
                     colors.accent,
                 );
             }

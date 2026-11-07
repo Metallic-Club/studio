@@ -13,10 +13,11 @@ use egui::{
 };
 use log::Level;
 
-use super::{empty_note, icon, ids, matches_words, search_box};
+use super::{empty_note, ids, matches_words, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::logging::{LogBuffer, LogLine, Origin};
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
@@ -160,8 +161,8 @@ impl Panel for Output {
         "Output"
     }
 
-    fn icon(&self) -> char {
-        icon::TERMINAL
+    fn icon(&self) -> Icon {
+        Icon::PanelOutput
     }
 
     fn zone(&self) -> Zone {
@@ -260,17 +261,18 @@ fn line_ui(ui: &mut Ui, line: &LogLine, height: f32) {
         return;
     }
     let (glyph, tint) = match line.level {
-        Level::Error => (icon::X_CIRCLE, if colors.dark { ERROR } else { ERROR_LIGHT }),
-        Level::Warn => (fonts::icon::WARNING, colors.accent),
-        Level::Info => (icon::INFO, p.subtle),
-        Level::Debug | Level::Trace => (icon::INFO, p.border),
+        Level::Error => (Icon::UiError, if colors.dark { ERROR } else { ERROR_LIGHT }),
+        Level::Warn => (Icon::UiWarning, colors.accent),
+        Level::Info => (Icon::UiInfo, p.subtle),
+        Level::Debug | Level::Trace => (Icon::UiInfo, p.border),
     };
     let mut x = rect.left() + space::S2;
-    ui.painter().text(
+    icons::paint_at(
+        ui.painter(),
         pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         glyph,
-        fonts::named(fonts::ICONS, text::SMALL + 1.0),
+        text::SMALL + 1.0,
         tint,
     );
     x += text::BODY + space::S2;

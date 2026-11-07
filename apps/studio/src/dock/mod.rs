@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::editor::EditorState;
 use crate::keymap::Context;
 use crate::settings::StudioSettings;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{current_colors, fonts};
 pub use layout::{LAYOUT_FILE, LAYOUT_VERSION, LayoutError};
@@ -61,8 +62,8 @@ pub trait Panel: Sync {
     fn id(&self) -> &'static str;
     /// The name on its tab and in the View menu.
     fn title(&self) -> &'static str;
-    /// Its Lucide icon (the drag chip shows it; tabs show titles only, #255).
-    fn icon(&self) -> char;
+    /// Its icon (the drag chip shows it; tabs show titles only, #255).
+    fn icon(&self) -> Icon;
     /// Where it goes in the default layout, and where it opens.
     fn zone(&self) -> Zone;
     /// The keymap context it gives while it has focus.
@@ -470,7 +471,7 @@ impl DockBehavior<'_, '_> {
     }
 
     /// The title and icon of a tab showing `pane` (`None`: a group of panels).
-    fn label(&self, pane: Option<&PanelId>) -> (String, Option<char>) {
+    fn label(&self, pane: Option<&PanelId>) -> (String, Option<Icon>) {
         match pane {
             Some(pane) => match self.panel(pane) {
                 Some(panel) => (panel.title().to_owned(), Some(panel.icon())),
@@ -546,11 +547,12 @@ fn tab_button(ui: &mut Ui, id: Id, title: &str, state: &TabState) -> (Response, 
                 ui.painter()
                     .rect_filled(close_rect, CornerRadius::same(radius::ITEM / 2), p.surface_hover);
             }
-            ui.painter().text(
+            icons::paint_at(
+                ui.painter(),
                 close_rect.center(),
                 Align2::CENTER_CENTER,
-                fonts::icon::X,
-                fonts::named(fonts::ICONS, text::SMALL),
+                Icon::UiClose,
+                text::SMALL,
                 if close.hovered() { p.text } else { p.subtle },
             );
         }

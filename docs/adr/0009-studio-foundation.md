@@ -129,6 +129,15 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   tracking. JetBrains Mono (OFL 1.1) for code. Phosphor icons (MIT); since #257, Lucide icons (ISC,
   https://lucide.dev). All bundled with their licence files. egui's default fonts are replaced, because one of them
   is under a licence `deny.toml` rejects.
+- **Icons** (#231): every icon is an entry in one table (`theme::icons::Icon`): a stable id (`explorer.part`), a
+  group and a default Lucide glyph. **Groups are coloured** so sections are easy to tell apart (Explorer: services blue,
+  world mint, lights orange, scripts violet, cameras rose, the rest neutral; panels, assets and the play controls
+  likewise), from theme tokens: each accent pulled towards the muted grey, so calm; high contrast makes them stronger.
+  Selection still wins: a selected row's icon is the accent. A **custom icon folder** (Settings → Appearance → Icon
+  folder) replaces any icon with `<id>.svg` or `<id>.png`; it is read and rasterised (resvg, png) on a background
+  thread when the setting changes or Reload is pressed, and cached as textures. A monochrome image takes its group's
+  colour; a coloured one is drawn as it is; a bad file keeps the built-in icon with one warning in Output. The ids are
+  listed in `docs/studio-icons.md`, generated from the table.
 - **Motion:** 0.12–0.2 s, eased. **Reduced motion** (a setting, and the OS's switch where Studio can read it) turns
   off fades and eases.
 

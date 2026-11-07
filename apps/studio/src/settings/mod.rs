@@ -46,7 +46,7 @@ pub struct General {
 }
 
 /// The Appearance category: what [`Look`] the interface has, and how large it is drawn.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Appearance {
     /// Dark, light or the system's.
     pub mode: ThemeMode,
@@ -60,6 +60,8 @@ pub struct Appearance {
     pub motion: MotionPreference,
     /// Whether each group of docked panels is outlined, as the Settings window is (#262).
     pub panel_borders: bool,
+    /// A folder of custom icons, empty for none: a file named after an icon's id replaces it (#231).
+    pub icon_folder: String,
 }
 
 impl Default for Appearance {
@@ -71,6 +73,7 @@ impl Default for Appearance {
             ui_scale: 1.0,
             motion: MotionPreference::default(),
             panel_borders: true,
+            icon_folder: String::new(),
         }
     }
 }
@@ -229,6 +232,12 @@ impl StudioSettings {
                 &mut a.motion,
             );
             read(appearance, "panel_borders", Value::as_bool, &mut a.panel_borders);
+            read(
+                appearance,
+                "icon_folder",
+                |v| v.as_str().map(str::to_owned),
+                &mut a.icon_folder,
+            );
         }
         if let Some(rendering) = section("rendering") {
             settings.rendering = rendering_from(rendering);
@@ -257,6 +266,7 @@ impl StudioSettings {
             appearance.insert("ui_scale".into(), Value::Float(scale));
             appearance.insert("reduce_motion".into(), Value::String(a.motion.as_str().into()));
             appearance.insert("panel_borders".into(), Value::Boolean(a.panel_borders));
+            appearance.insert("icon_folder".into(), Value::String(a.icon_folder.clone()));
         });
         with_section(&mut document, "rendering", |rendering| {
             for key in RENDERING_KEYS {
@@ -396,6 +406,7 @@ mod tests {
             ui_scale: 1.25,
             motion: MotionPreference::Reduced,
             panel_borders: false,
+            icon_folder: "C:/Icons".to_owned(),
         };
         settings.rendering = GraphicsSettings {
             preset: Preset::High,

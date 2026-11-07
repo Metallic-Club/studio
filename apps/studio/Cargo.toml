@@ -22,6 +22,9 @@ log.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 rfd.workspace = true
+# The custom icon folder's SVGs and PNGs (src/theme/icons/custom.rs).
+resvg.workspace = true
+png.workspace = true
 egui_tiles.workspace = true
 # The saved dock layout (`layout.json`).
 serde.workspace = true
@@ -35,5 +38,3 @@ windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi", "Win32_UI_Wi
 
 [dev-dependencies]
 egui_kittest.workspace = true
-# The offscreen screenshots (`docs/screenshots`), written by an ignored test.
-png.workspace = true
