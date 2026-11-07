@@ -3328,6 +3328,41 @@ mod tests {
         harness.get_by_label("512, 16, 512");
     }
 
+    #[test]
+    fn explorer_rows_touch_and_alternate_shades() {
+        let mut harness = editing(settings_file("explorer-stripes", None), "Explorer Stripes Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // The tree's rows, top to bottom: no gap between them (#274).
+        let mut items: Vec<egui::Rect> = harness
+            .get_all_by_role(Role::TreeItem)
+            .map(|item| item.rect())
+            .collect();
+        items.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        assert!(items.len() >= 6, "{} rows", items.len());
+        for pair in items.windows(2) {
+            assert!((pair[1].top() - pair[0].bottom()).abs() < 0.01, "{pair:?}");
+        }
+        // Each row is on a stripe, and neighbours have the two shades.
+        let shades = tokens::DARK.rows();
+        let output = harness.output();
+        let stripe = |row: egui::Rect| {
+            output.shapes.iter().find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect == row && (rect.fill == shades.darker || rect.fill == shades.brighter) =>
+                {
+                    Some(rect.fill)
+                }
+                _ => None,
+            })
+        };
+        let fills: Vec<egui::Color32> = items.iter().map(|&row| stripe(row).expect("a striped row")).collect();
+        assert_eq!(fills[0], shades.darker, "the first row is the darker shade");
+        for pair in fills.windows(2) {
+            assert_ne!(pair[0], pair[1]);
+        }
+    }
+
     /// Runs `studio` for `frames` frames of `size` points at `pixels_per_point`, drawn by egui-wgpu on the engine's
     /// offscreen device as the shell draws them (the viewport too), calling `before(studio, frame)` before each.
     /// Returns the last frame as RGBA rows.
