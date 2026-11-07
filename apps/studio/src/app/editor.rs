@@ -260,12 +260,11 @@ pub(crate) fn opening_overlay(ui: &mut Ui, name: &str, step: usize) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 }
 
-/// The top bar: the mark, the menus ([`MENUS`]), the play controls and the gear (raised while the Settings window is
+/// The top bar: the menus ([`MENUS`]), the play controls and the gear (raised while the Settings window is
 /// open, `settings_open`). The project's name is the window's title ([`super::Studio::window_title`]). Returns what was
 /// asked for.
 pub(crate) fn top_bar(
     ui: &mut Ui,
-    mark: Option<&egui::TextureHandle>,
     editor: &EditorState,
     dock: &Dock,
     keymap: &Keymap,
@@ -287,10 +286,7 @@ pub(crate) fn top_bar(
             .max_rect(inner)
             .layout(Layout::left_to_right(Align::Center)),
         |ui| {
-            if let Some(mark) = mark {
-                ui.add(egui::Image::new((mark.id(), egui::Vec2::splat(20.0))));
-                ui.add_space(space::S4);
-            }
+            // No mark here (#299): the window's title bar shows it.
             // A menu bar takes all the width it is given; it gets the titles' only, so the rest of the bar follows it.
             let title_font = egui::FontId::proportional(text::BODY);
             let widths: Vec<f32> = MENUS
