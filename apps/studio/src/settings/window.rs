@@ -21,7 +21,7 @@ use metallic_engine::metallic_render::settings::{GraphicsSettings, Preset, Quali
 use super::keybinds::{self, KeybindsPage};
 use super::{
     LOD_BIAS, MAX_FRAME_CAP, MAX_VIEW_DISTANCE, MotionPreference, SHADOW_DISTANCE, StudioSettings, TARGET_FRAME_MS,
-    TabPosition, ui_scale,
+    ui_scale,
 };
 use crate::keymap::{Command, Keymap};
 use crate::theme::tokens::{Accent, radius, size, space, text};
@@ -173,15 +173,6 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let choices = MotionPreference::ALL.map(|choice| (choice, choice.label()));
             segmented(ui, &mut s.appearance.motion, &choices);
-        },
-    },
-    Entry {
-        category: Category::Appearance,
-        name: "Panel tabs",
-        description: "Where each docked area's tab bar sits: under its panel or above it.",
-        control: |ui, s| {
-            let choices = TabPosition::ALL.map(|choice| (choice, choice.label()));
-            segmented(ui, &mut s.appearance.tab_position, &choices);
         },
     },
     Entry {

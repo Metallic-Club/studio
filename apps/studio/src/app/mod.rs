@@ -1923,7 +1923,7 @@ mod tests {
         harness.get_by_label("The output is empty.");
     }
 
-    // Tab bars at the bottom or the top, and striped Properties rows (#230).
+    // Tab bars above their panels (#236), and striped Properties rows (#230).
 
     /// The panels in the tab bar holding panel `id`, in order.
     fn tab_bar_of(studio: &Studio, id: &str) -> Vec<String> {
@@ -1968,58 +1968,48 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_bars_sit_under_their_panels_and_a_setting_puts_them_above() {
-        let path = settings_file("editor-tabs", None);
+    fn the_tab_bars_sit_above_their_panels_with_no_setting_to_move_them() {
+        // A file from #230's Studio, with the tab bars at the bottom: the key is kept, and nothing moves.
+        let path = settings_file("editor-tabs", Some("[appearance]\ntab_position = \"bottom\"\n"));
         let mut harness = editing(path.clone(), "Tabs Game");
-        let below = |harness: &Harness<'_, Test>| {
-            let tab = harness.get_by_role_and_label(Role::Tab, "Properties").rect();
-            let note = harness
-                .get_by_label("Select something in the Explorer to see its properties.")
-                .rect();
-            let explorer = harness.get_by_role_and_label(Role::Tab, "Explorer").rect();
-            let workspace = harness.get_by_role_and_label(Role::TreeItem, "Workspace").rect();
-            match (tab.top() >= note.bottom(), explorer.top() >= workspace.bottom()) {
-                (true, true) => Some(true),
-                (false, false) if tab.bottom() <= note.top() && explorer.bottom() <= workspace.top() => Some(false),
-                _ => None,
-            }
-        };
-        assert_eq!(below(&harness), Some(true), "the default is the bottom");
-        // At the very bottom of their areas.
         let tab = harness.get_by_role_and_label(Role::Tab, "Properties").rect();
+        let note = harness
+            .get_by_label("Select something in the Explorer to see its properties.")
+            .rect();
+        let explorer = harness.get_by_role_and_label(Role::Tab, "Explorer").rect();
+        let workspace = harness.get_by_role_and_label(Role::TreeItem, "Workspace").rect();
+        assert!(tab.bottom() <= note.top(), "{tab:?} over {note:?}");
+        assert!(explorer.bottom() <= workspace.top(), "{explorer:?} over {workspace:?}");
+        // At the very top of their areas.
         let tiles = &harness.state().studio.dock().tree().tiles;
         let area = tiles
             .iter()
             .find_map(|(&tile, kind)| match kind {
-                egui_tiles::Tile::Pane(pane) if pane.0 == panels::ids::PROPERTIES => tiles.rect(tile),
+                egui_tiles::Tile::Container(egui_tiles::Container::Tabs(tabs))
+                    if tabs.children.iter().any(|child| {
+                        matches!(tiles.get(*child), Some(egui_tiles::Tile::Pane(pane)) if pane.0 == panels::ids::PROPERTIES)
+                    }) =>
+                {
+                    tiles.rect(tile)
+                }
                 _ => None,
             })
             .unwrap();
-        assert!((tab.bottom() - area.bottom()).abs() < 0.5, "{tab:?} in {area:?}");
+        assert!((tab.top() - area.top()).abs() < 0.5, "{tab:?} in {area:?}");
 
-        // Settings → Appearance → Panel tabs: Top, applied at once and saved.
+        // Settings → Appearance has no Panel tabs row.
         harness.get_by_role_and_label(Role::Button, "Settings").click();
         settle(&mut harness);
         harness.get_by_role_and_label(Role::Tab, "Appearance").click();
         settle(&mut harness);
-        // Tall enough that the page's last rows show above the Output panel.
         harness.set_size(egui::vec2(1280.0, 1400.0));
         settle(&mut harness);
-        harness.get_by_label("Panel tabs");
-        harness.get_by_role_and_label(Role::Button, "Top").click();
+        harness.get_by_label("Reduced motion");
+        assert!(harness.query_by_label("Panel tabs").is_none());
+        harness.get_by_role_and_label(Role::Button, "Settings").click();
         settle(&mut harness);
-        assert_eq!(
-            harness.state().studio.settings().appearance.tab_position,
-            crate::settings::TabPosition::Top
-        );
-        assert_eq!(below(&harness), Some(false), "above their panels");
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("tab_position = \"top\""), "{text}");
 
-        harness.get_by_role_and_label(Role::Button, "Bottom").click();
-        settle(&mut harness);
-        assert_eq!(below(&harness), Some(true));
-        // A click on a bottom tab opens it, and its close button closes it.
+        // A click on a tab opens it, and its close button closes it.
         harness.get_by_role_and_label(Role::Tab, "Assets").click();
         settle(&mut harness);
         harness.get_by_label("1 asset");
@@ -2028,7 +2018,7 @@ mod tests {
     }
 
     #[test]
-    fn bottom_tabs_drag_to_a_new_place_and_into_another_bar() {
+    fn tabs_drag_to_a_new_place_and_into_another_bar() {
         let mut harness = editing(settings_file("editor-drag", None), "Drag Game");
         assert_eq!(
             tab_bar_of(&harness.state().studio, panels::ids::EXPLORER),
@@ -2278,14 +2268,14 @@ mod tests {
         write_png(&out.join("216-editor.png"), shot);
     }
 
-    /// The screenshots of #230 (`cargo test -p metallic_studio -- --ignored screenshots_of_bottom_tabs`): the editor
-    /// with its tab bars at the bottom, the template project open and a part selected, and its Properties panel's
-    /// striped rows close up. Offscreen, like the others.
+    /// The screenshot of #230 (`cargo test -p metallic_studio -- --ignored screenshot_of_striped_properties`): the
+    /// template project open with a part selected, and its Properties panel's striped rows close up. Offscreen, like
+    /// the others.
     #[test]
     #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
-    fn screenshots_of_bottom_tabs_and_striped_properties() {
+    fn screenshot_of_striped_properties() {
         let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
-        let path = config("shot-bottom-tabs", Some("[general]\nskip_sign_in = true\n"), None);
+        let path = config("shot-properties", Some("[general]\nskip_sign_in = true\n"), None);
         let project = make_project_once(path.parent().unwrap(), "Space Race");
         let mut studio = studio_after_startup(steps_reading(path));
         let pixels_per_point = 1.25;
@@ -2314,10 +2304,6 @@ mod tests {
             },
         );
         assert_eq!(studio.screen(), Screen::Editor);
-        assert_eq!(
-            studio.settings().appearance.tab_position,
-            crate::settings::TabPosition::Bottom
-        );
         // The Properties panel's area, from the dock's last layout.
         let tiles = &studio.dock().tree().tiles;
         let area = tiles
@@ -2340,7 +2326,6 @@ mod tests {
             let row = ((y * width + left) * 4) as usize;
             crop.extend_from_slice(&pixels[row..row + ((right - left) * 4) as usize]);
         }
-        write_png(&out.join("230-bottom-tabs.png"), shot.clone());
         write_png(&out.join("230-properties.png"), (right - left, bottom - top, crop));
     }
 
