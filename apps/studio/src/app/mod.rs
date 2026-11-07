@@ -80,9 +80,6 @@ enum EditorScreen {
 /// Studio's name in the window's title.
 pub const APP_TITLE: &str = "Metallic Studio";
 
-/// The mark's size in the editor's top bar, in points.
-const BAR_MARK: f32 = 20.0;
-
 /// Studio's interface state: the screen shown, the theme, the settings and what startup loaded.
 pub struct Studio {
     screen: Screen,
@@ -432,7 +429,6 @@ impl Studio {
             ui.ctx().request_repaint();
             return;
         }
-        let mark = self.mark(&ctx, BAR_MARK);
         let Some(EditorScreen::Open(editor)) = &mut self.editor else {
             // No project: nothing to edit.
             self.show_projects();
@@ -449,7 +445,7 @@ impl Studio {
         let action = ui
             .scope_builder(UiBuilder::new().max_rect(bar), |ui| {
                 let settings_open = self.settings_window.is_open();
-                editor::top_bar(ui, Some(&mark), editor, &self.dock, &self.keymap, settings_open)
+                editor::top_bar(ui, editor, &self.dock, &self.keymap, settings_open)
             })
             .inner;
         let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
@@ -3204,6 +3200,23 @@ mod tests {
         let tiles = &studio.dock().tree().tiles;
         let pane = tiles.find_pane(&crate::dock::PanelId(id.into())).unwrap();
         tiles.rect(tiles.parent_of(pane).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_top_bar_has_no_mark() {
+        let mut harness = editing(settings_file("bar-no-mark", None), "Bar Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // The window's title bar shows the mark (#299): the bar starts with the File menu, and nothing is drawn before it.
+        let file = harness.get_by_label("File").rect();
+        let images_before = harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Mesh(mesh) => {
+                let bounds = mesh.calc_bounds();
+                bounds.bottom() <= file.bottom() + 8.0 && bounds.right() <= file.left()
+            }
+            _ => false,
+        });
+        assert!(!images_before, "an image left of the File menu");
     }
 
     #[test]
