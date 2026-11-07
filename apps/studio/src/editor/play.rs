@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use egui::{Rect, TextureId};
 use metallic_engine::metallic_classes;
+use metallic_engine::metallic_core::{DataModel, Id};
 use metallic_engine::metallic_project::{SceneIds, load_scene, save_scene};
 use metallic_engine::metallic_render::settings::GraphicsSettings;
 use metallic_engine::{RunState, project_sources};
@@ -20,6 +21,7 @@ use metallic_player::Player;
 
 use super::EditorState;
 use crate::logging::{LogBuffer, ScriptOutput};
+use crate::panels::explorer::ExplorerState;
 
 /// A game session: the Player running the copy of the scene, and the Game tab's view of it.
 pub struct PlaySession {
@@ -32,6 +34,23 @@ pub struct PlaySession {
     pub view: GameView,
     /// A number no other session of this Studio had: the shell's texture belongs to one session.
     pub number: u64,
+    /// The selection in the running game (live editing, ADR 0010 §5): the editor's carried in by scene id at Play.
+    pub selection: Option<Id>,
+    /// The Explorer's state over the running game.
+    pub explorer: ExplorerState,
+}
+
+/// The scene the Explorer and Properties show and edit: the editor's, or the running game's while a session runs
+/// (live editing, ADR 0010 §5). Each has its own selection and Explorer state, so Stop finds the editor's as they were.
+pub struct Scene<'a> {
+    /// The game.
+    pub dm: &'a mut DataModel,
+    /// What is selected in it.
+    pub selection: &'a mut Option<Id>,
+    /// The Explorer's expanded instances and search over it.
+    pub explorer: &'a mut ExplorerState,
+    /// Whether it is the running game's.
+    pub playing: bool,
 }
 
 impl std::fmt::Debug for PlaySession {
@@ -86,13 +105,44 @@ impl EditorState {
         let player =
             Player::hosted(game, sources, graphics, ScriptOutput::new(log)).map_err(|error| error.to_string())?;
         log::info!("play: started {}", self.name());
+        // The selection comes along by scene id, revealed in the game's Explorer.
+        let selection = self
+            .selection
+            .and_then(|id| self.scene_ids.get(id))
+            .and_then(|scene_id| loaded.ids.instance(scene_id));
+        let dm = player.engine().data_model();
+        let mut explorer = ExplorerState::new(dm);
+        if let Some(id) = selection {
+            explorer.reveal(dm, id);
+        }
         self.play = Some(PlaySession {
             player,
             ids: loaded.ids,
             view: GameView::default(),
             number,
+            selection,
+            explorer,
         });
         Ok(())
+    }
+
+    /// The scene the Explorer and Properties show and edit: the running game's while a session runs, else the
+    /// editor's (ADR 0010 §5).
+    pub fn scene(&mut self) -> Scene<'_> {
+        match self.play.as_mut() {
+            Some(session) => Scene {
+                dm: session.player.engine_mut().data_model_mut(),
+                selection: &mut session.selection,
+                explorer: &mut session.explorer,
+                playing: true,
+            },
+            None => Scene {
+                dm: &mut self.dm,
+                selection: &mut self.selection,
+                explorer: &mut self.explorer,
+                playing: false,
+            },
+        }
     }
 
     /// Ends the session: the game is dropped, and the editor's scene is as it was before Play. Returns whether one
