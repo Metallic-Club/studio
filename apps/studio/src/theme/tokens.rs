@@ -91,8 +91,9 @@ impl Palette {
     /// a raised surface), and the border at low alpha for the 1 px lines between rows and columns.
     pub const fn rows(self) -> RowShades {
         RowShades {
-            darker: mix(self.panel, self.bg, 0.75),
-            brighter: mix(self.panel, self.surface, 0.5),
+            // Gentle (#285): about half the difference #230 had, so the stripes guide the eye without shouting.
+            darker: mix(self.panel, self.bg, ROW_DARKER),
+            brighter: mix(self.panel, self.surface, ROW_BRIGHTER),
             line: Color32::from_rgba_unmultiplied_const(
                 self.border.r(),
                 self.border.g(),
@@ -102,6 +103,11 @@ impl Palette {
         }
     }
 }
+
+/// How far the darker stripe moves from the panel towards the window's ground.
+const ROW_DARKER: f32 = 0.4;
+/// How far the brighter stripe moves from the panel towards a raised surface.
+const ROW_BRIGHTER: f32 = 0.25;
 
 /// The opacity of the lines between striped rows: faint, so they separate without boxing.
 pub const ROW_LINE_ALPHA: u8 = 0x66;
@@ -558,11 +564,17 @@ mod tests {
                 assert_eq!(fills, [rows.darker, rows.brighter, rows.darker, rows.brighter]);
             }
         }
-        // The website's dark panel gives these shades.
+        // The website's dark panel gives these shades: 5 levels apart, half #230's 10 (#285).
         assert_eq!(
             (DARK.rows().darker, DARK.rows().brighter),
-            (hex(0x171717), hex(0x212121))
+            (hex(0x191919), hex(0x1E1E1E))
         );
+        // Gentle but still there, in every mode: 2 to 6 levels apart.
+        for p in [DARK, LIGHT, DARK.high_contrast(true), LIGHT.high_contrast(false)] {
+            let rows = p.rows();
+            let gap = rows.brighter.r().abs_diff(rows.darker.r());
+            assert!((2..=6).contains(&gap), "{rows:?}");
+        }
         // High contrast keeps the shades and strengthens the lines.
         let strong = DARK.high_contrast(true).rows();
         assert_eq!(strong.darker, DARK.rows().darker);
