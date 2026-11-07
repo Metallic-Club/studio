@@ -214,17 +214,20 @@ impl Panel for Explorer {
         if let Some(target) = editor.explorer.scroll_to.take()
             && let Some(index) = rows.iter().position(|row| row.id == target)
         {
-            let spacing = ui.spacing().item_spacing.y;
-            let top = index as f32 * (row_height + spacing);
+            // The rows touch (#274): no spacing between them.
+            let top = index as f32 * row_height;
             let view = ui.available_height();
             scroll = scroll.vertical_scroll_offset((top - view / 2.0).max(0.0));
         }
         let mut clicked = None;
         let mut toggled = None;
+        let shades = current_colors(ui.ctx()).palette.rows();
+        // The rows touch (#274), so the stripes are continuous, as the Properties panel's are.
+        ui.spacing_mut().item_spacing.y = 0.0;
         scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
-            for row in &rows[range] {
+            for (index, row) in range.clone().zip(&rows[range]) {
                 let selected = *editor.selection == Some(row.id);
-                match row_ui(ui, editor.dm, *row, selected, searching) {
+                match row_ui(ui, editor.dm, *row, selected, searching, shades.fill(index)) {
                     RowAction::None => {}
                     RowAction::Select => clicked = Some(row.id),
                     RowAction::Toggle => toggled = Some(*row),
@@ -247,8 +250,9 @@ enum RowAction {
     Toggle,
 }
 
-/// One row: the caret, the class icon and the name; the selected row on a surface with the accent's bar.
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool) -> RowAction {
+/// One row on its `stripe` (#274): the caret, the class icon and the name; the selected row on a surface with the
+/// accent's bar.
+fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool, stripe: Color32) -> RowAction {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let name = dm.name(row.id).unwrap_or("?").to_owned();
@@ -265,6 +269,7 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool
         None
     };
     if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, stripe);
         let fill = if selected {
             p.surface_hover
         } else if response.hovered() {

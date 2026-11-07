@@ -96,7 +96,7 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
   window's edge has none. Settings → Appearance → Panel borders turns the lines off (on by default).
 - **Default layout:** Viewport in the centre; Explorer on the left with Assets as a tab beside it; Properties on the
   right; Output along the bottom.
-- **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection, search); Properties (the selected
+- **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection, search; since #274 its rows touch and are striped like Properties'); Properties (the selected
   instance's properties from `PropMeta`, **read-only in this slice**, since editing comes with undo); Assets (the
   `.mtproj`'s asset index, #188); Output (engine and script log, with filter and clear).
 
