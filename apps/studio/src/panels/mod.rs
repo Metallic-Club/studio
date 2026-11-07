@@ -166,6 +166,39 @@ mod tests {
     }
 
     #[test]
+    fn every_class_in_an_engine_section_shares_its_colour() {
+        use std::collections::HashMap;
+
+        use crate::theme::icons::Group;
+
+        let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
+        let mut sections: HashMap<&str, Group> = HashMap::new();
+        for info in registry.classes() {
+            let Some(class) = registry.class_id(info.name()) else {
+                continue;
+            };
+            let group = class_icon(&registry, class).group();
+            // Every service is a service, whatever else it is (#277).
+            let section = if info.service_order().is_some() {
+                "Services"
+            } else {
+                info.desc().category
+            };
+            if section.is_empty() {
+                continue;
+            }
+            let first = *sections.entry(section).or_insert(group);
+            assert_eq!(group, first, "{} in {section}", info.name());
+        }
+        assert!(sections.len() >= 5, "{sections:?}");
+        assert_eq!(sections["Services"], Group::Service);
+        assert_eq!(sections["Scripts"], Group::Script);
+        // Each section its own colour.
+        let groups: std::collections::HashSet<Group> = sections.values().copied().collect();
+        assert_eq!(groups.len(), sections.len(), "{sections:?}");
+    }
+
+    #[test]
     fn classes_get_their_own_icon_or_an_ancestors() {
         let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
         let icon_of = |name: &str| class_icon(&registry, registry.class_id(name).unwrap());
