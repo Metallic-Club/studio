@@ -80,6 +80,8 @@ struct StudioWindow {
     repaint_at: Option<Instant>,
     /// What the game asked of the cursor, as last applied to the window (ADR 0010 §4).
     cursor: GameCursor,
+    /// The title last given to the window.
+    title: String,
 }
 
 impl ApplicationHandler for Shell {
@@ -208,6 +210,7 @@ impl StudioWindow {
             vsync: None,
             repaint_at: None,
             cursor: GameCursor::default(),
+            title: super::APP_TITLE.to_owned(),
         };
         // Shown once there is a frame to show, so it never flashes empty.
         this.frame()?;
@@ -290,6 +293,11 @@ impl StudioWindow {
         }
 
         self.apply_game_cursor();
+        let title = self.studio.window_title();
+        if title != self.title {
+            self.window.set_title(&title);
+            self.title = title;
+        }
         for request in self.studio.take_requests() {
             match request {
                 WindowRequest::BecomeMainWindow => self.become_main_window(),
@@ -447,7 +455,7 @@ fn splash_attributes(monitor: Option<&MonitorHandle>) -> WindowAttributes {
         .map_err(|error| log::warn!("window: the emblem is not a usable icon: {error}"))
         .ok();
     let mut attributes = Window::default_attributes()
-        .with_title("Metallic Studio")
+        .with_title(super::APP_TITLE)
         .with_inner_size(size)
         .with_decorations(false)
         .with_transparent(true)

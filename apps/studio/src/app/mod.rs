@@ -75,6 +75,9 @@ enum EditorScreen {
     Open(Box<EditorState>),
 }
 
+/// Studio's name in the window's title.
+pub const APP_TITLE: &str = "Metallic Studio";
+
 /// The mark's size in the editor's top bar, in points.
 const BAR_MARK: f32 = 20.0;
 
@@ -524,6 +527,23 @@ impl Studio {
                 }
             }
             MenuAction::Stop => self.stop(),
+        }
+    }
+
+    /// The window's title (#254): the project's name with a `*` while it has unsaved changes, then the app's, in the
+    /// editor (`Space Race* - Metallic Studio`), and the app's alone elsewhere. The shell sets it when it changes.
+    pub fn window_title(&self) -> String {
+        if self.screen != Screen::Editor {
+            return APP_TITLE.to_owned();
+        }
+        match (self.editor(), self.open_project.as_deref()) {
+            (Some(editor), _) => {
+                let unsaved = if editor.project.is_modified() { "*" } else { "" };
+                format!("{}{unsaved} - {APP_TITLE}", editor.name())
+            }
+            // Opening: the name the projects list knows it by.
+            (None, Some(path)) => format!("{} - {APP_TITLE}", self.project_name(path)),
+            (None, None) => APP_TITLE.to_owned(),
         }
     }
 
@@ -1110,7 +1130,7 @@ mod tests {
         assert!(harness.state().studio.is_opening());
         wait_open(&mut harness);
         assert_eq!(harness.state().studio.editor().unwrap().path(), path);
-        harness.get_by_label("A Game");
+        assert!(harness.state().studio.window_title().starts_with("A Game"));
 
         click(&mut harness, "File");
         harness.get_by_role_and_label(Role::MenuItem, "Close project").click();
@@ -1588,7 +1608,7 @@ mod tests {
         assert_eq!(project.manifest().name, "Space Race");
         assert_eq!(studio.projects().list().entries()[0].path, opened);
         wait_open(&mut harness);
-        harness.get_by_label("Space Race");
+        assert!(harness.state().studio.window_title().starts_with("Space Race"));
         let list = std::fs::read_to_string(path.with_file_name(PROJECTS_FILE)).unwrap();
         assert!(list.contains("name = \"Space Race\""), "{list}");
 
@@ -1829,7 +1849,12 @@ mod tests {
             (project.as_path(), "Launched Game")
         );
         assert!(recent.last_opened.is_some());
-        harness.get_by_label("Launched Game");
+        assert!(harness.state().studio.window_title().starts_with("Launched Game"));
+        assert!(harness.state().studio.window_title().ends_with(" - Metallic Studio"));
+        assert!(
+            harness.query_by_label("Launched Game").is_none(),
+            "not in the top bar (#254)"
+        );
         let list = std::fs::read_to_string(path.with_file_name(PROJECTS_FILE)).unwrap();
         assert!(list.contains("name = \"Launched Game\""), "{list}");
 
@@ -1892,7 +1917,7 @@ mod tests {
         for tab in ["Viewport", "Explorer", "Assets", "Properties", "Output"] {
             harness.get_by_role_and_label(Role::Tab, tab);
         }
-        harness.get_by_label("Tree Game");
+        assert!(harness.state().studio.window_title().starts_with("Tree Game"));
         harness.get_by_role_and_label(Role::TreeItem, "Workspace");
         harness.get_by_role_and_label(Role::TreeItem, "Lighting");
         harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation");
@@ -2601,11 +2626,22 @@ mod tests {
             .unwrap()
             .unwrap();
         editor.dm.set_name(baseplate, "Floor".into()).unwrap();
+        // The window's title marks the unsaved change (#254), until the save.
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.window_title(), "Save Game* - Metallic Studio");
         harness.key_press_modifiers(Modifiers::COMMAND, Key::S);
         settle(&mut harness);
         assert!(harness.state().studio.notice().is_none());
-
+        assert_eq!(harness.state().studio.window_title(), "Save Game - Metallic Studio");
         let file = harness.state().studio.editor().unwrap().path().to_path_buf();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.window_title(),
+            "Metallic Studio",
+            "the projects page"
+        );
+
         let mut project = metallic_engine::metallic_project::Project::open(&file).unwrap();
         let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
         project.load_start_scene(&mut dm).unwrap();
