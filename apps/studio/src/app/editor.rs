@@ -259,8 +259,9 @@ pub(crate) fn opening_overlay(ui: &mut Ui, name: &str, step: usize) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 }
 
-/// The top bar: the mark, the menus ([`MENUS`]), the project's name, and the gear (raised while the Settings window
-/// is open, `settings_open`). Returns what was asked for.
+/// The top bar: the mark, the menus ([`MENUS`]), the play controls and the gear (raised while the Settings window is
+/// open, `settings_open`). The project's name is the window's title ([`super::Studio::window_title`]). Returns what was
+/// asked for.
 pub(crate) fn top_bar(
     ui: &mut Ui,
     mark: Option<&egui::TextureHandle>,
@@ -324,20 +325,7 @@ pub(crate) fn top_bar(
                 },
             );
             ui.ctx().data_mut(|data| data.insert_temp(menu_titles_id(), titles));
-            // A divider between the menus and the project.
-            ui.add_space(space::S4);
-            let (divider, _) = ui.allocate_exact_size(vec2(size::BORDER, TITLE_HEIGHT - 8.0), Sense::hover());
-            ui.painter().rect_filled(divider, CornerRadius::ZERO, p.border);
-            ui.add_space(space::S4);
-            ui.label(
-                RichText::new(editor.name())
-                    .font(fonts::named(fonts::STRONG, text::BODY))
-                    .color(p.text),
-            )
-            .on_hover_text(editor.path().display().to_string());
-            if editor.project.is_modified() {
-                ui.label(RichText::new("Unsaved changes").size(text::SMALL).color(p.subtle));
-            }
+            // The project's name is the window's title (#254), not the bar's.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let tip = match keymap.shortcut_text(ids::SETTINGS_OPEN) {
                     Some(keys) => format!("Settings ({keys})"),
