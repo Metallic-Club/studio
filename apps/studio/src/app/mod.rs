@@ -3796,6 +3796,57 @@ mod tests {
         write_png(&out.join("231-custom-icons.png"), shot);
     }
 
+    /// The screenshot of #277 (`cargo test -p metallic_studio -- --ignored screenshot_of_icon_sections`): the editor
+    /// with an object from each Explorer section, each section in its own colour. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_icon_sections() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-icon-sections", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.open(project.clone());
+                for _ in 0..10_000 {
+                    if studio.poll_opening().is_none() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let dm = &mut studio.editor_mut().expect("the project opened").dm;
+                let registry = dm.registry().clone();
+                let class = |name: &str| registry.class_id(name).unwrap();
+                let workspace = dm.service(class("Workspace")).unwrap();
+                let storage = dm.service(class("ReplicatedStorage")).unwrap();
+                let add = |dm: &mut metallic_engine::metallic_core::DataModel, name: &str, parent| {
+                    let id = dm.create(class(name)).unwrap();
+                    dm.set_parent(id, Some(parent)).unwrap();
+                    id
+                };
+                let model = add(dm, "Model", workspace);
+                add(dm, "Part", model);
+                add(dm, "PointLight", workspace);
+                add(dm, "SpotLight", workspace);
+                let folder = add(dm, "Folder", storage);
+                add(dm, "Script", folder);
+                add(dm, "ModuleScript", folder);
+                add(dm, "BindableEvent", folder);
+                add(dm, "IntValue", folder);
+                add(dm, "StringValue", folder);
+                for id in [model, folder] {
+                    studio.editor_mut().unwrap().explorer.set_expanded(id, true);
+                }
+                let storage_id = storage;
+                studio.editor_mut().unwrap().explorer.set_expanded(storage_id, true);
+                // The Explorer the whole column, so every section shows.
+                studio.dock_mut().close(panels::ids::PROPERTIES);
+            }
+        });
+        assert_eq!(studio.screen(), Screen::Editor);
+        write_png(&out.join("277-icon-sections.png"), shot);
+    }
+
     /// The screenshot of #239 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_menu_bar`): the editor
     /// with its File menu open, working items and planned (disabled) ones.
     #[test]

@@ -240,61 +240,70 @@ impl Accent {
     }
 }
 
-/// The hues icons are coloured in, one per icon group (`theme::icons::Group`, #231): the accent family's five colours
-/// and a neutral. Calm, not neon: on the dark mode each is the accent pulled a quarter of the way towards the muted
-/// grey, on the light mode the light accent a fifth of the way; high contrast is stronger: the brighter hover colour on
-/// dark, the light accent pulled towards the text on light. Selection and the accent still win where they mark something.
+/// The hues icons are coloured in, one per icon section (`theme::icons::Group`, #231, #277). Vivid, as Roblox
+/// Studio's object icons are, so sections stand apart at a glance; every icon in a section shares one. Each has a
+/// dark-mode colour and a darker light-mode one, and high contrast pulls either further from its ground.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hue {
-    /// Lights, transform tools.
-    Orange,
-    /// Services, the scene's panels, the File menu.
+    /// Services, the scene's panels.
     Blue,
-    /// Scripts, the log, the View menu.
+    /// Parts, models and scenes.
+    Teal,
+    /// Cameras, images and sounds.
+    Pink,
+    /// Lights.
+    Orange,
+    /// Scripting, running the game.
+    Green,
+    /// Values, the log.
     Violet,
-    /// The world: parts and models; content; running the game.
-    Mint,
-    /// Cameras, inserting.
-    Rose,
-    /// Everything else: folders, values, Studio itself, the interface's own icons.
+    /// Folders.
+    Yellow,
+    /// Everything else: Studio itself and the interface's own icons.
     Neutral,
 }
 
-/// How far a dark-mode icon hue is pulled towards the muted grey.
-const ICON_CALM_DARK: f32 = 0.25;
-/// How far a light-mode icon hue is pulled towards the muted grey.
-const ICON_CALM_LIGHT: f32 = 0.2;
-/// How far a light-mode, high-contrast icon hue is pulled towards the text colour: darker, so stronger than the calm one.
-const ICON_STRONG_LIGHT: f32 = 0.3;
+/// How far a high-contrast icon hue is pulled towards the text colour: away from the ground, so stronger.
+const ICON_STRONG: f32 = 0.3;
 
 impl Hue {
     /// Every hue.
-    pub const ALL: [Hue; 6] = [Hue::Orange, Hue::Blue, Hue::Violet, Hue::Mint, Hue::Rose, Hue::Neutral];
+    pub const ALL: [Hue; 8] = [
+        Hue::Blue,
+        Hue::Teal,
+        Hue::Pink,
+        Hue::Orange,
+        Hue::Green,
+        Hue::Violet,
+        Hue::Yellow,
+        Hue::Neutral,
+    ];
 
-    /// The accent it is drawn from; `None` for the neutral.
-    const fn accent(self) -> Option<Accent> {
-        match self {
-            Hue::Orange => Some(Accent::Orange),
-            Hue::Blue => Some(Accent::Blue),
-            Hue::Violet => Some(Accent::Violet),
-            Hue::Mint => Some(Accent::Mint),
-            Hue::Rose => Some(Accent::Rose),
-            Hue::Neutral => None,
-        }
+    /// Its colours on the dark and the light mode; `None` for the neutral, which is the palette's.
+    const fn pair(self) -> Option<(Color32, Color32)> {
+        Some(match self {
+            Hue::Blue => (Color32::from_rgb(0x4c, 0x9e, 0xff), Color32::from_rgb(0x15, 0x65, 0xc0)),
+            Hue::Teal => (Color32::from_rgb(0x2d, 0xd4, 0xbf), Color32::from_rgb(0x0f, 0x76, 0x6e)),
+            Hue::Pink => (Color32::from_rgb(0xf4, 0x72, 0xb6), Color32::from_rgb(0xbe, 0x18, 0x5d)),
+            Hue::Orange => (Color32::from_rgb(0xfb, 0x92, 0x3c), Color32::from_rgb(0xc2, 0x41, 0x0c)),
+            Hue::Green => (Color32::from_rgb(0x4a, 0xde, 0x80), Color32::from_rgb(0x15, 0x80, 0x3d)),
+            Hue::Violet => (Color32::from_rgb(0xa7, 0x8b, 0xfa), Color32::from_rgb(0x6d, 0x28, 0xd9)),
+            Hue::Yellow => (Color32::from_rgb(0xfa, 0xcc, 0x15), Color32::from_rgb(0x85, 0x4d, 0x0e)),
+            Hue::Neutral => return None,
+        })
     }
 
     /// Its colour on the dark or the light mode, with or without high contrast.
     pub const fn color(self, dark: bool, high_contrast: bool) -> Color32 {
         let palette = if dark { DARK } else { LIGHT };
-        let Some(accent) = self.accent() else {
+        let Some((on_dark, on_light)) = self.pair() else {
             return if high_contrast { palette.text } else { palette.subtle };
         };
-        let c = accent.colors();
-        match (dark, high_contrast) {
-            (true, false) => mix(c.color, palette.muted, ICON_CALM_DARK),
-            (true, true) => c.hover,
-            (false, false) => mix(c.light, palette.muted, ICON_CALM_LIGHT),
-            (false, true) => mix(c.light, palette.text, ICON_STRONG_LIGHT),
+        let base = if dark { on_dark } else { on_light };
+        if high_contrast {
+            mix(base, palette.text, ICON_STRONG)
+        } else {
+            base
         }
     }
 }
@@ -564,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn icon_hues_are_distinct_calm_and_show_on_every_ground() {
+    fn icon_hues_are_distinct_and_show_on_every_ground() {
         for dark in [true, false] {
             for strong in [false, true] {
                 let mode = format!("dark {dark}, high contrast {strong}");
@@ -589,21 +598,11 @@ mod tests {
                     }
                 }
             }
-            // Calm: on the dark mode each hue is softer (less saturated) than the accent it comes from.
-            if dark {
-                let chroma = |c: Color32| c.r().max(c.g()).max(c.b()) - c.r().min(c.g()).min(c.b());
-                for (hue, accent) in Hue::ALL.iter().zip(Accent::ALL) {
-                    assert!(
-                        chroma(hue.color(true, false)) < chroma(accent.colors().color),
-                        "{hue:?}"
-                    );
-                }
-            }
         }
         assert_eq!(Hue::Neutral.color(true, false), DARK.subtle);
         assert_eq!(
             Hue::Orange.color(false, true),
-            mix(Accent::Orange.colors().light, LIGHT.text, ICON_STRONG_LIGHT)
+            mix(Color32::from_rgb(0xc2, 0x41, 0x0c), LIGHT.text, ICON_STRONG)
         );
     }
 
