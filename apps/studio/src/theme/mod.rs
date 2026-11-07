@@ -112,6 +112,36 @@ pub struct Colors {
     pub high_contrast: bool,
 }
 
+/// How a play control's icon is drawn (#302), on the top bar and as a toolbar tool alike (#325).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayControl {
+    /// Play: a filled green triangle.
+    Play,
+    /// Stop: a filled red square.
+    Stop,
+    /// Pause and Step: the text colour, outlined.
+    Plain,
+}
+
+impl PlayControl {
+    /// Its icon's colour while it can be used, on the dark or the light mode. Greyed out when it cannot is the
+    /// caller's: the text at 48 %.
+    pub fn ink(self, colors: &Colors) -> Color32 {
+        match (self, colors.dark) {
+            (PlayControl::Play, true) => tokens::play::ICON_DARK,
+            (PlayControl::Play, false) => tokens::play::ICON_LIGHT,
+            (PlayControl::Stop, true) => tokens::play::STOP_DARK,
+            (PlayControl::Stop, false) => tokens::play::STOP_LIGHT,
+            (PlayControl::Plain, _) => colors.palette.text,
+        }
+    }
+
+    /// Whether its icon is filled.
+    pub fn filled(self) -> bool {
+        self != PlayControl::Plain
+    }
+}
+
 impl Colors {
     /// The colour of an icon hue in these colours (#231).
     pub fn hue(&self, hue: Hue) -> Color32 {

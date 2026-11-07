@@ -2745,6 +2745,55 @@ mod tests {
     }
 
     #[test]
+    fn the_toolbar_s_play_controls_look_like_the_top_bar_s() {
+        let mut harness = editing(settings_file("toolbar-play", None), "Toolbar Play Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let colors = current_colors(&harness.ctx);
+        let grey = colors.palette.text.gamma_multiply(0.48);
+        let (green, red) = (editor::Control::Play.ink(&colors), editor::Control::Stop.ink(&colors));
+        // Each tool's icon in its button: its colour, and whether it is filled.
+        let drawn = |harness: &Harness<'_, Test>, icon: Icon, label: &str| {
+            let area = harness
+                .get_by_role_and_label(Role::Button, &format!("{label} tool"))
+                .rect();
+            let filled = crate::theme::icons::builtin::textures_of_kind(&harness.ctx, icon, true);
+            let all = crate::theme::icons::builtin::textures_of(&harness.ctx, icon);
+            harness
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Mesh(mesh)
+                        if all.contains(&mesh.texture_id) && area.contains_rect(mesh.calc_bounds()) =>
+                    {
+                        mesh.vertices
+                            .first()
+                            .map(|v| (v.color, filled.contains(&mesh.texture_id)))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // No game: Play a filled green triangle; Stop greyed out but filled, as on the top bar.
+        assert_eq!(drawn(&harness, Icon::ToolbarPlay, "Play"), [(green, true)]);
+        assert_eq!(drawn(&harness, Icon::ToolbarStop, "Stop"), [(grey, true)]);
+        assert_eq!(drawn(&harness, Icon::ToolbarPause, "Pause"), [(grey, false)]);
+        // Playing: Play greyed out, Pause in the text colour, Stop a filled red square.
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        assert!(harness.state().studio.is_playing());
+        assert_eq!(drawn(&harness, Icon::ToolbarPlay, "Play"), [(grey, true)]);
+        assert_eq!(
+            drawn(&harness, Icon::ToolbarPause, "Pause"),
+            [(colors.palette.text, false)]
+        );
+        assert_eq!(drawn(&harness, Icon::ToolbarStop, "Stop"), [(red, true)]);
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
+        settle(&mut harness);
+    }
+
+    #[test]
     fn play_runs_the_scene_in_a_game_tab_and_stop_puts_everything_back() {
         let path = settings_file("editor-play", None);
         let layout = path.with_file_name(crate::dock::LAYOUT_FILE);
