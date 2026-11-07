@@ -3329,6 +3329,27 @@ mod tests {
     }
 
     #[test]
+    fn the_output_toolbar_is_one_line() {
+        let mut harness = editing(settings_file("output-toolbar", None), "Output Toolbar Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let centre = |node: egui_kittest::Node<'_>| node.rect().center().y;
+        let errors = centre(harness.get_by_role_and_label(Role::CheckBox, "Errors"));
+        let debug = centre(harness.get_by_role_and_label(Role::CheckBox, "Debug"));
+        let clear = centre(harness.get_by_role_and_label(Role::Button, "Clear"));
+        let search = harness
+            .get_all_by_role(Role::TextInput)
+            // The bottom left: the Output's, not the Explorer's.
+            .find(|field| field.rect().left() < 1000.0 && field.rect().top() > 400.0)
+            .map(centre)
+            .expect("the output's search box");
+        // On one level (#275), within a point (layout rounds to pixels).
+        for (name, y) in [("Debug", debug), ("Clear", clear), ("search", search)] {
+            assert!((y - errors).abs() < 1.0, "{name} at {y}, the toggles at {errors}");
+        }
+    }
+
+    #[test]
     fn explorer_rows_touch_and_alternate_shades() {
         let mut harness = editing(settings_file("explorer-stripes", None), "Explorer Stripes Game");
         harness.set_size(egui::vec2(1280.0, 800.0));

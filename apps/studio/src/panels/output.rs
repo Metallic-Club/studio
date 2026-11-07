@@ -181,7 +181,10 @@ impl Panel for Output {
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         let state = &mut cx.editor.output;
         state.update();
-        ui.horizontal(|ui| {
+        // One row of a fixed height, everything centred in it (#275): the toggles, the search box and Clear on a line.
+        let toolbar = vec2(ui.available_width(), size::CONTROL);
+        ui.allocate_ui_with_layout(toolbar, Layout::left_to_right(Align::Center), |ui| {
+            ui.set_height(size::CONTROL);
             for filter in Filter::ALL {
                 let count = state.count(filter);
                 let mut on = state.is_shown(filter);
@@ -197,7 +200,8 @@ impl Panel for Output {
                     state.clear();
                 }
                 ui.add_space(space::S3);
-                ui.allocate_ui(vec2(ui.available_width().min(320.0), size::CONTROL), |ui| {
+                let search = vec2(ui.available_width().min(320.0), size::CONTROL);
+                ui.allocate_ui_with_layout(search, Layout::left_to_right(Align::Center), |ui| {
                     search_box(ui, &mut state.query, "Search the output");
                 });
             });
