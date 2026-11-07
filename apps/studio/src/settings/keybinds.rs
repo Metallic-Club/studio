@@ -94,7 +94,7 @@ impl KeybindsPage {
                 .color(p.text),
         );
         ui.label(
-            RichText::new("Click a shortcut to change it. Right-click to add or remove one.")
+            RichText::new("Click a shortcut to change it, or + to add another. Right-click one to remove it.")
                 .size(text::BODY)
                 .color(p.muted),
         );
@@ -727,6 +727,10 @@ pub(super) fn command_row(
                             keymap.reset(command.id);
                         }
                     }
+                    // #265: + after the shortcuts adds another.
+                    if add_button(ui, command.title).clicked() {
+                        capture = Some((command.id, None));
+                    }
                     let bindings = keymap.bindings(command.id).to_vec();
                     if bindings.is_empty() {
                         let chip = chip(ui, "Unbound", false);
@@ -768,6 +772,34 @@ pub(super) fn command_row(
         );
     });
     capture
+}
+
+/// The small + after a command's shortcuts (#265): adds another, as right-click → Add binding does.
+fn add_button(ui: &mut Ui, title: &str) -> Response {
+    let p = current_colors(ui.ctx()).palette;
+    let (rect, response) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            ui.is_enabled(),
+            format!("Add a shortcut to {title}"),
+        )
+    });
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered();
+        if hovered {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(radius::ITEM / 2), p.surface_hover);
+        }
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            fonts::icon::PLUS,
+            fonts::named(fonts::ICONS, text::BODY),
+            if hovered { p.text } else { p.subtle },
+        );
+    }
+    response.on_hover_text("Add another shortcut")
 }
 
 /// A shortcut as a key cap: monospace on the input colour with a border; `bound` false for the muted "Unbound".

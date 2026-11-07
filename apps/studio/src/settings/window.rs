@@ -65,7 +65,7 @@ impl Category {
             Category::General => "How Studio starts and behaves.",
             Category::Appearance => "Changes apply at once.",
             Category::Rendering => "How the editor's viewport draws your scenes. The game's own look is never changed.",
-            Category::Keybinds => "Click a shortcut to change it. Right-click to add or remove one.",
+            Category::Keybinds => "Click a shortcut to change it, or + to add another. Right-click one to remove it.",
         }
     }
 }
