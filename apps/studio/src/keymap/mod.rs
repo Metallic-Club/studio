@@ -49,15 +49,19 @@ pub struct Focus {
     pub hovered: Option<Context>,
     /// Whether a text field has focus.
     pub typing: bool,
+    /// Whether a running game has the keyboard and mouse (Play in Studio): only commands marked
+    /// [`Command::during_play`] fire, and every other key and click is the game's.
+    pub playing: bool,
 }
 
 impl Focus {
-    /// Focus in `context`, nothing hovered, not typing.
+    /// Focus in `context`, nothing hovered, not typing, no game with the input.
     pub const fn new(context: Context) -> Self {
         Self {
             context,
             hovered: None,
             typing: false,
+            playing: false,
         }
     }
 }
@@ -588,7 +592,9 @@ impl Keymap {
                 let command = &self.registry.commands()[slot.command];
                 // A text field gets the keys; the wheel and buttons are not typing.
                 let typing_blocks = !pointer && focus.typing && !command.while_typing;
-                !typing_blocks && self.specificity(slot.command, focus, pointer).is_some()
+                // A game with the input gets everything but the few commands that control it.
+                let play_blocks = focus.playing && !command.during_play;
+                !typing_blocks && !play_blocks && self.specificity(slot.command, focus, pointer).is_some()
             })
     }
 
@@ -981,6 +987,44 @@ mod tests {
             "marked while typing"
         );
         assert_eq!(processed.consumed, [0]);
+    }
+
+    #[test]
+    fn a_game_with_the_input_gets_every_key_but_the_play_controls() {
+        let mut keymap = studio(&Overrides::new());
+        let playing = Focus {
+            playing: true,
+            ..Focus::new(Context::Editor)
+        };
+        // Save and Close project are the game's keys now; Stop, Pause, Step and Settings are not.
+        let events = [
+            press(Key::S, PRIMARY),
+            press(Key::W, PRIMARY),
+            press(Key::F5, Modifiers::SHIFT),
+            press(Key::F7, Modifiers::NONE),
+            press(Key::F6, Modifiers::NONE),
+            press(Key::Comma, PRIMARY),
+        ];
+        let processed = keymap.process(&events, playing);
+        let fired: Vec<&str> = processed
+            .activations
+            .iter()
+            .map(|activation| activation.command)
+            .collect();
+        assert_eq!(
+            fired,
+            [ids::TEST_STOP, ids::TEST_PAUSE, ids::TEST_STEP, ids::SETTINGS_OPEN]
+        );
+        assert_eq!(processed.consumed, [2, 3, 4, 5], "the rest go to the game");
+        // Without the game, Primary+S saves.
+        assert_eq!(
+            fired_in(&mut keymap, &[press(Key::S, PRIMARY)], Focus::new(Context::Editor)),
+            [ids::FILE_SAVE]
+        );
+    }
+
+    fn fired_in(keymap: &mut Keymap, events: &[Event], focus: Focus) -> Vec<&'static str> {
+        fired(keymap, events, focus)
     }
 
     #[test]

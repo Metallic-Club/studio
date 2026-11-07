@@ -7,6 +7,7 @@
 
 mod editor;
 pub mod game;
+mod game_input;
 mod native;
 #[cfg(test)]
 mod offscreen;
@@ -36,6 +37,7 @@ use crate::settings::{SettingsStore, SettingsWindow, StudioSettings};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
 use editor::MenuAction;
+use metallic_engine::metallic_classes::input::feed::CursorState;
 pub use shell::run;
 use splash::{Splash, Status};
 use startup::{Loaded, Startup};
@@ -119,6 +121,10 @@ pub struct Studio {
     /// The mark at the sizes the screens after the splash show it, in pixels: drawn for each, never scaled.
     marks: Vec<(u32, TextureHandle)>,
     requests: Vec<WindowRequest>,
+    /// The Game tab's input hand-off: what it remembers between frames.
+    game_input: game_input::GameInput,
+    /// Whether the running game had the keyboard and mouse after the last frame's hand-off.
+    game_had_input: bool,
     /// Game sessions started so far: each gets the next number.
     sessions: u64,
 }
@@ -169,6 +175,8 @@ impl Studio {
             marks: Vec::new(),
             requests: Vec::new(),
             sessions: 0,
+            game_input: game_input::GameInput::default(),
+            game_had_input: false,
         }
     }
 
@@ -367,6 +375,10 @@ impl Studio {
             // Before anything is drawn, so a key a command used reaches nothing else.
             self.run_keymap(&ctx);
         }
+        if self.screen == Screen::Editor {
+            // After the keymap took the play controls, before any panel sees a key.
+            self.hand_off_input(&ctx);
+        }
         let before = (self.screen != Screen::Splash).then(|| self.settings.settings().clone());
         match self.screen {
             Screen::Splash => self.splash(ui, now),
@@ -520,6 +532,91 @@ impl Studio {
         self.editor().is_some_and(EditorState::is_playing)
     }
 
+    /// Whether the running game has the keyboard and mouse (ADR 0010 §4): the Game tab has the focus (Play gives it, a
+    /// click in the tab gives it back, Esc and a click elsewhere take it), the Settings window does not, and Studio's
+    /// window is focused.
+    pub fn game_has_input(&self, ctx: &egui::Context) -> bool {
+        self.is_playing()
+            && self.dock.focus().focused == Some(panels::ids::GAME)
+            && !self.settings_window.has_focus()
+            && ctx.input(|input| input.focused)
+    }
+
+    /// What the running game asks of the cursor while it has the input, and the Game tab's area (points): what the
+    /// shell holds or hides its cursor for. `None` while the game does not have the input.
+    pub fn game_cursor(&self) -> Option<(CursorState, Rect)> {
+        if !self.game_had_input {
+            return None;
+        }
+        let session = self.editor()?.play.as_ref()?;
+        Some((session.player.cursor(), session.view.rect?))
+    }
+
+    /// The frame's hand-off to the game (ADR 0010 §4): when it takes or lets go of the input, it gets the focus or
+    /// releases what it holds; while it has the input, the frame's keys, text, pointer and wheel become its events
+    /// and the panels see no keys. Esc goes to the game, then the input comes back to Studio.
+    fn hand_off_input(&mut self, ctx: &egui::Context) {
+        let has_input = self.game_has_input(ctx);
+        let Some(EditorScreen::Open(editor)) = &mut self.editor else {
+            self.game_had_input = false;
+            return;
+        };
+        let Some(session) = editor.play.as_mut() else {
+            self.game_had_input = false;
+            return;
+        };
+        let engine = session.player.engine_mut();
+        if has_input != self.game_had_input {
+            let events = if has_input {
+                self.game_input.take(ctx.input(|input| input.modifiers))
+            } else {
+                self.game_input.release()
+            };
+            for event in events {
+                engine.push_input(event);
+            }
+            self.game_had_input = has_input;
+        }
+        if !has_input {
+            return;
+        }
+        let Some(rect) = session.view.rect else {
+            return;
+        };
+        // A click anywhere but the Game tab (a menu, the top bar, a panel) takes the input back.
+        let elsewhere = ctx.input(|input| {
+            input.pointer.any_pressed() && input.pointer.interact_pos().is_some_and(|at| !rect.contains(at))
+        });
+        if elsewhere {
+            if self.dock.focus().focused == Some(panels::ids::GAME) {
+                self.dock.set_focused(None);
+            }
+            for event in self.game_input.release() {
+                engine.push_input(event);
+            }
+            self.game_had_input = false;
+            return;
+        }
+        let events = ctx.input(|input| input.events.clone());
+        let converted = self.game_input.convert(&events, rect, ctx.pixels_per_point());
+        for event in converted.events {
+            engine.push_input(event);
+        }
+        // The keys were the game's: no panel or widget acts on them too.
+        ctx.input_mut(|input| {
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Key { .. } | egui::Event::Text(_)));
+        });
+        if converted.escape {
+            self.dock.set_focused(None);
+            for event in self.game_input.release() {
+                engine.push_input(event);
+            }
+            self.game_had_input = false;
+        }
+    }
+
     /// Starts a game session of the open project (ADR 0010): the scene as it is now runs in an embedded Player, drawn
     /// with the Rendering settings, its output in Output, and the Game tab opens in front with the focus. Tells the
     /// user why if it cannot start.
@@ -665,6 +762,7 @@ impl Studio {
             context,
             hovered,
             typing: ctx.egui_wants_keyboard_input(),
+            playing: self.game_has_input(ctx),
         };
         let activations = self.keymap.dispatch(ctx, focus);
         if let Some(EditorScreen::Open(editor)) = &mut self.editor {
@@ -2229,6 +2327,94 @@ mod tests {
         harness.get_by_role_and_label(Role::MenuItem, "Play").click();
         settle(&mut harness);
         assert!(harness.state().studio.is_playing());
+    }
+
+    // The input hand-off to the game (#247).
+
+    /// The lines the game printed since the session began.
+    fn game_prints(log: &LogBuffer) -> Vec<String> {
+        let mut lines = Vec::new();
+        log.read_since(0, &mut lines);
+        lines
+            .into_iter()
+            .filter(|line| line.origin == crate::logging::Origin::Script)
+            .map(|line| line.message)
+            .collect()
+    }
+
+    #[test]
+    fn the_game_gets_the_keys_while_its_tab_has_the_focus_and_esc_gives_them_back() {
+        let log = Arc::new(LogBuffer::new());
+        let mut harness = editing(settings_file("editor-game-input", None), "Input Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        harness.state_mut().studio.set_log(Arc::clone(&log));
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let dm = &mut editor.dm;
+            let registry = dm.registry().clone();
+            let service = dm.service(registry.class_id("ServerScriptService").unwrap()).unwrap();
+            let script = dm.create(registry.class_id("Script").unwrap()).unwrap();
+            dm.set_by_name(script, "Source", Value::String("Scripts/Keys.luau".into()))
+                .unwrap();
+            dm.set_parent(script, Some(service)).unwrap();
+            editor
+                .project
+                .write(
+                    "Scripts/Keys.luau",
+                    "game:GetService('UserInputService').InputBegan:Connect(function(input)\n\
+                         print('began ' .. input.KeyCode.Name)\n\
+                     end)\n",
+                )
+                .unwrap();
+        }
+        settle(&mut harness);
+        let camera_before = camera(&harness);
+
+        // Play gives the game the input: W reaches it, and not the editor camera.
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        assert!(harness.state().studio.game_has_input(&harness.ctx));
+        hold(&mut harness, Key::W);
+        settle(&mut harness);
+        assert!(
+            game_prints(&log).contains(&"began W".to_owned()),
+            "{:?}",
+            game_prints(&log)
+        );
+        assert_eq!(camera(&harness), camera_before);
+
+        // Esc: the game sees it, then Studio has the keys back. W no longer reaches the game.
+        harness.event(physical(Key::Escape, true));
+        harness.step();
+        harness.event(physical(Key::Escape, false));
+        settle(&mut harness);
+        assert!(game_prints(&log).contains(&"began Escape".to_owned()));
+        assert!(!harness.state().studio.game_has_input(&harness.ctx));
+        let seen = game_prints(&log).len();
+        hold(&mut harness, Key::W);
+        settle(&mut harness);
+        assert_eq!(game_prints(&log).len(), seen, "W stays with Studio");
+
+        // A click in the Game tab gives the game the keys again; Shift+F5 still stops it.
+        let tab = area_of(&harness.state().studio, panels::ids::GAME).center();
+        harness.event(egui::Event::PointerMoved(tab));
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: tab,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            harness.step();
+        }
+        settle(&mut harness);
+        assert!(harness.state().studio.game_has_input(&harness.ctx));
+        hold(&mut harness, Key::D);
+        settle(&mut harness);
+        assert!(game_prints(&log).contains(&"began D".to_owned()));
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_playing());
     }
 
     // Settings as a floating window in the editor (#238).
