@@ -2477,6 +2477,38 @@ mod tests {
     }
 
     #[test]
+    fn the_play_controls_are_filled_and_coloured_by_state() {
+        let mut harness = editing(settings_file("play-controls", None), "Controls Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let colors = current_colors(&harness.ctx);
+        let grey = colors.palette.text.gamma_multiply(0.48);
+        let green = editor::Control::Play.ink(&colors);
+        let red = editor::Control::Stop.ink(&colors);
+        // No game: Play is a green icon on no green fill; Pause, Step and Stop are greyed out (#302).
+        assert_eq!(icon_meshes(&harness, Icon::ToolbarPlay), [green]);
+        assert_eq!(icon_meshes(&harness, Icon::ToolbarStop), [grey]);
+        assert_eq!(icon_meshes(&harness, Icon::ToolbarPause), [grey]);
+        let play = harness.get_by_role_and_label(Role::Button, "Play").rect();
+        let green_fill = harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) => rect.rect == play && rect.fill == tokens::play::FILL,
+            _ => false,
+        });
+        assert!(!green_fill, "Play has no green background");
+
+        // Playing: Play is greyed out, Pause white, Stop a red icon.
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        assert!(harness.state().studio.is_playing());
+        assert_eq!(icon_meshes(&harness, Icon::ToolbarPlay), [grey]);
+        assert_eq!(icon_meshes(&harness, Icon::ToolbarPause), [colors.palette.text]);
+        assert_eq!(icon_meshes(&harness, Icon::ToolbarStop), [red]);
+        assert_ne!(red, grey);
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
+        settle(&mut harness);
+    }
+
+    #[test]
     fn play_runs_the_scene_in_a_game_tab_and_stop_puts_everything_back() {
         let path = settings_file("editor-play", None);
         let layout = path.with_file_name(crate::dock::LAYOUT_FILE);

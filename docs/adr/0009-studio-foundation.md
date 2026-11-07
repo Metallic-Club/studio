@@ -121,7 +121,9 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   button's fill.**
 - **Buttons:** primary is neutral (`#ebebeb` with `#242424` text, white on hover; `#303030`/white in light mode);
   secondary is a surface with a 1 px border that goes to subtle on hover; quiet is transparent with muted text; "play"
-  (run) is green `#39b878` (hover `#53d08f`, text `#0d281a`). Disabled is 48 % opacity.
+  (run) is green `#39b878` (hover `#53d08f`, text `#0d281a`). Disabled is 48 % opacity. Since #302 the top bar's play
+  controls have no coloured fill: Play is a filled green icon, Stop a filled red one while a game runs, Pause and Step
+  the text colour, each greyed out while it cannot be used.
 - **Shape:** **no chamfered corners anywhere.** Radii 8 (buttons, items), 9 (inputs), 12 (panels, cards, the
   splash), 15 (dialogs); 1 px borders. Shadows only on what floats: menus and popovers (`0 8 24 #0005`) and dialogs.
 - **Type:** **Inter** (OFL 1.1) for the interface: heavy headings with tight negative tracking, body 14–15 px,

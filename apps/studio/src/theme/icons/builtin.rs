@@ -103,8 +103,8 @@ struct Loaded {
     files: HashMap<Icon, PathBuf>,
     /// Each icon's SVG once read; `None` when it could not be.
     svgs: HashMap<Icon, Option<Arc<[u8]>>>,
-    /// Each icon drawn so far, by its side in pixels.
-    textures: HashMap<(Icon, u32), Option<TextureHandle>>,
+    /// Each icon drawn so far, by its side in pixels and whether it is filled.
+    textures: HashMap<(Icon, u32, bool), Option<TextureHandle>>,
 }
 
 impl Loaded {
@@ -164,14 +164,22 @@ impl Loaded {
         svg
     }
 
-    /// `icon` drawn `side` pixels square, white on transparency for tinting.
-    fn texture(&mut self, ctx: &Context, icon: Icon, side: u32) -> Option<TextureId> {
-        if let Some(texture) = self.textures.get(&(icon, side)) {
+    /// `icon` drawn `side` pixels square, white on transparency for tinting; `filled`, its shapes are filled as well as
+    /// outlined (#302: the play controls).
+    fn texture(&mut self, ctx: &Context, icon: Icon, side: u32, filled: bool) -> Option<TextureId> {
+        if let Some(texture) = self.textures.get(&(icon, side, filled)) {
             return texture.as_ref().map(TextureHandle::id);
         }
-        let texture = self
-            .svg(icon)
-            .and_then(|svg| match super::custom::rasterise_svg(&svg, side) {
+        let texture = self.svg(icon).and_then(|svg| {
+            // Lucide outlines its shapes with `fill="none"` on the root: filling them is filling in currentColor.
+            let svg: Vec<u8> = if filled {
+                String::from_utf8_lossy(&svg)
+                    .replace("fill=\"none\"", "fill=\"currentColor\"")
+                    .into_bytes()
+            } else {
+                svg.to_vec()
+            };
+            match super::custom::rasterise_svg(&svg, side) {
                 Ok(image) => {
                     // White, keeping the coverage: the paint's tint is the icon's colour.
                     let pixels = image
@@ -180,15 +188,17 @@ impl Loaded {
                         .map(|pixel| egui::Color32::from_white_alpha(pixel.a()))
                         .collect();
                     let image = egui::ColorImage::new(image.size, pixels);
-                    Some(ctx.load_texture(format!("icon {} {side}", icon.id()), image, TextureOptions::LINEAR))
+                    let name = format!("icon {} {side} {filled}", icon.id());
+                    Some(ctx.load_texture(name, image, TextureOptions::LINEAR))
                 }
                 Err(error) => {
                     log::warn!("icons: {} for {}: {error}", icon.default_file(), icon.id());
                     None
                 }
-            });
+            }
+        });
         let id = texture.as_ref().map(TextureHandle::id);
-        self.textures.insert((icon, side), texture);
+        self.textures.insert((icon, side, filled), texture);
         id
     }
 }
@@ -219,10 +229,10 @@ pub fn use_folder(ctx: &Context, dir: &Path) {
 }
 
 /// `icon` as a texture `side` pixels square, white on transparency, or `None` when its SVG is missing or bad.
-pub fn texture(ctx: &Context, icon: Icon, side: u32) -> Option<TextureId> {
+pub fn texture(ctx: &Context, icon: Icon, side: u32, filled: bool) -> Option<TextureId> {
     let shared = shared(ctx);
     let mut loaded = shared.0.lock().ok()?;
-    loaded.texture(ctx, icon, side.clamp(1, 512))
+    loaded.texture(ctx, icon, side.clamp(1, 512), filled)
 }
 
 /// Every texture `icon` has been drawn with so far, at any size (tests look for an icon in a frame by them).
@@ -235,7 +245,7 @@ pub fn textures_of(ctx: &Context, icon: Icon) -> Vec<TextureId> {
     loaded
         .textures
         .iter()
-        .filter(|((drawn, _), _)| *drawn == icon)
+        .filter(|((drawn, _, _), _)| *drawn == icon)
         .filter_map(|(_, texture)| texture.as_ref().map(TextureHandle::id))
         .collect()
 }
@@ -330,14 +340,14 @@ mod tests {
 
         // Drawn at the size asked, white for tinting, and cached.
         let ctx = Context::default();
-        let a = loaded.texture(&ctx, Icon::ExplorerPart, 20).expect("a texture");
-        assert_eq!(loaded.texture(&ctx, Icon::ExplorerPart, 20), Some(a), "cached");
+        let a = loaded.texture(&ctx, Icon::ExplorerPart, 20, false).expect("a texture");
+        assert_eq!(loaded.texture(&ctx, Icon::ExplorerPart, 20, false), Some(a), "cached");
         assert_ne!(
-            loaded.texture(&ctx, Icon::ExplorerPart, 40),
+            loaded.texture(&ctx, Icon::ExplorerPart, 40, false),
             Some(a),
             "another size, another texture"
         );
-        assert!(loaded.texture(&ctx, Icon::ExplorerCamera, 20).is_none());
+        assert!(loaded.texture(&ctx, Icon::ExplorerCamera, 20, false).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

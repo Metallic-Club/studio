@@ -310,6 +310,16 @@ impl Icon {
 /// Paints `icon` filling the square `rect` in `color`: the custom folder's image if it has one (tinted with `color`
 /// only when it is monochrome), the built-in glyph otherwise.
 pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
+    paint_with(painter, icon, rect, color, false);
+}
+
+/// Paints `icon` filling the square `rect` in `color` with its shapes filled in (#302: the play controls). A custom
+/// image is drawn as it is.
+pub fn paint_filled(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
+    paint_with(painter, icon, rect, color, true);
+}
+
+fn paint_with(painter: &Painter, icon: Icon, rect: Rect, color: Color32, filled: bool) {
     match custom::get(painter.ctx(), icon) {
         Some(image) => {
             let tint = if image.monochrome {
@@ -327,7 +337,7 @@ pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
             let side = (rect.height().min(rect.width()) * ppp).round().max(1.0);
             let min = ((rect.center().to_vec2() * ppp - Vec2::splat(side / 2.0)).round() / ppp).to_pos2();
             let snapped = Rect::from_min_size(min, Vec2::splat(side / ppp));
-            if let Some(texture) = builtin::texture(painter.ctx(), icon, side as u32) {
+            if let Some(texture) = builtin::texture(painter.ctx(), icon, side as u32, filled) {
                 let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
                 painter.image(texture, snapped, uv, color);
             }
