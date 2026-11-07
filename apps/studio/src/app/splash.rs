@@ -3,8 +3,8 @@
 //! accent bar.
 //!
 //! The splash is the main window in disguise: the shell opens the window at [`SIZE`], borderless, and turns the same
-//! window into the main one when the splash is done. It is always the dark mode with the default accent, because it
-//! shows before the settings are read.
+//! window into the main one when the splash is done. It is always the dark mode, but its bar takes the accent the
+//! settings file names, read before the splash's first frame (#319).
 
 use std::time::{Duration, Instant};
 
@@ -73,7 +73,7 @@ impl Splash {
                 .is_some_and(|shown| now.saturating_duration_since(shown) >= MIN_TIME)
     }
 
-    /// Draws the splash filling `ui` (the window is [`SIZE`]) at `now`.
+    /// Draws the splash filling `ui` (the window is [`SIZE`]) at `now`, its bar in `accent`.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -81,6 +81,7 @@ impl Splash {
         status: Status<'_>,
         emblem: Option<&TextureHandle>,
         motion: Motion,
+        accent: Accent,
     ) {
         let shown = *self.shown_at.get_or_insert(now);
         // Arrives: fades in, easing out. Reduced motion: no fade.
@@ -94,7 +95,7 @@ impl Splash {
             ui.ctx().request_repaint();
         }
         let p = &tokens::DARK;
-        let accent = Accent::default().on(true);
+        let accent = accent.on(true);
         let rect = Rect::from_center_size(ui.max_rect().center(), SIZE);
         let painter = ui.painter().clone();
         let r = radius::PANEL;

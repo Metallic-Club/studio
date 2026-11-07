@@ -36,7 +36,7 @@ use crate::projects::{FileDialog, Projects, RAIL_MARK, name_from_path};
 use crate::settings::{SettingsStore, SettingsWindow, StudioSettings};
 use crate::theme::icons::custom::CustomIcons;
 use crate::theme::icons::{self, Icon};
-use crate::theme::tokens::{radius, shadow, size, space, text};
+use crate::theme::tokens::{Accent, radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
 use crate::toolbar::{self, StudioCommand, ToolAction, Toolbar};
 use editor::MenuAction;
@@ -98,6 +98,8 @@ fn tool_enabled(action: &ToolAction, play: editor::PlayState) -> bool {
 pub struct Studio {
     screen: Screen,
     splash: Splash,
+    /// The accent the splash's bar is drawn in: the saved one, once the shell has peeked at the settings (#319).
+    splash_accent: Accent,
     startup: Startup,
     /// What the startup steps produced, once the splash is done: the renderer the viewport will use (#217). The
     /// projects list, the templates and the layout move from it to their owners.
@@ -173,6 +175,7 @@ impl Studio {
         Self {
             screen: Screen::Splash,
             splash: Splash::new(),
+            splash_accent: Accent::default(),
             startup,
             loaded: None,
             projects: Projects::new(),
@@ -206,6 +209,12 @@ impl Studio {
             game_input: game_input::GameInput::default(),
             game_had_input: false,
         }
+    }
+
+    /// Draws the splash's bar in `accent`: the one the settings file names, read before the splash's first frame
+    /// (#319). The rest of the splash keeps its own look.
+    pub fn set_splash_accent(&mut self, accent: Accent) {
+        self.splash_accent = accent;
     }
 
     /// Asks `dialog` for files and folders (the shell gives the system's; until then every dialog is cancelled).
@@ -1054,7 +1063,8 @@ impl Studio {
             done: self.startup.done(),
         };
         let motion = self.theme.look().motion();
-        self.splash.show(ui, now, status, self.emblem.as_ref(), motion);
+        self.splash
+            .show(ui, now, status, self.emblem.as_ref(), motion, self.splash_accent);
 
         if self.splash.finished(self.startup.is_finished(), now) {
             let mut loaded = self.startup.take_loaded().unwrap_or_default();
@@ -1113,7 +1123,7 @@ mod tests {
     use crate::projects::{PROJECTS_FILE, View, templates_dir};
     use crate::settings::keybinds::LISTENING;
     use crate::settings::{Category, SETTINGS_FILE};
-    use crate::theme::tokens::{self, Accent};
+    use crate::theme::tokens;
     use crate::theme::{ThemeMode, fonts};
 
     /// A settings file of its own for `test`, holding `text` (none when `None`).
@@ -1189,6 +1199,35 @@ mod tests {
         wait(&mut harness.state_mut().studio.startup);
         harness.state_mut().now += by;
         harness.step();
+    }
+
+    #[test]
+    fn the_splash_s_bar_is_in_the_saved_accent() {
+        // The bar is filled once a step is done: the first of two.
+        let (_go, gate) = mpsc::channel::<()>();
+        let mut harness = harness(vec![
+            Step::new("Reading settings", |_| {}),
+            Step::new("Starting the renderer", move |_| {
+                let _ = gate.recv();
+            }),
+        ]);
+        harness.state_mut().studio.set_splash_accent(Accent::Blue);
+        harness.step();
+        while harness.state().studio.startup.done() < 1 {
+            harness.state_mut().studio.startup.poll();
+            std::thread::yield_now();
+        }
+        harness.state_mut().now += Duration::from_secs(2);
+        harness.step();
+        harness.step();
+        let filled = |color: egui::Color32| {
+            harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) => rect.fill == color,
+                _ => false,
+            })
+        };
+        assert!(filled(Accent::Blue.on(true)), "the bar is blue");
+        assert!(!filled(Accent::default().on(true)), "not the default orange");
     }
 
     #[test]

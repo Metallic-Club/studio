@@ -191,6 +191,10 @@ impl StudioWindow {
         let mark = emblem::render((splash::EMBLEM * window.scale_factor() as f32).round() as u32);
         let image = ColorImage::from_rgba_unmultiplied([mark.width as usize, mark.height as usize], &mark.rgba);
         let mut studio = Studio::new(startup, Some(image), reduce_motion);
+        // A small file, read again properly by the startup steps: only so the splash shows the user's accent (#319).
+        if let Some(path) = super::startup::studio_settings_path() {
+            studio.set_splash_accent(crate::settings::SettingsStore::peek(&path).appearance.accent);
+        }
         if let Some(project) = project {
             studio.open_after_splash(project);
         }
