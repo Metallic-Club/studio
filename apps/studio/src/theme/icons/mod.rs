@@ -20,11 +20,11 @@ use super::tokens::Hue;
 pub enum Group {
     /// Explorer: the workspace.
     Workspace,
-    /// Explorer: the storage services (replicated and server storage).
+    /// Explorer: replicated storage.
     Storage,
     /// Explorer: the input and settings services (user input, user settings, run service).
     SettingsService,
-    /// Explorer and Assets: server scripts and the server script service.
+    /// Explorer and Assets: server scripts, the server script service and server storage (#321).
     ServerScript,
     /// Explorer: local scripts, which run on the player's machine.
     LocalScript,
@@ -102,9 +102,9 @@ impl Group {
     pub const fn label(self) -> &'static str {
         match self {
             Group::Workspace => "Explorer: the workspace",
-            Group::Storage => "Explorer: storage services",
+            Group::Storage => "Explorer: replicated storage",
             Group::SettingsService => "Explorer: input and settings services",
-            Group::ServerScript => "Explorer and Assets: server scripts",
+            Group::ServerScript => "Explorer and Assets: server scripts and server storage",
             Group::LocalScript => "Explorer: local scripts",
             Group::ModuleScript => "Explorer: module scripts",
             Group::Event => "Explorer: bindable events and functions",
@@ -186,7 +186,7 @@ icons! {
     /// The server script service.
     ExplorerScriptService = "explorer.script_service", ServerScript, "scroll";
     /// Server storage.
-    ExplorerServerStorage = "explorer.server_storage", Storage, "hard-drive";
+    ExplorerServerStorage = "explorer.server_storage", ServerScript, "hard-drive";
     /// A settings or input service (user settings, input, run service).
     ExplorerSettingsService = "explorer.settings_service", SettingsService, "sliders-horizontal";
     /// A camera.
@@ -462,7 +462,8 @@ mod tests {
             (Icon::ExplorerSpotLight, Hue::Yellow),
             (Icon::ExplorerLight, Hue::Yellow),
             (Icon::ExplorerReplicatedStorage, Hue::Orange),
-            (Icon::ExplorerServerStorage, Hue::Orange),
+            // Server storage as the server script service (#321).
+            (Icon::ExplorerServerStorage, Hue::Green),
             (Icon::ExplorerSettingsService, Hue::Cyan),
             (Icon::ExplorerCamera, Hue::White),
             (Icon::ExplorerFolder, Hue::White),
