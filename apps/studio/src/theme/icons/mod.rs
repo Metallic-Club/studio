@@ -368,8 +368,10 @@ pub fn docs_markdown() -> String {
          <!-- Generated from apps/studio/src/theme/icons/mod.rs by \
          `cargo test -p metallic_studio write_the_icon_docs -- --ignored`. Do not edit by hand. -->\n\n\
          Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https://lucide.dev/icons/) SVG \
-         (ISC licence) in the `icons` folder beside Studio's executable, drawn in its group's colour.\n\n\
-         **The icons folder:** `icons/icons.json` says which SVG file each icon id uses, with a line on what it \
+         (ISC licence) in Studio's icons folder, drawn in its group's colour.\n\n\
+         **The icons folder** is `icons` in Studio's own folder: `%APPDATA%\\Metallic\\Studio\\icons` on Windows. \
+         Studio ships its icons beside its executable and copies any file missing there on start, so your edits \
+         are kept. `icons.json` in it says which SVG file each icon id uses, with a line on what it \
          marks. To change an icon for good, put an SVG in the folder and point its entry's `file` at it. A file \
          that is missing or cannot be read falls back to the default, with one warning in Output.\n\n\
          **Custom icons:** set a folder in Settings → Appearance → Icon folder. A file in it named after an icon's id, \

@@ -87,6 +87,8 @@ pub struct Projects {
     new_project: Option<NewProject>,
     /// What went wrong last (a missing file, a file that is not a project), until dismissed.
     error: Option<String>,
+    /// The games folder (#312): where new games go by default.
+    games: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Projects {
@@ -117,6 +119,7 @@ impl Projects {
             selected: None,
             new_project: None,
             error: None,
+            games: None,
         }
     }
 
@@ -133,6 +136,11 @@ impl Projects {
     /// The projects list, to change.
     pub fn list_mut(&mut self) -> &mut ProjectList {
         &mut self.list
+    }
+
+    /// Sets the games folder (`Documents\Metallic`, #312): new games go there unless the user says otherwise.
+    pub fn set_games_folder(&mut self, folder: Option<PathBuf>) {
+        self.games = folder;
     }
 
     /// Offers `templates` for new projects.
@@ -292,9 +300,12 @@ impl Projects {
         }
     }
 
-    /// Where a new project goes unless the user says otherwise: the folder of the latest project, else
-    /// `Documents/Metallic` in the user's home.
+    /// Where a new project goes unless the user says otherwise: the games folder (#312); without one, the folder of
+    /// the latest project, else `Documents/Metallic` in the user's home.
     fn default_folder(&self) -> PathBuf {
+        if let Some(games) = &self.games {
+            return games.clone();
+        }
         if let Some(folder) = self
             .list
             .entries()
