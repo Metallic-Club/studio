@@ -496,14 +496,18 @@ const TAB_HEIGHT: f32 = 32.0;
 const TAB_GAP: f32 = 6.0;
 /// The close button's size.
 const CLOSE_SIZE: f32 = 18.0;
-/// The active tab's fill (#288): the raised surface, clearly apart from the tab bar.
+/// The active tab's fill (#288, #310): a step towards the raised surface, apart from the tab bar but quiet.
 pub(crate) fn active_tab_fill(p: &crate::theme::tokens::Palette) -> Color32 {
-    p.surface_hover
+    // Quieter than the raised surface itself (#310): 40 % of the way there from the bar.
+    p.header.lerp_to_gamma(p.surface_hover, ACTIVE_TAB)
 }
+
+/// How far the active tab's fill goes from the tab bar towards the raised surface.
+const ACTIVE_TAB: f32 = 0.4;
 
 /// A hovered tab's fill: halfway between the bar and the active tab's.
 fn hovered_tab_fill(p: &crate::theme::tokens::Palette) -> Color32 {
-    p.header.lerp_to_gamma(p.surface_hover, 0.5)
+    p.header.lerp_to_gamma(p.surface_hover, ACTIVE_TAB / 2.0)
 }
 
 /// Every group of tabs in `tree`: what the panel borders outline.
@@ -786,6 +790,26 @@ mod tests {
         match tiles.parent_of(bar).and_then(|split| tiles.get(split)) {
             Some(Tile::Container(Container::Linear(linear))) => (linear.dir, linear.children.clone()),
             _ => panic!("{id}'s bar is not in a split"),
+        }
+    }
+
+    #[test]
+    fn the_active_tab_is_marked_quietly() {
+        use crate::theme::tokens::{DARK, LIGHT};
+        for p in [DARK, LIGHT] {
+            let active = active_tab_fill(&p);
+            let gap = |a: Color32, b: Color32| {
+                a.r()
+                    .abs_diff(b.r())
+                    .max(a.g().abs_diff(b.g()))
+                    .max(a.b().abs_diff(b.b()))
+            };
+            // Apart from the bar, but nearer it than the raised surface #288 used (#310).
+            assert!(gap(active, p.header) >= 4, "{active:?} on {:?}", p.header);
+            assert!(gap(active, p.header) < gap(p.surface_hover, p.header), "{active:?}");
+            // A hovered tab lies between the bar and the active one.
+            let hovered = hovered_tab_fill(&p);
+            assert!(gap(hovered, p.header) < gap(active, p.header) && hovered != p.header);
         }
     }
 
