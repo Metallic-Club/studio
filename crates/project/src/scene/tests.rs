@@ -565,3 +565,19 @@ fn mesh_parts_keep_their_asset_ids() {
         Ok(Value::Vector3(Vector3::new(2.0, 3.0, 4.0)))
     );
 }
+
+#[test]
+fn scene_ids_say_which_instance_of_a_copy_is_which_of_the_original() {
+    let mut original = game();
+    let workspace = service(&original, "Workspace");
+    let part = new_in(&mut original, "Part", workspace, "Door");
+    let mut ids = SceneIds::new();
+    let text = save_scene(&original, &mut ids).unwrap().text;
+    let scene_id = ids.get(part).expect("the part was saved");
+    assert_eq!(ids.instance(scene_id), Some(part));
+
+    let (copy, loaded) = load(&text);
+    let twin = loaded.ids.instance(scene_id).expect("the copy has it");
+    assert_eq!(copy.name(twin).unwrap(), "Door");
+    assert_eq!(loaded.ids.instance(u64::MAX), None);
+}

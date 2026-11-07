@@ -105,6 +105,11 @@ Forge and Roblox. The selection is carried into the session by scene id and come
 The Viewport's tab keeps showing the editor's scene, unchanged, from the editor camera. Edits are discarded on Stop
 (§2); keeping them is not planned.
 
+As built (#248): the panels read one "scene" (`EditorState::scene`), the editor's or the running game's, each with its
+own selection and Explorer state, under a "Running game" banner. Properties is still read-only (ADR 0009, until undo
+lands), so what can be edited live today is what the panels can edit at all; property editing will reach the game
+through the same scene with no Play-specific work.
+
 ### 6. Slices
 
 1. #245: `metallic_player` embeddable in a host's viewport (§1).

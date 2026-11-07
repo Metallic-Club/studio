@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{DataModel, Id};
 
-use super::{class_icon, empty_note, icon, ids, matches_words, search_box};
+use super::{class_icon, empty_note, icon, ids, matches_words, playing_banner, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::theme::tokens::{radius, size, space, text};
@@ -188,10 +188,14 @@ impl Panel for Explorer {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
-        let editor = &mut *cx.editor;
+        // The running game's tree while one runs (live editing, ADR 0010 §5).
+        let editor = cx.editor.scene();
+        if editor.playing {
+            playing_banner(ui);
+        }
         search_box(ui, &mut editor.explorer.query, "Search the game");
         ui.add_space(space::S3);
-        let rows = rows(&editor.dm, &editor.explorer);
+        let rows = rows(editor.dm, editor.explorer);
         if rows.is_empty() {
             let line = if editor.explorer.query.trim().is_empty() {
                 "The game is empty.".to_owned()
@@ -218,8 +222,8 @@ impl Panel for Explorer {
         let mut toggled = None;
         scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
             for row in &rows[range] {
-                let selected = editor.selection == Some(row.id);
-                match row_ui(ui, &editor.dm, *row, selected, searching) {
+                let selected = *editor.selection == Some(row.id);
+                match row_ui(ui, editor.dm, *row, selected, searching) {
                     RowAction::None => {}
                     RowAction::Select => clicked = Some(row.id),
                     RowAction::Toggle => toggled = Some(*row),
@@ -230,7 +234,7 @@ impl Panel for Explorer {
             editor.explorer.set_expanded(row.id, !row.expanded);
         }
         if let Some(id) = clicked {
-            editor.selection = Some(id);
+            *editor.selection = Some(id);
         }
     }
 }

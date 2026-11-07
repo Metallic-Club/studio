@@ -2329,6 +2329,80 @@ mod tests {
         assert!(harness.state().studio.is_playing());
     }
 
+    // Live editing while playing (#248).
+
+    #[test]
+    fn while_playing_the_explorer_and_properties_show_the_running_game() {
+        let mut harness = editing(settings_file("editor-live", None), "Live Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        add_play_script(&mut harness);
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        let editor_selection = harness.state().studio.editor().unwrap().selection;
+        assert!(
+            harness.query_by_label_contains("Running game").is_none(),
+            "no banner before Play"
+        );
+
+        // Play: the selection comes along (by scene id), Properties shows the game's Baseplate, and the Explorer
+        // shows what only the running game has: the script's Frames value.
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        assert_eq!(
+            harness.query_all_by_label_contains("Running game").count(),
+            2,
+            "Explorer and Properties"
+        );
+        {
+            let studio = &mut harness.state_mut().studio;
+            let editor = studio.editor_mut().unwrap();
+            let scene = editor.scene();
+            assert!(scene.playing);
+            let selected = scene.selection.expect("carried into the game");
+            assert_eq!(scene.dm.name(selected).unwrap(), "Baseplate");
+            // The game's own id, not the editor's.
+            let session = editor.play.as_ref().unwrap();
+            assert!(session.player.engine().data_model().contains(selected));
+        }
+        harness.get_by_label("TRANSFORM");
+        let storage = harness.get_by_role_and_label(Role::TreeItem, "ReplicatedStorage");
+        storage.click();
+        settle(&mut harness);
+        // Expanding goes through the caret; the row click selects it, and Properties follows the game.
+        {
+            let scene = harness.state_mut().studio.editor_mut().unwrap().scene();
+            let storage = scene.selection.expect("ReplicatedStorage selected");
+            assert_eq!(scene.dm.name(storage).unwrap(), "ReplicatedStorage");
+            scene.explorer.set_expanded(storage, true);
+        }
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Frames");
+        assert!(
+            harness.state().studio.editor().unwrap().selection == editor_selection,
+            "the editor's selection is untouched"
+        );
+
+        // A change made to the game through the scene the panels edit is the game's at once.
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let scene = editor.scene();
+            let storage = scene.selection.unwrap();
+            let frames = scene.dm.find_first_child(storage, "Frames", false).unwrap().unwrap();
+            scene.dm.set_name(frames, "Ticks".into()).unwrap();
+        }
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Ticks");
+
+        // Stop: the editor's tree, selection and Explorer are as they were.
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
+        settle(&mut harness);
+        assert!(harness.query_by_label_contains("Running game").is_none());
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Ticks").is_none());
+        assert_eq!(harness.state().studio.editor().unwrap().selection, editor_selection);
+        harness.get_by_label("TRANSFORM");
+    }
+
     // The input hand-off to the game (#247).
 
     /// The lines the game printed since the session began.
@@ -3248,11 +3322,15 @@ mod tests {
                  end)\n",
             )
             .unwrap();
+        let workspace = editor.dm.service(class("Workspace")).unwrap();
+        let pad = editor.dm.find_first_child(workspace, "SpawnLocation", false).unwrap();
+        editor.select(pad);
         studio.menu_action(MenuAction::Play);
         assert!(studio.is_playing(), "{:?}", studio.notice());
         for _ in 0..40 {
             offscreen.frame(&mut studio);
         }
+        // #248: the Explorer and Properties show the running game, the spawn pad selected in it.
         write_png(&out.join("246-game-tab.png"), offscreen.read());
     }
 

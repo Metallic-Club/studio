@@ -19,7 +19,7 @@ use crate::panels::explorer::ExplorerState;
 use crate::panels::output::OutputState;
 use crate::viewport::ViewportState;
 pub use open::{AssetRow, Opened, Opening, STEPS};
-pub use play::{GameView, PlaySession};
+pub use play::{GameView, PlaySession, Scene};
 
 /// The open project, its game, and the panels' state.
 pub struct EditorState {

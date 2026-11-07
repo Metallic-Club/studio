@@ -12,7 +12,7 @@ use egui::{
 };
 use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, ResolvedProp, Value};
 
-use super::{class_icon, empty_note, icon, ids};
+use super::{class_icon, empty_note, icon, ids, playing_banner};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::settings::window::section_label;
@@ -169,12 +169,18 @@ impl Panel for Properties {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
-        let editor = &*cx.editor;
-        let Some(id) = editor.selection.filter(|&id| editor.dm.contains(id)) else {
+        // The running game's values while one runs, live (ADR 0010 §5).
+        let scene = cx.editor.scene();
+        if scene.playing {
+            playing_banner(ui);
+            // The values change as the game runs.
+            ui.ctx().request_repaint();
+        }
+        let dm: &_ = scene.dm;
+        let Some(id) = scene.selection.filter(|&id| dm.contains(id)) else {
             empty_note(ui, "Select something in the Explorer to see its properties.");
             return;
         };
-        let dm = &editor.dm;
         let p = current_colors(ui.ctx()).palette;
         ui.horizontal(|ui| {
             let icon = dm

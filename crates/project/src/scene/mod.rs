@@ -112,6 +112,15 @@ impl SceneIds {
         self.ids.get(&instance).copied()
     }
 
+    /// The instance with scene id `scene_id`, if one has it: which instance of a loaded copy is which instance of the
+    /// scene it was saved from (Studio's Play, ADR 0010). Looks through every id.
+    pub fn instance(&self, scene_id: u64) -> Option<Id> {
+        self.ids
+            .iter()
+            .find(|(_, id)| **id == scene_id)
+            .map(|(instance, _)| *instance)
+    }
+
     /// How many instances have an id.
     pub fn len(&self) -> usize {
         self.ids.len()
