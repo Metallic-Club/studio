@@ -269,7 +269,9 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool
         None
     };
     if ui.is_rect_visible(rect) {
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, stripe);
+        // The stripe and the fills reach the panel's sides (#301).
+        let (band_painter, band) = super::row_band(ui, rect);
+        band_painter.rect_filled(band, CornerRadius::ZERO, stripe);
         let fill = if selected {
             p.surface_hover
         } else if response.hovered() {
@@ -278,7 +280,7 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool
             Color32::TRANSPARENT
         };
         // Plain (#300): a square fill marks the selected row, with no accent bar.
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
+        band_painter.rect_filled(band, CornerRadius::ZERO, fill);
         if row.has_children {
             let hovered = caret_response.as_ref().is_some_and(|response| response.hovered());
             icons::paint_at(

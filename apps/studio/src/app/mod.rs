@@ -3371,7 +3371,8 @@ mod tests {
                     if (rect.fill == shades.darker || rect.fill == shades.brighter)
                         && (rect.rect.height() - size::ROW).abs() < 0.01 =>
                 {
-                    Some((rect.rect, rect.fill))
+                    // Shown, not just shaped: the clip spans it too.
+                    Some((rect.rect.intersect(clipped.clip_rect), rect.fill))
                 }
                 _ => None,
             })
@@ -3429,7 +3430,12 @@ mod tests {
             .shapes
             .iter()
             .filter_map(|clipped| match &clipped.shape {
-                egui::Shape::Rect(rect) if row.expand(0.5).contains_rect(rect.rect) => Some(rect),
+                // The row's height; its fills reach past it to the panel's sides (#301).
+                egui::Shape::Rect(rect)
+                    if rect.rect.top() >= row.top() - 0.5 && rect.rect.bottom() <= row.bottom() + 0.5 =>
+                {
+                    Some(rect)
+                }
                 _ => None,
             })
             .collect();
@@ -3469,17 +3475,26 @@ mod tests {
         // Each row is on a stripe, and neighbours have the two shades.
         let shades = tokens::DARK.rows();
         let output = harness.output();
+        // A stripe spans the panel from side to side (#301), across the row's height.
+        let pane = area_of(&harness.state().studio, panels::ids::EXPLORER);
         let stripe = |row: egui::Rect| {
             output.shapes.iter().find_map(|clipped| match &clipped.shape {
                 egui::Shape::Rect(rect)
-                    if rect.rect == row && (rect.fill == shades.darker || rect.fill == shades.brighter) =>
+                    if rect.rect.y_range() == row.y_range()
+                        && (rect.fill == shades.darker || rect.fill == shades.brighter) =>
                 {
-                    Some(rect.fill)
+                    Some((rect.rect, rect.fill))
                 }
                 _ => None,
             })
         };
-        let fills: Vec<egui::Color32> = items.iter().map(|&row| stripe(row).expect("a striped row")).collect();
+        let stripes: Vec<(egui::Rect, egui::Color32)> =
+            items.iter().map(|&row| stripe(row).expect("a striped row")).collect();
+        for (band, _) in &stripes {
+            assert!((band.left() - pane.left()).abs() < 0.5, "{band:?} in {pane:?}");
+            assert!((band.right() - pane.right()).abs() < 0.5, "{band:?} in {pane:?}");
+        }
+        let fills: Vec<egui::Color32> = stripes.iter().map(|(_, fill)| *fill).collect();
         assert_eq!(fills[0], shades.darker, "the first row is the darker shade");
         for pair in fills.windows(2) {
             assert_ne!(pair[0], pair[1]);

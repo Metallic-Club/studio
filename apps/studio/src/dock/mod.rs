@@ -488,6 +488,9 @@ impl DockBehavior<'_, '_> {
     }
 }
 
+/// How far a panel's content is inset from its sides. A list's row backgrounds reach past it to the sides (#301).
+pub(crate) const PANE_MARGIN: f32 = space::S4;
+
 /// A tab's height.
 const TAB_HEIGHT: f32 = 32.0;
 /// The space between a tab's title and its close button.
@@ -597,7 +600,7 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
                 self.focus.focused = Some(panel.id());
             }
         }
-        let inner = rect.shrink2(vec2(space::S4, space::S4));
+        let inner = rect.shrink2(vec2(PANE_MARGIN, PANE_MARGIN));
         ui.scope_builder(
             UiBuilder::new()
                 .max_rect(inner)

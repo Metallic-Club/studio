@@ -233,12 +233,14 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
         return;
     }
     let split = rect.left() + (width * NAME_SHARE).max(80.0).min(width);
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
+    // The stripe and the lines between rows reach the panel's sides (#301).
+    let (band_painter, band) = super::row_band(ui, rect);
+    band_painter.rect_filled(band, CornerRadius::ZERO, fill);
     // The lines are drawn inside the row (half a point in), so the next row's fill never covers them.
     let half = size::BORDER / 2.0;
-    ui.painter().hline(rect.x_range(), rect.top() + half, line);
+    band_painter.hline(band.x_range(), rect.top() + half, line);
     if last {
-        ui.painter().hline(rect.x_range(), rect.bottom() - half, line);
+        band_painter.hline(band.x_range(), rect.bottom() - half, line);
     }
     ui.painter().vline(split - half, rect.y_range(), line);
 
