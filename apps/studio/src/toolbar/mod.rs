@@ -1,9 +1,11 @@
 //! The editor's toolbar (#232; ADR 0009, Toolbar): a row of tabs, and under it the front tab's toolbar of tools,
 //! spacers and separators.
 //!
-//! - **Tabs** (Home, Model, UI, Scripts and Plugins by default) can be added (the + after them), renamed, deleted
-//!   and moved (right-click, or drag one along the row). Switching tab changes the toolbar only, unless the tab's
-//!   "Load a layout for this tab" box is ticked: then the dock shows that tab's own layout while it is in front.
+//! - **Tabs** (Home, Model, UI, Scripts and Plugins by default) can be added (the + after them), renamed in place
+//!   (double-click), and moved by dragging one along the row. Right-click a tab for the Tabs window ([`tabs`], #329):
+//!   every tab with its name, whether it is shown and whether it loads a layout of its own, moving and deleting, and
+//!   where the tabs sit in the row (left, center or right). Switching tab changes the toolbar only, unless the tab
+//!   loads a layout of its own: then the dock shows that tab's layout while it is in front.
 //! - **Elements** come from the [`ToolRegistry`] ([`tools`]): right-click the toolbar and choose Add... for the Add
 //!   window ([`add`], #327), which lists every tool, spacer and separator in groups with what each does; right-click
 //!   one to add another before it, move it or remove it, or drag it along the row.
@@ -14,6 +16,7 @@
 
 pub mod add;
 pub mod model;
+pub mod tabs;
 pub mod tools;
 
 use std::path::{Path, PathBuf};
@@ -26,7 +29,7 @@ use crate::dock::Panel;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
 use crate::theme::{PlayControl, current_colors, fonts};
-pub use model::{Element, TOOLBAR_FILE, TOOLBAR_VERSION, TabConfig, ToolbarConfig};
+pub use model::{Element, TOOLBAR_FILE, TOOLBAR_VERSION, TabAlign, TabConfig, ToolbarConfig};
 pub use tools::{StudioCommand, Tool, ToolAction, ToolError, ToolRegistry};
 
 /// The tab row's height.
@@ -43,6 +46,8 @@ const SPACER_WIDTH: f32 = 24.0;
 const SEPARATOR_WIDTH: f32 = 13.0;
 /// A tool's icon size.
 const TOOL_ICON: f32 = 20.0;
+/// The room the + after the tabs takes.
+const PLUS_WIDTH: f32 = 28.0;
 /// What a tab being renamed has past its name: room for the text cursor (#326).
 const RENAME_SLACK: f32 = 2.0;
 
@@ -60,9 +65,9 @@ enum Change {
     StartRename(usize),
     FinishRename,
     CancelRename,
-    RemoveTab(usize),
     MoveTab(usize, usize),
-    SetOwnLayout(usize, bool),
+    OpenTabs,
+    CloseTabs,
     Insert(usize, Element),
     OpenAdd(usize),
     CloseAdd,
@@ -83,6 +88,8 @@ pub struct Toolbar {
     renaming: Option<(usize, String)>,
     /// The Add window, while it is open.
     adding: Option<add::Adding>,
+    /// Whether the Tabs window is open.
+    tabs_open: bool,
 }
 
 impl Default for Toolbar {
@@ -103,6 +110,7 @@ impl Toolbar {
             registry: ToolRegistry::studio(panels),
             renaming: None,
             adding: None,
+            tabs_open: false,
         }
     }
 
@@ -116,12 +124,28 @@ impl Toolbar {
             registry: ToolRegistry::studio(panels),
             renaming: None,
             adding: None,
+            tabs_open: false,
         }
     }
 
     /// Whether the Add window is open.
     pub fn is_adding(&self) -> bool {
         self.adding.is_some()
+    }
+
+    /// Whether the Tabs window is open.
+    pub fn is_editing_tabs(&self) -> bool {
+        self.tabs_open
+    }
+
+    /// Opens or closes the Tabs window.
+    pub fn set_editing_tabs(&mut self, open: bool) {
+        self.apply(if open { Change::OpenTabs } else { Change::CloseTabs });
+    }
+
+    /// Closes the Add window.
+    pub fn close_add(&mut self) {
+        self.apply(Change::CloseAdd);
     }
 
     /// Opens the Add window for the front tab, adding at `at` (its end when past it).
@@ -202,6 +226,9 @@ impl Toolbar {
         self.tab_row(ui, tabs, &mut changes);
         self.tool_row(ui, tools, &enabled, &checked, &mut changes, &mut events);
         self.add_window(ui.ctx(), &mut changes);
+        if self.tabs_open && !tabs::show(ui.ctx(), &mut self.config) {
+            changes.push(Change::CloseTabs);
+        }
         for change in changes {
             self.apply(change);
         }
@@ -235,19 +262,15 @@ impl Toolbar {
                 }
             }
             Change::CancelRename => self.renaming = None,
-            Change::RemoveTab(index) => {
-                config.remove_tab(index);
-                self.renaming = None;
-            }
             Change::MoveTab(from, to) => {
                 config.move_tab(from, to);
                 self.renaming = None;
             }
-            Change::SetOwnLayout(index, on) => {
-                if let Some(tab) = config.tabs.get_mut(index) {
-                    tab.own_layout = on;
-                }
+            Change::OpenTabs => {
+                self.tabs_open = true;
+                self.renaming = None;
             }
+            Change::CloseTabs => self.tabs_open = false,
             Change::Insert(at, element) => config.insert_element(config.active, at, element),
             Change::OpenAdd(at) => {
                 let tab = config.active_tab();
@@ -284,24 +307,60 @@ impl Toolbar {
         }
     }
 
-    /// The tabs, the + after them, and a tab being dragged.
+    /// The shown tabs' places in the row `rect` (#329): each with its index, left to right, placed as
+    /// [`ToolbarConfig::align`] says, followed by the + that adds a tab. A tab being renamed is as wide as its new name.
+    fn tab_layout(&self, ui: &Ui, rect: Rect, font: &FontId) -> (Vec<(usize, Rect)>, Rect) {
+        let widths: Vec<(usize, f32)> = self
+            .config
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| tab.shown)
+            .map(|(index, tab)| {
+                let name = match &self.renaming {
+                    Some((at, name)) if *at == index => name.clone(),
+                    _ => tab.name.clone(),
+                };
+                let width = ui.painter().layout_no_wrap(name, font.clone(), Color32::WHITE).size().x;
+                (index, width + 2.0 * space::S5)
+            })
+            .collect();
+        let tabs: f32 = widths.iter().map(|(_, width)| width + space::S1).sum();
+        let total = tabs + PLUS_WIDTH;
+        let start = match self.config.align {
+            TabAlign::Left => rect.left() + space::S3,
+            TabAlign::Center => rect.center().x - total / 2.0,
+            TabAlign::Right => rect.right() - space::S3 - total,
+        }
+        .max(rect.left() + space::S3);
+        let mut x = start;
+        let rects = widths
+            .into_iter()
+            .map(|(index, width)| {
+                let at = Rect::from_min_size(pos2(x, rect.top()), vec2(width, rect.height()));
+                x = at.right() + space::S1;
+                (index, at)
+            })
+            .collect();
+        let plus = Rect::from_center_size(pos2(x + PLUS_WIDTH / 2.0, rect.center().y), vec2(22.0, 22.0));
+        (rects, plus)
+    }
+
+    /// The shown tabs, the + after them, and a tab being dragged. Right-click a tab for the Tabs window.
     fn tab_row(&mut self, ui: &mut Ui, rect: Rect, changes: &mut Vec<Change>) {
         let colors = current_colors(ui.ctx());
         let p = colors.palette;
         let font = fonts::named(fonts::STRONG, text::SMALL + 1.0);
-        let mut x = rect.left() + space::S3;
-        let mut rects = Vec::new();
+        let (layout, plus) = self.tab_layout(ui, rect, &font);
+        let rects: Vec<Rect> = layout.iter().map(|(_, at)| *at).collect();
         let mut dragged = None;
-        for (index, tab) in self.config.tabs.iter().enumerate() {
+        for &(index, tab_rect) in &layout {
+            let tab = &self.config.tabs[index];
             let id = ui.scope_id().with(("metallic.toolbar.tab", tab.id));
             if let Some((_, name)) = self.renaming.as_mut().filter(|(at, _)| *at == index) {
                 // In place (#326): the tab as it is drawn, its name where it was, with only a text cursor added. No
                 // frame, no margin, and as wide as the name so far, so nothing moves while typing.
                 let galley = ui.painter().layout_no_wrap(name.clone(), font.clone(), p.text);
-                let tab_rect = Rect::from_min_size(
-                    pos2(x, rect.top()),
-                    vec2(galley.size().x + 2.0 * space::S5, rect.height()),
-                );
                 if index == self.config.active {
                     ui.painter()
                         .rect_filled(tab_rect, CornerRadius::ZERO, crate::dock::active_tab_fill(&p));
@@ -337,15 +396,9 @@ impl Toolbar {
                         Change::FinishRename
                     });
                 }
-                rects.push(tab_rect);
-                x = tab_rect.right() + space::S1;
                 continue;
             }
             let galley = ui.painter().layout_no_wrap(tab.name.clone(), font.clone(), p.text);
-            let tab_rect = Rect::from_min_size(
-                pos2(x, rect.top()),
-                vec2(galley.size().x + 2.0 * space::S5, rect.height()),
-            );
             let response = ui.interact(tab_rect, id, Sense::click_and_drag());
             let active = index == self.config.active;
             response.widget_info(|| WidgetInfo::selected(Role::Tab, true, active, &tab.name));
@@ -371,47 +424,20 @@ impl Toolbar {
             if response.double_clicked() {
                 changes.push(Change::StartRename(index));
             }
+            if response.secondary_clicked() {
+                changes.push(Change::OpenTabs);
+            }
             if response.dragged() {
                 dragged = Some(index);
             }
-            if response.drag_stopped() {
-                let to = drop_index(
-                    &rects_after(ui, &self.config.tabs, rect, &font),
-                    ui.ctx().pointer_latest_pos(),
-                );
-                if let Some(to) = to {
-                    changes.push(Change::MoveTab(index, to));
-                }
+            if response.drag_stopped()
+                && let Some(to) = drop_index(&rects, ui.ctx().pointer_latest_pos())
+                && let Some(&(to, _)) = layout.get(to)
+            {
+                changes.push(Change::MoveTab(index, to));
             }
-            let tabs = self.config.tabs.len();
-            response.context_menu(|ui| {
-                if ui.button("Rename").clicked() {
-                    changes.push(Change::StartRename(index));
-                }
-                let mut own = tab.own_layout;
-                if crate::theme::checkbox(ui, &mut own, "Load a layout for this tab").clicked() {
-                    changes.push(Change::SetOwnLayout(index, own));
-                }
-                ui.separator();
-                if ui.add_enabled(index > 0, egui::Button::new("Move left")).clicked() {
-                    changes.push(Change::MoveTab(index, index - 1));
-                }
-                if ui
-                    .add_enabled(index + 1 < tabs, egui::Button::new("Move right"))
-                    .clicked()
-                {
-                    changes.push(Change::MoveTab(index, index + 1));
-                }
-                ui.separator();
-                if ui.add_enabled(tabs > 1, egui::Button::new("Delete")).clicked() {
-                    changes.push(Change::RemoveTab(index));
-                }
-            });
-            rects.push(tab_rect);
-            x = tab_rect.right() + space::S1;
         }
         // The + that adds a tab.
-        let plus = Rect::from_center_size(pos2(x + 14.0, rect.center().y), vec2(22.0, 22.0));
         let response = ui.interact(plus, ui.scope_id().with("metallic.toolbar.add_tab"), Sense::click());
         response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "New tab"));
         if response.hovered() {
@@ -657,24 +683,6 @@ fn play_control(action: &ToolAction) -> Option<PlayControl> {
         ToolAction::Studio(StudioCommand::Pause | StudioCommand::Step) => Some(PlayControl::Plain),
         _ => None,
     }
-}
-
-/// Where the tabs are, laid out as the row draws them (for a tab dropped after the ones drawn so far).
-fn rects_after(ui: &Ui, tabs: &[TabConfig], rect: Rect, font: &FontId) -> Vec<Rect> {
-    let mut x = rect.left() + space::S3;
-    tabs.iter()
-        .map(|tab| {
-            let width = ui
-                .painter()
-                .layout_no_wrap(tab.name.clone(), font.clone(), Color32::WHITE)
-                .size()
-                .x
-                + 2.0 * space::S5;
-            let at = Rect::from_min_size(pos2(x, rect.top()), vec2(width, rect.height()));
-            x = at.right() + space::S1;
-            at
-        })
-        .collect()
 }
 
 /// The index a thing dropped at `pointer` goes to among `rects` (left to right): before the first whose middle is
