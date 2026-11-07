@@ -135,6 +135,17 @@ pub(crate) fn playing_banner(ui: &mut Ui) {
     ui.add_space(space::S3);
 }
 
+/// Where a list row's background goes (#301): the row `rect` stretched past the panel's inset to its sides, and a
+/// painter clipped to that width, so stripes and the selected fill leave no gap at the edges.
+pub(crate) fn row_band(ui: &Ui, rect: egui::Rect) -> (egui::Painter, egui::Rect) {
+    let margin = crate::dock::PANE_MARGIN;
+    let clip = ui.clip_rect();
+    let wider = egui::Rect::from_x_y_ranges((clip.left() - margin)..=(clip.right() + margin), clip.y_range());
+    // A painter on the same layer, so the clip can widen past the panel's inset: a child painter only narrows it.
+    let painter = ui.ctx().layer_painter(ui.layer_id()).with_clip_rect(wider);
+    (painter, rect.expand2(vec2(margin, 0.0)))
+}
+
 /// A quiet line in the middle of an empty panel.
 pub(crate) fn empty_note(ui: &mut Ui, line: &str) {
     let p = current_colors(ui.ctx()).palette;
