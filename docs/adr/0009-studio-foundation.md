@@ -91,6 +91,8 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
   repaired on load (they are dropped, and the default layout is used if nothing is left). **Reset layout** is in the
   View menu (since #239, in the Window menu of the Roblox-style menu bar: File, Edit, View, Plugins, Test, Window,
   Help, with items for features still to come shown disabled).
+- **Panel borders** (#262): each group of tabs is outlined like the Settings window (1 px border colour, the panel
+  radius, a 4 px gap between groups). Settings → Appearance → Panel borders turns it off (on by default).
 - **Default layout:** Viewport in the centre; Explorer on the left with Assets as a tab beside it; Properties on the
   right; Output along the bottom.
 - **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection, search); Properties (the selected
