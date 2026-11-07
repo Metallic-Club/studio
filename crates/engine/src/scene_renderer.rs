@@ -70,7 +70,8 @@ struct Device {
 /// [`SceneRenderer::attach_viewport`] makes a [`ViewportTarget`] on that device, [`SceneRenderer::render_viewport`]
 /// draws the game into it each frame through the same frame as a window's (graphics settings, anti-aliasing,
 /// dynamic resolution and the overlay included; the frame cap is the caller's to apply, as the Player's is), and
-/// [`SceneRenderer::resize_viewport`] resizes it without a black frame. An editor draws from its own camera with
+/// [`SceneRenderer::resize_viewport`] follows the panel's size in the same frame: the frame fills the target's top-left
+/// corner of that size, the target kept with room to spare (#330). An editor draws from its own camera with
 /// [`SceneRenderer::set_camera`], leaving the game's untouched. One `SceneRenderer` draws one viewport;
 /// several viewports are several of them on the same device.
 pub struct SceneRenderer {
@@ -804,20 +805,42 @@ impl SceneRenderer {
         self.start_graphics();
     }
 
-    /// Resizes the viewport target to `width` x `height` physical pixels (the panel's new size) without a black frame:
-    /// until its textures at the new size exist (large ones are made off the frame), frames keep drawing into the old
-    /// texture, which stays the one to show ([`Renderer::resize_viewport`]). A zero size (a collapsed panel) keeps
-    /// the old size. Nothing happens without a viewport.
+    /// Fits the viewport to a panel of `width` x `height` physical pixels, from the next frame on, as Forge-Engine's
+    /// editor drew its view into a part of a larger target (#330): the frame fills the target's top-left `width` x
+    /// `height` corner ([`Renderer::set_drawn_size`]), so a panel being resized is drawn at its new size in the same
+    /// frame, never stretched and with no texture to wait for. The target is kept with room to spare
+    /// ([`ViewportTarget::room_for`]); when the panel outgrows it, a larger one and the renderer's attachments at its
+    /// size are made at once, before the frame. Show the corner [`SceneRenderer::viewport_drawn_size`] says. A zero
+    /// size (a collapsed panel) changes nothing, and nothing happens without a viewport.
     pub fn resize_viewport(&mut self, width: u32, height: u32) {
-        let (Some(device), Some(_)) = (self.device.as_mut(), self.viewport.as_ref()) else {
+        let (Some(device), Some(target)) = (self.device.as_mut(), self.viewport.as_mut()) else {
             return;
         };
-        if width > 0
-            && height > 0
-            && let Err(error) = device.renderer.resize_viewport(width, height)
-        {
-            log::warn!("render: could not resize the viewport to {width}x{height}: {error}");
+        if width == 0 || height == 0 {
+            return;
         }
+        let limit = device.context.capabilities().max_texture_size;
+        let room = ViewportTarget::room_for((width, height), target.size(), limit);
+        if room != target.size() {
+            let grown = device
+                .renderer
+                .resize(room.0, room.1)
+                .and_then(|()| target.resize_now(&device.context, room.0, room.1));
+            if let Err(error) = grown {
+                log::warn!("render: could not make the viewport {}x{}: {error}", room.0, room.1);
+                // Back to the target's own size, which the renderer must match to draw into it.
+                let (w, h) = target.size();
+                let _ = device.renderer.resize(w, h);
+            }
+        }
+        device.renderer.set_drawn_size(width, height);
+    }
+
+    /// The part of the viewport target the frames fill, its top-left corner (#330): the panel's size since
+    /// [`SceneRenderer::resize_viewport`], within the target. `None` without a viewport.
+    pub fn viewport_drawn_size(&self) -> Option<(u32, u32)> {
+        self.viewport.as_ref()?;
+        self.device.as_ref().map(|device| device.renderer.drawn_size())
     }
 
     /// Draws a frame of `dm` into the viewport target, as [`RenderHook::render`] draws one into a window: the scene

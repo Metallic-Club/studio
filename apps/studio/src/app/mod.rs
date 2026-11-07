@@ -3517,36 +3517,56 @@ mod tests {
     }
 
     #[test]
-    fn the_viewport_never_stretches_a_frame_while_it_resizes() {
+    fn the_viewport_shows_the_corner_drawn_this_frame() {
+        use metallic_engine::metallic_render::ViewportTarget;
+
         let mut harness = editing(settings_file("viewport-resize", None), "Resize Game");
         harness.set_size(egui::vec2(1280.0, 800.0));
         settle(&mut harness);
         let texture = egui::TextureId::User(77);
-        let image_rect = |harness: &Harness<'_, Test>| {
-            harness.output().shapes.iter().find_map(|clipped| match &clipped.shape {
-                egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
-                _ => None,
-            })
+        // Where the image is drawn and the texture coordinates of its far corner.
+        let image = |harness: &Harness<'_, Test>| {
+            harness
+                .output()
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
+                        let uv = mesh.vertices.iter().fold(egui::pos2(0.0, 0.0), |far, v| far.max(v.uv));
+                        Some((mesh.calc_bounds(), uv))
+                    }
+                    _ => None,
+                })
+                .expect("the viewport's image")
         };
-        // A frame of the panel's own size fills it.
         let wanted = harness.state().studio.editor().unwrap().viewport.pixels.unwrap();
-        let viewport = &mut harness.state_mut().studio.editor_mut().unwrap().viewport;
-        viewport.texture = Some(texture);
-        viewport.texture_pixels = Some(wanted);
-        harness.step();
         let panel = harness.state().studio.editor().unwrap().viewport.rect.unwrap();
-        assert_eq!(image_rect(&harness), Some(panel));
-        // Mid-resize, an older, smaller frame: drawn at its own size, centred, not stretched (#311).
-        let viewport = &mut harness.state_mut().studio.editor_mut().unwrap().viewport;
-        viewport.texture_pixels = Some((wanted.0 - 200, wanted.1 - 100));
-        harness.step();
-        let drawn = image_rect(&harness).expect("the old frame");
-        assert!((drawn.width() - (wanted.0 - 200) as f32).abs() < 0.01, "{drawn:?}");
-        assert!((drawn.height() - (wanted.1 - 100) as f32).abs() < 0.01, "{drawn:?}");
-        assert!(
-            (drawn.center() - panel.center()).length() < 1.0,
-            "{drawn:?} in {panel:?}"
-        );
+        let show = |harness: &mut Harness<'_, Test>, target: (u32, u32)| {
+            let viewport = &mut harness.state_mut().studio.editor_mut().unwrap().viewport;
+            viewport.texture = Some(texture);
+            viewport.texture_pixels = Some(target);
+            viewport.texture_limit = 16_384;
+            harness.step();
+            image(harness)
+        };
+        let share = |drawn: u32, of: u32| drawn as f32 / of as f32;
+        // A target of the panel's size: all of it, filling the panel.
+        let (at, uv) = show(&mut harness, wanted);
+        assert_eq!(at, panel);
+        assert_eq!(uv, egui::pos2(1.0, 1.0));
+        // A larger target (#330): its top-left corner of the panel's size, still filling the panel, never stretched.
+        let larger = (wanted.0 + 300, wanted.1 + 200);
+        let (at, uv) = show(&mut harness, larger);
+        assert_eq!(at, panel);
+        assert_eq!(uv, egui::pos2(share(wanted.0, larger.0), share(wanted.1, larger.1)));
+        // A target the panel outgrew: the engine grows it this frame, as the panel works out too, and the corner is
+        // the panel's size in the grown one.
+        let smaller = (wanted.0 - 200, wanted.1 - 100);
+        let room = ViewportTarget::room_for(wanted, smaller, 16_384);
+        assert!(room.0 >= wanted.0 && room.1 >= wanted.1);
+        let (at, uv) = show(&mut harness, smaller);
+        assert_eq!(at, panel);
+        assert_eq!(uv, egui::pos2(share(wanted.0, room.0), share(wanted.1, room.1)));
     }
 
     /// The toolbar's tab called `name`.
@@ -5145,7 +5165,7 @@ skip_sign_in = true
     }
 
     #[test]
-    fn resizing_the_panel_resizes_the_target_without_a_black_frame() {
+    fn resizing_the_panel_draws_its_new_size_in_the_same_frame() {
         let Some((mut studio, mut offscreen)) = viewport_shown("viewport-resize", egui::vec2(960.0, 600.0)) else {
             return;
         };
@@ -5154,27 +5174,38 @@ skip_sign_in = true
             rgb(frame, centre.x as u32, centre.y as u32)
         };
         let before = centre_of(&studio, &offscreen.read());
-        let generation = offscreen.viewport.scene().viewport().unwrap().generation();
-        let old = offscreen.viewport.scene().viewport().unwrap().size();
-
-        offscreen.set_size(egui::vec2(800.0, 560.0));
-        let mut resized = false;
-        for _ in 0..2000 {
-            offscreen.frame(&mut studio);
-            // Every frame shows the scene: the old texture stretched until the new one is drawn.
-            let now = centre_of(&studio, &offscreen.read());
-            let off: u32 = now.iter().zip(before).map(|(a, b)| u32::from(a.abs_diff(b))).sum();
-            assert!(off < 60, "the centre went from {before:?} to {now:?}");
+        let drawn = |offscreen: &Offscreen| offscreen.viewport.scene().viewport_drawn_size();
+        let target = |offscreen: &Offscreen| {
             let target = offscreen.viewport.scene().viewport().unwrap();
-            if Some(target.size()) == studio.editor().unwrap().viewport.pixels {
-                assert!(target.generation() > generation);
-                assert_ne!(target.size(), old);
-                resized = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(resized, "the target never took the panel's new size");
+            (target.size(), target.generation())
+        };
+        // Smaller (#330): the very next frame is drawn at the panel's new size, in the same target.
+        let (size, generation) = target(&offscreen);
+        offscreen.set_size(egui::vec2(800.0, 560.0));
+        offscreen.frame(&mut studio);
+        assert_eq!(drawn(&offscreen), studio.editor().unwrap().viewport.pixels);
+        assert_eq!(target(&offscreen), (size, generation), "no texture made");
+        let now = centre_of(&studio, &offscreen.read());
+        let off: u32 = now.iter().zip(before).map(|(a, b)| u32::from(a.abs_diff(b))).sum();
+        assert!(off < 60, "the centre went from {before:?} to {now:?}");
+        // Larger than the target: it grows in that same frame, with room to spare, and the frame fills the panel.
+        offscreen.set_size(egui::vec2(1400.0, 900.0));
+        offscreen.frame(&mut studio);
+        let pixels = studio.editor().unwrap().viewport.pixels.unwrap();
+        assert_eq!(drawn(&offscreen), Some(pixels));
+        let (grown, again) = target(&offscreen);
+        assert!(
+            again > generation && grown.0 > pixels.0 && grown.1 > pixels.1,
+            "{grown:?} for {pixels:?}"
+        );
+        let now = centre_of(&studio, &offscreen.read());
+        let off: u32 = now.iter().zip(before).map(|(a, b)| u32::from(a.abs_diff(b))).sum();
+        assert!(off < 60, "the centre went from {before:?} to {now:?}");
+        // A little larger again: it fits, so nothing is made.
+        offscreen.set_size(egui::vec2(1420.0, 910.0));
+        offscreen.frame(&mut studio);
+        assert_eq!(target(&offscreen), (grown, again));
+        assert_eq!(drawn(&offscreen), studio.editor().unwrap().viewport.pixels);
     }
 
     /// The viewport's screenshot (`cargo test -p metallic_studio -- --ignored screenshot_of_the_viewport`): the

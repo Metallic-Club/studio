@@ -65,7 +65,7 @@ impl Panel for Game {
                 match view.texture {
                     Some(texture) => {
                         // At its own size while a resize is under way (#311).
-                        super::draw_render(ui, texture, view.texture_pixels, rect, p.bg);
+                        super::draw_render(ui, texture, view.texture_pixels, view.texture_limit, rect);
                         None
                     }
                     None => Some(

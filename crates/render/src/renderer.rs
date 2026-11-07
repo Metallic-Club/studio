@@ -212,6 +212,9 @@ pub struct Renderer {
     texture_size: (u32, u32),
     /// The size the scene is drawn at this frame: the top-left corner of the scene's attachments.
     render_size: (u32, u32),
+    /// The part of the target a frame fills, its top-left corner, when that is less than all of it
+    /// ([`Renderer::set_drawn_size`], #330).
+    drawn: Option<(u32, u32)>,
     resolution: DynamicResolution,
     upscaler: Upscaler,
     timer: Option<GpuTimer>,
@@ -319,6 +322,7 @@ impl Renderer {
             post: Post::new(context, settings.color_format, hdr_format),
             texture_size: (settings.width, settings.height),
             render_size: (settings.width, settings.height),
+            drawn: None,
             resolution: DynamicResolution::new(settings.resolution),
             upscaler: Upscaler::new(context.device(), settings.color_format),
             timer,
@@ -813,6 +817,23 @@ impl Renderer {
         &self.settings
     }
 
+    /// Fills only the top-left `width` x `height` pixels of the target from the next frame on (#330): the scene is
+    /// culled, lit and drawn for that size, and the finish pass writes only there. A viewport whose panel changes size
+    /// draws at the new size at once this way, in a target kept larger than the panel, with no texture made. A size
+    /// past the target's is cut to it; a zero side is drawn as 1.
+    pub fn set_drawn_size(&mut self, width: u32, height: u32) {
+        let size = (width.max(1), height.max(1));
+        self.drawn = (size != (self.settings.width, self.settings.height)).then_some(size);
+    }
+
+    /// The part of the target a frame fills: its top-left corner, all of it unless
+    /// [`Renderer::set_drawn_size`] asked for less.
+    pub fn drawn_size(&self) -> (u32, u32) {
+        let (width, height) = (self.settings.width, self.settings.height);
+        self.drawn
+            .map_or((width, height), |(w, h)| (w.min(width), h.min(height)))
+    }
+
     /// The passes a frame runs and their attachments' load and store operations.
     pub fn plan(&self) -> &FramePlan {
         &self.plan
@@ -1278,7 +1299,8 @@ impl Renderer {
         // Mesh assets and textures that arrived, before anything culls or draws the kinds they draw.
         self.parts.resolve_assets(scene, &self.maker);
         let cull = &self.settings.cull;
-        let size = (self.settings.width, self.settings.height);
+        // The part of the target drawn: its aspect is the camera's (#330).
+        let size = self.drawn_size();
         let view = camera.filter(|_| cull.enabled).map(|camera| {
             CullView::for_camera(camera, scene.scene().origin(), size.0, size.1, cull).with_lod(&self.settings.lod)
         });
@@ -1303,8 +1325,8 @@ impl Renderer {
         self.parts.prepare(
             scene,
             camera,
-            self.settings.width,
-            self.settings.height,
+            size.0,
+            size.1,
             // The scene's shaders write linear light into an HDR or sRGB target, and encode only for a plain one.
             self.scene_target_format().is_srgb() || crate::post::is_hdr(self.scene_target_format()),
         );
@@ -1535,8 +1557,9 @@ impl Renderer {
 
     /// Uploads the overlay when it is on and changed.
     fn prepare_overlay(&mut self) {
+        let (width, height) = self.drawn_size();
         if let Some(pass) = self.overlay_pass.as_mut() {
-            pass.prepare(&self.queue, &self.overlay, self.settings.width, self.settings.height);
+            pass.prepare(&self.queue, &self.overlay, width, height);
         }
     }
 
@@ -1575,7 +1598,7 @@ impl Renderer {
     /// collected by the timer's `begin_frame`).
     fn update_resolution(&mut self) {
         if !self.plan.scaled() {
-            self.render_size = (self.settings.width, self.settings.height);
+            self.render_size = self.drawn_size();
             self.prepare_post();
             return;
         }
@@ -1589,7 +1612,8 @@ impl Renderer {
             self.resolution.observe(frame, gpu_ms);
         }
         self.resolution.drawing(self.frame);
-        let (width, height) = scaled_size(self.settings.width, self.settings.height, self.resolution.scale());
+        let (width, height) = self.drawn_size();
+        let (width, height) = scaled_size(width, height, self.resolution.scale());
         self.render_size = (width.min(self.texture_size.0), height.min(self.texture_size.1));
         if self.plan.post() {
             self.prepare_post();
@@ -1661,8 +1685,12 @@ impl Renderer {
         } else {
             Some(target)
         };
-        // A frame drawn below the attachments' size draws into their top-left corner.
-        let corner = (self.plan.scaled() && self.render_size != self.texture_size).then_some(self.render_size);
+        // A frame drawn below the attachments' size draws into their top-left corner: with a render scale, or when
+        // only part of the target is drawn (#330).
+        let corner = (self.render_size != self.texture_size).then_some(self.render_size);
+        // The output passes fill only the part of the target drawn.
+        let drawn = self.drawn_size();
+        let output_corner = (drawn != (self.settings.width, self.settings.height)).then_some(drawn);
 
         // The shadow passes recorded before took the first queries.
         let mut timed = self.shadow_recorded + usize::from(self.atlas_recorded);
@@ -1738,9 +1766,8 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Some((width, height)) = corner
-                && pass.id.is_scene()
-            {
+            let pass_corner = if pass.id.is_scene() { corner } else { output_corner };
+            if let Some((width, height)) = pass_corner {
                 render_pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
                 render_pass.set_scissor_rect(0, 0, width, height);
             }

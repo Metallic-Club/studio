@@ -153,7 +153,37 @@ impl ViewportTarget {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// The size a target is kept at to draw a `wanted` panel, from its `current` size (#330): the same while the panel
+    /// fits in it (the frame then fills only its top-left corner, [`crate::Renderer::set_drawn_size`]), else room for
+    /// the panel with a fifth to spare on the side that grew, in whole 64-pixel steps, so a panel dragged larger needs
+    /// a new texture only now and then. It never shrinks, and a side is never past `limit` (the device's largest
+    /// texture). The UI that shows the target computes the same, so it knows this frame's corner before it is drawn.
+    pub fn room_for(wanted: (u32, u32), current: (u32, u32), limit: u32) -> (u32, u32) {
+        let side = |want: u32, have: u32| {
+            if want <= have {
+                have
+            } else {
+                (want + want / 5).div_ceil(ROOM_STEP) * ROOM_STEP
+            }
+            .min(limit)
+            .max(1)
+        };
+        (side(wanted.0, current.0), side(wanted.1, current.1))
+    }
+
+    /// Makes the texture `width` x `height` now (#330), in place of the one it had: a viewport that grows past its
+    /// target draws at its new size in the same frame. Callers resize the renderer that draws it to the same size.
+    pub fn resize_now(&mut self, context: &RenderContext, width: u32, height: u32) -> Result<(), RenderError> {
+        check_size(context, width, height)?;
+        let texture = Self::spec(self.format(), width, height).make_now(context.device());
+        self.replace(texture);
+        Ok(())
+    }
 }
+
+/// The steps a viewport target grows in ([`ViewportTarget::room_for`]).
+const ROOM_STEP: u32 = 64;
 
 /// Rejects sizes wgpu would refuse (zero, or above the device's texture limit) before they reach it.
 pub(crate) fn check_size(context: &RenderContext, width: u32, height: u32) -> Result<(), RenderError> {
@@ -162,4 +192,22 @@ pub(crate) fn check_size(context: &RenderContext, width: u32, height: u32) -> Re
         return Err(RenderError::InvalidSize { width, height });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ViewportTarget;
+
+    #[test]
+    fn a_target_keeps_room_and_grows_by_a_fifth_in_steps() {
+        // The panel fits: the target stays as it is, larger in both or either.
+        assert_eq!(ViewportTarget::room_for((800, 600), (800, 600), 8192), (800, 600));
+        assert_eq!(ViewportTarget::room_for((640, 480), (1024, 768), 8192), (1024, 768));
+        // Wider than it: a fifth more, in 64-pixel steps, on that side only.
+        assert_eq!(ViewportTarget::room_for((1000, 600), (800, 600), 8192), (1216, 600));
+        assert_eq!(ViewportTarget::room_for((1000, 900), (800, 600), 8192), (1216, 1088));
+        // Never past the device's limit, and never zero.
+        assert_eq!(ViewportTarget::room_for((8000, 10), (100, 10), 8192), (8192, 10));
+        assert_eq!(ViewportTarget::room_for((1, 1), (0, 0), 8192), (64, 64));
+    }
 }

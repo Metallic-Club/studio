@@ -8,7 +8,7 @@ use metallic_engine::metallic_render::{RenderContext, wgpu};
 
 use super::Studio;
 
-/// How the game's texture is sampled: smoothly, which matters only while a resize stretches the old one.
+/// How the game's texture is sampled. Its corner is drawn one texel to a pixel (#330), so this rarely shows.
 const FILTER: wgpu::FilterMode = wgpu::FilterMode::Linear;
 
 /// The texture the Game tab shows: registered once per session with egui-wgpu.
@@ -85,6 +85,8 @@ impl GameRenderer {
             }
         }
         view.texture_pixels = Some(target.size());
-        target.size() != (width, height)
+        view.texture_limit = context.capabilities().max_texture_size;
+        // The frame fills the tab's size in the target's corner (#330); it differs only past the device's limit.
+        renderer.viewport_drawn_size() != Some((width, height))
     }
 }

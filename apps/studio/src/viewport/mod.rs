@@ -37,8 +37,11 @@ pub struct ViewportState {
     pub shown: bool,
     /// The engine's render, registered with the UI renderer, once the shell has drawn one.
     pub texture: Option<TextureId>,
-    /// That render's size in pixels: while a resize is under way it differs from [`ViewportState::pixels`] (#311).
+    /// The size of the target that render is in, as last drawn: kept larger than the panel, whose frame fills its
+    /// top-left corner (#330).
     pub texture_pixels: Option<(u32, u32)>,
+    /// The largest side that target can grow to (the device's largest texture).
+    pub texture_limit: u32,
     /// Why the engine cannot draw the viewport, when it cannot (no renderer could be made).
     pub error: Option<String>,
 }
@@ -53,6 +56,7 @@ impl ViewportState {
             shown: false,
             texture: None,
             texture_pixels: None,
+            texture_limit: u32::MAX,
             error: None,
         }
     }
