@@ -352,6 +352,7 @@ impl Dock {
             borders,
             groups,
             area: ui.max_rect(),
+            pixels_per_point: ctx.pixels_per_point(),
             cx,
             focus: DockFocus {
                 focused: self.focus.focused,
@@ -464,6 +465,8 @@ struct DockBehavior<'a, 'b> {
     groups: Vec<TileId>,
     /// The dock's whole area: a group's side along it has no border (#273).
     area: Rect,
+    /// Physical pixels per point, for lines exactly one pixel wide (#287).
+    pixels_per_point: f32,
     /// Each tab drawn this frame and where: where a dragged tab goes in a bar it is dropped on.
     tabs: Vec<(TileId, Rect)>,
 }
@@ -506,21 +509,22 @@ fn tab_groups(tree: &Tree<PanelId>) -> Vec<TileId> {
 /// The 1 px lines a group in `rect` draws (#273): borders only between docked panels, never along the dock's edge
 /// (`area`, the window's). Each group draws its right and bottom sides when another group is there, so two
 /// neighbours share one line rather than two.
-fn inner_edges(rect: Rect, area: Rect) -> Vec<Rect> {
+fn inner_edges(rect: Rect, area: Rect, pixels_per_point: f32) -> Vec<Rect> {
     // Within half a point: layouts are fractional.
     const SAME: f32 = 0.5;
+    // Exactly one physical pixel, on the pixel grid (#287): a 1 pt line at 125 % is 1.25 px and smears into the
+    // neighbour.
+    let ppp = pixels_per_point.max(f32::EPSILON);
+    let pixel = 1.0 / ppp;
+    let snap = |x: f32| (x * ppp).round() / ppp;
     let mut lines = Vec::new();
     if area.right() - rect.right() > SAME {
-        lines.push(Rect::from_min_max(
-            pos2(rect.right() - size::BORDER, rect.top()),
-            rect.right_bottom(),
-        ));
+        let x = snap(rect.right());
+        lines.push(Rect::from_min_max(pos2(x - pixel, rect.top()), pos2(x, rect.bottom())));
     }
     if area.bottom() - rect.bottom() > SAME {
-        lines.push(Rect::from_min_max(
-            pos2(rect.left(), rect.bottom() - size::BORDER),
-            rect.right_bottom(),
-        ));
+        let y = snap(rect.bottom());
+        lines.push(Rect::from_min_max(pos2(rect.left(), y - pixel), pos2(rect.right(), y)));
     }
     lines
 }
@@ -658,7 +662,7 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
 
     fn paint_on_top_of_tile(&self, painter: &egui::Painter, _style: &egui::Style, tile_id: TileId, rect: Rect) {
         if self.borders && self.groups.contains(&tile_id) {
-            for line in inner_edges(rect, self.area) {
+            for line in inner_edges(rect, self.area, painter.pixels_per_point()) {
                 painter.rect_filled(line, CornerRadius::ZERO, self.colors.palette.border);
             }
         }
@@ -669,7 +673,8 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
     }
 
     fn tab_bar_hline_stroke(&self, _visuals: &egui::Visuals) -> Stroke {
-        Stroke::new(size::BORDER, self.colors.palette.border)
+        // One physical pixel, as the lines between panels (#287).
+        Stroke::new(1.0 / self.pixels_per_point, self.colors.palette.border)
     }
 
     fn drag_preview_color(&self, _visuals: &egui::Visuals) -> Color32 {
@@ -788,7 +793,7 @@ mod tests {
         let right = Rect::from_min_max(pos2(700.0, 0.0), pos2(1000.0, 600.0));
         // Top left: a line along its right (the column beside it) and its bottom (the group under it).
         assert_eq!(
-            inner_edges(left_top, area),
+            inner_edges(left_top, area, 1.0),
             [
                 Rect::from_min_max(pos2(699.0, 0.0), pos2(700.0, 400.0)),
                 Rect::from_min_max(pos2(0.0, 399.0), pos2(700.0, 400.0)),
@@ -796,13 +801,24 @@ mod tests {
         );
         // Bottom left: its bottom and left touch the window's edge, so only its right has a line.
         assert_eq!(
-            inner_edges(left_bottom, area),
+            inner_edges(left_bottom, area, 1.0),
             [Rect::from_min_max(pos2(699.0, 400.0), pos2(700.0, 600.0))]
         );
         // The right column touches the window on three sides and its neighbour draws the line between: none.
-        assert!(inner_edges(right, area).is_empty());
+        assert!(inner_edges(right, area, 1.0).is_empty());
         // Fractional layouts still count as touching.
-        assert!(inner_edges(Rect::from_min_max(pos2(700.0, 0.0), pos2(999.8, 600.2)), area).is_empty());
+        assert!(inner_edges(Rect::from_min_max(pos2(700.0, 0.0), pos2(999.8, 600.2)), area, 1.0).is_empty());
+        // At 125 %: one physical pixel (0.8 pt), on the pixel grid, inside the group (#287). The boundary at 700.3 pt is
+        // 875.375 px; it snaps to 875 px, and the line covers 874 to 875 px.
+        let fractional = Rect::from_min_max(pos2(0.0, 0.0), pos2(700.3, 600.0));
+        let lines = inner_edges(fractional, area, 1.25);
+        assert_eq!(lines.len(), 1);
+        let line = lines[0];
+        assert!((line.width() * 1.25 - 1.0).abs() < 1e-4, "{line:?}");
+        assert!(
+            (line.left() * 1.25 - 874.0).abs() < 1e-3 && (line.right() * 1.25 - 875.0).abs() < 1e-3,
+            "{line:?}"
+        );
     }
 
     #[test]
