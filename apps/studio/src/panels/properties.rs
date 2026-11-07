@@ -161,7 +161,7 @@ impl Panel for Properties {
     }
 
     fn zone(&self) -> Zone {
-        Zone::Right
+        Zone::RightBelow
     }
 
     fn context(&self) -> Context {

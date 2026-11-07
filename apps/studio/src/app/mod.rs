@@ -1913,6 +1913,9 @@ mod tests {
     #[test]
     fn the_template_opens_with_its_tree_and_the_selected_parts_properties() {
         let mut harness = editing(settings_file("editor-tree", None), "Tree Game");
+        // Properties shares the right column with the Explorer (#256): tall enough for the rows checked below.
+        harness.set_size(egui::vec2(1280.0, 1400.0));
+        settle(&mut harness);
         assert_eq!(harness.state().studio.dock().open_panels(), DEFAULT_PANELS);
         for tab in ["Viewport", "Explorer", "Assets", "Properties", "Output"] {
             harness.get_by_role_and_label(Role::Tab, tab);
@@ -1938,14 +1941,14 @@ mod tests {
         harness.get_by_label("Concrete");
         harness.get_by_label("99, 95, 98");
 
-        // The Assets tab beside the Explorer: the template's one asset is its scene.
+        // The Assets tab beside Output (#256): the template's one asset is its scene, and Output goes behind it.
+        harness.get_by_role_and_label(Role::Button, "Clear");
         harness.get_by_role_and_label(Role::Tab, "Assets").click();
         settle(&mut harness);
         harness.get_by_role_and_label(Role::ListItem, "Scenes/Main.scene");
         harness.get_by_label("1 asset");
-        assert!(harness.query_by_role_and_label(Role::TreeItem, "Workspace").is_none());
-        harness.get_by_role_and_label(Role::Tab, "Explorer").click();
-        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::Button, "Clear").is_none());
+        harness.get_by_role_and_label(Role::TreeItem, "Workspace");
 
         // Collapsing the workspace hides what is in it.
         click_label(&mut harness, "Collapse Workspace");
@@ -2824,35 +2827,39 @@ mod tests {
     #[test]
     fn tabs_drag_to_a_new_place_and_into_another_bar() {
         let mut harness = editing(settings_file("editor-drag", None), "Drag Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
         assert_eq!(
-            tab_bar_of(&harness.state().studio, panels::ids::EXPLORER),
-            [panels::ids::EXPLORER, panels::ids::ASSETS]
+            tab_bar_of(&harness.state().studio, panels::ids::OUTPUT),
+            [panels::ids::ASSETS, panels::ids::OUTPUT]
         );
-        // Assets dragged to the left of Explorer, in the same bar.
-        let assets = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
-        let explorer = harness.get_by_role_and_label(Role::Tab, "Explorer").rect();
-        drag(
-            &mut harness,
-            assets.center(),
-            egui::pos2(explorer.left() + 4.0, explorer.center().y),
-        );
-        assert_eq!(
-            tab_bar_of(&harness.state().studio, panels::ids::EXPLORER),
-            [panels::ids::ASSETS, panels::ids::EXPLORER]
-        );
-        // Output dragged onto the Properties bar joins it, after Properties, and opens.
+        // Output dragged to the left of Assets, in the same bar.
         let output = harness.get_by_role_and_label(Role::Tab, "Output").rect();
-        let properties = harness.get_by_role_and_label(Role::Tab, "Properties").rect();
+        let assets = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
         drag(
             &mut harness,
             output.center(),
+            egui::pos2(assets.left() + 4.0, assets.center().y),
+        );
+        assert_eq!(
+            tab_bar_of(&harness.state().studio, panels::ids::OUTPUT),
+            [panels::ids::OUTPUT, panels::ids::ASSETS]
+        );
+        // Assets dragged onto the Properties bar joins it, after Properties, and opens.
+        let assets = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
+        let properties = harness.get_by_role_and_label(Role::Tab, "Properties").rect();
+        drag(
+            &mut harness,
+            assets.center(),
             egui::pos2(properties.right() + 20.0, properties.center().y),
         );
         assert_eq!(
             tab_bar_of(&harness.state().studio, panels::ids::PROPERTIES),
-            [panels::ids::PROPERTIES, panels::ids::OUTPUT]
+            [panels::ids::PROPERTIES, panels::ids::ASSETS],
+            "assets is in {:?}",
+            tab_bar_of(&harness.state().studio, panels::ids::ASSETS)
         );
-        harness.get_by_label("The output is empty.");
+        harness.get_by_label("1 asset");
     }
 
     // Dock guides (#237).
@@ -2892,7 +2899,9 @@ mod tests {
         drag(&mut harness, assets.center(), to);
         assert_eq!(
             tab_bar_of(&harness.state().studio, panels::ids::PROPERTIES),
-            [panels::ids::PROPERTIES, panels::ids::ASSETS]
+            [panels::ids::PROPERTIES, panels::ids::ASSETS],
+            "assets is in {:?}",
+            tab_bar_of(&harness.state().studio, panels::ids::ASSETS)
         );
         harness.get_by_label("1 asset");
 

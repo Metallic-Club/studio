@@ -185,25 +185,46 @@ impl egui_tiles::Behavior<PanelId> for Tidy {
     }
 }
 
-/// The default layout (ADR 0009, Docking): the centre panels in the middle, the left panels as tabs on the left, the
-/// right ones on the right, and the bottom ones under the centre. Panels not open by default are left out.
+/// The default layout (ADR 0009, Docking; #256): the centre panels in the middle with the bottom ones under them as
+/// one tab bar, and the right column with its upper panels ([`Zone::Right`]) over its lower ones
+/// ([`Zone::RightBelow`]); a left column only if a panel asks for one. Each zone's tab bar shows the panel that asks
+/// to be in front ([`Panel::in_front_by_default`]), else its first. Panels not open by default are left out.
 pub fn default_tree(panels: &[&dyn Panel]) -> Tree<PanelId> {
     let mut tiles = Tiles::default();
     let zone = |zone: Zone, tiles: &mut Tiles<PanelId>| -> Option<TileId> {
+        let mut front = None;
         let panes: Vec<TileId> = panels
             .iter()
             .filter(|panel| panel.zone() == zone && panel.open_by_default())
-            .map(|panel| tiles.insert_pane(PanelId::of(*panel)))
+            .map(|panel| {
+                let pane = tiles.insert_pane(PanelId::of(*panel));
+                if panel.in_front_by_default() {
+                    front = Some(pane);
+                }
+                pane
+            })
             .collect();
-        (!panes.is_empty()).then(|| tiles.insert_tab_tile(panes))
+        if panes.is_empty() {
+            return None;
+        }
+        let mut tabs = egui_tiles::Tabs::new(panes);
+        if let Some(front) = front {
+            tabs.set_active(front);
+        }
+        Some(tiles.insert_container(Container::Tabs(tabs)))
     };
     let left = zone(Zone::Left, &mut tiles);
     let centre = zone(Zone::Centre, &mut tiles);
-    let right = zone(Zone::Right, &mut tiles);
+    let upper = zone(Zone::Right, &mut tiles);
+    let lower = zone(Zone::RightBelow, &mut tiles);
     let bottom = zone(Zone::Bottom, &mut tiles);
 
     let middle = match (centre, bottom) {
         (Some(centre), Some(bottom)) => Some(split(&mut tiles, LinearDir::Vertical, &[(centre, 3.0), (bottom, 1.0)])),
+        (one, other) => one.or(other),
+    };
+    let right = match (upper, lower) {
+        (Some(upper), Some(lower)) => Some(split(&mut tiles, LinearDir::Vertical, &[(upper, 1.0), (lower, 1.2)])),
         (one, other) => one.or(other),
     };
     let columns: Vec<(TileId, f32)> = [(left, 1.0), (middle, 3.4), (right, 1.2)]

@@ -105,7 +105,7 @@ impl Panel for Assets {
     }
 
     fn zone(&self) -> Zone {
-        Zone::Left
+        Zone::Bottom
     }
 
     fn context(&self) -> Context {
