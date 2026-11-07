@@ -315,6 +315,10 @@ icons! {
     ToolbarResetLayout = "toolbar.reset_layout", Scene, "rotate-ccw";
     /// A plugin's tool that brings no icon of its own.
     ToolbarPlugin = "toolbar.plugin", Studio, "puzzle";
+    /// A spacer, in the toolbar's Add window.
+    ToolbarSpacer = "toolbar.spacer", Interface, "space";
+    /// A separator, in the toolbar's Add window.
+    ToolbarSeparator = "toolbar.separator", Interface, "separator-vertical";
     /// A search box.
     UiSearch = "ui.search", Interface, "search";
     /// Close, dismiss.

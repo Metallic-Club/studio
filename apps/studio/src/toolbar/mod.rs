@@ -4,13 +4,15 @@
 //! - **Tabs** (Home, Model, UI, Scripts and Plugins by default) can be added (the + after them), renamed, deleted
 //!   and moved (right-click, or drag one along the row). Switching tab changes the toolbar only, unless the tab's
 //!   "Load a layout for this tab" box is ticked: then the dock shows that tab's own layout while it is in front.
-//! - **Elements** come from the [`ToolRegistry`] ([`tools`]): right-click the toolbar to add one (a tool, a spacer
-//!   or a separator), right-click one to add another before it, move it or remove it, or drag it along the row.
+//! - **Elements** come from the [`ToolRegistry`] ([`tools`]): right-click the toolbar and choose Add... for the Add
+//!   window ([`add`], #327), which lists every tool, spacer and separator in groups with what each does; right-click
+//!   one to add another before it, move it or remove it, or drag it along the row.
 //! - **Saved** as `toolbar.json` beside the settings ([`model`]), each tab's own layout in it.
 //!
 //! The toolbar runs nothing itself: a click reports the tool's [`ToolAction`] ([`ToolbarEvent::Run`]) for Studio
 //! to carry out, which is also how a plugin's tool will reach its plugin.
 
+pub mod add;
 pub mod model;
 pub mod tools;
 
@@ -62,6 +64,8 @@ enum Change {
     MoveTab(usize, usize),
     SetOwnLayout(usize, bool),
     Insert(usize, Element),
+    OpenAdd(usize),
+    CloseAdd,
     Remove(usize),
     MoveElement(usize, usize),
 }
@@ -77,6 +81,8 @@ pub struct Toolbar {
     registry: ToolRegistry,
     /// The tab being renamed, by index, and its new name so far.
     renaming: Option<(usize, String)>,
+    /// The Add window, while it is open.
+    adding: Option<add::Adding>,
 }
 
 impl Default for Toolbar {
@@ -96,6 +102,7 @@ impl Toolbar {
             path: None,
             registry: ToolRegistry::studio(panels),
             renaming: None,
+            adding: None,
         }
     }
 
@@ -108,7 +115,18 @@ impl Toolbar {
             path: Some(path),
             registry: ToolRegistry::studio(panels),
             renaming: None,
+            adding: None,
         }
+    }
+
+    /// Whether the Add window is open.
+    pub fn is_adding(&self) -> bool {
+        self.adding.is_some()
+    }
+
+    /// Opens the Add window for the front tab, adding at `at` (its end when past it).
+    pub fn open_add(&mut self, at: usize) {
+        self.apply(Change::OpenAdd(at));
     }
 
     /// The file it is saved in, unless it lives in memory.
@@ -183,6 +201,7 @@ impl Toolbar {
         let mut events = Vec::new();
         self.tab_row(ui, tabs, &mut changes);
         self.tool_row(ui, tools, &enabled, &checked, &mut changes, &mut events);
+        self.add_window(ui.ctx(), &mut changes);
         for change in changes {
             self.apply(change);
         }
@@ -230,8 +249,38 @@ impl Toolbar {
                 }
             }
             Change::Insert(at, element) => config.insert_element(config.active, at, element),
+            Change::OpenAdd(at) => {
+                let tab = config.active_tab();
+                self.adding = Some(add::Adding {
+                    tab: tab.id,
+                    at: at.min(tab.elements.len()),
+                    query: String::new(),
+                });
+            }
+            Change::CloseAdd => self.adding = None,
             Change::Remove(index) => config.remove_element(config.active, index),
             Change::MoveElement(from, to) => config.move_element(config.active, from, to),
+        }
+    }
+
+    /// The Add window, while open: what is chosen goes into its tab where it was opened for, the next after it. The
+    /// front tab is the one added to; a window left open while another tab is brought forward adds at its end.
+    fn add_window(&mut self, ctx: &egui::Context, changes: &mut Vec<Change>) {
+        let Some(adding) = self.adding.as_mut() else {
+            return;
+        };
+        let front = self.config.active_tab();
+        if adding.tab != front.id {
+            adding.tab = front.id;
+            adding.at = front.elements.len();
+        }
+        let (chosen, open) = add::show(ctx, &self.registry, adding);
+        if let Some(element) = chosen {
+            changes.push(Change::Insert(adding.at, element));
+            adding.at += 1;
+        }
+        if !open {
+            changes.push(Change::CloseAdd);
         }
     }
 
@@ -401,7 +450,9 @@ impl Toolbar {
         row.widget_info(|| WidgetInfo::labeled(Role::Toolbar, true, "Toolbar"));
         let elements = &self.config.active_tab().elements;
         row.context_menu(|ui| {
-            add_menu(ui, &self.registry, elements.len(), "Add", changes);
+            if ui.button("Add...").clicked() {
+                changes.push(Change::OpenAdd(elements.len()));
+            }
         });
         if elements.is_empty() {
             ui.painter().text(
@@ -444,7 +495,9 @@ impl Toolbar {
                 }
             }
             response.context_menu(|ui| {
-                add_menu(ui, &self.registry, index, "Add before", changes);
+                if ui.button("Add before...").clicked() {
+                    changes.push(Change::OpenAdd(index));
+                }
                 ui.separator();
                 if ui.add_enabled(index > 0, egui::Button::new("Move left")).clicked() {
                     changes.push(Change::MoveElement(index, index - 1));
@@ -570,34 +623,6 @@ fn play_control(action: &ToolAction) -> Option<PlayControl> {
         ToolAction::Studio(StudioCommand::Pause | StudioCommand::Step) => Some(PlayControl::Plain),
         _ => None,
     }
-}
-
-/// The Add menu: every tool (Studio's, then the plugins'), a spacer and a separator, put at `at`.
-fn add_menu(ui: &mut Ui, registry: &ToolRegistry, at: usize, title: &str, changes: &mut Vec<Change>) {
-    ui.menu_button(title, |ui| {
-        let (plugins, studio): (Vec<&Tool>, Vec<&Tool>) = registry.tools().iter().partition(|tool| tool.is_plugin());
-        for tool in studio {
-            if ui.button(&tool.label).on_hover_text(&tool.description).clicked() {
-                changes.push(Change::Insert(at, Element::tool(&tool.id)));
-            }
-        }
-        if !plugins.is_empty() {
-            ui.separator();
-            ui.label(egui::RichText::new("Plugins").size(text::SMALL));
-            for tool in plugins {
-                if ui.button(&tool.label).on_hover_text(&tool.description).clicked() {
-                    changes.push(Change::Insert(at, Element::tool(&tool.id)));
-                }
-            }
-        }
-        ui.separator();
-        if ui.button("Spacer").clicked() {
-            changes.push(Change::Insert(at, Element::Spacer));
-        }
-        if ui.button("Separator").clicked() {
-            changes.push(Change::Insert(at, Element::Separator));
-        }
-    });
 }
 
 /// Where the tabs are, laid out as the row draws them (for a tab dropped after the ones drawn so far).

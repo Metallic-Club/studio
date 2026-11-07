@@ -314,10 +314,18 @@
       "color": "studio",
       "for": "The toolbar's Save tool."
     },
+    "toolbar.separator": {
+      "file": "toolbar/separator-vertical.svg",
+      "for": "A separator, in the toolbar's Add window."
+    },
     "toolbar.settings": {
       "file": "toolbar/settings.svg",
       "color": "studio",
       "for": "The gear that opens Settings."
+    },
+    "toolbar.spacer": {
+      "file": "toolbar/space.svg",
+      "for": "A spacer, in the toolbar's Add window."
     },
     "toolbar.step": {
       "file": "toolbar/skip-forward.svg",

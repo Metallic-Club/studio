@@ -3675,11 +3675,47 @@ mod tests {
         assert!(harness.state().studio.toolbar().config().tabs[1].elements.is_empty());
         let row = harness.get_by_role_and_label(Role::Toolbar, "Toolbar").rect();
         right_click(&mut harness, row);
-        harness.get_by_label("Add").click();
+        harness.get_by_label("Add...").click();
         settle(&mut harness);
-        harness.get_by_label("Save").click();
+        // A window's first frame only measures it.
+        harness.step();
+        // The Add window (#327): every element in its group, with what it does. Several in a row go in order.
+        assert!(harness.state().studio.toolbar().is_adding());
+        for heading in ["PROJECT", "GAME", "STUDIO", "PANELS", "LAYOUT"] {
+            harness.get_by_label(heading);
+        }
+        let painted = |harness: &Harness<'_, Test>, text: &str| {
+            harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) => shape.galley.text() == text,
+                _ => false,
+            })
+        };
+        assert!(painted(&harness, "Runs the game."), "each tool with what it does");
+        harness.get_by_role_and_label(Role::Button, "Add Save").click();
+        settle(&mut harness);
+        // Below the fold: clicked as a screen reader would.
+        harness
+            .get_by_role_and_label(Role::Button, "Add Separator")
+            .click_accesskit();
         settle(&mut harness);
         let model = |harness: &Harness<'_, Test>| harness.state().studio.toolbar().config().tabs[1].elements.clone();
+        assert_eq!(
+            model(&harness),
+            [
+                toolbar::Element::tool(toolbar::tools::ids::SAVE),
+                toolbar::Element::Separator
+            ]
+        );
+        harness
+            .get_by_role_and_label(Role::Button, &format!("Close {}", toolbar::add::TITLE))
+            .click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.toolbar().is_adding());
+        // Right-click the separator: Remove.
+        let separator = harness.get_by_label("Separator").rect();
+        right_click(&mut harness, separator);
+        harness.get_by_label("Remove").click();
+        settle(&mut harness);
         assert_eq!(model(&harness), [toolbar::Element::tool(toolbar::tools::ids::SAVE)]);
         // Right-click the new tool: Remove.
         let save = harness.get_by_role_and_label(Role::Button, "Save tool").rect();
@@ -3698,10 +3734,19 @@ mod tests {
             .register(paint)
             .unwrap();
         right_click(&mut harness, row);
-        harness.get_by_label("Add").click();
+        harness.get_by_label("Add...").click();
         settle(&mut harness);
-        harness.get_by_label("Paint terrain").click();
+        // A window's first frame only measures it.
+        harness.step();
+        harness.get_by_label("TERRAIN (PLUGIN)");
+        harness
+            .get_by_role_and_label(Role::Button, "Add Paint terrain")
+            .click_accesskit();
         settle(&mut harness);
+        // Escape closes the window.
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(!harness.state().studio.toolbar().is_adding());
         assert_eq!(model(&harness), [toolbar::Element::tool("plugin.terrain.paint")]);
         // Disabled until the plugin API runs it.
         let tool = harness.get_by_role_and_label(Role::Button, "Paint terrain tool");

@@ -83,6 +83,8 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `toolbar.close` | The toolbar's Close project tool. | Studio | [`toolbar/folder-x.svg`](https://lucide.dev/icons/folder-x) | `toolbar.close.svg`, `toolbar.close.png` |
 | `toolbar.reset_layout` | The toolbar's Reset layout tool. | Panels: scene | [`toolbar/rotate-ccw.svg`](https://lucide.dev/icons/rotate-ccw) | `toolbar.reset_layout.svg`, `toolbar.reset_layout.png` |
 | `toolbar.plugin` | A plugin's tool that brings no icon of its own. | Studio | [`toolbar/puzzle.svg`](https://lucide.dev/icons/puzzle) | `toolbar.plugin.svg`, `toolbar.plugin.png` |
+| `toolbar.spacer` | A spacer, in the toolbar's Add window. | Interface | [`toolbar/space.svg`](https://lucide.dev/icons/space) | `toolbar.spacer.svg`, `toolbar.spacer.png` |
+| `toolbar.separator` | A separator, in the toolbar's Add window. | Interface | [`toolbar/separator-vertical.svg`](https://lucide.dev/icons/separator-vertical) | `toolbar.separator.svg`, `toolbar.separator.png` |
 | `ui.search` | A search box. | Interface | [`interface/search.svg`](https://lucide.dev/icons/search) | `ui.search.svg`, `ui.search.png` |
 | `ui.close` | Close, dismiss. | Interface | [`interface/x.svg`](https://lucide.dev/icons/x) | `ui.close.svg`, `ui.close.png` |
 | `ui.warning` | A warning. | Interface | [`interface/triangle-alert.svg`](https://lucide.dev/icons/triangle-alert) | `ui.warning.svg`, `ui.warning.png` |
