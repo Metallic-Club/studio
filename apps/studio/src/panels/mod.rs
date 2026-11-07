@@ -70,9 +70,16 @@ pub fn class_icon(registry: &Registry, class: ClassId) -> Icon {
             "SpotLight" => Icon::ExplorerSpotLight,
             "Light" => Icon::ExplorerLight,
             "Folder" => Icon::ExplorerFolder,
+            "LocalScript" => Icon::ExplorerLocalScript,
             "SourceContainer" => Icon::ExplorerScript,
+            "BoolValue" => Icon::ExplorerBoolValue,
+            "IntValue" => Icon::ExplorerIntValue,
+            "NumberValue" => Icon::ExplorerNumberValue,
+            "StringValue" => Icon::ExplorerStringValue,
+            "ObjectValue" => Icon::ExplorerObjectValue,
             "ValueBase" => Icon::ExplorerValue,
-            "BindableEvent" | "BindableFunction" => Icon::ExplorerEvent,
+            "BindableEvent" => Icon::ExplorerEvent,
+            "BindableFunction" => Icon::ExplorerFunction,
             "InputObject" => Icon::ExplorerInput,
             _ => continue,
         };
@@ -196,6 +203,34 @@ mod tests {
         // Each section its own colour.
         let groups: std::collections::HashSet<Group> = sections.values().copied().collect();
         assert_eq!(groups.len(), sections.len(), "{sections:?}");
+    }
+
+    #[test]
+    fn every_creatable_class_has_its_own_icon() {
+        let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
+        for info in registry
+            .classes()
+            .iter()
+            .filter(|info| info.creatable() || info.service_order().is_some())
+        {
+            let class = registry.class_id(info.name()).unwrap();
+            assert_ne!(
+                class_icon(&registry, class),
+                Icon::ExplorerInstance,
+                "{} has no icon",
+                info.name()
+            );
+        }
+        // Look-alikes have their own (#278).
+        let icon_of = |name: &str| class_icon(&registry, registry.class_id(name).unwrap());
+        assert_ne!(icon_of("LocalScript"), icon_of("Script"));
+        assert_ne!(icon_of("BindableFunction"), icon_of("BindableEvent"));
+        let values: std::collections::HashSet<Icon> =
+            ["BoolValue", "IntValue", "NumberValue", "StringValue", "ObjectValue"]
+                .into_iter()
+                .map(icon_of)
+                .collect();
+        assert_eq!(values.len(), 5);
     }
 
     #[test]

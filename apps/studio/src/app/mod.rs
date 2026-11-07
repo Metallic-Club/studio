@@ -1166,6 +1166,36 @@ mod tests {
     }
 
     #[test]
+    fn settings_draws_lucide_in_place_of_egui_s_own_glyphs() {
+        let mut harness = past_the_splash(settings_file("lucide-widgets", None));
+        let window = harness.state_mut().studio.settings_window();
+        window.set_open(true);
+        window.show_category(Category::Appearance);
+        settle(&mut harness);
+        // The drop-down's arrow is Lucide's chevron (#278), not egui's triangle.
+        let chevron = Icon::UiCollapse.glyph().to_string();
+        let chevrons = harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == chevron))
+            .count();
+        assert!(chevrons >= 1, "the Interface scale drop-down");
+        // The window's own header closes it with Lucide's X.
+        let close = Icon::UiClose.glyph().to_string();
+        assert!(
+            harness
+                .output()
+                .shapes
+                .iter()
+                .any(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == close))
+        );
+        harness.get_by_role_and_label(Role::Button, "Close Settings").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_settings_open());
+    }
+
+    #[test]
     fn switching_the_theme_in_settings_restyles_at_once_and_saves() {
         let path = settings_file("live", None);
         let mut harness = past_the_splash(path.clone());
@@ -2342,6 +2372,17 @@ mod tests {
         assert!(harness.state().studio.is_about_open());
         harness.get_by_label(&format!("Version {}", env!("CARGO_PKG_VERSION")));
         harness.get_by_role_and_label(Role::Button, "Close").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_about_open());
+        // Its header's Lucide close button closes it too (#278).
+        click_label(&mut harness, "Help");
+        harness
+            .get_by_role_and_label(Role::MenuItem, "About Metallic Studio")
+            .click();
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::Button, "Close About Metallic Studio")
+            .click();
         settle(&mut harness);
         assert!(!harness.state().studio.is_about_open());
 

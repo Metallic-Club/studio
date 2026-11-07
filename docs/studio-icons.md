@@ -44,10 +44,17 @@ Every icon in Metallic Studio has a stable id. By default it is drawn from [Luci
 | `explorer.spot_light` | Explorer: lights | [`flashlight`](https://lucide.dev/icons/flashlight) | `explorer.spot_light.svg`, `explorer.spot_light.png` |
 | `explorer.light` | Explorer: lights | [`lightbulb`](https://lucide.dev/icons/lightbulb) | `explorer.light.svg`, `explorer.light.png` |
 | `explorer.script` | Explorer and Assets: scripting | [`file-code`](https://lucide.dev/icons/file-code) | `explorer.script.svg`, `explorer.script.png` |
+| `explorer.local_script` | Explorer and Assets: scripting | [`file-user`](https://lucide.dev/icons/file-user) | `explorer.local_script.svg`, `explorer.local_script.png` |
 | `explorer.module_script` | Explorer and Assets: scripting | [`braces`](https://lucide.dev/icons/braces) | `explorer.module_script.svg`, `explorer.module_script.png` |
 | `explorer.event` | Explorer and Assets: scripting | [`radio`](https://lucide.dev/icons/radio) | `explorer.event.svg`, `explorer.event.png` |
+| `explorer.function` | Explorer and Assets: scripting | [`square-function`](https://lucide.dev/icons/square-function) | `explorer.function.svg`, `explorer.function.png` |
 | `explorer.folder` | Explorer: folders | [`folder`](https://lucide.dev/icons/folder) | `explorer.folder.svg`, `explorer.folder.png` |
 | `explorer.value` | Explorer: values | [`diamond`](https://lucide.dev/icons/diamond) | `explorer.value.svg`, `explorer.value.png` |
+| `explorer.bool_value` | Explorer: values | [`toggle-left`](https://lucide.dev/icons/toggle-left) | `explorer.bool_value.svg`, `explorer.bool_value.png` |
+| `explorer.int_value` | Explorer: values | [`hash`](https://lucide.dev/icons/hash) | `explorer.int_value.svg`, `explorer.int_value.png` |
+| `explorer.number_value` | Explorer: values | [`binary`](https://lucide.dev/icons/binary) | `explorer.number_value.svg`, `explorer.number_value.png` |
+| `explorer.string_value` | Explorer: values | [`type`](https://lucide.dev/icons/type) | `explorer.string_value.svg`, `explorer.string_value.png` |
+| `explorer.object_value` | Explorer: values | [`link`](https://lucide.dev/icons/link) | `explorer.object_value.svg`, `explorer.object_value.png` |
 | `explorer.input` | Explorer and Assets: other | [`mouse-pointer`](https://lucide.dev/icons/mouse-pointer) | `explorer.input.svg`, `explorer.input.png` |
 | `explorer.instance` | Explorer and Assets: other | [`circle`](https://lucide.dev/icons/circle) | `explorer.instance.svg`, `explorer.instance.png` |
 | `panel.viewport` | Panels: scene | [`monitor`](https://lucide.dev/icons/monitor) | `panel.viewport.svg`, `panel.viewport.png` |

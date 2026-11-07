@@ -157,6 +157,7 @@ pub static ENTRIES: &[Entry] = &[
             let scale = &mut s.appearance.ui_scale;
             let percent = |scale: f32| format!("{:.0} %", scale * 100.0);
             egui::ComboBox::from_id_salt("settings.ui_scale")
+                .icon(crate::theme::combo_icon)
                 .selected_text(percent(*scale))
                 .width(COMBO_WIDTH)
                 .show_ui(ui, |ui| {
@@ -211,6 +212,7 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let preset = &mut s.rendering.preset;
             egui::ComboBox::from_id_salt("settings.preset")
+                .icon(crate::theme::combo_icon)
                 .selected_text(preset_label(*preset))
                 .width(COMBO_WIDTH)
                 .show_ui(ui, |ui| {
@@ -469,13 +471,17 @@ impl SettingsWindow {
             // Opens centred on the window; where it is moved to is egui's to remember.
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
-            .open(&mut open)
+            // Its own header, with Lucide's close button (#278), in place of egui's title bar.
+            .title_bar(false)
             .collapsible(false)
             .resizable(true)
             .default_size([780.0, 640.0])
             .min_width(680.0)
             .min_height(360.0)
-            .show(ctx, |ui| self.contents(ui, settings, keymap));
+            .show(ctx, |ui| {
+                crate::theme::window_header(ui, "Settings", &mut open);
+                self.contents(ui, settings, keymap);
+            });
         self.rect = shown.map(|shown| shown.response.rect);
         let press = ctx.input(|input| {
             input
@@ -810,6 +816,7 @@ fn combo<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, choices: &[(
         .find(|(choice, _)| choice == value)
         .map_or_else(String::new, |(_, label)| label.clone());
     egui::ComboBox::from_id_salt(id)
+        .icon(crate::theme::combo_icon)
         .selected_text(selected)
         .width(COMBO_WIDTH)
         .show_ui(ui, |ui| {

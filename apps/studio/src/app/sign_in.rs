@@ -86,7 +86,7 @@ pub fn show(ui: &mut Ui, mark: Option<&TextureHandle>, skip_sign_in: &mut bool) 
                     ui.add_space(space::S5);
                     ui.separator();
                     ui.add_space(space::S2);
-                    ui.checkbox(skip_sign_in, "Don't ask again");
+                    crate::theme::checkbox(ui, skip_sign_in, "Don't ask again");
                     ui.label(
                         RichText::new("Studio will start on your projects. Change it in Settings, General.")
                             .size(text::SMALL)

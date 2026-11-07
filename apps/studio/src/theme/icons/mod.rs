@@ -184,14 +184,28 @@ icons! {
     ExplorerLight = "explorer.light", Light, "lightbulb", '\u{E1C2}';
     /// A script.
     ExplorerScript = "explorer.script", Script, "file-code", '\u{E0C3}';
+    /// A local script, which runs on the player's machine.
+    ExplorerLocalScript = "explorer.local_script", Script, "file-user", '\u{E62D}';
     /// A module script.
     ExplorerModuleScript = "explorer.module_script", Script, "braces", '\u{E36A}';
-    /// A bindable event or function.
+    /// A bindable event.
     ExplorerEvent = "explorer.event", Script, "radio", '\u{E142}';
+    /// A bindable function.
+    ExplorerFunction = "explorer.function", Script, "square-function", '\u{E22D}';
     /// A folder.
     ExplorerFolder = "explorer.folder", Folder, "folder", '\u{E0D7}';
     /// A value object.
     ExplorerValue = "explorer.value", Value, "diamond", '\u{E2D2}';
+    /// A true-or-false value.
+    ExplorerBoolValue = "explorer.bool_value", Value, "toggle-left", '\u{E18B}';
+    /// A whole-number value.
+    ExplorerIntValue = "explorer.int_value", Value, "hash", '\u{E0EF}';
+    /// A number value.
+    ExplorerNumberValue = "explorer.number_value", Value, "binary", '\u{E1F2}';
+    /// A text value.
+    ExplorerStringValue = "explorer.string_value", Value, "type", '\u{E198}';
+    /// A value that refers to another object.
+    ExplorerObjectValue = "explorer.object_value", Value, "link", '\u{E102}';
     /// An input object.
     ExplorerInput = "explorer.input", Other, "mouse-pointer", '\u{E11F}';
     /// Any other instance.

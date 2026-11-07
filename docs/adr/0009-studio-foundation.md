@@ -140,6 +140,9 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   thread when the setting changes or Reload is pressed, and cached as textures. A monochrome image takes its group's
   colour; a coloured one is drawn as it is; a bad file keeps the built-in icon with one warning in Output. The ids are
   listed in `docs/studio-icons.md`, generated from the table.
+  Since #278 egui's own glyphs are gone too: drop-downs draw Lucide's chevron, Studio's windows (Settings, About) have
+  their own header with Lucide's close button, and checkboxes draw Lucide's check. Look-alike classes have their own
+  icons (LocalScript, each value type, BindableFunction), still in their section's colour.
 - **Motion:** 0.12–0.2 s, eased. **Reduced motion** (a setting, and the OS's switch where Studio can read it) turns
   off fades and eases.
 
