@@ -3883,6 +3883,7 @@ mod tests {
                 add(dm, "SpotLight", workspace);
                 let folder = add(dm, "Folder", storage);
                 add(dm, "Script", folder);
+                add(dm, "LocalScript", folder);
                 add(dm, "ModuleScript", folder);
                 add(dm, "BindableEvent", folder);
                 add(dm, "IntValue", folder);
