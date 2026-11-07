@@ -354,8 +354,12 @@ pub(crate) fn top_bar(
                         Some(keys) => format!("{label} ({keys})"),
                         None => label.to_owned(),
                     };
-                    let green = kind == MenuAction::Play;
-                    if play_button(ui, glyph, label, play.allows(kind), green)
+                    let look = match kind {
+                        MenuAction::Play => Control::Play,
+                        MenuAction::Stop => Control::Stop,
+                        _ => Control::Plain,
+                    };
+                    if play_button(ui, glyph, label, play.allows(kind), look)
                         .on_hover_text(tip)
                         .on_disabled_hover_text(label)
                         .clicked()
@@ -369,34 +373,60 @@ pub(crate) fn top_bar(
     action
 }
 
-/// A play control in the top bar: `glyph` in a square button labelled `label`, the theme's green play fill when
-/// `green`, at the disabled strength and inert unless `enabled`.
-fn play_button(ui: &mut Ui, glyph: Icon, label: &str, enabled: bool, green: bool) -> Response {
+/// How a play control's icon is drawn (#302).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Control {
+    /// Play: a filled green triangle.
+    Play,
+    /// Stop: a filled red square.
+    Stop,
+    /// Pause and Step: the text colour, outlined.
+    Plain,
+}
+
+impl Control {
+    /// Its icon's colour while it can be used, on the dark or the light mode.
+    pub(crate) fn ink(self, colors: &crate::theme::Colors) -> Color32 {
+        match (self, colors.dark) {
+            (Control::Play, true) => tokens::play::ICON_DARK,
+            (Control::Play, false) => tokens::play::ICON_LIGHT,
+            (Control::Stop, true) => tokens::play::STOP_DARK,
+            (Control::Stop, false) => tokens::play::STOP_LIGHT,
+            (Control::Plain, _) => colors.palette.text,
+        }
+    }
+
+    /// Whether its icon is filled.
+    fn filled(self) -> bool {
+        self != Control::Plain
+    }
+}
+
+/// A play control in the top bar (#302): `glyph` in a square button labelled `label`, drawn as `look` says, with no
+/// fill but the hover's; greyed out (the website's disabled strength) and inert unless `enabled`.
+fn play_button(ui: &mut Ui, glyph: Icon, label: &str, enabled: bool, look: Control) -> Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(TITLE_HEIGHT + 4.0, TITLE_HEIGHT), sense);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
     if ui.is_rect_visible(rect) {
-        let hovered = enabled && response.hovered();
-        let (fill, ink) = match (green, enabled) {
-            (true, true) if hovered => (tokens::play::HOVER, tokens::play::TEXT),
-            (true, true) => (tokens::play::FILL, tokens::play::TEXT),
-            // The others in the Run group's colour (#231).
-            (_, true) if hovered => (p.surface_hover, glyph.color(&colors)),
-            (_, true) => (Color32::TRANSPARENT, glyph.color(&colors)),
-            // The website's disabled strength: 48 %.
-            (_, false) => (Color32::TRANSPARENT, p.text.gamma_multiply(0.48)),
+        if enabled && response.hovered() {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface_hover);
+        }
+        // The website's disabled strength: 48 %.
+        let ink = if enabled {
+            look.ink(&colors)
+        } else {
+            p.text.gamma_multiply(0.48)
         };
-        ui.painter().rect_filled(rect, CornerRadius::same(radius::ITEM), fill);
-        icons::paint_at(
-            ui.painter(),
-            rect.center(),
-            Align2::CENTER_CENTER,
-            glyph,
-            text::BODY_LG,
-            ink,
-        );
+        let icon = Rect::from_center_size(rect.center(), vec2(text::BODY_LG, text::BODY_LG));
+        if look.filled() {
+            icons::paint_filled(ui.painter(), glyph, icon, ink);
+        } else {
+            icons::paint(ui.painter(), glyph, icon, ink);
+        }
     }
     response
 }

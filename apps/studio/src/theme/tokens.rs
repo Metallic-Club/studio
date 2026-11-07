@@ -157,6 +157,14 @@ pub mod play {
     pub const HOVER: Color32 = hex(0x53D08F);
     /// Its text.
     pub const TEXT: Color32 = hex(0x0D281A);
+    /// The filled play icon on the top bar (#302), on the dark and the light mode.
+    pub const ICON_DARK: Color32 = hex(0x39B878);
+    /// The filled play icon on the light mode: darker, to read on white.
+    pub const ICON_LIGHT: Color32 = hex(0x1F8A52);
+    /// The filled stop icon while a game runs, on the dark mode.
+    pub const STOP_DARK: Color32 = hex(0xF26B6B);
+    /// The filled stop icon on the light mode.
+    pub const STOP_LIGHT: Color32 = hex(0xC62828);
 }
 
 /// The text on an accent fill (selected text), the same for every accent.
