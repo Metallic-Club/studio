@@ -2354,6 +2354,42 @@ mod tests {
         assert!(harness.state().studio.is_playing());
     }
 
+    // Dock tabs: titles only, a 1 px accent line (#255).
+
+    #[test]
+    fn dock_tabs_show_their_title_alone_over_a_one_pixel_accent_line() {
+        let mut harness = editing(settings_file("editor-tab-style", None), "Tabs Style Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let accent = current_colors(&harness.ctx).accent;
+        let output = harness.output();
+        for (title, icon) in [("Explorer", panels::icon::TREE), ("Viewport", panels::icon::MONITOR)] {
+            let tab = harness.get_by_role_and_label(Role::Tab, title).rect();
+            // The underline: an accent rect along the tab's bottom, 1 px high.
+            let lines: Vec<egui::Rect> = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect)
+                        if rect.fill == accent && (rect.rect.bottom() - tab.bottom()).abs() < 0.5 =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .filter(|line| line.left() >= tab.left() - 0.5 && line.right() <= tab.right() + 0.5)
+                .collect();
+            assert_eq!(lines.len(), 1, "{title}: {lines:?}");
+            assert!((lines[0].height() - 1.0).abs() < 0.01, "{title}: {:?}", lines[0]);
+            // No icon in the tab.
+            let has_icon = output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => text.galley.text().contains(icon) && tab.contains(text.pos),
+                _ => false,
+            });
+            assert!(!has_icon, "{title} draws its icon");
+        }
+    }
+
     // Live editing while playing (#248).
 
     #[test]

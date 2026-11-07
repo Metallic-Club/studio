@@ -436,20 +436,21 @@ impl DockBehavior<'_, '_> {
 
 /// A tab's height.
 const TAB_HEIGHT: f32 = 32.0;
-/// The space between a tab's icon and its title, and around its close button.
+/// The space between a tab's title and its close button.
 const TAB_GAP: f32 = 6.0;
 /// The close button's size.
 const CLOSE_SIZE: f32 = 18.0;
+/// The active tab's accent underline (#255: 1 px, thinner than the 3 px bars that mark selected list items).
+pub(crate) const TAB_LINE: f32 = 1.0;
 
-/// Draws one tab (icon, title, close button) filling the bar's height, interacting as `id`. Returns its response
-/// and whether its close button was clicked.
-fn tab_button(ui: &mut Ui, id: Id, title: &str, icon: Option<char>, state: &TabState) -> (Response, bool) {
+/// Draws one tab (its title and close button; no icon, #255) filling the bar's height, interacting as `id`. Returns
+/// its response and whether its close button was clicked.
+fn tab_button(ui: &mut Ui, id: Id, title: &str, state: &TabState) -> (Response, bool) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let title_font = fonts::named(fonts::STRONG, text::SMALL + 1.0);
     let galley = ui.painter().layout_no_wrap(title.to_owned(), title_font, p.text);
-    let icon_width = if icon.is_some() { text::BODY + TAB_GAP } else { 0.0 };
-    let width = space::S5 + icon_width + galley.size().x + TAB_GAP + CLOSE_SIZE + space::S3;
+    let width = space::S5 + galley.size().x + TAB_GAP + CLOSE_SIZE + space::S3;
     let (_, rect) = ui.allocate_space(vec2(width, ui.available_height()));
     let response = ui.interact(rect, id, Sense::click_and_drag());
     response.widget_info(|| WidgetInfo::selected(Role::Tab, ui.is_enabled(), state.active, title));
@@ -463,25 +464,14 @@ fn tab_button(ui: &mut Ui, id: Id, title: &str, icon: Option<char>, state: &TabS
         let hovered = response.hovered() || close.hovered();
         if state.active {
             ui.painter().rect_filled(rect, CornerRadius::ZERO, p.panel);
-            // The active tab's 3 px accent underline, where it meets its panel.
-            let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - size::ACCENT_BAR), rect.right_bottom());
+            // The active tab's accent underline, where it meets its panel.
+            let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - TAB_LINE), rect.right_bottom());
             ui.painter().rect_filled(line, CornerRadius::ZERO, colors.accent);
         } else if hovered {
             ui.painter().rect_filled(rect, CornerRadius::ZERO, p.surface);
         }
         let ink = if state.active || hovered { p.text } else { p.muted };
-        let mut x = rect.left() + space::S5;
-        if let Some(icon) = icon {
-            ui.painter().text(
-                pos2(x, rect.center().y),
-                Align2::LEFT_CENTER,
-                icon,
-                fonts::named(fonts::ICONS, text::BODY),
-                ink,
-            );
-            x += icon_width;
-        }
-        let at = pos2(x, rect.center().y - galley.size().y / 2.0);
+        let at = pos2(rect.left() + space::S5, rect.center().y - galley.size().y / 2.0);
         ui.painter().galley(at, galley, ink);
         if state.active || hovered {
             if close.hovered() {
@@ -543,8 +533,8 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
             Some(Tile::Pane(pane)) => Some(pane.clone()),
             _ => None,
         };
-        let (title, icon) = self.label(pane.as_ref());
-        let (response, close) = tab_button(ui, id, &title, icon, state);
+        let (title, _) = self.label(pane.as_ref());
+        let (response, close) = tab_button(ui, id, &title, state);
         if close {
             self.close.push(tile);
         }
