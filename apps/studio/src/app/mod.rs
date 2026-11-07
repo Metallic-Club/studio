@@ -1502,6 +1502,30 @@ mod tests {
     }
 
     #[test]
+    fn the_plus_beside_a_command_adds_another_shortcut() {
+        let mut harness = on_the_keybinds_page(settings_file("plus", None));
+        let settings = label_of(&harness, ids::SETTINGS_OPEN);
+        let plus = harness.get_by_role_and_label(Role::Button, "Add a shortcut to Settings");
+        // To the right of the command's shortcut.
+        assert!(plus.rect().left() > harness.get_by_label(&settings).rect().right());
+        plus.click();
+        settle(&mut harness);
+        assert!(harness.state_mut().studio.settings_window().is_capturing());
+        harness.key_press(Key::F10);
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().is_capturing());
+        let keymap = harness.state().studio.keymap();
+        let labels: Vec<String> = keymap
+            .bindings(ids::SETTINGS_OPEN)
+            .iter()
+            .map(|binding| keymap.label(binding))
+            .collect();
+        assert_eq!(labels, [settings, "F10".to_owned()], "added, not replaced");
+        // Every command has one, unbound ones too.
+        harness.get_by_role_and_label(Role::Button, "Add a shortcut to Reset layout");
+    }
+
+    #[test]
     fn a_conflict_offers_replace_swap_and_cancel() {
         let mut harness = on_the_keybinds_page(settings_file("conflict", None));
         let settings = label_of(&harness, ids::SETTINGS_OPEN);
