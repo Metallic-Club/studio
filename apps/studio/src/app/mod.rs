@@ -3599,6 +3599,58 @@ mod tests {
     }
 
     #[test]
+    fn a_toolbar_tab_is_renamed_in_place() {
+        let mut harness = editing(settings_file("toolbar-rename", None), "Rename Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let text_at = |harness: &Harness<'_, Test>, text: &str| {
+            harness
+                .output()
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(shape) if shape.galley.text() == text => {
+                        Some(shape.pos + shape.galley.rect.min.to_vec2())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{text} is not drawn"))
+        };
+        let model = toolbar_tab(&harness, "Model");
+        let before = text_at(&harness, "Model");
+        // A double-click starts renaming: the name stays where it was, with no frame around it (#326).
+        left_click(&mut harness, model);
+        // The second click 50 ms after the first, as `double_click` does.
+        let time = harness.ctx.input(|input| input.time);
+        harness.input_mut().time = Some(time + 0.05);
+        left_click(&mut harness, model);
+        harness.input_mut().time = None;
+        let field = harness
+            .get_all_by_role(Role::TextInput)
+            .find(|field| field.rect().top() < editor::BAR_HEIGHT + toolbar::TAB_ROW)
+            .expect("the tab's name, being edited")
+            .rect();
+        let during = text_at(&harness, "Model");
+        assert!((during - before).length() < 0.5, "{during:?}, was {before:?}");
+        assert!(
+            field.width() < model.width(),
+            "no wider than the tab: {field:?} in {model:?}"
+        );
+        let outlined = harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Rect(shape) => shape.stroke.width > 0.0 && shape.rect.intersects(field),
+            _ => false,
+        });
+        assert!(!outlined, "no outline around the name");
+        // Typing goes on after the name; Enter keeps it.
+        harness.event(egui::Event::Text("s".to_owned()));
+        settle(&mut harness);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.toolbar().config().tabs[1].name, "Models");
+        toolbar_tab(&harness, "Models");
+    }
+
+    #[test]
     fn the_toolbar_has_tabs_of_tools_that_can_be_changed() {
         let path = settings_file("toolbar", None);
         let mut harness = editing(path.clone(), "Toolbar Game");
