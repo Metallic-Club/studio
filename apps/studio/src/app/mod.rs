@@ -2390,6 +2390,38 @@ mod tests {
     }
 
     #[test]
+    fn the_line_between_names_and_values_drags_and_stays() {
+        let mut harness = editing(settings_file("editor-split", None), "Split Game");
+        harness.set_size(egui::vec2(1280.0, 1400.0));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        let grip = harness.get_by_label("Name column width").rect();
+        let before = crate::panels::properties::name_share(&harness.ctx);
+        // Dragged right: the line follows the pointer.
+        drag(&mut harness, grip.center(), grip.center() + egui::vec2(40.0, 0.0));
+        let moved = harness.get_by_label("Name column width").rect();
+        assert!(
+            (moved.center().x - grip.center().x - 40.0).abs() < 1.0,
+            "{moved:?} from {grip:?}"
+        );
+        assert!(crate::panels::properties::name_share(&harness.ctx) > before);
+        // Dragged past the panel's side: it stops short of it, the names still there.
+        drag(&mut harness, moved.center(), egui::pos2(0.0, moved.center().y));
+        let stopped = harness.get_by_label("Name column width").rect();
+        let size = harness.get_by_label("Size").rect();
+        assert!(
+            stopped.center().x > size.left() + 40.0,
+            "{stopped:?}, the name at {size:?}"
+        );
+        // It stays where it was left, for another part too.
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
+        settle(&mut harness);
+        let again = harness.get_by_label("Name column width").rect();
+        assert!((again.center().x - stopped.center().x).abs() < 1.0);
+    }
+
+    #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
         let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
