@@ -6,12 +6,13 @@
 //! built-in glyph ([`custom`]); [`paint`] draws whichever the icon has. `docs/studio-icons.md` lists every id
 //! ([`docs_markdown`]; a test keeps it current).
 
+pub mod builtin;
 pub mod custom;
 
 use egui::{Align2, Color32, Painter, Pos2, Rect, Response, Sense, Ui, Vec2, pos2};
 
+use super::Colors;
 use super::tokens::Hue;
-use super::{Colors, fonts};
 
 /// A group of icons drawn in one colour, so the parts of the interface are easy to tell apart (#290: the owner's
 /// groups). Each group has one [`Hue`] from the theme's tokens, tuned for Dark, Light and high contrast.
@@ -121,10 +122,10 @@ impl Group {
     }
 }
 
-/// Declares [`Icon`] and its table: each icon's variant, stable id, group, Lucide name and code point in
-/// `Lucide.ttf` (`lucide-static` 1.70.0's `font/codepoints.json`), in one place.
+/// Declares [`Icon`] and its table: each icon's variant, stable id, group and default Lucide icon (by its name in
+/// `lucide-static` 1.70.0, whose SVG ships in the icons folder), in one place.
 macro_rules! icons {
-    ($($(#[doc = $doc:literal])* $name:ident = $id:literal, $group:ident, $lucide:literal, $code:literal;)*) => {
+    ($($(#[doc = $doc:literal])* $name:ident = $id:literal, $group:ident, $lucide:literal;)*) => {
         /// Every icon Studio draws, by its stable id.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub enum Icon {
@@ -156,10 +157,17 @@ macro_rules! icons {
                 }
             }
 
-            /// Its built-in glyph: the Lucide icon's code point in Studio's icon font.
-            pub const fn glyph(self) -> char {
+            /// The SVG file it uses by default in the icons folder: its Lucide icon's, `<name>.svg` (#291).
+            pub const fn default_file(self) -> &'static str {
                 match self {
-                    $(Icon::$name => $code,)*
+                    $(Icon::$name => concat!($lucide, ".svg"),)*
+                }
+            }
+
+            /// What it marks, from its doc comment: `icons.json` says so beside each entry.
+            pub fn description(self) -> &'static str {
+                match self {
+                    $(Icon::$name => concat!($($doc),*).trim(),)*
                 }
             }
         }
@@ -168,115 +176,115 @@ macro_rules! icons {
 
 icons! {
     /// The game (the data model).
-    ExplorerGame = "explorer.game", Object, "gamepad-2", '\u{E0DF}';
+    ExplorerGame = "explorer.game", Object, "gamepad-2";
     /// The workspace.
-    ExplorerWorkspace = "explorer.workspace", Workspace, "earth", '\u{E1F3}';
+    ExplorerWorkspace = "explorer.workspace", Workspace, "earth";
     /// The lighting service.
-    ExplorerLighting = "explorer.lighting", Light, "sun", '\u{E178}';
+    ExplorerLighting = "explorer.lighting", Light, "sun";
     /// Replicated storage.
-    ExplorerReplicatedStorage = "explorer.replicated_storage", Storage, "package", '\u{E129}';
+    ExplorerReplicatedStorage = "explorer.replicated_storage", Storage, "package";
     /// The server script service.
-    ExplorerScriptService = "explorer.script_service", ServerScript, "scroll", '\u{E2ED}';
+    ExplorerScriptService = "explorer.script_service", ServerScript, "scroll";
     /// Server storage.
-    ExplorerServerStorage = "explorer.server_storage", Storage, "hard-drive", '\u{E0ED}';
+    ExplorerServerStorage = "explorer.server_storage", Storage, "hard-drive";
     /// A settings or input service (user settings, input, run service).
-    ExplorerSettingsService = "explorer.settings_service", SettingsService, "sliders-horizontal", '\u{E29A}';
+    ExplorerSettingsService = "explorer.settings_service", SettingsService, "sliders-horizontal";
     /// A camera.
-    ExplorerCamera = "explorer.camera", Object, "camera", '\u{E064}';
+    ExplorerCamera = "explorer.camera", Object, "camera";
     /// A part.
-    ExplorerPart = "explorer.part", Object, "box", '\u{E061}';
+    ExplorerPart = "explorer.part", Object, "box";
     /// A mesh part.
-    ExplorerMeshPart = "explorer.mesh_part", Object, "cuboid", '\u{E524}';
+    ExplorerMeshPart = "explorer.mesh_part", Object, "cuboid";
     /// A model.
-    ExplorerModel = "explorer.model", Object, "shapes", '\u{E4B3}';
+    ExplorerModel = "explorer.model", Object, "shapes";
     /// A directional light.
-    ExplorerDirectionalLight = "explorer.directional_light", Light, "sun", '\u{E178}';
+    ExplorerDirectionalLight = "explorer.directional_light", Light, "sun";
     /// A spotlight.
-    ExplorerSpotLight = "explorer.spot_light", Light, "spotlight", '\u{E682}';
+    ExplorerSpotLight = "explorer.spot_light", Light, "spotlight";
     /// Any other light.
-    ExplorerLight = "explorer.light", Light, "lightbulb", '\u{E1C2}';
+    ExplorerLight = "explorer.light", Light, "lightbulb";
     /// A script.
-    ExplorerScript = "explorer.script", ServerScript, "scroll", '\u{E2ED}';
+    ExplorerScript = "explorer.script", ServerScript, "scroll";
     /// A local script, which runs on the player's machine: a script's scroll (#289), in its own colour.
-    ExplorerLocalScript = "explorer.local_script", LocalScript, "scroll", '\u{E2ED}';
+    ExplorerLocalScript = "explorer.local_script", LocalScript, "scroll";
     /// A module script.
-    ExplorerModuleScript = "explorer.module_script", ModuleScript, "scroll-text", '\u{E45F}';
+    ExplorerModuleScript = "explorer.module_script", ModuleScript, "scroll-text";
     /// A bindable event.
-    ExplorerEvent = "explorer.event", Event, "radio", '\u{E142}';
+    ExplorerEvent = "explorer.event", Event, "radio";
     /// A bindable function.
-    ExplorerFunction = "explorer.function", Event, "square-function", '\u{E22D}';
+    ExplorerFunction = "explorer.function", Event, "square-function";
     /// A folder.
-    ExplorerFolder = "explorer.folder", Object, "folder", '\u{E0D7}';
+    ExplorerFolder = "explorer.folder", Object, "folder";
     /// A value object.
-    ExplorerValue = "explorer.value", Value, "diamond", '\u{E2D2}';
+    ExplorerValue = "explorer.value", Value, "diamond";
     /// A true-or-false value.
-    ExplorerBoolValue = "explorer.bool_value", Value, "toggle-left", '\u{E18B}';
+    ExplorerBoolValue = "explorer.bool_value", Value, "toggle-left";
     /// A whole-number value.
-    ExplorerIntValue = "explorer.int_value", Value, "hash", '\u{E0EF}';
+    ExplorerIntValue = "explorer.int_value", Value, "hash";
     /// A number value.
-    ExplorerNumberValue = "explorer.number_value", Value, "binary", '\u{E1F2}';
+    ExplorerNumberValue = "explorer.number_value", Value, "binary";
     /// A text value.
-    ExplorerStringValue = "explorer.string_value", Value, "type", '\u{E198}';
+    ExplorerStringValue = "explorer.string_value", Value, "type";
     /// A value that refers to another object.
-    ExplorerObjectValue = "explorer.object_value", Value, "link", '\u{E102}';
+    ExplorerObjectValue = "explorer.object_value", Value, "link";
     /// An input object.
-    ExplorerInput = "explorer.input", Other, "mouse-pointer", '\u{E11F}';
+    ExplorerInput = "explorer.input", Other, "mouse-pointer";
     /// Any other instance.
-    ExplorerInstance = "explorer.instance", Other, "circle", '\u{E076}';
+    ExplorerInstance = "explorer.instance", Other, "circle";
     /// The Viewport panel.
-    PanelViewport = "panel.viewport", Scene, "monitor", '\u{E11D}';
+    PanelViewport = "panel.viewport", Scene, "monitor";
     /// The Explorer panel.
-    PanelExplorer = "panel.explorer", Scene, "list-tree", '\u{E408}';
+    PanelExplorer = "panel.explorer", Scene, "list-tree";
     /// The Properties panel.
-    PanelProperties = "panel.properties", Scene, "list", '\u{E106}';
+    PanelProperties = "panel.properties", Scene, "list";
     /// The Assets panel.
-    PanelAssets = "panel.assets", Content, "files", '\u{E0CF}';
+    PanelAssets = "panel.assets", Content, "files";
     /// The Output panel.
-    PanelOutput = "panel.output", Log, "square-terminal", '\u{E20A}';
+    PanelOutput = "panel.output", Log, "square-terminal";
     /// The Game tab.
-    PanelGame = "panel.game", Run, "gamepad-2", '\u{E0DF}';
+    PanelGame = "panel.game", Run, "gamepad-2";
     /// A mesh in the Assets panel.
-    AssetMesh = "asset.mesh", Object, "cuboid", '\u{E524}';
+    AssetMesh = "asset.mesh", Object, "cuboid";
     /// An image in the Assets panel.
-    AssetImage = "asset.image", Content, "image", '\u{E0F6}';
+    AssetImage = "asset.image", Content, "image";
     /// A sound in the Assets panel.
-    AssetAudio = "asset.audio", Content, "music", '\u{E122}';
+    AssetAudio = "asset.audio", Content, "music";
     /// A scene in the Assets panel.
-    AssetScene = "asset.scene", Object, "list-tree", '\u{E408}';
+    AssetScene = "asset.scene", Object, "list-tree";
     /// A script in the Assets panel.
-    AssetScript = "asset.script", ServerScript, "scroll", '\u{E2ED}';
+    AssetScript = "asset.script", ServerScript, "scroll";
     /// Any other file in the Assets panel.
-    AssetFile = "asset.file", Other, "file", '\u{E0C0}';
+    AssetFile = "asset.file", Other, "file";
     /// Play, and Resume while paused.
-    ToolbarPlay = "toolbar.play", Run, "play", '\u{E13C}';
+    ToolbarPlay = "toolbar.play", Run, "play";
     /// Pause.
-    ToolbarPause = "toolbar.pause", Run, "pause", '\u{E12E}';
+    ToolbarPause = "toolbar.pause", Run, "pause";
     /// Step one frame.
-    ToolbarStep = "toolbar.step", Run, "skip-forward", '\u{E160}';
+    ToolbarStep = "toolbar.step", Run, "skip-forward";
     /// Stop.
-    ToolbarStop = "toolbar.stop", Run, "square", '\u{E167}';
+    ToolbarStop = "toolbar.stop", Run, "square";
     /// The gear that opens Settings.
-    ToolbarSettings = "toolbar.settings", Studio, "settings", '\u{E154}';
+    ToolbarSettings = "toolbar.settings", Studio, "settings";
     /// A search box.
-    UiSearch = "ui.search", Interface, "search", '\u{E151}';
+    UiSearch = "ui.search", Interface, "search";
     /// Close, dismiss.
-    UiClose = "ui.close", Interface, "x", '\u{E1B2}';
+    UiClose = "ui.close", Interface, "x";
     /// A warning.
-    UiWarning = "ui.warning", Interface, "triangle-alert", '\u{E193}';
+    UiWarning = "ui.warning", Interface, "triangle-alert";
     /// An error.
-    UiError = "ui.error", Interface, "circle-x", '\u{E084}';
+    UiError = "ui.error", Interface, "circle-x";
     /// Information.
-    UiInfo = "ui.info", Interface, "info", '\u{E0F9}';
+    UiInfo = "ui.info", Interface, "info";
     /// A check mark.
-    UiCheck = "ui.check", Interface, "check", '\u{E06C}';
+    UiCheck = "ui.check", Interface, "check";
     /// A collapsed tree item or section.
-    UiExpand = "ui.expand", Interface, "chevron-right", '\u{E06F}';
+    UiExpand = "ui.expand", Interface, "chevron-right";
     /// An expanded tree item or section.
-    UiCollapse = "ui.collapse", Interface, "chevron-down", '\u{E06D}';
+    UiCollapse = "ui.collapse", Interface, "chevron-down";
     /// A colour of your own.
-    UiPalette = "ui.palette", Interface, "palette", '\u{E1DD}';
+    UiPalette = "ui.palette", Interface, "palette";
     /// Add another.
-    UiAdd = "ui.add", Interface, "plus", '\u{E13D}';
+    UiAdd = "ui.add", Interface, "plus";
 }
 
 /// The file types a custom icon may be, in the order one is preferred when both are there.
@@ -314,13 +322,15 @@ pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
             painter.image(image.texture.id(), rect, uv, tint);
         }
         None => {
-            painter.text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                icon.glyph(),
-                fonts::named(fonts::ICONS, rect.height()),
-                color,
-            );
+            // The folder's SVG, drawn at exactly the pixels it covers, on the pixel grid, so it stays sharp (#291).
+            let ppp = painter.pixels_per_point();
+            let side = (rect.height().min(rect.width()) * ppp).round().max(1.0);
+            let min = ((rect.center().to_vec2() * ppp - Vec2::splat(side / 2.0)).round() / ppp).to_pos2();
+            let snapped = Rect::from_min_size(min, Vec2::splat(side / ppp));
+            if let Some(texture) = builtin::texture(painter.ctx(), icon, side as u32) {
+                let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                painter.image(texture, snapped, uv, color);
+            }
         }
     }
 }
@@ -347,8 +357,11 @@ pub fn docs_markdown() -> String {
         "# Studio icons\n\n\
          <!-- Generated from apps/studio/src/theme/icons/mod.rs by \
          `cargo test -p metallic_studio write_the_icon_docs -- --ignored`. Do not edit by hand. -->\n\n\
-         Every icon in Metallic Studio has a stable id. By default it is drawn from [Lucide](https://lucide.dev/icons/)'s \
-         icon font (ISC licence), in its group's colour.\n\n\
+         Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https://lucide.dev/icons/) SVG \
+         (ISC licence) in the `icons` folder beside Studio's executable, drawn in its group's colour.\n\n\
+         **The icons folder:** `icons/icons.json` says which SVG file each icon id uses, with a line on what it \
+         marks. To change an icon for good, put an SVG in the folder and point its entry's `file` at it. A file \
+         that is missing or cannot be read falls back to the default, with one warning in Output.\n\n\
          **Custom icons:** set a folder in Settings → Appearance → Icon folder. A file in it named after an icon's id, \
          `<icon-id>.svg` or `<icon-id>.png` (the SVG wins when both are there), replaces that icon. Icons without a \
          file keep the built-in one, and a file that cannot be read keeps it too, with one warning in Output. \
@@ -365,14 +378,18 @@ pub fn docs_markdown() -> String {
         };
         out.push_str(&format!("| {} | {hue} |\n", group.label()));
     }
-    out.push_str("\n## Icons\n\n| Icon id | Group | Lucide icon | Custom files |\n|---|---|---|---|\n");
+    out.push_str(
+        "\n## Icons\n\n| Icon id | What it marks | Group | Default file | Custom files |\n|---|---|---|---|---|\n",
+    );
     for icon in Icon::ALL {
         let [svg, png] = icon.file_names();
         let name = icon.lucide();
         out.push_str(&format!(
-            "| `{}` | {} | [`{name}`](https://lucide.dev/icons/{name}) | `{svg}`, `{png}` |\n",
+            "| `{}` | {} | {} | [`{}`](https://lucide.dev/icons/{name}) | `{svg}`, `{png}` |\n",
             icon.id(),
+            icon.description(),
             icon.group().label(),
+            icon.default_file(),
         ));
     }
     out
@@ -409,23 +426,6 @@ mod tests {
             Icon::ExplorerPart.file_names(),
             ["explorer.part.svg".to_owned(), "explorer.part.png".to_owned()]
         );
-    }
-
-    #[test]
-    fn every_icon_is_in_lucide() {
-        let ctx = egui::Context::default();
-        ctx.set_fonts(fonts::definitions());
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            for icon in Icon::ALL {
-                let has = ui
-                    .ctx()
-                    .fonts_mut(|f| f.has_glyph(&fonts::named(fonts::ICONS, 16.0), icon.glyph()));
-                assert!(has, "{} ({}, U+{:04X})", icon.id(), icon.lucide(), icon.glyph() as u32);
-                // The private use area: never a letter of the text fonts.
-                assert!(('\u{E000}'..='\u{F8FF}').contains(&icon.glyph()), "{}", icon.id());
-            }
-        });
-        output.textures_delta.clear();
     }
 
     #[test]

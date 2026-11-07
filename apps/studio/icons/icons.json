@@ -1,0 +1,226 @@
+{
+  "format": 1,
+  "about": "Which SVG file each of Metallic Studio's icons uses, relative to this folder. To change an icon, put an SVG here and point its entry's file at it. The ids never change.",
+  "icons": {
+    "asset.audio": {
+      "file": "music.svg",
+      "for": "A sound in the Assets panel."
+    },
+    "asset.file": {
+      "file": "file.svg",
+      "for": "Any other file in the Assets panel."
+    },
+    "asset.image": {
+      "file": "image.svg",
+      "for": "An image in the Assets panel."
+    },
+    "asset.mesh": {
+      "file": "cuboid.svg",
+      "for": "A mesh in the Assets panel."
+    },
+    "asset.scene": {
+      "file": "list-tree.svg",
+      "for": "A scene in the Assets panel."
+    },
+    "asset.script": {
+      "file": "scroll.svg",
+      "for": "A script in the Assets panel."
+    },
+    "explorer.bool_value": {
+      "file": "toggle-left.svg",
+      "for": "A true-or-false value."
+    },
+    "explorer.camera": {
+      "file": "camera.svg",
+      "for": "A camera."
+    },
+    "explorer.directional_light": {
+      "file": "sun.svg",
+      "for": "A directional light."
+    },
+    "explorer.event": {
+      "file": "radio.svg",
+      "for": "A bindable event."
+    },
+    "explorer.folder": {
+      "file": "folder.svg",
+      "for": "A folder."
+    },
+    "explorer.function": {
+      "file": "square-function.svg",
+      "for": "A bindable function."
+    },
+    "explorer.game": {
+      "file": "gamepad-2.svg",
+      "for": "The game (the data model)."
+    },
+    "explorer.input": {
+      "file": "mouse-pointer.svg",
+      "for": "An input object."
+    },
+    "explorer.instance": {
+      "file": "circle.svg",
+      "for": "Any other instance."
+    },
+    "explorer.int_value": {
+      "file": "hash.svg",
+      "for": "A whole-number value."
+    },
+    "explorer.light": {
+      "file": "lightbulb.svg",
+      "for": "Any other light."
+    },
+    "explorer.lighting": {
+      "file": "sun.svg",
+      "for": "The lighting service."
+    },
+    "explorer.local_script": {
+      "file": "scroll.svg",
+      "for": "A local script, which runs on the player's machine: a script's scroll (#289), in its own colour."
+    },
+    "explorer.mesh_part": {
+      "file": "cuboid.svg",
+      "for": "A mesh part."
+    },
+    "explorer.model": {
+      "file": "shapes.svg",
+      "for": "A model."
+    },
+    "explorer.module_script": {
+      "file": "scroll-text.svg",
+      "for": "A module script."
+    },
+    "explorer.number_value": {
+      "file": "binary.svg",
+      "for": "A number value."
+    },
+    "explorer.object_value": {
+      "file": "link.svg",
+      "for": "A value that refers to another object."
+    },
+    "explorer.part": {
+      "file": "box.svg",
+      "for": "A part."
+    },
+    "explorer.replicated_storage": {
+      "file": "package.svg",
+      "for": "Replicated storage."
+    },
+    "explorer.script": {
+      "file": "scroll.svg",
+      "for": "A script."
+    },
+    "explorer.script_service": {
+      "file": "scroll.svg",
+      "for": "The server script service."
+    },
+    "explorer.server_storage": {
+      "file": "hard-drive.svg",
+      "for": "Server storage."
+    },
+    "explorer.settings_service": {
+      "file": "sliders-horizontal.svg",
+      "for": "A settings or input service (user settings, input, run service)."
+    },
+    "explorer.spot_light": {
+      "file": "spotlight.svg",
+      "for": "A spotlight."
+    },
+    "explorer.string_value": {
+      "file": "type.svg",
+      "for": "A text value."
+    },
+    "explorer.value": {
+      "file": "diamond.svg",
+      "for": "A value object."
+    },
+    "explorer.workspace": {
+      "file": "earth.svg",
+      "for": "The workspace."
+    },
+    "panel.assets": {
+      "file": "files.svg",
+      "for": "The Assets panel."
+    },
+    "panel.explorer": {
+      "file": "list-tree.svg",
+      "for": "The Explorer panel."
+    },
+    "panel.game": {
+      "file": "gamepad-2.svg",
+      "for": "The Game tab."
+    },
+    "panel.output": {
+      "file": "square-terminal.svg",
+      "for": "The Output panel."
+    },
+    "panel.properties": {
+      "file": "list.svg",
+      "for": "The Properties panel."
+    },
+    "panel.viewport": {
+      "file": "monitor.svg",
+      "for": "The Viewport panel."
+    },
+    "toolbar.pause": {
+      "file": "pause.svg",
+      "for": "Pause."
+    },
+    "toolbar.play": {
+      "file": "play.svg",
+      "for": "Play, and Resume while paused."
+    },
+    "toolbar.settings": {
+      "file": "settings.svg",
+      "for": "The gear that opens Settings."
+    },
+    "toolbar.step": {
+      "file": "skip-forward.svg",
+      "for": "Step one frame."
+    },
+    "toolbar.stop": {
+      "file": "square.svg",
+      "for": "Stop."
+    },
+    "ui.add": {
+      "file": "plus.svg",
+      "for": "Add another."
+    },
+    "ui.check": {
+      "file": "check.svg",
+      "for": "A check mark."
+    },
+    "ui.close": {
+      "file": "x.svg",
+      "for": "Close, dismiss."
+    },
+    "ui.collapse": {
+      "file": "chevron-down.svg",
+      "for": "An expanded tree item or section."
+    },
+    "ui.error": {
+      "file": "circle-x.svg",
+      "for": "An error."
+    },
+    "ui.expand": {
+      "file": "chevron-right.svg",
+      "for": "A collapsed tree item or section."
+    },
+    "ui.info": {
+      "file": "info.svg",
+      "for": "Information."
+    },
+    "ui.palette": {
+      "file": "palette.svg",
+      "for": "A colour of your own."
+    },
+    "ui.search": {
+      "file": "search.svg",
+      "for": "A search box."
+    },
+    "ui.warning": {
+      "file": "triangle-alert.svg",
+      "for": "A warning."
+    }
+  }
+}

@@ -1,6 +1,6 @@
 //! Studio's typefaces, bundled (`apps/studio/assets/fonts`, licences beside them; see `NOTICE.txt` there): Inter for
-//! the interface, as on the website, JetBrains Mono for code and changing numbers, and Lucide (https://lucide.dev) for
-//! icons (#257).
+//! the interface, as on the website, and JetBrains Mono for code and changing numbers.
+//! Icons are not fonts: they are SVGs in the `icons` folder beside the executable (#291, `theme::icons::builtin`).
 //!
 //! egui's own fonts are never loaded ([`definitions`] starts empty, and the workspace turns off egui's
 //! `default_fonts`): one of them is under the Ubuntu Font Licence, which `deny.toml` does not allow.
@@ -17,14 +17,11 @@ use egui::{FontData, FontDefinitions, FontFamily, FontId, FontTweak};
 
 const INTER: &[u8] = include_bytes!("../../assets/fonts/Inter-Variable.ttf");
 const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf");
-const LUCIDE: &[u8] = include_bytes!("../../assets/fonts/Lucide.ttf");
 
 /// Controls: button text, labels, names.
 pub const STRONG: &str = "strong";
 /// Headings, titles and the wordmark.
 pub const HEADING: &str = "heading";
-/// Lucide's icons alone. Also the last fallback of every text family, so an icon can sit in a label.
-pub const ICONS: &str = "icons";
 
 /// Inter's weights, on its `wght` axis.
 pub mod weight {
@@ -49,7 +46,7 @@ fn inter(coords: &[(&[u8; 4], f32)]) -> Arc<FontData> {
 }
 
 /// The whole font set: Inter for proportional text and, at their weights, the voices, JetBrains Mono for
-/// monospace, each falling back to Lucide; and the icon family.
+/// monospace.
 pub fn definitions() -> FontDefinitions {
     let mut defs = FontDefinitions::empty();
     defs.font_data.insert("inter".into(), inter(&[(b"wght", weight::BODY)]));
@@ -59,8 +56,6 @@ pub fn definitions() -> FontDefinitions {
         "inter-heading".into(),
         inter(&[(b"wght", weight::HEADING), (b"opsz", HEADING_OPTICAL_SIZE)]),
     );
-    defs.font_data
-        .insert("lucide".into(), Arc::new(FontData::from_static(LUCIDE)));
     defs.font_data.insert(
         "jetbrains-mono".into(),
         Arc::new(FontData::from_static(JETBRAINS_MONO).tweak(FontTweak {
@@ -73,15 +68,10 @@ pub fn definitions() -> FontDefinitions {
         (FontFamily::Name(STRONG.into()), "inter-strong"),
         (FontFamily::Name(HEADING.into()), "inter-heading"),
     ] {
-        defs.families
-            .insert(family, vec![inter.to_owned(), "lucide".to_owned()]);
+        defs.families.insert(family, vec![inter.to_owned()]);
     }
-    defs.families.insert(
-        FontFamily::Monospace,
-        vec!["jetbrains-mono".into(), "inter".into(), "lucide".into()],
-    );
     defs.families
-        .insert(FontFamily::Name(ICONS.into()), vec!["lucide".into()]);
+        .insert(FontFamily::Monospace, vec!["jetbrains-mono".into(), "inter".into()]);
     defs
 }
 
@@ -105,14 +95,11 @@ mod tests {
         // egui's defaults (Ubuntu-Light, Hack, the emoji fonts) are never in the set.
         let mut names: Vec<&String> = defs.font_data.keys().collect();
         names.sort();
-        assert_eq!(
-            names,
-            ["inter", "inter-heading", "inter-strong", "jetbrains-mono", "lucide"]
-        );
+        assert_eq!(names, ["inter", "inter-heading", "inter-strong", "jetbrains-mono"]);
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             assert!(defs.families.contains_key(&family));
         }
-        for name in [STRONG, HEADING, ICONS] {
+        for name in [STRONG, HEADING] {
             let fonts = &defs.families[&FontFamily::Name(name.into())];
             assert!(fonts.iter().all(|font| defs.font_data.contains_key(font)), "{name}");
         }
@@ -187,7 +174,6 @@ mod tests {
         for (font, licence) in [
             ("Inter-Variable.ttf", "OFL-Inter.txt"),
             ("JetBrainsMono-Variable.ttf", "OFL-JetBrainsMono.txt"),
-            ("Lucide.ttf", "LICENSE-Lucide.txt"),
         ] {
             assert!(dir.join(font).is_file(), "{font}");
             let text = std::fs::read_to_string(dir.join(licence)).unwrap();
