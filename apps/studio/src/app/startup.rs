@@ -12,6 +12,8 @@ use metallic_engine::metallic_platform::AppId;
 use metallic_engine::metallic_render::{RenderContext, Renderer, RendererSettings, wgpu};
 
 use crate::STUDIO_APP_ID;
+use crate::dock::{Dock, LAYOUT_FILE};
+use crate::panels::PANELS;
 use crate::projects::{ProjectList, TemplateInfo, list_templates, projects_path, templates_dir};
 use crate::settings::{SettingsStore, settings_path};
 
@@ -27,6 +29,9 @@ pub struct Loaded {
     pub projects: ProjectList,
     /// The templates a new project can start from.
     pub templates: Vec<TemplateInfo>,
+    /// The editor's dock layout, read from `layout.json` beside the settings (the default one in memory if Studio has no
+    /// config folder).
+    pub layout: Dock,
 }
 
 impl std::fmt::Debug for Loaded {
@@ -36,6 +41,7 @@ impl std::fmt::Debug for Loaded {
             .field("viewport_renderer", &self.viewport_renderer.is_some())
             .field("projects", &self.projects)
             .field("templates", &self.templates)
+            .field("layout", &self.layout)
             .finish()
     }
 }
@@ -201,12 +207,14 @@ pub fn projects_step(list: Option<PathBuf>, templates: Option<PathBuf>) -> Step 
     })
 }
 
-/// The step that reads the settings at `path` (`None`: there is no config folder, so they live in memory).
+/// The step that reads the settings at `path` (`None`: there is no config folder, so they live in memory), and the
+/// dock layout beside them.
 pub fn settings_step(path: Option<PathBuf>) -> Step {
     Step::new("Reading settings", move |loaded| {
         loaded.settings = match path {
             Some(path) => {
                 log::info!("settings: {}", path.display());
+                loaded.layout = Dock::load(path.with_file_name(LAYOUT_FILE), PANELS);
                 SettingsStore::load(path)
             }
             None => SettingsStore::in_memory(),

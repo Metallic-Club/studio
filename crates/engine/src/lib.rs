@@ -179,6 +179,9 @@ pub use metallic_script::{MemorySources, RunContext, SourceLoader};
 // and the event loop), re-exported because apps depend on the engine alone (ADR 0001): the Player builds its game's
 // instances and drives the platform's event loop through these.
 pub use metallic_core;
+// The built-in classes, so an editor makes an empty game to load a scene into (`new_game`) without starting an engine,
+// whose script host stays on the thread that made it.
+pub use metallic_classes;
 pub use metallic_platform;
 // Projects, so apps open `.mtproj` files through the engine.
 pub use metallic_project;

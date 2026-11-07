@@ -143,8 +143,12 @@ impl Command {
 pub mod ids {
     /// Opens or closes the Settings window.
     pub const SETTINGS_OPEN: &str = "settings.open";
+    /// Saves the open project.
+    pub const FILE_SAVE: &str = "file.save";
     /// Closes the open project.
     pub const PROJECT_CLOSE: &str = "project.close";
+    /// Puts the editor's panels back where they start.
+    pub const VIEW_RESET_LAYOUT: &str = "view.reset_layout";
     /// Opens the project selected on the projects page.
     pub const PROJECTS_OPEN: &str = "projects.open";
     /// Starts a new project from a template.
@@ -226,6 +230,20 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Close project",
             "Project",
             "Closes the project and goes back to your projects.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+S"],
+        ..Command::new(ids::FILE_SAVE, "Save", "Project", "Saves the project to its file.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        ..Command::new(
+            ids::VIEW_RESET_LAYOUT,
+            "Reset layout",
+            "View",
+            "Puts the editor's panels back where they were when Studio was new.",
         )
     },
     Command {

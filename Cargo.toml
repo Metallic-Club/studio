@@ -104,6 +104,10 @@ egui-winit = { version = "0.37.0", default-features = false, features = ["x11", 
 egui-wgpu = { version = "0.37.0", default-features = false }
 # Studio's UI tests (dev-dependency): feeds input to egui and queries its widgets through AccessKit, no GPU.
 egui_kittest = { version = "0.37.0", default-features = false }
+# Studio's docking (ADR 0009, Docking): tabs and splits the user drags around. egui_dock has no release for egui 0.37
+# (its newest, 0.21, is built for egui 0.36), so this is egui_tiles, the egui authors' own docking crate, which is.
+# `serde` saves the layout as JSON. MIT OR Apache-2.0, pure Rust.
+egui_tiles = { version = "0.18.0", features = ["serde"] }
 # Studio's native file dialogs (pick a `.mtproj`, pick a folder). Desktop only, like egui. On Linux it asks the XDG
 # desktop portal over D-Bus (no GTK); on Windows and macOS it shows the system's own dialogs. MIT.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }

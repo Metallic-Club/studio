@@ -9,17 +9,25 @@
 //! | [`settings`] | `StudioSettings`, `settings.toml` in the config folder, and the Settings window |
 //! | [`keymap`] | the command registry, focus contexts and bindings (keys, mouse, wheel) every shortcut goes through |
 //! | [`projects`] | the projects page, `projects.toml`, the templates, and the file dialogs behind a trait |
+//! | [`editor`] | the open project, its game, and its panels' state; opening it off the UI thread |
+//! | [`dock`] | the panel registry, the docked layout (egui_tiles) and `layout.json` |
+//! | [`panels`] | the panels: Viewport, Explorer, Properties, Assets, Output, Settings |
+//! | [`logging`] | the log the Output panel shows: the engine's `log` lines and the scripts' output |
 //! | [`emblem`] | the Metallic mark: the splash's emblem and the window icon |
 //!
-//! Later issues add `dock`, `panels` and `viewport` beside them.
+//! The viewport issue (#217) adds `viewport` beside them.
 
 // The one place Studio calls the operating system itself (`app::native`, Windows only): shaping the splash window
 // and reading the system's animation switch need Win32 calls, which are unsafe. Each block says why it is sound.
 #![cfg_attr(windows, allow(unsafe_code))]
 
 pub mod app;
+pub mod dock;
+pub mod editor;
 pub mod emblem;
 pub mod keymap;
+pub mod logging;
+pub mod panels;
 pub mod projects;
 pub mod settings;
 pub mod theme;
