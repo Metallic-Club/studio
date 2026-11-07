@@ -459,7 +459,7 @@ impl Studio {
             editor,
             settings: self.settings.settings_mut(),
         };
-        ui.scope_builder(UiBuilder::new().max_rect(body.shrink(space::S1)), |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
             self.dock.ui(ui, &mut cx);
         });
         if let Some(action) = action {
@@ -3150,6 +3150,41 @@ mod tests {
         let tiles = &studio.dock().tree().tiles;
         let pane = tiles.find_pane(&crate::dock::PanelId(id.into())).unwrap();
         tiles.rect(tiles.parent_of(pane).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn docked_panels_sit_flush_with_each_other_and_the_window() {
+        let mut harness = editing(settings_file("flush", None), "Flush Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let studio = &harness.state().studio;
+        let viewport = area_of(studio, panels::ids::VIEWPORT);
+        let output = area_of(studio, panels::ids::OUTPUT);
+        let explorer = area_of(studio, panels::ids::EXPLORER);
+        let properties = area_of(studio, panels::ids::PROPERTIES);
+        // No gap between groups (#273).
+        assert!(
+            (viewport.bottom() - output.top()).abs() < 0.01,
+            "{viewport:?} {output:?}"
+        );
+        assert!(
+            (explorer.bottom() - properties.top()).abs() < 0.01,
+            "{explorer:?} {properties:?}"
+        );
+        assert!(
+            (viewport.right() - explorer.left()).abs() < 0.01,
+            "{viewport:?} {explorer:?}"
+        );
+        // None around the dock: it meets the frame's left, right and bottom, and the top bar. The harness frames the
+        // UI with a margin of its own (Studio's window has none): the top bar's top-left corner is the frame's.
+        let margin = viewport.top() - editor::BAR_HEIGHT;
+        assert!(
+            (viewport.left() - margin).abs() < 0.01 && (output.left() - margin).abs() < 0.01,
+            "{viewport:?}"
+        );
+        assert!((explorer.right() - (1280.0 - margin)).abs() < 0.01, "{explorer:?}");
+        assert!((output.bottom() - (800.0 - margin)).abs() < 0.01, "{output:?}");
+        assert!((properties.bottom() - (800.0 - margin)).abs() < 0.01, "{properties:?}");
     }
 
     /// Where the guide for `side` is drawn over the area of the tab bar holding `id`.
