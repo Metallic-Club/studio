@@ -4000,13 +4000,13 @@ fn viewport_frames(
 /// order.
 ///
 /// Measured as the other exact comparisons are (#223): GPU timing off, and every frame finished before the next.
-/// Otherwise whether wgpu-core allocates depends on how far the GPU has got, which neither side controls. Timing maps
-/// each frame's timestamp readback after its submit, and the map is filed under that submission while it is still in
-/// flight (the submission's first mapped buffer: a 32-byte `Vec`) but as ready to map, with no allocation, once the
-/// submit's own maintenance saw the GPU finish it; with frames in flight, which earlier submissions that maintenance
-/// retires varies too. A frame that won either race allocated one fewer than its usual count, so whichever side had
-/// one in its 100 frames had the lower minimum: 314 against 313 on CI's software adapters, and 148 against 147 on the
-/// dev PC's DX12.
+/// Otherwise whether wgpu-core allocates depends on how far the GPU has got, which neither side controls. With two
+/// frames in flight, what a submit's own maintenance finds finished varies from frame to frame: on CI's lavapipe most
+/// frames made an 80-byte allocation there and a few did not. And timing maps each frame's timestamp readback after
+/// its submit: the map is filed under that submission while it is in flight (its first mapped buffer, a 32-byte
+/// `Vec`), but as ready to map, with no allocation, once that maintenance saw the GPU finish it (the dev PC's DX12). A
+/// frame that won either race counted one fewer than the rest, so whichever side had one in its 100 frames had the
+/// lower minimum: 157 against 156 on lavapipe, 314 against 313 on llvmpipe, 148 against 147 on DX12.
 fn viewport_and_scene_frames(context: &RenderContext, extra: usize) -> (u64, u64) {
     let (mut game, mut scene, mut renderer, mut target) = viewport_frames(context, false);
     let view = target.view().clone();
