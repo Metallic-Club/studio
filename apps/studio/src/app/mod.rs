@@ -2281,6 +2281,20 @@ mod tests {
                     editor::Entry::Separator => {}
                 }
             }
+            // Compact (#276): one width per menu, as its longest line needs, not the old fixed 240.
+            let items: Vec<egui::Rect> = harness
+                .query_all_by_role(Role::MenuItem)
+                .chain(harness.query_all_by_role(Role::MenuItemCheckBox))
+                .map(|item| item.rect())
+                .collect();
+            let width = items[0].width();
+            assert!(
+                items.iter().all(|item| (item.width() - width).abs() < 0.01),
+                "{}",
+                menu.title
+            );
+            assert!(width < 240.0, "{} is {width} wide", menu.title);
+            assert!(width >= 150.0, "{} is {width} wide", menu.title);
             // Escape closes it, ready for the next.
             harness.key_press(Key::Escape);
             settle(&mut harness);

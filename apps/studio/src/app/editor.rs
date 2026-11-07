@@ -20,8 +20,10 @@ use crate::theme::{ButtonKind, button, current_colors, fonts};
 
 /// The top bar's height.
 pub(crate) const BAR_HEIGHT: f32 = 40.0;
-/// A menu's width.
-const MENU_WIDTH: f32 = 240.0;
+/// The narrowest a menu is (#276: otherwise as wide as its longest item and shortcut need).
+const MENU_MIN_WIDTH: f32 = 150.0;
+/// The space between an item's label and its shortcut.
+const SHORTCUT_GAP: f32 = space::S8;
 /// A menu item's height.
 const ITEM_HEIGHT: f32 = 28.0;
 /// A menu title's height in the bar.
@@ -313,8 +315,10 @@ pub(crate) fn top_bar(
                                 .min_size(vec2(*width, TITLE_HEIGHT))
                                 .corner_radius(CornerRadius::same(radius::ITEM));
                             let (response, _) = egui::containers::menu::MenuButton::from_button(title).ui(ui, |ui| {
-                                ui.set_min_width(MENU_WIDTH);
-                                if let Some(chosen) = menu_entries(ui, menu, dock, keymap, play) {
+                                let width = menu_width(ui, menu, dock, keymap);
+                                ui.set_min_width(width);
+                                ui.set_max_width(width);
+                                if let Some(chosen) = menu_entries(ui, menu, dock, keymap, play, width) {
                                     action = Some(chosen);
                                 }
                             });
@@ -424,7 +428,14 @@ fn gear(ui: &mut Ui, open: bool) -> Response {
 }
 
 /// Draws `menu`'s lines into its open popup. Returns what was chosen.
-fn menu_entries(ui: &mut Ui, menu: &Menu, dock: &Dock, keymap: &Keymap, play: PlayState) -> Option<MenuAction> {
+fn menu_entries(
+    ui: &mut Ui,
+    menu: &Menu,
+    dock: &Dock,
+    keymap: &Keymap,
+    play: PlayState,
+    width: f32,
+) -> Option<MenuAction> {
     let mut chosen = None;
     ui.spacing_mut().item_spacing.y = 2.0;
     for entry in menu.entries {
@@ -436,17 +447,17 @@ fn menu_entries(ui: &mut Ui, menu: &Menu, dock: &Dock, keymap: &Keymap, play: Pl
                 } else {
                     label
                 };
-                if menu_item(ui, label, keys, None, play.allows(action)).clicked() {
+                if menu_item(ui, width, label, keys, None, play.allows(action)).clicked() {
                     chosen = Some(action);
                 }
             }
             Entry::Planned(label) => {
-                menu_item(ui, label, None, None, false).on_hover_text("Coming in a later version of Studio.");
+                menu_item(ui, width, label, None, None, false).on_hover_text("Coming in a later version of Studio.");
             }
             Entry::Panels => {
                 for panel in dock.panels().iter().filter(|panel| !panel.transient()) {
                     let open = dock.is_open(panel.id());
-                    if menu_item(ui, panel.title(), None, Some(open), true).clicked() {
+                    if menu_item(ui, width, panel.title(), None, Some(open), true).clicked() {
                         chosen = Some(MenuAction::Toggle(panel.id()));
                     }
                 }
@@ -459,13 +470,58 @@ fn menu_entries(ui: &mut Ui, menu: &Menu, dock: &Dock, keymap: &Keymap, play: Pl
     chosen
 }
 
-/// A menu item: a check mark when `checked` is `Some(true)`, the label, and the shortcut on the right. A click closes
+/// How wide `menu` is (#276): its longest line, the check column (for the panels' list), the label, the gap and the
+/// shortcut, with the item's padding on both sides; never less than [`MENU_MIN_WIDTH`].
+fn menu_width(ui: &Ui, menu: &Menu, dock: &Dock, keymap: &Keymap) -> f32 {
+    let painter = ui.painter();
+    let measure = |text: &str, size: f32| {
+        painter
+            .layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), Color32::WHITE)
+            .size()
+            .x
+    };
+    let mut widest: f32 = 0.0;
+    let mut line = |label: &str, shortcut: Option<String>, check: bool| {
+        let check = if check { text::BODY + space::S3 } else { 0.0 };
+        let keys = shortcut.map_or(0.0, |keys| SHORTCUT_GAP + measure(&keys, text::SMALL));
+        widest = widest.max(check + measure(label, text::BODY) + keys);
+    };
+    for entry in menu.entries {
+        match *entry {
+            Entry::Item { label, action, command } => {
+                let keys = command.and_then(|id| keymap.shortcut_text(id));
+                line(label, keys.clone(), false);
+                if action == MenuAction::Pause {
+                    // Pause reads Resume while paused: the menu keeps one width.
+                    line("Resume", keys, false);
+                }
+            }
+            Entry::Planned(label) => line(label, None, false),
+            Entry::Panels => {
+                for panel in dock.panels().iter().filter(|panel| !panel.transient()) {
+                    line(panel.title(), None, true);
+                }
+            }
+            Entry::Separator => {}
+        }
+    }
+    (widest + 2.0 * space::S4).ceil().max(MENU_MIN_WIDTH)
+}
+
+/// A menu item `width` wide: a check mark when `checked` is `Some(true)`, the label, and the shortcut on the right. A click closes
 /// the menu. Not `enabled`, it is drawn at the theme's disabled strength and does nothing.
-fn menu_item(ui: &mut Ui, label: &str, shortcut: Option<String>, checked: Option<bool>, enabled: bool) -> Response {
+fn menu_item(
+    ui: &mut Ui,
+    width: f32,
+    label: &str,
+    shortcut: Option<String>,
+    checked: Option<bool>,
+    enabled: bool,
+) -> Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
-    // A fixed width: a popup's available width is not its own, and items sized from it widen the menu every frame.
-    let width = MENU_WIDTH;
+    // The menu's width, measured from its items: a popup's available width is not its own, and items sized from it
+    // widen the menu every frame.
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(width, ITEM_HEIGHT), sense);
     response.widget_info(|| match checked {
