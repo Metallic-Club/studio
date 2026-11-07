@@ -9,14 +9,15 @@
 //! A [`Player`] is a game in the engine ([`metallic_engine::Engine`]), made from a [`PlayerConfig`]: which game
 //! (a built-in [`Scene`], or a `.mtproj` project: [`PlayerConfig::project`]), the window, the graphics [`Preset`] and
 //! when to stop. [`Player::new`] loads the scene (a project's start scene, with its scripts), installs the renderer
-//! and starts the game. Then one of three things drives
+//! and starts the game ([`Player::hosted`] takes a game its host hands over instead). Then one of four things drives
 //! its frames, depending on who owns the event loop and the window:
 //!
 //! | Host | Owns | Drives the Player with |
 //! |---|---|---|
 //! | the `metallic_player` binary | nothing: the Player opens its window and runs the platform's event loop | [`Player::run`] |
 //! | the Launcher (M8), whose web view runs its own loop | the event loop; the Player still opens its own window | [`Player::into_app`]: forward the loop's callbacks to the [`PlayerApp`] (an [`AppHandler`](metallic_engine::metallic_platform::AppHandler)) |
-//! | Studio's game view (M6), a panel in Studio's dock | the event loop and the window | [`Player::engine_mut`]: [`attach_window`](metallic_engine::Engine::attach_window), [`resize`](metallic_engine::Engine::resize) and [`push_input`](metallic_engine::Engine::push_input), then [`Player::frame`] once per loop iteration |
+//! | a host that owns the event loop and a window for the game | the event loop and the window | [`Player::engine_mut`]: [`attach_window`](metallic_engine::Engine::attach_window), [`resize`](metallic_engine::Engine::resize) and [`push_input`](metallic_engine::Engine::push_input), then [`Player::frame`] once per loop iteration |
+//! | Studio's Game tab (Play in Studio, ADR 0010), a panel in Studio's dock | the event loop, the window and the render device | [`Player::hosted`] with a copy of the scene and the project's scripts, [`Player::attach_viewport`] on its device; then per loop iteration [`push_input`](metallic_engine::Engine::push_input), [`Player::frame`] and [`Player::render_viewport`], showing [`SceneRenderer::viewport`](metallic_engine::SceneRenderer::viewport)'s texture and holding its cursor as [`Player::cursor`] says |
 //!
 //! ```no_run
 //! use metallic_player::{Player, PlayerConfig, Scene};
@@ -274,5 +275,150 @@ mod tests {
         let summary = player.summary();
         assert_eq!((summary.frames, summary.gpu_frames), (0, 0), "no window, no renderer");
         assert!(player.renderer().borrow().renderer().is_none());
+    }
+
+    // A Player a host hands its game to (ADR 0010 §1).
+
+    /// A game with a part called Spinner in `Workspace` and a Script whose source is `Scripts/Spin.luau`, and that
+    /// source: it prints whether it runs in Studio, then turns the part on Heartbeat.
+    fn hosted_game() -> (
+        metallic_engine::metallic_core::DataModel,
+        metallic_engine::MemorySources,
+    ) {
+        use metallic_engine::metallic_core::{CFrame, glam::Vec3};
+
+        let mut dm = metallic_engine::metallic_classes::new_game().expect("a game");
+        let registry = dm.registry().clone();
+        let class = |name: &str| registry.class_id(name).expect("the class");
+        let workspace = dm.service(class("Workspace")).expect("Workspace");
+        let part = dm.create(class("Part")).expect("a part");
+        dm.set_name(part, "Spinner".into()).expect("named");
+        dm.set_by_name(part, "CFrame", Value::CFrame(CFrame::new(Vec3::new(0.0, 4.0, 0.0))))
+            .expect("placed");
+        dm.set_parent(part, Some(workspace)).expect("parented");
+        let camera = dm.create(class("Camera")).expect("a camera");
+        dm.set_by_name(
+            camera,
+            "CFrame",
+            Value::CFrame(CFrame::look_at(
+                Vec3::new(0.0, 6.0, 12.0),
+                Vec3::new(0.0, 4.0, 0.0),
+                Vec3::Y,
+            )),
+        )
+        .expect("aimed");
+        dm.set_parent(camera, Some(workspace)).expect("parented");
+        dm.set_by_name(workspace, "CurrentCamera", Value::Ref(Some(camera)))
+            .expect("the current camera");
+        let service = dm.service(class("ServerScriptService")).expect("the service");
+        let script = dm.create(class("Script")).expect("a script");
+        dm.set_by_name(script, "Source", Value::String("Scripts/Spin.luau".into()))
+            .expect("its source");
+        dm.set_parent(script, Some(service)).expect("parented");
+        let mut sources = metallic_engine::MemorySources::new();
+        sources.insert(
+            "Scripts/Spin.luau",
+            "print('in Studio:', game:GetService('RunService'):IsStudio())\n\
+             local part = workspace:FindFirstChild('Spinner') :: Part\n\
+             game:GetService('RunService').Heartbeat:Connect(function(dt)\n\
+                 part.CFrame = part.CFrame * CFrame.Angles(0, dt, 0)\n\
+             end)\n",
+        );
+        (dm, sources)
+    }
+
+    fn hosted() -> Player<CollectOutput> {
+        let (dm, sources) = hosted_game();
+        Player::hosted(dm, sources, GraphicsSettings::new(Preset::Low), CollectOutput::new())
+            .expect("the hosted game starts")
+    }
+
+    #[test]
+    fn a_hosted_player_runs_the_game_it_is_given_as_studio() {
+        let mut player = hosted();
+        assert_eq!(player.engine().state(), RunState::Running);
+        assert_no_errors(&player);
+        let printed: Vec<&str> = player
+            .engine()
+            .host()
+            .output()
+            .of_level(OutputLevel::Print)
+            .map(|line| line.message.as_str())
+            .collect();
+        assert_eq!(printed, ["in Studio: true"]);
+        assert_eq!(player.config().frame_cap, None, "the host paces it");
+        assert_eq!(player.config().graphics.preset, Preset::Low);
+
+        let before = read(&player, "Spinner", "CFrame");
+        player.frame(FRAME);
+        assert_ne!(read(&player, "Spinner", "CFrame"), before, "Heartbeat turns the part");
+        assert_no_errors(&player);
+        assert_eq!(
+            player.cursor(),
+            metallic_engine::metallic_classes::input::feed::CursorState::default(),
+            "nothing asked of the cursor"
+        );
+    }
+
+    #[test]
+    fn a_hosted_player_pauses_and_steps() {
+        let mut player = hosted();
+        player.frame(FRAME);
+        assert!(player.engine_mut().pause());
+        let paused = read(&player, "Spinner", "CFrame");
+        let time = player.engine().game_time();
+        for _ in 0..3 {
+            player.frame(FRAME);
+        }
+        assert_eq!(read(&player, "Spinner", "CFrame"), paused, "nothing runs while paused");
+        assert_eq!(player.engine().game_time(), time);
+
+        let stepped = player.engine_mut().step_frame().expect("a frame");
+        assert!(stepped.ran);
+        assert_ne!(read(&player, "Spinner", "CFrame"), paused, "a step runs one frame");
+        assert_eq!(player.engine().state(), RunState::Paused, "and stays paused");
+        assert!(player.engine_mut().resume());
+    }
+
+    #[test]
+    fn a_hosted_player_draws_into_the_hosts_viewport() {
+        use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderError};
+
+        let context = match RenderContext::new_offscreen(&ContextOptions::default()) {
+            Ok(context) => context,
+            Err(error @ RenderError::NoAdapter { .. }) => {
+                if std::env::var("METALLIC_REQUIRE_GPU").is_ok_and(|value| value == "1") {
+                    panic!("{error}, and METALLIC_REQUIRE_GPU=1");
+                }
+                eprintln!("skipped: {error}");
+                return;
+            }
+            Err(error) => panic!("could not create a device: {error}"),
+        };
+        let mut player = hosted();
+        player.render_viewport();
+        assert!(
+            player.renderer().borrow().viewport().is_none(),
+            "nothing before attaching"
+        );
+
+        player.attach_viewport(&context, 320, 180).expect("attached");
+        for _ in 0..3 {
+            player.frame(FRAME);
+            player.render_viewport();
+        }
+        let renderer = player.renderer().borrow();
+        assert_eq!(renderer.viewport().map(|target| target.size()), Some((320, 180)));
+        let draws = renderer.draw_stats();
+        assert!(draws.instances >= 1, "the part is drawn: {draws:?}");
+        assert_eq!(draws.sky_draws, 1, "seen from the game's camera");
+        drop(renderer);
+
+        player.resize_viewport(640, 360);
+        for _ in 0..3 {
+            player.frame(FRAME);
+            player.render_viewport();
+        }
+        assert!(player.renderer().borrow().draw_stats().instances >= 1);
     }
 }

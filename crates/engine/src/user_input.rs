@@ -95,6 +95,11 @@ impl UserInput {
         self.feed.service()
     }
 
+    /// What the scripts ask of the cursor now.
+    pub(crate) fn cursor(&self, dm: &DataModel) -> CursorState {
+        self.feed.cursor(dm)
+    }
+
     /// The input step: the frame's events, in arrival order, then the cursor state scripts asked for reaches
     /// `window` (and the engine moves the cursor, when it holds it). `firing` says whether the game runs this frame.
     pub(crate) fn process(&mut self, dm: &mut DataModel, events: &[InputEvent], firing: bool, window: Option<&Window>) {
