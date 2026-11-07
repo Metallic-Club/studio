@@ -33,6 +33,9 @@ pub enum PlatformError {
     /// The user folders could not be found (no home folder for the current user).
     #[error("no home folder for the current user, so there are no user folders")]
     NoHomeDir,
+    /// A file association could not be registered or removed (a registry value or a file refused).
+    #[error("{0}")]
+    FileAssociation(String),
 }
 
 impl PlatformError {

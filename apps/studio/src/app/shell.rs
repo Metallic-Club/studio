@@ -36,10 +36,14 @@ const MAIN_MIN_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 600.0);
 /// How soon the viewport is drawn again while something it shows is still coming in, without input.
 const VIEWPORT_POLL: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// Opens Studio's window and runs it until it is closed. Call it on the main thread.
-pub fn run() -> Result<(), StudioError> {
+/// Opens Studio's window and runs it until it is closed. Call it on the main thread. `open` is a project to open
+/// straight into the editor once the splash is done (the command line's).
+pub fn run(open: Option<PathBuf>) -> Result<(), StudioError> {
     let event_loop = EventLoop::new()?;
-    let mut shell = Shell::default();
+    let mut shell = Shell {
+        open,
+        ..Shell::default()
+    };
     event_loop.run_app(&mut shell)?;
     match shell.error {
         Some(error) => Err(error),
@@ -52,6 +56,8 @@ pub fn run() -> Result<(), StudioError> {
 struct Shell {
     window: Option<StudioWindow>,
     error: Option<StudioError>,
+    /// The project to open after the splash, until the window takes it.
+    open: Option<PathBuf>,
 }
 
 /// Studio's window, the device it is drawn with, and the interface in it.
@@ -75,7 +81,7 @@ impl ApplicationHandler for Shell {
         if self.window.is_some() {
             return;
         }
-        match StudioWindow::open(event_loop) {
+        match StudioWindow::open(event_loop, self.open.take()) {
             Ok(window) => self.window = Some(window),
             Err(error) => {
                 self.error = Some(error);
@@ -125,8 +131,8 @@ impl ApplicationHandler for Shell {
 
 impl StudioWindow {
     /// Opens the window as the splash, makes the render device on it, starts the startup steps, and shows the
-    /// splash's first frame.
-    fn open(event_loop: &ActiveEventLoop) -> Result<Self, StudioError> {
+    /// splash's first frame. `project` opens once the splash is done.
+    fn open(event_loop: &ActiveEventLoop, project: Option<PathBuf>) -> Result<Self, StudioError> {
         let monitor = event_loop
             .primary_monitor()
             .or_else(|| event_loop.available_monitors().next());
@@ -167,6 +173,9 @@ impl StudioWindow {
         let mark = emblem::render((splash::EMBLEM * window.scale_factor() as f32).round() as u32);
         let image = ColorImage::from_rgba_unmultiplied([mark.width as usize, mark.height as usize], &mark.rgba);
         let mut studio = Studio::new(startup, Some(image), reduce_motion);
+        if let Some(project) = project {
+            studio.open_after_splash(project);
+        }
         studio.set_file_dialog(Box::new(NativeDialog {
             window: Arc::clone(&window),
         }));

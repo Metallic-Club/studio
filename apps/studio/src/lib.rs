@@ -15,12 +15,14 @@
 //! | [`logging`] | the log the Output panel shows: the engine's `log` lines and the scripts' output |
 //! | [`viewport`] | the editor camera, and the viewport's state between its panel and the shell that draws the game |
 //! | [`emblem`] | the Metallic mark: the splash's emblem and the window icon |
+//! | [`cli`] | the command line: a project to open straight into the editor, and registering `.mtproj` files |
 
 // The one place Studio calls the operating system itself (`app::native`, Windows only): shaping the splash window
 // and reading the system's animation switch need Win32 calls, which are unsafe. Each block says why it is sound.
 #![cfg_attr(windows, allow(unsafe_code))]
 
 pub mod app;
+pub mod cli;
 pub mod dock;
 pub mod editor;
 pub mod emblem;
@@ -39,6 +41,17 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Studio's id for its per-user folders (`metallic_platform`'s `AppId`).
 pub const STUDIO_APP_ID: &str = "dev.metallic.Studio";
+
+/// The `.mtproj` file type, as `--register-file-types` associates it with Studio for the current user.
+pub const PROJECT_FILE_TYPE: metallic_engine::metallic_platform::file_types::FileType =
+    metallic_engine::metallic_platform::file_types::FileType {
+        extension: metallic_engine::metallic_project::PROJECT_EXTENSION,
+        mime_type: "application/x-metallic-project",
+        prog_id: "Metallic.Project",
+        description: "Metallic project",
+        app_id: STUDIO_APP_ID,
+        app_name: "Metallic Studio",
+    };
 
 /// Why Studio could not start or stopped.
 #[derive(Debug, thiserror::Error)]

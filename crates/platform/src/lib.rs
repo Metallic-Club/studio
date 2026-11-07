@@ -11,7 +11,8 @@
 //! [`Window`]s through the [`EventLoopContext`] it is given and receives [`WindowEvent`]s, [`DeviceEvent`]s and
 //! [`GamepadEvent`]s as plain engine types. A [`Window`] implements `HasWindowHandle` and `HasDisplayHandle`, which
 //! is what `metallic_render` takes; the renderer never depends on this crate (ADR 0001 rule 4). [`UserPaths`] gives
-//! an app's config, data and cache folders.
+//! an app's config, data and cache folders. [`file_types`] associates a file type with an app for the current user,
+//! by an explicit action only.
 //!
 //! # Backends and the console seam
 //!
@@ -37,11 +38,16 @@
 //! (`metallic_engine --no-default-features --features physics,luau`): it needs user paths, not windows, and CI
 //! checks that its build contains no winit.
 
+// Windows only: the per-user file association writes the registry and notifies the shell through Win32 calls
+// (`file_types`), which are unsafe. Each block says why it is sound.
+#![cfg_attr(target_os = "windows", allow(unsafe_code))]
+
 #[cfg(feature = "window")]
 mod app;
 mod error;
 #[cfg(feature = "window")]
 mod event;
+pub mod file_types;
 #[cfg(feature = "window")]
 mod gamepad;
 #[cfg(feature = "window")]

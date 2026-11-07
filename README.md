@@ -75,6 +75,64 @@ out, with the preset's value). A damaged file is ignored with a warning, and Aut
 Light instances are in the scene already; the renderer draws them once the sun and sky (#81) and point and spot
 lights (#83) land. Until then one temporary directional light shades everything.
 
+## Open projects in Studio
+
+```bash
+cargo run -p metallic_studio -- "My Games/MyGame.mtproj"   # straight to the editor, skipping sign-in and the projects page
+```
+
+A project given on the command line (relative or absolute, spaces and all) opens once the splash is done and is added
+to Recent. A path with no file, or a file that is not a project, lands on the projects page with the error.
+
+**Double-click to open.** Studio never registers itself for `.mtproj` files on its own. Ask it to, for the current
+user only, and it prints each change it made:
+
+```bash
+metallic_studio --register-file-types     # .mtproj files open with this metallic_studio executable
+metallic_studio --unregister-file-types   # removes what that added
+```
+
+| OS | What `--register-file-types` writes |
+|---|---|
+| Windows | `HKEY_CURRENT_USER\Software\Classes\.mtproj` (default `Metallic.Project`, `Content Type` `application/x-metallic-project`), and `...\Classes\Metallic.Project` (default `Metallic project`) with `DefaultIcon` `"<exe>",0` and `shell\open\command` `"<exe>" "%1"`; then tells Explorer associations changed. Studio's executable has no icon resource yet, so the files show the generic program icon until packaging (M8) adds one. |
+| Linux | `~/.local/share/mime/packages/dev.metallic.Studio.xml` (the `application/x-metallic-project` type for `*.mtproj`) and `~/.local/share/applications/dev.metallic.Studio.desktop` (`Exec="<exe>" %f`, `MimeType=application/x-metallic-project;`), under `$XDG_DATA_HOME` if set; then runs `update-mime-database` and `update-desktop-database` if they are installed. |
+| macOS | nothing: the app bundle declares the type at packaging (M8), below. |
+
+The executable registered is the one that ran the command, so register an installed or release build, not a `target/`
+folder you will clean. To check it by hand: run `metallic_studio --register-file-types`, double-click a `.mtproj` in
+Explorer or your file manager, see Studio open it straight in the editor (and in Recent next time), then run
+`metallic_studio --unregister-file-types` and see the double-click no longer offers Studio.
+
+For the macOS bundle's `Info.plist` (M8):
+
+```xml
+<key>CFBundleDocumentTypes</key>
+<array>
+  <dict>
+    <key>CFBundleTypeName</key>        <string>Metallic project</string>
+    <key>CFBundleTypeRole</key>        <string>Editor</string>
+    <key>LSHandlerRank</key>           <string>Owner</string>
+    <key>LSItemContentTypes</key>      <array><string>dev.metallic.project</string></array>
+  </dict>
+</array>
+<key>UTExportedTypeDeclarations</key>
+<array>
+  <dict>
+    <key>UTTypeIdentifier</key>        <string>dev.metallic.project</string>
+    <key>UTTypeDescription</key>       <string>Metallic project</string>
+    <key>UTTypeConformsTo</key>        <array><string>public.data</string><string>public.zip-archive</string></array>
+    <key>UTTypeTagSpecification</key>
+    <dict>
+      <key>public.filename-extension</key> <array><string>mtproj</string></array>
+      <key>public.mime-type</key>          <string>application/x-metallic-project</string>
+    </dict>
+  </dict>
+</array>
+```
+
+A double-clicked file reaches a bundled app as an "open documents" event, not as an argument; handling that event is
+part of the packaging work.
+
 ## Layout
 
 ```
