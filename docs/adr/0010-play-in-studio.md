@@ -106,7 +106,8 @@ The Viewport's tab keeps showing the editor's scene, unchanged, from the editor 
 (§2); keeping them is not planned.
 
 As built (#248): the panels read one "scene" (`EditorState::scene`), the editor's or the running game's, each with its
-own selection and Explorer state, under a "Running game" banner. Properties is still read-only (ADR 0009, until undo
+own selection and Explorer state (under a "Running game" banner until #309 removed it: the play controls show a game
+runs). Properties is still read-only (ADR 0009, until undo
 lands), so what can be edited live today is what the panels can edit at all; property editing will reach the game
 through the same scene with no Play-specific work.
 

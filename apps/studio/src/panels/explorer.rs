@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{DataModel, Id};
 
-use super::{class_icon, empty_note, ids, matches_words, playing_banner, search_box};
+use super::{class_icon, empty_note, ids, matches_words, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::theme::icons::{self, Icon};
@@ -189,11 +189,8 @@ impl Panel for Explorer {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
-        // The running game's tree while one runs (live editing, ADR 0010 §5).
+        // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
         let editor = cx.editor.scene();
-        if editor.playing {
-            playing_banner(ui);
-        }
         search_box(ui, &mut editor.explorer.query, "Search the game");
         ui.add_space(space::S3);
         let rows = rows(editor.dm, editor.explorer);

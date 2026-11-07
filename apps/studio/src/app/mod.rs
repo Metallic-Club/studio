@@ -2774,11 +2774,8 @@ mod tests {
         // shows what only the running game has: the script's Frames value.
         harness.key_press(Key::F5);
         settle(&mut harness);
-        assert_eq!(
-            harness.query_all_by_label_contains("Running game").count(),
-            2,
-            "Explorer and Properties"
-        );
+        // No banner while playing either (#309).
+        assert!(harness.query_by_label_contains("Running game").is_none());
         {
             let studio = &mut harness.state_mut().studio;
             let editor = studio.editor_mut().unwrap();
