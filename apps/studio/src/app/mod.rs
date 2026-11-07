@@ -366,6 +366,12 @@ impl Studio {
         &self.keymap
     }
 
+    /// The keymap, to change: what the Keybinds page changes is saved with the settings.
+    #[cfg(test)]
+    pub(crate) fn keymap_mut(&mut self) -> &mut Keymap {
+        &mut self.keymap
+    }
+
     /// Draws one frame into `ui`, the whole window, at `now`.
     pub fn ui(&mut self, ui: &mut egui::Ui, now: Instant) {
         let ctx = ui.ctx().clone();
@@ -1279,7 +1285,9 @@ mod tests {
         settle(&mut harness);
         assert_eq!(harness.state_mut().studio.settings_window().query(), "");
         harness.get_by_label("Fly forward");
-        harness.get_by_label("VIEWPORT NAVIGATION");
+        // #264: in sections, Fly camera inside Viewport.
+        harness.get_by_role_and_label(Role::Button, "Viewport");
+        harness.get_by_role_and_label(Role::Button, "Fly camera");
     }
 
     /// Studio past the splash, a project open in the editor, with the Settings window on the Keybinds page.
@@ -1290,6 +1298,93 @@ mod tests {
         studio.settings_window().set_open(true);
         settle(&mut harness);
         harness
+    }
+
+    #[test]
+    fn keybind_sections_collapse_nest_and_reset_their_own_commands() {
+        let mut harness = on_the_keybinds_page(settings_file("sections", None));
+        harness.set_size(egui::vec2(1280.0, 2400.0));
+        settle(&mut harness);
+        // Viewport holds two sections; Fly camera's commands are in it.
+        harness.get_by_role_and_label(Role::Button, "Viewport");
+        harness.get_by_role_and_label(Role::Button, "Fly camera");
+        harness.get_by_role_and_label(Role::Button, "Mouse");
+        harness.get_by_label("Fly forward");
+
+        // Collapsing Fly camera hides its commands, not Mouse's.
+        harness
+            .get_by_role_and_label(Role::Button, "Fly camera")
+            .click_accesskit();
+        animate(&mut harness);
+        assert!(harness.query_by_label("Fly forward").is_none());
+        harness.get_by_label("Look around");
+        // Collapsing Viewport hides the sections inside it.
+        harness
+            .get_by_role_and_label(Role::Button, "Viewport")
+            .click_accesskit();
+        animate(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::Button, "Mouse").is_none());
+        assert!(harness.query_by_label("Look around").is_none());
+        // Open again, Fly camera is still collapsed.
+        harness
+            .get_by_role_and_label(Role::Button, "Viewport")
+            .click_accesskit();
+        animate(&mut harness);
+        harness.get_by_label("Look around");
+        assert!(harness.query_by_label("Fly forward").is_none());
+        harness
+            .get_by_role_and_label(Role::Button, "Fly camera")
+            .click_accesskit();
+        animate(&mut harness);
+        harness.get_by_label("Fly forward");
+
+        // No Reset while nothing is changed.
+        assert!(harness.query_by_label("Reset").is_none());
+        let keymap = harness.state_mut().studio.keymap_mut();
+        keymap.remove_binding(ids::FLY_FORWARD, 0);
+        keymap.remove_binding(ids::ZOOM, 0);
+        keymap.remove_binding(ids::FILE_SAVE, 0);
+        settle(&mut harness);
+        // A Reset on each changed command, on Fly camera, Mouse and Viewport around them, and on Project.
+        assert_eq!(harness.query_all_by_label("Reset").count(), 3 + 4);
+        // Fly camera's Reset: the first in Viewport's card after Viewport's own.
+        let fly = harness.get_by_role_and_label(Role::Button, "Fly camera").rect();
+        let reset = harness
+            .query_all_by_label("Reset")
+            .find(|reset| (reset.rect().center().y - fly.center().y).abs() < 1.0)
+            .expect("Fly camera has a Reset");
+        reset.click_accesskit();
+        settle(&mut harness);
+        let keymap = harness.state().studio.keymap();
+        assert!(keymap.is_default(ids::FLY_FORWARD));
+        assert!(!keymap.is_default(ids::ZOOM), "Mouse is another section");
+        assert!(!keymap.is_default(ids::FILE_SAVE));
+
+        // Viewport's Reset takes in the sections inside it.
+        keymap_changed_in(&mut harness, ids::FLY_BACK);
+        let viewport = harness.get_by_role_and_label(Role::Button, "Viewport").rect();
+        harness
+            .query_all_by_label("Reset")
+            .find(|reset| (reset.rect().center().y - viewport.center().y).abs() < 1.0)
+            .expect("Viewport has a Reset")
+            .click_accesskit();
+        settle(&mut harness);
+        let keymap = harness.state().studio.keymap();
+        assert!(keymap.is_default(ids::FLY_BACK) && keymap.is_default(ids::ZOOM));
+        assert!(!keymap.is_default(ids::FILE_SAVE), "Project is another section");
+    }
+
+    /// Runs frames until a section has finished opening or closing.
+    fn animate(harness: &mut Harness<'_, Test>) {
+        for _ in 0..30 {
+            harness.step();
+        }
+    }
+
+    /// Unbinds command `id`, so it differs from its default.
+    fn keymap_changed_in(harness: &mut Harness<'_, Test>, id: &str) {
+        harness.state_mut().studio.keymap_mut().remove_binding(id, 0);
+        settle(harness);
     }
 
     /// The label of command `id`'s first binding, as this platform shows it.
@@ -1353,7 +1448,8 @@ mod tests {
         assert_eq!(studio.settings().keybinds.overrides[ids::SETTINGS_OPEN], ["F10"]);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"settings.open\" = [\"F10\"]"), "{text}");
-        harness.get_by_label("Reset");
+        // Reset on the command, and on its section (#264).
+        assert_eq!(harness.query_all_by_label("Reset").count(), 2);
 
         // The new key works, and the old one no longer does.
         harness.key_press(Key::F10);
@@ -1398,7 +1494,7 @@ mod tests {
         );
 
         // Reset gives the default back and removes the override from the file.
-        harness.get_by_label("Reset").click();
+        harness.query_all_by_label("Reset").last().unwrap().click();
         settle(&mut harness);
         assert!(harness.state().studio.keymap().is_default(ids::SETTINGS_OPEN));
         let text = std::fs::read_to_string(&path).unwrap();
@@ -3318,6 +3414,35 @@ mod tests {
         assert_eq!(studio.screen(), Screen::Editor);
         assert!(studio.is_settings_open());
         write_png(&out.join("238-settings-window.png"), shot);
+    }
+
+    /// The screenshot of #264 (`cargo test -p metallic_studio -- --ignored screenshot_of_keybind_sections`): the
+    /// Keybinds page filtered to "fly", Viewport's two sections inside it, one command changed so its sections show
+    /// Reset. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_keybind_sections() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-keybind-sections", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.open(project.clone());
+                for _ in 0..10_000 {
+                    if studio.poll_opening().is_none() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                studio.keymap_mut().remove_binding(ids::FLY_UP, 0);
+                studio.settings_window().show_category(Category::Keybinds);
+                studio.settings_window().keybinds().set_filter("fly");
+                studio.settings_window().set_open(true);
+            }
+        });
+        assert!(studio.is_settings_open());
+        write_png(&out.join("264-keybind-sections.png"), shot);
     }
 
     /// The screenshot of #239 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_menu_bar`): the editor

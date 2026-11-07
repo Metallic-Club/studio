@@ -134,23 +134,78 @@ impl KeybindsPage {
                     .color(p.muted),
             );
         }
-        let mut categories: Vec<&str> = Vec::new();
-        for command in &commands {
-            if !categories.contains(&command.category) {
-                categories.push(command.category);
-            }
+        // While searching, every section with a match is open, whatever the user collapsed.
+        let searching = !self.filter.trim().is_empty();
+        for section in sections(&commands) {
+            self.section(ui, &section, keymap, searching);
+            ui.add_space(space::S4);
         }
-        for category in categories {
-            section_label(ui, category);
-            for command in commands.iter().filter(|command| command.category == category) {
-                if let Some(request) = command_row(ui, command, keymap) {
-                    self.capture(request.0, request.1);
-                }
-            }
-            ui.add_space(space::S6);
-        }
+        ui.add_space(space::S4);
 
         self.file_row(ui, keymap);
+    }
+
+    /// One section (#264): a header that collapses it, with Reset while a command in it differs from its default;
+    /// then its commands and the sections inside it. A top-level section is a bordered card; one inside it is
+    /// indented along a line.
+    fn section(&mut self, ui: &mut Ui, section: &Section, keymap: &mut Keymap, searching: bool) {
+        let p = current_colors(ui.ctx()).palette;
+        let top = section.depth() == 0;
+        let id = Id::unique(("metallic.keybinds.section", &section.path));
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+        if top {
+            egui::Frame::new()
+                .stroke(Stroke::new(size::BORDER, p.border))
+                .corner_radius(CornerRadius::same(radius::PANEL))
+                .inner_margin(egui::Margin::symmetric(space::S5 as i8, space::S3 as i8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    self.section_contents(ui, section, keymap, searching, &mut state);
+                });
+        } else {
+            // Indented, with a line down its left side that ties it to the section around it.
+            let start = ui.cursor().min;
+            ui.horizontal_top(|ui| {
+                ui.add_space(space::S5);
+                ui.vertical(|ui| self.section_contents(ui, section, keymap, searching, &mut state));
+            });
+            let end = ui.min_rect().bottom();
+            ui.painter()
+                .vline(start.x + space::S1, start.y..=end, Stroke::new(size::BORDER, p.border));
+        }
+        state.store(ui.ctx());
+    }
+
+    /// A section's header, then its body when open (or while searching).
+    fn section_contents(
+        &mut self,
+        ui: &mut Ui,
+        section: &Section,
+        keymap: &mut Keymap,
+        searching: bool,
+        state: &mut egui::collapsing_header::CollapsingState,
+    ) {
+        if section_header(ui, section, keymap, state.is_open() || searching) {
+            state.toggle(ui);
+        }
+        if searching {
+            self.section_body(ui, section, keymap, searching);
+        } else {
+            state.show_body_unindented(ui, |ui| self.section_body(ui, section, keymap, searching));
+        }
+    }
+
+    /// A section's commands, then the sections inside it.
+    fn section_body(&mut self, ui: &mut Ui, section: &Section, keymap: &mut Keymap, searching: bool) {
+        for command in &section.commands {
+            if let Some(request) = command_row(ui, command, keymap) {
+                self.capture(request.0, request.1);
+            }
+        }
+        for inner in &section.sections {
+            ui.add_space(space::S3);
+            self.section(ui, inner, keymap, searching);
+        }
     }
 
     /// The keymap file: its path, Export and Import, and what the last one did.
@@ -318,6 +373,151 @@ impl KeybindsPage {
             self.capture = Some(capture);
         }
     }
+}
+
+/// A section of the Keybinds page (#264): its commands, then the sections inside it, from the commands' category
+/// paths (`Viewport/Fly camera` is Fly camera inside Viewport).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Section {
+    /// Its name: the path's last part.
+    pub name: String,
+    /// Its whole path, which names it apart from a section of the same name elsewhere.
+    pub path: String,
+    /// The commands directly in it, in the registry's order.
+    pub commands: Vec<Command>,
+    /// The sections inside it, in the order their first command comes.
+    pub sections: Vec<Section>,
+}
+
+impl Section {
+    /// How many sections it is inside.
+    fn depth(&self) -> usize {
+        self.path.matches('/').count()
+    }
+
+    /// Every command in it and in the sections inside it.
+    pub(super) fn all_commands(&self) -> Vec<Command> {
+        let mut all = self.commands.clone();
+        for inner in &self.sections {
+            all.extend(inner.all_commands());
+        }
+        all
+    }
+
+    /// The section inside it with `name`, made if there is none yet.
+    fn child(sections: &mut Vec<Section>, parent: &str, name: &str) -> usize {
+        if let Some(at) = sections.iter().position(|section| section.name == name) {
+            return at;
+        }
+        let path = if parent.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{parent}/{name}")
+        };
+        sections.push(Section {
+            name: name.to_owned(),
+            path,
+            ..Section::default()
+        });
+        sections.len() - 1
+    }
+}
+
+/// `commands` as the page's sections, nested by their category paths, in the order each first appears.
+pub(super) fn sections(commands: &[Command]) -> Vec<Section> {
+    let mut top: Vec<Section> = Vec::new();
+    for command in commands {
+        let mut parts = command
+            .category
+            .split('/')
+            .map(str::trim)
+            .filter(|part| !part.is_empty());
+        let Some(first) = parts.next() else {
+            continue;
+        };
+        let at = Section::child(&mut top, "", first);
+        let mut section = &mut top[at];
+        for part in parts {
+            let path = section.path.clone();
+            let at = Section::child(&mut section.sections, &path, part);
+            section = &mut section.sections[at];
+        }
+        section.commands.push(*command);
+    }
+    top
+}
+
+/// A section's header: a chevron, its name and how many commands it holds, all of which collapse it; and Reset on
+/// the right while one of its commands differs from its default. Returns whether it was clicked to collapse or open.
+fn section_header(ui: &mut Ui, section: &Section, keymap: &mut Keymap, open: bool) -> bool {
+    let p = current_colors(ui.ctx()).palette;
+    let top = section.depth() == 0;
+    let commands = section.all_commands();
+    let changed = commands.iter().any(|command| !keymap.is_default(command.id));
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), size::CONTROL), Sense::hover());
+    let reset_width = if changed { 72.0 } else { 0.0 };
+    let toggle_rect = Rect::from_min_max(rect.min, egui::pos2(rect.right() - reset_width, rect.bottom()));
+    let toggle = ui.interact(
+        toggle_rect,
+        ui.scope_id().with(("section", &section.path)),
+        Sense::click(),
+    );
+    toggle.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &section.name);
+        info.selected = Some(open);
+        info
+    });
+    if ui.is_rect_visible(rect) {
+        let ink = if toggle.hovered() { p.text } else { p.muted };
+        let chevron = if open {
+            crate::panels::icon::CARET_DOWN
+        } else {
+            crate::panels::icon::CARET_RIGHT
+        };
+        let mut x = rect.left();
+        ui.painter().text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            chevron,
+            fonts::named(fonts::ICONS, text::BODY),
+            ink,
+        );
+        x += text::BODY + space::S3;
+        let title = ui.painter().text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &section.name,
+            fonts::named(fonts::STRONG, if top { text::BODY_LG } else { text::BODY }),
+            p.text,
+        );
+        ui.painter().text(
+            egui::pos2(title.right() + space::S3, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            commands.len().to_string(),
+            FontId::proportional(text::SMALL),
+            p.subtle,
+        );
+    }
+    if changed {
+        let reset_rect = Rect::from_min_max(egui::pos2(rect.right() - reset_width, rect.top()), rect.max);
+        let reset = ui
+            .scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(reset_rect)
+                    .layout(Layout::right_to_left(Align::Center)),
+                |ui| {
+                    button(ui, ButtonKind::Quiet, "Reset")
+                        .on_hover_text(format!("Back to the defaults for everything in {}", section.name))
+                },
+            )
+            .inner;
+        if reset.clicked() {
+            for command in &commands {
+                keymap.reset(command.id);
+            }
+        }
+    }
+    toggle.clicked()
 }
 
 /// What the capture dialog recorded this frame.
@@ -594,4 +794,55 @@ fn default_file() -> String {
         .unwrap_or_else(|_| PathBuf::from(KEYMAP_FILE))
         .display()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(id: &'static str, category: &'static str) -> Command {
+        Command::new(id, id, category, "A command.")
+    }
+
+    #[test]
+    fn sections_nest_by_category_path_in_first_seen_order() {
+        let commands = [
+            command("a", "General"),
+            command("b", "Viewport/Fly camera"),
+            command("c", "Viewport/Mouse"),
+            command("d", "General"),
+            command("e", "Viewport"),
+            command("f", "Viewport/Fly camera/Fast"),
+            command("g", " Viewport / Mouse "),
+        ];
+        let sections = sections(&commands);
+        let names = |sections: &[Section]| sections.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        let ids = |section: &Section| section.commands.iter().map(|c| c.id).collect::<Vec<_>>();
+        assert_eq!(names(&sections), ["General", "Viewport"]);
+        assert_eq!(ids(&sections[0]), ["a", "d"]);
+        let viewport = &sections[1];
+        assert_eq!(ids(viewport), ["e"]);
+        assert_eq!(names(&viewport.sections), ["Fly camera", "Mouse"]);
+        let fly = &viewport.sections[0];
+        assert_eq!(fly.path, "Viewport/Fly camera");
+        assert_eq!(fly.depth(), 1);
+        assert_eq!(names(&fly.sections), ["Fast"]);
+        assert_eq!(fly.sections[0].path, "Viewport/Fly camera/Fast");
+        assert_eq!(fly.sections[0].depth(), 2);
+        // Spaces around a part do not make another section.
+        assert_eq!(ids(&viewport.sections[1]), ["c", "g"]);
+        let all: Vec<&str> = viewport.all_commands().iter().map(|c| c.id).collect();
+        assert_eq!(all, ["e", "b", "f", "c", "g"]);
+    }
+
+    #[test]
+    fn studio_commands_nest_the_viewport_s_two_sections() {
+        let sections = sections(crate::keymap::STUDIO_COMMANDS);
+        let viewport = sections
+            .iter()
+            .find(|s| s.name == "Viewport")
+            .expect("a Viewport section");
+        let inner: Vec<&str> = viewport.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(inner, ["Fly camera", "Mouse"]);
+    }
 }

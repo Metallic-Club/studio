@@ -105,7 +105,8 @@ pub struct Command {
     pub id: &'static str,
     /// Its name.
     pub title: &'static str,
-    /// The group the Keybinds page lists it under.
+    /// The section the Keybinds page lists it under: a path, `/` between a section and the one inside it
+    /// (`Viewport/Fly camera`), so sections nest (#264).
     pub category: &'static str,
     /// What it does, in a line.
     pub description: &'static str,
@@ -189,7 +190,9 @@ pub mod ids {
     pub const SPEED: &str = "viewport.speed";
 }
 
-const NAVIGATION: &str = "Viewport navigation";
+/// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
+const FLY: &str = "Viewport/Fly camera";
+const MOUSE: &str = "Viewport/Mouse";
 
 /// A fly command: a physical key, held, repeating, in the viewport.
 const fn fly(
@@ -202,7 +205,7 @@ const fn fly(
         contexts: &[Context::Viewport],
         defaults: key,
         repeat: Repeat::Allow,
-        ..Command::new(id, title, NAVIGATION, description)
+        ..Command::new(id, title, FLY, description)
     }
 }
 
@@ -217,7 +220,7 @@ const fn pointer(
         contexts: &[Context::Viewport],
         defaults: bind,
         on_hover: true,
-        ..Command::new(id, title, NAVIGATION, description)
+        ..Command::new(id, title, MOUSE, description)
     }
 }
 
