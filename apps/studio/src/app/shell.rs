@@ -1,14 +1,23 @@
-//! The shell: Studio's own winit loop, its one window, and egui drawn by `egui-wgpu` on the engine's
-//! [`RenderContext`] (ADR 0009, Toolkit).
+//! The shell: Studio's own winit loop, its window, and egui drawn by `egui-wgpu` on the engine's [`RenderContext`]
+//! (ADR 0009, Toolkit).
 //!
 //! The window opens as the splash (720 × 420, borderless, centred, hidden until its first frame is drawn), and on
 //! [`WindowRequest::BecomeMainWindow`] the same window becomes the main one.
+//!
+//! **Windows of their own** (#331): Studio code can show a native window beside the main one with egui's immediate
+//! viewports (`Context::show_viewport_immediate`), as Settings does. The shell opens a window for each viewport shown,
+//! draws it with the same device and UI renderer (so the icons, fonts and rendered views serve every window) while
+//! the main window draws, and closes it once it is no longer shown. Events in such a window redraw the main one,
+//! which draws it.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use egui::{ColorImage, ViewportId};
+use egui::{ColorImage, ImmediateViewport, ViewportBuilder, ViewportId, ViewportInfo};
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use metallic_engine::graphics::pipeline_cache_dir;
 use metallic_engine::metallic_classes::input::feed::MouseBehavior;
@@ -62,13 +71,44 @@ struct Shell {
     open: Option<PathBuf>,
 }
 
+/// What the main window shares with the windows of their own (#331): the UI renderer, whose textures serve every
+/// window, and those windows. Drawing a window of its own happens inside the main window's interface pass, so this is
+/// borrowed only between passes, never across one.
+struct Shared {
+    context: RenderContext,
+    painter: egui_wgpu::Renderer,
+    windows: Windows,
+}
+
+/// Studio's windows of their own: egui's immediate viewports, each a native window.
+#[derive(Default)]
+struct Windows {
+    open: HashMap<ViewportId, OwnWindow>,
+    by_window: HashMap<WindowId, ViewportId>,
+    /// Viewports shown that have no window yet, and how to make one: opened once the frame is drawn.
+    wanted: Vec<(ViewportId, ViewportBuilder)>,
+    /// The soonest one of them asked to be drawn again.
+    repaint: Option<Duration>,
+}
+
+/// One window of its own.
+struct OwnWindow {
+    window: Arc<Window>,
+    surface: RenderSurface,
+    egui: egui_winit::State,
+    info: ViewportInfo,
+    /// Whether it was shown in the frame being drawn: one that was not is closed after it.
+    shown: bool,
+}
+
 /// Studio's window, the device it is drawn with, and the interface in it.
 struct StudioWindow {
     window: Arc<Window>,
     context: RenderContext,
     surface: RenderSurface,
     egui: egui_winit::State,
-    painter: egui_wgpu::Renderer,
+    /// The UI renderer and the windows of their own (#331).
+    shared: Rc<RefCell<Shared>>,
     studio: Studio,
     /// The engine drawing the game into the Viewport panel's texture.
     viewport: ViewportRenderer,
@@ -98,10 +138,14 @@ impl ApplicationHandler for Shell {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let Some(window) = self.window.as_mut() else {
             return;
         };
+        if id != window.window.id() {
+            window.own_window_event(id, &event);
+            return;
+        }
         if window.egui.on_window_event(&window.window, &event).repaint {
             window.window.request_redraw();
         }
@@ -112,7 +156,7 @@ impl ApplicationHandler for Shell {
                 window.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
-                if let Err(error) = window.frame() {
+                if let Err(error) = window.frame(event_loop) {
                     self.error = Some(error);
                     event_loop.exit();
                 }
@@ -184,6 +228,15 @@ impl StudioWindow {
             Some(max_texture_side),
         );
         let painter = egui_wgpu::Renderer::new(context.device(), surface.format(), RendererOptions::default());
+        let shared = Rc::new(RefCell::new(Shared {
+            context: context.clone(),
+            painter,
+            windows: Windows::default(),
+        }));
+        // Windows of their own (#331): egui draws each immediate viewport through this, inside the main window's pass.
+        let weak = Rc::downgrade(&shared);
+        egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| draw_own_window(&weak, ctx, viewport));
+        egui.egui_ctx().set_embed_viewports(false);
 
         let reduce_motion = native::prefers_reduced_motion();
         let startup = Startup::spawn(studio_steps(context.clone()))?;
@@ -207,7 +260,7 @@ impl StudioWindow {
             context,
             surface,
             egui,
-            painter,
+            shared,
             studio,
             viewport: ViewportRenderer::new(),
             game: GameRenderer::new(),
@@ -217,84 +270,52 @@ impl StudioWindow {
             title: super::APP_TITLE.to_owned(),
         };
         // Shown once there is a frame to show, so it never flashes empty.
-        this.frame()?;
+        this.frame(event_loop)?;
         this.window.set_visible(true);
         Ok(this)
     }
 
-    /// Runs the interface for one frame and draws it.
-    fn frame(&mut self) -> Result<(), StudioError> {
-        let input = self.egui.take_egui_input(&self.window);
+    /// Runs the interface for one frame and draws it, with the windows of their own shown in it; then closes those
+    /// no longer shown and opens those newly shown (#331).
+    fn frame(&mut self, event_loop: &ActiveEventLoop) -> Result<(), StudioError> {
         let ctx = self.egui.egui_ctx().clone();
+        let mut input = self.egui.take_egui_input(&self.window);
+        // Where the main window is on the screen, so a window of its own opens over it (#331).
+        let info = input.viewports.entry(ViewportId::ROOT).or_default();
+        egui_winit::update_viewport_info(info, &ctx, &self.window, false);
         let studio = &mut self.studio;
         let now = Instant::now();
         let mut output = ctx.run_ui(input, |ui| studio.ui(ui, now));
         self.egui
             .handle_platform_output(&self.window, std::mem::take(&mut output.platform_output));
-        // Every delta is applied below; taken out, they are drained as they are.
-        let mut textures = std::mem::take(&mut output.textures_delta);
+        let mut shared = self.shared.borrow_mut();
+        let Shared {
+            context,
+            painter,
+            windows,
+        } = &mut *shared;
         // The game into the viewport's texture, from the camera this frame's input moved, before the UI shows it.
-        let viewport_busy = self.viewport.frame(&self.context, &mut self.painter, &mut self.studio)
-            | self.game.frame(&self.context, &mut self.painter, &mut self.studio);
+        let viewport_busy = self.viewport.frame(context, painter, &mut self.studio)
+            | self.game.frame(context, painter, &mut self.studio);
+        let clear = self.studio.clear_color();
+        paint(
+            context,
+            painter,
+            &mut self.surface,
+            &self.window,
+            &ctx,
+            Painted {
+                textures: std::mem::take(&mut output.textures_delta),
+                shapes: std::mem::take(&mut output.shapes),
+                pixels_per_point: output.pixels_per_point,
+                clear,
+            },
+        )?;
+        let own_repaint = windows.repaint.take();
+        windows.close_unshown();
+        let opened = windows.open_wanted(context, &ctx, event_loop);
+        drop(shared);
         self.apply_vsync();
-
-        let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
-        let (width, height) = self.surface.size();
-        let screen = ScreenDescriptor {
-            size_in_pixels: [width, height],
-            pixels_per_point: output.pixels_per_point,
-        };
-        let device = self.context.device();
-        let queue = self.context.queue();
-        {
-            // The viewport's renderer may be making textures on the startup thread at the same time.
-            let _turn = self.context.descriptor_heap_turn();
-            for (id, deltas) in textures.set.drain() {
-                for delta in &deltas {
-                    self.painter.update_texture(device, queue, id, delta);
-                }
-            }
-        }
-        if let Some(frame) = self.surface.acquire(&self.context)? {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("studio ui"),
-            });
-            let mut buffers = {
-                let _turn = self.context.descriptor_heap_turn();
-                self.painter.update_buffers(device, queue, &mut encoder, &jobs, &screen)
-            };
-            let clear = egui::Rgba::from(self.studio.clear_color());
-            {
-                let mut pass = encoder
-                    .begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("studio ui"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: frame.view(),
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: f64::from(clear.r()),
-                                    g: f64::from(clear.g()),
-                                    b: f64::from(clear.b()),
-                                    a: f64::from(clear.a()),
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        ..Default::default()
-                    })
-                    .forget_lifetime();
-                self.painter.render(&mut pass, &jobs, &screen);
-            }
-            buffers.push(encoder.finish());
-            self.context.submit(buffers);
-            self.window.pre_present_notify();
-            frame.present(&self.context);
-        }
-        for id in textures.free.drain() {
-            self.painter.free_texture(&id);
-        }
 
         self.apply_game_cursor();
         let title = self.studio.window_title();
@@ -310,10 +331,17 @@ impl StudioWindow {
         let mut delay = output
             .viewport_output
             .get(&ViewportId::ROOT)
-            .map_or(std::time::Duration::MAX, |viewport| viewport.repaint_delay);
+            .map_or(Duration::MAX, |viewport| viewport.repaint_delay);
         if viewport_busy {
             // A resize, assets or pipelines still coming in: drawn as they land, even without input.
             delay = delay.min(VIEWPORT_POLL);
+        }
+        // A window of its own is drawn when this one is: as soon as it asks, and at once when one just opened.
+        if let Some(own) = own_repaint {
+            delay = delay.min(own);
+        }
+        if opened {
+            delay = Duration::ZERO;
         }
         if delay.is_zero() {
             self.window.request_redraw();
@@ -322,6 +350,37 @@ impl StudioWindow {
             self.repaint_at = now.checked_add(delay);
         }
         Ok(())
+    }
+
+    /// An event in a window of its own (#331): to its egui input, a close asked for to its viewport (the code showing
+    /// it decides), a resize to its surface; and the main window redraws, which draws it.
+    fn own_window_event(&mut self, id: WindowId, event: &WindowEvent) {
+        let mut shared = self.shared.borrow_mut();
+        let Shared { context, windows, .. } = &mut *shared;
+        let Some(own) = windows
+            .by_window
+            .get(&id)
+            .copied()
+            .and_then(|viewport| windows.open.get_mut(&viewport))
+        else {
+            return;
+        };
+        let repaint = own.egui.on_window_event(&own.window, event).repaint;
+        match event {
+            WindowEvent::CloseRequested => own.info.events.push(egui::ViewportEvent::Close),
+            WindowEvent::Resized(size) => own.surface.resize(context, size.width, size.height),
+            _ => {}
+        }
+        let redraw = matches!(
+            event,
+            WindowEvent::CloseRequested
+                | WindowEvent::Resized(_)
+                | WindowEvent::RedrawRequested
+                | WindowEvent::Focused(_)
+        );
+        if repaint || redraw {
+            self.window.request_redraw();
+        }
     }
 
     /// Presents with vsync or without, as the Rendering settings say (with it when they leave it to Studio).
@@ -369,6 +428,248 @@ impl StudioWindow {
         window.focus_window();
         window.request_redraw();
     }
+}
+
+impl Windows {
+    /// Closes every window of its own not shown this frame, and marks the rest for the next.
+    fn close_unshown(&mut self) {
+        self.open.retain(|_, own| std::mem::take(&mut own.shown));
+        let open = &self.open;
+        self.by_window.retain(|_, viewport| open.contains_key(viewport));
+    }
+
+    /// Opens a window for each viewport shown without one. Returns whether any opened.
+    fn open_wanted(&mut self, context: &RenderContext, ctx: &egui::Context, event_loop: &ActiveEventLoop) -> bool {
+        let mut opened = false;
+        for (viewport, builder) in std::mem::take(&mut self.wanted) {
+            if self.open.contains_key(&viewport) {
+                continue;
+            }
+            match OwnWindow::open(context, ctx, event_loop, viewport, &builder) {
+                Ok(own) => {
+                    self.by_window.insert(own.window.id(), viewport);
+                    self.open.insert(viewport, own);
+                    opened = true;
+                }
+                Err(error) => log::error!("window: could not open {:?}: {error}", builder.title),
+            }
+        }
+        opened
+    }
+}
+
+impl OwnWindow {
+    /// A native window for `viewport` as `builder` describes it, with its surface on `context`'s device and its egui
+    /// input.
+    fn open(
+        context: &RenderContext,
+        ctx: &egui::Context,
+        event_loop: &ActiveEventLoop,
+        viewport: ViewportId,
+        builder: &ViewportBuilder,
+    ) -> Result<Self, StudioError> {
+        let window = Arc::new(egui_winit::create_window(ctx, event_loop, builder)?);
+        let size = window.inner_size();
+        let surface = context.create_surface(Arc::clone(&window), size.width.max(1), size.height.max(1))?;
+        let egui = egui_winit::State::new(
+            ctx.clone(),
+            viewport,
+            &window,
+            Some(window.scale_factor() as f32),
+            window.theme(),
+            Some(context.capabilities().max_texture_size as usize),
+        );
+        let mut info = ViewportInfo::default();
+        egui_winit::update_viewport_info(&mut info, ctx, &window, true);
+        Ok(Self {
+            window,
+            surface,
+            egui,
+            info,
+            shown: true,
+        })
+    }
+}
+
+/// Draws an immediate viewport (#331) in its window: egui calls this from inside the main window's pass whenever Studio
+/// shows one. A viewport without a window yet runs its contents once, unseen (egui needs them run), and its window
+/// opens after the frame.
+fn draw_own_window(shared: &std::rc::Weak<RefCell<Shared>>, ctx: &egui::Context, viewport: ImmediateViewport<'_>) {
+    let ImmediateViewport {
+        ids,
+        builder,
+        mut viewport_ui_cb,
+    } = viewport;
+    let Some(shared) = shared.upgrade() else {
+        // Studio is closing: nothing to draw into, nor textures to keep.
+        let mut output = ctx.run_ui(unseen_input(ids.this), |ui| viewport_ui_cb(ui));
+        output.textures_delta.clear();
+        return;
+    };
+    let input = {
+        let mut shared = shared.borrow_mut();
+        let windows = &mut shared.windows;
+        match windows.open.get_mut(&ids.this) {
+            Some(own) => {
+                own.shown = true;
+                egui_winit::update_viewport_info(&mut own.info, ctx, &own.window, false);
+                let mut input = own.egui.take_egui_input(&own.window);
+                input.viewports.insert(ids.this, own.info.clone());
+                Some(input)
+            }
+            None => {
+                if !windows.wanted.iter().any(|(viewport, _)| *viewport == ids.this) {
+                    windows.wanted.push((ids.this, builder));
+                }
+                None
+            }
+        }
+    };
+    let Some(input) = input else {
+        let output = ctx.run_ui(unseen_input(ids.this), |ui| viewport_ui_cb(ui));
+        // The textures it made (a font's new glyphs) serve every window.
+        let mut shared = shared.borrow_mut();
+        let Shared { context, painter, .. } = &mut *shared;
+        update_textures(context, painter, output.textures_delta);
+        return;
+    };
+    // No borrow is held while the contents run: they may show another window, which comes back here.
+    let mut output = ctx.run_ui(input, |ui| viewport_ui_cb(ui));
+    let mut shared = shared.borrow_mut();
+    let Shared {
+        context,
+        painter,
+        windows,
+    } = &mut *shared;
+    let Some(own) = windows.open.get_mut(&ids.this) else {
+        return;
+    };
+    own.info.events.clear();
+    own.egui
+        .handle_platform_output(&own.window, std::mem::take(&mut output.platform_output));
+    if let Some(asked) = output.viewport_output.remove(&ids.this) {
+        let mut actions = Vec::new();
+        egui_winit::process_viewport_commands(ctx, &mut own.info, asked.commands, &own.window, &mut actions);
+        windows.repaint = Some(
+            windows
+                .repaint
+                .map_or(asked.repaint_delay, |delay| delay.min(asked.repaint_delay)),
+        );
+    }
+    let Some(own) = windows.open.get_mut(&ids.this) else {
+        return;
+    };
+    let clear = ctx.global_style().visuals.window_fill;
+    let painted = Painted {
+        textures: output.textures_delta,
+        shapes: output.shapes,
+        pixels_per_point: output.pixels_per_point,
+        clear,
+    };
+    if let Err(error) = paint(context, painter, &mut own.surface, &own.window, ctx, painted) {
+        log::warn!("window: could not draw {:?}: {error}", own.info.title);
+    }
+}
+
+/// The input of a viewport's unseen first run: no events, just its id and an empty description of it (egui needs one
+/// for the viewport it runs).
+fn unseen_input(viewport: ViewportId) -> egui::RawInput {
+    let mut input = egui::RawInput {
+        viewport_id: viewport,
+        ..Default::default()
+    };
+    input.viewports.insert(viewport, ViewportInfo::default());
+    input
+}
+
+/// What a window's pass gave to draw.
+struct Painted {
+    textures: egui::TexturesDelta,
+    shapes: Vec<egui::epaint::ClippedShape>,
+    pixels_per_point: f32,
+    clear: egui::Color32,
+}
+
+/// Applies the textures a pass made or changed to the UI renderer.
+fn update_textures(context: &RenderContext, painter: &mut egui_wgpu::Renderer, mut textures: egui::TexturesDelta) {
+    // The viewport's renderer may be making textures on the startup thread at the same time.
+    let _turn = context.descriptor_heap_turn();
+    for (id, deltas) in textures.set.drain() {
+        for delta in &deltas {
+            painter.update_texture(context.device(), context.queue(), id, delta);
+        }
+    }
+    for id in textures.free.drain() {
+        painter.free_texture(&id);
+    }
+}
+
+/// Draws a pass's shapes into `surface` (`window`'s) over `clear` and presents it; textures it freed are freed after.
+fn paint(
+    context: &RenderContext,
+    painter: &mut egui_wgpu::Renderer,
+    surface: &mut RenderSurface,
+    window: &Window,
+    ctx: &egui::Context,
+    painted: Painted,
+) -> Result<(), StudioError> {
+    let Painted {
+        mut textures,
+        shapes,
+        pixels_per_point,
+        clear,
+    } = painted;
+    let free = std::mem::take(&mut textures.free);
+    update_textures(context, painter, textures);
+    let jobs = ctx.tessellate(shapes, pixels_per_point);
+    let (width, height) = surface.size();
+    let screen = ScreenDescriptor {
+        size_in_pixels: [width, height],
+        pixels_per_point,
+    };
+    let device = context.device();
+    let queue = context.queue();
+    if let Some(frame) = surface.acquire(context)? {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("studio ui"),
+        });
+        let mut buffers = {
+            let _turn = context.descriptor_heap_turn();
+            painter.update_buffers(device, queue, &mut encoder, &jobs, &screen)
+        };
+        let clear = egui::Rgba::from(clear);
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("studio ui"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: frame.view(),
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: f64::from(clear.r()),
+                                g: f64::from(clear.g()),
+                                b: f64::from(clear.b()),
+                                a: f64::from(clear.a()),
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                })
+                .forget_lifetime();
+            painter.render(&mut pass, &jobs, &screen);
+        }
+        buffers.push(encoder.finish());
+        context.submit(buffers);
+        window.pre_present_notify();
+        frame.present(context);
+    }
+    for id in free {
+        painter.free_texture(&id);
+    }
+    Ok(())
 }
 
 /// The cursor as the running game asked for it (`MouseBehavior`, `MouseIconEnabled`), applied to Studio's window: the

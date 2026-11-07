@@ -43,6 +43,11 @@ Two references were studied:
 - Exact crate versions are pinned when the shell lands (#211). If an egui release built for wgpu 30 isn't available,
   that issue stops and reports instead of downgrading wgpu.
 - UI tests use `egui_kittest` (feed input, query widgets, take snapshots).
+- **Windows of their own (#331, owner, 2026-11-07):** the shell runs egui's *immediate viewports*: Studio code shows a
+  native window beside the main one with `Context::show_viewport_immediate`, and the shell opens it, draws it with the
+  same device and `egui-wgpu` renderer (one set of textures for every window) while the main window draws, routes its
+  events to it, and closes it once it is no longer shown. Settings is the first such window. The tests have no
+  windowing system: there egui embeds such a viewport as a floating window over the main one.
 
 ### Layout of the code
 
@@ -186,6 +191,9 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   - **Amended in #238 (owner, 2026-11-07):** Settings is a **floating window** on every screen, the editor's included,
     and never a docked panel. It is moved, resized and closed like a window. While the user's last click was in it,
     the panels under it get no shortcuts, but the editor's own commands (save, close, reset layout) still run.
+  - **Amended in #331 (owner, 2026-11-07):** Settings opens in a **window of its own**, as Roblox Studio's does: the
+    system's title bar and close button, centred over Studio's window when it opens. Keys typed in it reach it alone
+    (a keybind being recorded reads them there). Where no window can open (the tests), it floats as #238 describes.
 
 ### Keybinds (improving on Forge's)
 
