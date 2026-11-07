@@ -58,6 +58,8 @@ pub struct Appearance {
     pub ui_scale: f32,
     /// Whether fades and eases play.
     pub motion: MotionPreference,
+    /// Whether each group of docked panels is outlined, as the Settings window is (#262).
+    pub panel_borders: bool,
 }
 
 impl Default for Appearance {
@@ -68,6 +70,7 @@ impl Default for Appearance {
             high_contrast: false,
             ui_scale: 1.0,
             motion: MotionPreference::default(),
+            panel_borders: true,
         }
     }
 }
@@ -225,6 +228,7 @@ impl StudioSettings {
                 |v| v.as_str().and_then(MotionPreference::parse),
                 &mut a.motion,
             );
+            read(appearance, "panel_borders", Value::as_bool, &mut a.panel_borders);
         }
         if let Some(rendering) = section("rendering") {
             settings.rendering = rendering_from(rendering);
@@ -252,6 +256,7 @@ impl StudioSettings {
             let scale = (f64::from(a.ui_scale) * 100.0).round() / 100.0;
             appearance.insert("ui_scale".into(), Value::Float(scale));
             appearance.insert("reduce_motion".into(), Value::String(a.motion.as_str().into()));
+            appearance.insert("panel_borders".into(), Value::Boolean(a.panel_borders));
         });
         with_section(&mut document, "rendering", |rendering| {
             for key in RENDERING_KEYS {
@@ -390,6 +395,7 @@ mod tests {
             high_contrast: true,
             ui_scale: 1.25,
             motion: MotionPreference::Reduced,
+            panel_borders: false,
         };
         settings.rendering = GraphicsSettings {
             preset: Preset::High,

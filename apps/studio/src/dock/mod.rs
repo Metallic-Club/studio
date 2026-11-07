@@ -10,6 +10,8 @@
 //!   only when it changed and nothing is being dragged.
 //! - **Dock guides** (#237): while a tab is dragged, squares in the middle of the area under the pointer say where it
 //!   docks, and a drop anywhere but a square or a tab bar leaves the layout as it was ([`guides`]).
+//! - **Panel borders** (#262): with Settings → Appearance → Panel borders on, each group of tabs is outlined with the
+//!   Settings window's 1 px border, square, a little apart from the next.
 
 pub(crate) mod guides;
 pub mod layout;
@@ -20,7 +22,7 @@ use egui::{
     Align2, Color32, CornerRadius, Id, LayerId, Order, Pos2, Rect, Response, Role, Sense, Stroke, Ui, UiBuilder,
     WidgetInfo, pos2, vec2,
 };
-use egui_tiles::{Container, LinearDir, TabState, Tile, TileId, Tiles, Tree, UiResponse};
+use egui_tiles::{Container, ContainerKind, LinearDir, ResizeState, TabState, Tile, TileId, Tiles, Tree, UiResponse};
 use serde::{Deserialize, Serialize};
 
 use crate::editor::EditorState;
@@ -342,8 +344,12 @@ impl Dock {
         // guides or a tab bar say (or nowhere).
         let before = (drag.is_some() && released).then(|| self.tree.clone());
         let colors = current_colors(&ctx);
+        let borders = cx.settings.appearance.panel_borders;
+        let groups = tab_groups(&self.tree);
         let mut behavior = DockBehavior {
             panels: self.panels,
+            borders,
+            groups,
             cx,
             focus: DockFocus {
                 focused: self.focus.focused,
@@ -450,6 +456,10 @@ struct DockBehavior<'a, 'b> {
     close: Vec<TileId>,
     /// The theme's colours: the behaviour's colour hooks are not given a context.
     colors: crate::theme::Colors,
+    /// Whether groups of tabs are outlined (#262).
+    borders: bool,
+    /// The groups of tabs, which the borders outline.
+    groups: Vec<TileId>,
     /// Each tab drawn this frame and where: where a dragged tab goes in a bar it is dropped on.
     tabs: Vec<(TileId, Rect)>,
 }
@@ -479,6 +489,27 @@ const TAB_GAP: f32 = 6.0;
 const CLOSE_SIZE: f32 = 18.0;
 /// The active tab's accent underline (#255: 1 px, thinner than the 3 px bars that mark selected list items).
 pub(crate) const TAB_LINE: f32 = 1.0;
+
+/// The space between outlined groups of tabs (#262).
+const BORDER_GAP: f32 = space::S2;
+/// Every group of tabs in `tree`: what the panel borders outline.
+fn tab_groups(tree: &Tree<PanelId>) -> Vec<TileId> {
+    tree.tiles
+        .iter()
+        .filter(|(_, tile)| matches!(tile, Tile::Container(container) if container.kind() == ContainerKind::Tabs))
+        .map(|(&id, _)| id)
+        .collect()
+}
+
+/// Outlines `rect` with the Settings window's 1 px border in `edge`: square, as docked panels are (owner, #262).
+fn paint_border(painter: &egui::Painter, rect: Rect, edge: Color32) {
+    painter.rect_stroke(
+        rect,
+        CornerRadius::ZERO,
+        Stroke::new(size::BORDER, edge),
+        egui::StrokeKind::Inside,
+    );
+}
 
 /// Draws one tab (its title and close button; no icon, #255) filling the bar's height, interacting as `id`. Returns
 /// its response and whether its close button was clicked.
@@ -598,7 +629,24 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
     }
 
     fn gap_width(&self, _style: &egui::Style) -> f32 {
-        2.0
+        if self.borders { BORDER_GAP } else { 2.0 }
+    }
+
+    fn resize_stroke(&self, style: &egui::Style, resize_state: ResizeState) -> Stroke {
+        match resize_state {
+            // Outlined groups stand apart on the background; without borders the gap is the tab bars' colour.
+            ResizeState::Idle if self.borders => Stroke::NONE,
+            ResizeState::Idle => Stroke::new(self.gap_width(style), self.colors.palette.header),
+            ResizeState::Hovering => style.visuals.widgets.hovered.fg_stroke,
+            ResizeState::Dragging => style.visuals.widgets.active.fg_stroke,
+        }
+    }
+
+    fn paint_on_top_of_tile(&self, painter: &egui::Painter, _style: &egui::Style, tile_id: TileId, rect: Rect) {
+        if self.borders && self.groups.contains(&tile_id) {
+            let p = self.colors.palette;
+            paint_border(painter, rect, p.border);
+        }
     }
 
     fn tab_bar_color(&self, _visuals: &egui::Visuals) -> Color32 {
@@ -711,6 +759,32 @@ mod tests {
             Some(Tile::Container(Container::Linear(linear))) => (linear.dir, linear.children.clone()),
             _ => panic!("{id}'s bar is not in a split"),
         }
+    }
+
+    #[test]
+    fn panel_borders_outline_each_group_of_tabs_square() {
+        let dock = Dock::in_memory(PANELS);
+        // Viewport, Assets and Output, Explorer, Properties.
+        assert_eq!(tab_groups(dock.tree()).len(), 4);
+
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(200.0, 100.0));
+        let edge = Color32::BLUE;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_border(ui.painter(), rect, edge);
+        });
+        let shapes: Vec<&egui::Shape> = output.shapes.iter().map(|clipped| &clipped.shape).collect();
+        assert_eq!(shapes.len(), 1, "the outline alone");
+        let outline = shapes.iter().find_map(|shape| match shape {
+            egui::Shape::Rect(outline) => Some(outline),
+            _ => None,
+        });
+        let outline = outline.expect("an outline");
+        assert_eq!(outline.rect, rect);
+        assert_eq!(outline.corner_radius, CornerRadius::ZERO, "square, not rounded");
+        assert_eq!(outline.stroke, Stroke::new(size::BORDER, edge));
+        // epaint checks the frame's font texture was taken.
+        output.textures_delta.clear();
     }
 
     #[test]

@@ -175,6 +175,14 @@ pub static ENTRIES: &[Entry] = &[
         },
     },
     Entry {
+        category: Category::Appearance,
+        name: "Panel borders",
+        description: "Outlines each group of docked panels, as the Settings window is outlined.",
+        control: |ui, s| {
+            toggle(ui, &mut s.appearance.panel_borders, "Panel borders");
+        },
+    },
+    Entry {
         category: Category::Rendering,
         name: "Quality preset",
         description: "How much a viewport frame may cost. Auto measures this machine and holds the frame time.",
