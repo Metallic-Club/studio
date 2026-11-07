@@ -3669,10 +3669,17 @@ mod tests {
         harness.get_by_role_and_label(Role::Button, "Explorer tool").click();
         settle(&mut harness);
 
-        // Model: an empty toolbar. Right-click it, Add, Separator.
+        // Model: an empty toolbar, with an Add tool button (#328) that opens the Add window.
         click_tab(&mut harness, "Model");
         assert_eq!(harness.state().studio.toolbar().config().active, 1);
         assert!(harness.state().studio.toolbar().config().tabs[1].elements.is_empty());
+        harness.get_by_role_and_label(Role::Button, "Add tool").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.toolbar().is_adding());
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(!harness.state().studio.toolbar().is_adding());
+        // Right-click the row: Add...
         let row = harness.get_by_role_and_label(Role::Toolbar, "Toolbar").rect();
         right_click(&mut harness, row);
         harness.get_by_label("Add...").click();
