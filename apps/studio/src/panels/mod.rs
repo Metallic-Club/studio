@@ -206,6 +206,20 @@ mod tests {
     }
 
     #[test]
+    fn classes_show_the_lucide_icons_the_owner_chose() {
+        let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
+        let lucide = |name: &str| class_icon(&registry, registry.class_id(name).unwrap()).lucide();
+        // #289.
+        assert_eq!(lucide("Camera"), "camera");
+        assert_eq!(lucide("SpotLight"), "spotlight");
+        assert_eq!(lucide("Workspace"), "earth");
+        assert_eq!(lucide("ModuleScript"), "scroll-text");
+        for scripted in ["Script", "LocalScript", "ServerScriptService"] {
+            assert_eq!(lucide(scripted), "scroll", "{scripted}");
+        }
+    }
+
+    #[test]
     fn every_creatable_class_has_its_own_icon() {
         let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
         for info in registry
@@ -223,7 +237,6 @@ mod tests {
         }
         // Look-alikes have their own (#278).
         let icon_of = |name: &str| class_icon(&registry, registry.class_id(name).unwrap());
-        assert_ne!(icon_of("LocalScript"), icon_of("Script"));
         assert_ne!(icon_of("BindableFunction"), icon_of("BindableEvent"));
         let values: std::collections::HashSet<Icon> =
             ["BoolValue", "IntValue", "NumberValue", "StringValue", "ObjectValue"]

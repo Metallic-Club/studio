@@ -30,22 +30,22 @@ Every icon in Metallic Studio has a stable id. By default it is drawn from [Luci
 | Icon id | Group | Lucide icon | Custom files |
 |---|---|---|---|
 | `explorer.game` | Explorer: services | [`gamepad-2`](https://lucide.dev/icons/gamepad-2) | `explorer.game.svg`, `explorer.game.png` |
-| `explorer.workspace` | Explorer: services | [`globe`](https://lucide.dev/icons/globe) | `explorer.workspace.svg`, `explorer.workspace.png` |
+| `explorer.workspace` | Explorer: services | [`earth`](https://lucide.dev/icons/earth) | `explorer.workspace.svg`, `explorer.workspace.png` |
 | `explorer.lighting` | Explorer: services | [`sun`](https://lucide.dev/icons/sun) | `explorer.lighting.svg`, `explorer.lighting.png` |
 | `explorer.replicated_storage` | Explorer: services | [`package`](https://lucide.dev/icons/package) | `explorer.replicated_storage.svg`, `explorer.replicated_storage.png` |
-| `explorer.script_service` | Explorer: services | [`braces`](https://lucide.dev/icons/braces) | `explorer.script_service.svg`, `explorer.script_service.png` |
+| `explorer.script_service` | Explorer: services | [`scroll`](https://lucide.dev/icons/scroll) | `explorer.script_service.svg`, `explorer.script_service.png` |
 | `explorer.server_storage` | Explorer: services | [`hard-drive`](https://lucide.dev/icons/hard-drive) | `explorer.server_storage.svg`, `explorer.server_storage.png` |
 | `explorer.settings_service` | Explorer: services | [`sliders-horizontal`](https://lucide.dev/icons/sliders-horizontal) | `explorer.settings_service.svg`, `explorer.settings_service.png` |
-| `explorer.camera` | Explorer: cameras | [`video`](https://lucide.dev/icons/video) | `explorer.camera.svg`, `explorer.camera.png` |
+| `explorer.camera` | Explorer: cameras | [`camera`](https://lucide.dev/icons/camera) | `explorer.camera.svg`, `explorer.camera.png` |
 | `explorer.part` | Explorer and Assets: parts, models and scenes | [`box`](https://lucide.dev/icons/box) | `explorer.part.svg`, `explorer.part.png` |
 | `explorer.mesh_part` | Explorer and Assets: parts, models and scenes | [`cuboid`](https://lucide.dev/icons/cuboid) | `explorer.mesh_part.svg`, `explorer.mesh_part.png` |
 | `explorer.model` | Explorer and Assets: parts, models and scenes | [`shapes`](https://lucide.dev/icons/shapes) | `explorer.model.svg`, `explorer.model.png` |
 | `explorer.directional_light` | Explorer: lights | [`sun`](https://lucide.dev/icons/sun) | `explorer.directional_light.svg`, `explorer.directional_light.png` |
-| `explorer.spot_light` | Explorer: lights | [`flashlight`](https://lucide.dev/icons/flashlight) | `explorer.spot_light.svg`, `explorer.spot_light.png` |
+| `explorer.spot_light` | Explorer: lights | [`spotlight`](https://lucide.dev/icons/spotlight) | `explorer.spot_light.svg`, `explorer.spot_light.png` |
 | `explorer.light` | Explorer: lights | [`lightbulb`](https://lucide.dev/icons/lightbulb) | `explorer.light.svg`, `explorer.light.png` |
-| `explorer.script` | Explorer and Assets: scripting | [`file-code`](https://lucide.dev/icons/file-code) | `explorer.script.svg`, `explorer.script.png` |
-| `explorer.local_script` | Explorer and Assets: scripting | [`file-user`](https://lucide.dev/icons/file-user) | `explorer.local_script.svg`, `explorer.local_script.png` |
-| `explorer.module_script` | Explorer and Assets: scripting | [`braces`](https://lucide.dev/icons/braces) | `explorer.module_script.svg`, `explorer.module_script.png` |
+| `explorer.script` | Explorer and Assets: scripting | [`scroll`](https://lucide.dev/icons/scroll) | `explorer.script.svg`, `explorer.script.png` |
+| `explorer.local_script` | Explorer and Assets: scripting | [`scroll`](https://lucide.dev/icons/scroll) | `explorer.local_script.svg`, `explorer.local_script.png` |
+| `explorer.module_script` | Explorer and Assets: scripting | [`scroll-text`](https://lucide.dev/icons/scroll-text) | `explorer.module_script.svg`, `explorer.module_script.png` |
 | `explorer.event` | Explorer and Assets: scripting | [`radio`](https://lucide.dev/icons/radio) | `explorer.event.svg`, `explorer.event.png` |
 | `explorer.function` | Explorer and Assets: scripting | [`square-function`](https://lucide.dev/icons/square-function) | `explorer.function.svg`, `explorer.function.png` |
 | `explorer.folder` | Explorer: folders | [`folder`](https://lucide.dev/icons/folder) | `explorer.folder.svg`, `explorer.folder.png` |
@@ -67,7 +67,7 @@ Every icon in Metallic Studio has a stable id. By default it is drawn from [Luci
 | `asset.image` | Panels and Assets: content | [`image`](https://lucide.dev/icons/image) | `asset.image.svg`, `asset.image.png` |
 | `asset.audio` | Panels and Assets: content | [`music`](https://lucide.dev/icons/music) | `asset.audio.svg`, `asset.audio.png` |
 | `asset.scene` | Explorer and Assets: parts, models and scenes | [`list-tree`](https://lucide.dev/icons/list-tree) | `asset.scene.svg`, `asset.scene.png` |
-| `asset.script` | Explorer and Assets: scripting | [`file-code`](https://lucide.dev/icons/file-code) | `asset.script.svg`, `asset.script.png` |
+| `asset.script` | Explorer and Assets: scripting | [`scroll`](https://lucide.dev/icons/scroll) | `asset.script.svg`, `asset.script.png` |
 | `asset.file` | Explorer and Assets: other | [`file`](https://lucide.dev/icons/file) | `asset.file.svg`, `asset.file.png` |
 | `toolbar.play` | Running the game | [`play`](https://lucide.dev/icons/play) | `toolbar.play.svg`, `toolbar.play.png` |
 | `toolbar.pause` | Running the game | [`pause`](https://lucide.dev/icons/pause) | `toolbar.pause.svg`, `toolbar.pause.png` |
