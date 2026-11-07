@@ -730,6 +730,8 @@ fn accent_swatches(ui: &mut Ui, accent: &mut Accent) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     ui.spacing_mut().item_spacing.x = space::S3;
+    // Right to left: the custom colour first, so it reads last.
+    custom_accent(ui);
     for choice in Accent::ALL.into_iter().rev() {
         let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
         let chosen = *accent == choice;
@@ -754,6 +756,34 @@ fn accent_swatches(ui: &mut Ui, accent: &mut Accent) {
             }
         }
     }
+}
+
+/// What the custom colour button says while there is no colour picker.
+pub(crate) const CUSTOM_ACCENT_SOON: &str = "A colour of your own. Coming with the colour picker.";
+
+/// The custom accent colour (#263): a round button with Lucide's palette, the swatches' size. Disabled until Studio
+/// has a colour picker, so it changes nothing yet.
+fn custom_accent(ui: &mut Ui) -> Response {
+    let p = current_colors(ui.ctx()).palette;
+    ui.add_enabled_ui(false, |ui| {
+        let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), "Custom colour"));
+        if ui.is_rect_visible(rect) {
+            let centre = rect.center();
+            // Drawn a step stronger than a live control: egui fades it as disabled.
+            ui.painter()
+                .circle(centre, 11.0, p.input, Stroke::new(size::BORDER, p.subtle));
+            ui.painter().text(
+                centre,
+                egui::Align2::CENTER_CENTER,
+                fonts::icon::PALETTE,
+                fonts::named(fonts::ICONS, text::BODY),
+                p.text,
+            );
+        }
+        response.on_disabled_hover_text(CUSTOM_ACCENT_SOON)
+    })
+    .inner
 }
 
 /// A drop-down over `choices`.
