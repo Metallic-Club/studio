@@ -11,15 +11,16 @@ use std::time::Instant;
 use egui::{ColorImage, ViewportId};
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use metallic_engine::graphics::pipeline_cache_dir;
+use metallic_engine::metallic_classes::input::feed::MouseBehavior;
 use metallic_engine::metallic_platform::AppId;
 use metallic_engine::metallic_project::PROJECT_EXTENSION;
 use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderSurface, wgpu};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::monitor::MonitorHandle;
-use winit::window::{Icon, Window, WindowAttributes, WindowId};
+use winit::window::{CursorGrabMode, Icon, Window, WindowAttributes, WindowId};
 
 use super::game::GameRenderer;
 use super::startup::{Startup, studio_steps};
@@ -77,6 +78,8 @@ struct StudioWindow {
     vsync: Option<bool>,
     /// When egui asked to be drawn again, if not at once.
     repaint_at: Option<Instant>,
+    /// What the game asked of the cursor, as last applied to the window (ADR 0010 §4).
+    cursor: GameCursor,
 }
 
 impl ApplicationHandler for Shell {
@@ -113,6 +116,16 @@ impl ApplicationHandler for Shell {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _device: DeviceId, event: DeviceEvent) {
+        // Raw mouse motion, which keeps coming while the cursor is held: what a game's camera reads (ADR 0010 §4).
+        if let (Some(window), DeviceEvent::MouseMotion { delta }) = (self.window.as_mut(), event)
+            && window.cursor.held.is_some()
+            && window.egui.on_mouse_motion(delta)
+        {
+            window.window.request_redraw();
         }
     }
 
@@ -194,6 +207,7 @@ impl StudioWindow {
             game: GameRenderer::new(),
             vsync: None,
             repaint_at: None,
+            cursor: GameCursor::default(),
         };
         // Shown once there is a frame to show, so it never flashes empty.
         this.frame()?;
@@ -275,6 +289,7 @@ impl StudioWindow {
             self.painter.free_texture(&id);
         }
 
+        self.apply_game_cursor();
         for request in self.studio.take_requests() {
             match request {
                 WindowRequest::BecomeMainWindow => self.become_main_window(),
@@ -341,6 +356,59 @@ impl StudioWindow {
         }
         window.focus_window();
         window.request_redraw();
+    }
+}
+
+/// The cursor as the running game asked for it (`MouseBehavior`, `MouseIconEnabled`), applied to Studio's window: the
+/// Player has no window of its own (ADR 0010 §4).
+#[derive(Debug, Default)]
+struct GameCursor {
+    /// Where the cursor is held, in the window's physical pixels, while the game holds it.
+    held: Option<PhysicalPosition<f64>>,
+    /// Whether the cursor is hidden.
+    hidden: bool,
+}
+
+impl StudioWindow {
+    /// Holds, frees, shows or hides the cursor as the game asks while it has the input; frees and shows it otherwise.
+    /// `LockCenter` holds it at the Game tab's centre, `LockCurrentPosition` where it was. The window is asked to lock
+    /// the cursor, or else to confine it, and the cursor is put back on the point every frame, so a click never lands
+    /// outside the tab.
+    fn apply_game_cursor(&mut self) {
+        let wanted = self.studio.game_cursor();
+        let scale = self.window.scale_factor();
+        let physical = |at: egui::Pos2| PhysicalPosition::new(f64::from(at.x) * scale, f64::from(at.y) * scale);
+        let held = wanted.and_then(|(state, tab)| match state.behavior {
+            MouseBehavior::Default => None,
+            MouseBehavior::LockCenter => Some(physical(tab.center())),
+            MouseBehavior::LockCurrentPosition => Some(self.cursor.held.unwrap_or_else(|| {
+                let at = self.egui.egui_ctx().input(|input| input.pointer.latest_pos());
+                physical(at.filter(|at| tab.contains(*at)).unwrap_or(tab.center()))
+            })),
+        });
+        if held.is_some() != self.cursor.held.is_some() {
+            let grabbed = if held.is_some() {
+                self.window
+                    .set_cursor_grab(CursorGrabMode::Locked)
+                    .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Confined))
+            } else {
+                self.window.set_cursor_grab(CursorGrabMode::None)
+            };
+            if let Err(error) = grabbed {
+                log::warn!("play: the cursor could not be held for MouseBehavior: {error}");
+            }
+        }
+        if let Some(at) = held
+            && let Err(error) = self.window.set_cursor_position(at)
+        {
+            log::debug!("play: the cursor could not be put back: {error}");
+        }
+        self.cursor.held = held;
+        let hidden = held.is_some() || wanted.is_some_and(|(state, _)| !state.icon_visible);
+        if hidden != self.cursor.hidden {
+            self.window.set_cursor_visible(!hidden);
+            self.cursor.hidden = hidden;
+        }
     }
 }
 

@@ -120,6 +120,9 @@ pub struct Command {
     /// Whether its mouse and wheel bindings start when the pointer is over its panel without focus: viewport
     /// navigation only.
     pub on_hover: bool,
+    /// Whether it still fires while a running game has the keyboard and mouse (Play in Studio): Stop, Pause, Step and
+    /// Settings. Every other key goes to the game.
+    pub during_play: bool,
 }
 
 impl Command {
@@ -135,6 +138,7 @@ impl Command {
             repeat: Repeat::Ignore,
             while_typing: false,
             on_hover: false,
+            during_play: false,
         }
     }
 }
@@ -223,6 +227,7 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         defaults: &["Primary+Comma"],
         // Closing Settings from its own search box is expected; a comma typed with Primary held is not text.
         while_typing: true,
+        during_play: true,
         ..Command::new(
             ids::SETTINGS_OPEN,
             "Settings",
@@ -267,6 +272,7 @@ pub const STUDIO_COMMANDS: &[Command] = &[
     Command {
         contexts: &[Context::Editor],
         defaults: &["F7"],
+        during_play: true,
         ..Command::new(
             ids::TEST_PAUSE,
             "Pause or resume",
@@ -277,11 +283,13 @@ pub const STUDIO_COMMANDS: &[Command] = &[
     Command {
         contexts: &[Context::Editor],
         defaults: &["F6"],
+        during_play: true,
         ..Command::new(ids::TEST_STEP, "Step", "Test", "Runs one frame of the paused game.")
     },
     Command {
         contexts: &[Context::Editor],
         defaults: &["Shift+F5"],
+        during_play: true,
         ..Command::new(
             ids::TEST_STOP,
             "Stop",
