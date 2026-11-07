@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use egui::emath::GuiRounding;
-use egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2};
+use egui::{Align2, FontId, Sense, Ui};
 
 use super::ids;
 use crate::dock::{Panel, PanelContext, Zone};
@@ -56,14 +56,9 @@ impl Panel for Viewport {
         viewport.pixels = Some((size.x.max(1.0) as u32, size.y.max(1.0) as u32));
         viewport.shown = true;
         match viewport.texture {
-            // During a resize this is the old size's texture, stretched: never a black frame.
+            // During a resize this is the old size's frame, drawn at its own size (#311): never stretched, never black.
             Some(texture) => {
-                ui.painter().image(
-                    texture,
-                    rect,
-                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                    Color32::WHITE,
-                );
+                super::draw_render(ui, texture, viewport.texture_pixels, rect, p.bg);
             }
             None => {
                 ui.painter().rect_filled(rect, 0.0, p.bg);

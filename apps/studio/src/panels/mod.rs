@@ -104,6 +104,35 @@ pub(crate) fn search_box(ui: &mut Ui, query: &mut String, hint: &str) -> bool {
     .inner
 }
 
+/// Draws a rendered frame (the Viewport's or the Game tab's) `texture`, `texture_pixels` in size, into `rect` (#311).
+/// At the panel's size it fills `rect`. While a resize is under way the renderer is still making the new size's
+/// target, so the last frame is drawn at its own size, centred, on `ground`: never stretched, so resizing feels steady.
+pub(crate) fn draw_render(
+    ui: &Ui,
+    texture: egui::TextureId,
+    texture_pixels: Option<(u32, u32)>,
+    rect: egui::Rect,
+    ground: egui::Color32,
+) -> egui::Rect {
+    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    let ppp = ui.ctx().pixels_per_point();
+    let wanted = (rect.size() * ppp).round();
+    let at = match texture_pixels {
+        Some((width, height)) if (width as f32, height as f32) != (wanted.x, wanted.y) => {
+            ui.painter().rect_filled(rect, 0.0, ground);
+            let size = vec2(width as f32, height as f32) / ppp;
+            // On whole pixels, so the old frame is drawn one texel to a pixel.
+            let min = ((rect.center().to_vec2() - size / 2.0) * ppp).round() / ppp;
+            egui::Rect::from_min_size(min.to_pos2(), size)
+        }
+        _ => rect,
+    };
+    ui.painter()
+        .with_clip_rect(rect)
+        .image(texture, at, uv, egui::Color32::WHITE);
+    at
+}
+
 /// Where a list row's background goes (#301): the row `rect` stretched past the panel's inset to its sides, and a
 /// painter clipped to that width, so stripes and the selected fill leave no gap at the edges.
 pub(crate) fn row_band(ui: &Ui, rect: egui::Rect) -> (egui::Painter, egui::Rect) {

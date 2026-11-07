@@ -10,7 +10,7 @@ use metallic_engine::{FrameStats, SceneRenderer};
 
 use super::Studio;
 
-/// How the viewport's texture is sampled: smoothly, which matters only while a resize stretches the old one.
+/// How the viewport's texture is sampled. It is drawn one texel to a pixel, also mid-resize (#311), so this rarely shows.
 const FILTER: wgpu::FilterMode = wgpu::FilterMode::Linear;
 
 /// The engine's renderer for the viewport, and the texture egui-wgpu shows it with. One for Studio's lifetime: a
@@ -102,6 +102,7 @@ impl ViewportRenderer {
                 viewport.texture = Some(id);
             }
         }
+        viewport.texture_pixels = Some(target.size());
         let resizing = wanted.is_some_and(|size| size != target.size());
         let loading = self.scene.assets().is_some_and(|assets| assets.pending() > 0);
         let compiling = self
