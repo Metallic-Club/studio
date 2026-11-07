@@ -1,10 +1,9 @@
 //! The Settings window (ADR 0009, Settings): a category list on the left, a search box over every setting, and each
 //! setting as a row with its name, a line saying what it does, and its control.
 //!
-//! A floating window on the screens before the editor; in the editor the same pages are a dockable panel
-//! (`panels::settings`, #216). Every setting is one
-//! [`Entry`] in [`ENTRIES`], so the pages and the search read the same list, and adding a setting is one line there
-//! plus its control.
+//! A floating window over every screen, the editor's included (#238): moved, resized and closed like any window,
+//! and never docked. Every setting is one [`Entry`] in [`ENTRIES`], so the pages and the search read the same list,
+//! and adding a setting is one line there plus its control.
 
 use std::ops::RangeInclusive;
 
@@ -361,6 +360,10 @@ pub struct SettingsWindow {
     category: Category,
     query: String,
     keybinds: KeybindsPage,
+    /// Where the window was last drawn, while open.
+    rect: Option<egui::Rect>,
+    /// Whether the last click went into the window (and not to what is under it).
+    focused: bool,
 }
 
 impl SettingsWindow {
@@ -369,9 +372,23 @@ impl SettingsWindow {
         self.open
     }
 
-    /// Opens or closes it.
+    /// Opens or closes it. Opened, it has the focus, as a click in it gives.
     pub fn set_open(&mut self, open: bool) {
         self.open = open;
+        self.focused = open;
+        if !open {
+            self.rect = None;
+        }
+    }
+
+    /// Whether it is open and the user's last click was in it: what is under it then gets no shortcuts.
+    pub fn has_focus(&self) -> bool {
+        self.open && self.focused
+    }
+
+    /// Whether it is open under `at`, as last drawn.
+    pub fn contains(&self, at: egui::Pos2) -> bool {
+        self.open && self.rect.is_some_and(|rect| rect.contains(at))
     }
 
     /// The page shown when the search is empty.
@@ -417,7 +434,7 @@ impl SettingsWindow {
             return;
         }
         let mut open = true;
-        egui::Window::new("Settings")
+        let shown = egui::Window::new("Settings")
             .id(Id::unique("metallic.settings"))
             // Opens centred on the window; where it is moved to is egui's to remember.
             .pivot(egui::Align2::CENTER_CENTER)
@@ -429,7 +446,20 @@ impl SettingsWindow {
             .min_width(680.0)
             .min_height(360.0)
             .show(ctx, |ui| self.contents(ui, settings, keymap));
-        self.open &= open;
+        self.rect = shown.map(|shown| shown.response.rect);
+        let press = ctx.input(|input| {
+            input
+                .pointer
+                .any_pressed()
+                .then(|| input.pointer.interact_pos())
+                .flatten()
+        });
+        if let Some(at) = press {
+            self.focused = self.rect.is_some_and(|rect| rect.contains(at));
+        }
+        if !open {
+            self.set_open(false);
+        }
     }
 
     /// The pages, filling `ui`: the search box, the category list and the page or the search's results.

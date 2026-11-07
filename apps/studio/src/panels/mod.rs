@@ -7,7 +7,6 @@ pub mod assets;
 pub mod explorer;
 pub mod output;
 pub mod properties;
-pub mod settings;
 pub mod viewport;
 
 use egui::{Align, Label, Layout, RichText, TextEdit, Ui, vec2};
@@ -24,7 +23,6 @@ pub static PANELS: &[&dyn Panel] = &[
     &assets::Assets,
     &properties::Properties,
     &output::Output,
-    &settings::SettingsPanel,
 ];
 
 /// The panels' ids.
@@ -39,8 +37,6 @@ pub mod ids {
     pub const PROPERTIES: &str = "properties";
     /// The Output panel.
     pub const OUTPUT: &str = "output";
-    /// Settings, docked.
-    pub const SETTINGS: &str = "settings";
 }
 
 /// Phosphor icons the panels use beyond the theme's own, by their code points in `Phosphor.ttf`.
@@ -195,14 +191,7 @@ mod tests {
         for panel in PANELS {
             assert!(seen.insert(panel.id()), "{} twice", panel.id());
         }
-        for id in [
-            ids::VIEWPORT,
-            ids::EXPLORER,
-            ids::ASSETS,
-            ids::PROPERTIES,
-            ids::OUTPUT,
-            ids::SETTINGS,
-        ] {
+        for id in [ids::VIEWPORT, ids::EXPLORER, ids::ASSETS, ids::PROPERTIES, ids::OUTPUT] {
             assert!(seen.contains(id), "{id}");
         }
     }

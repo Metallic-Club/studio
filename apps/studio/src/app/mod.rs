@@ -243,8 +243,6 @@ impl Studio {
             Ok(opening) => {
                 self.editor = Some(EditorScreen::Opening(opening));
                 self.open_project = Some(path);
-                // Settings is a docked panel in the editor, not the window.
-                self.settings_window.set_open(false);
                 self.screen = Screen::Editor;
             }
             Err(error) => {
@@ -335,13 +333,9 @@ impl Studio {
         &mut self.settings_window
     }
 
-    /// Whether Settings shows: the window before the editor, the docked panel in it.
+    /// Whether the Settings window shows.
     pub fn is_settings_open(&self) -> bool {
-        if self.editor().is_some() {
-            self.dock.is_open(panels::ids::SETTINGS)
-        } else {
-            self.settings_window.is_open()
-        }
+        self.settings_window.is_open()
     }
 
     /// What Studio is telling the user (about the settings file, or the keymap), until it is dismissed.
@@ -415,7 +409,8 @@ impl Studio {
         let bar = Rect::from_min_size(full.min, vec2(full.width(), editor::BAR_HEIGHT));
         let action = ui
             .scope_builder(UiBuilder::new().max_rect(bar), |ui| {
-                editor::top_bar(ui, Some(&mark), editor, &self.dock, &self.keymap)
+                let settings_open = self.settings_window.is_open();
+                editor::top_bar(ui, Some(&mark), editor, &self.dock, &self.keymap, settings_open)
             })
             .inner;
         let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
@@ -424,8 +419,6 @@ impl Studio {
         let mut cx = PanelContext {
             editor,
             settings: self.settings.settings_mut(),
-            keymap: &mut self.keymap,
-            settings_page: &mut self.settings_window,
         };
         ui.scope_builder(UiBuilder::new().max_rect(body.shrink(space::S1)), |ui| {
             self.dock.ui(ui, &mut cx);
@@ -540,14 +533,10 @@ impl Studio {
         }
     }
 
-    /// Opens or closes Settings: the docked panel in the editor, the window before it.
+    /// Opens or closes the Settings window, on any screen.
     fn toggle_settings(&mut self) {
-        if self.editor().is_some() {
-            self.dock.toggle(panels::ids::SETTINGS);
-        } else {
-            let open = self.settings_window.is_open();
-            self.settings_window.set_open(!open);
-        }
+        let open = self.settings_window.is_open();
+        self.settings_window.set_open(!open);
     }
 
     /// Runs the frame's input through the keymap and does what the commands ask. Every Studio shortcut is here; no
@@ -557,11 +546,20 @@ impl Studio {
             // The capture dialog is recording a key: it must not also run a command.
             return;
         }
-        // In the editor, the focused panel's context, and the one under the pointer for navigation. The projects
-        // page has the focus unless a dialog or the Settings window is over it.
+        // In the editor, the focused panel's context, and the one under the pointer for navigation, unless the
+        // Settings window has the focus or the pointer. The projects page has the focus unless a dialog or the
+        // Settings window is over it.
         let editing = self.editor().is_some();
+        let over_settings = ctx
+            .input(|input| input.pointer.latest_pos())
+            .is_some_and(|at| self.settings_window.contains(at));
         let (context, hovered) = match self.screen {
-            Screen::Editor if editing => (self.dock.context(), self.dock.hovered_context()),
+            // The editor's own commands (save, close, layout) still run; the panels' do not.
+            Screen::Editor if editing && self.settings_window.has_focus() => (Context::Editor, None),
+            Screen::Editor if editing => (
+                self.dock.context(),
+                self.dock.hovered_context().filter(|_| !over_settings),
+            ),
             Screen::Projects if !self.projects.is_creating() && !self.settings_window.is_open() => {
                 (Context::Projects, None)
             }
@@ -602,13 +600,10 @@ impl Studio {
         }
     }
 
-    /// The Settings window (before the editor) and the capture dialog, the notices, and saving what changed since
-    /// `before`.
+    /// The Settings window and its capture dialog, the notices, and saving what changed since `before`.
     fn settings_ui(&mut self, ctx: &egui::Context, before: &StudioSettings) {
-        if self.screen != Screen::Editor {
-            self.settings_window
-                .show(ctx, self.settings.settings_mut(), &mut self.keymap);
-        }
+        self.settings_window
+            .show(ctx, self.settings.settings_mut(), &mut self.keymap);
         self.settings_window.dialog(ctx, &mut self.keymap);
         if self.keymap.take_changed() {
             self.settings.settings_mut().keybinds.overrides = self.keymap.overrides().clone();
@@ -1058,12 +1053,12 @@ mod tests {
         harness.get_by_label("VIEWPORT NAVIGATION");
     }
 
-    /// Studio past the splash, a project open in the editor, with the Settings panel on the Keybinds page.
+    /// Studio past the splash, a project open in the editor, with the Settings window on the Keybinds page.
     fn on_the_keybinds_page(path: PathBuf) -> Harness<'static, Test> {
         let mut harness = editing(path, "Keybinds");
         let studio = &mut harness.state_mut().studio;
         studio.settings_window().show_category(Category::Keybinds);
-        studio.dock_mut().open(panels::ids::SETTINGS);
+        studio.settings_window().set_open(true);
         settle(&mut harness);
         harness
     }
@@ -1801,24 +1796,13 @@ mod tests {
         click_label(&mut harness, "Close Properties");
         assert!(!harness.state().studio.dock().is_open(panels::ids::PROPERTIES));
 
-        // The gear opens Settings as a panel, as a tab beside the viewport.
-        harness.get_by_role_and_label(Role::Button, "Settings").click();
-        settle(&mut harness);
-        assert!(harness.state().studio.is_settings_open());
-        harness.get_by_role_and_label(Role::Tab, "Settings");
-        harness.get_by_role_and_label(Role::Tab, "General");
         drop(harness);
 
         // Started again, Studio has the same layout.
         let mut harness = editing(path, "Layout Game");
         assert_eq!(
             harness.state().studio.dock().open_panels(),
-            [
-                panels::ids::VIEWPORT,
-                panels::ids::EXPLORER,
-                panels::ids::ASSETS,
-                panels::ids::SETTINGS
-            ]
+            [panels::ids::VIEWPORT, panels::ids::EXPLORER, panels::ids::ASSETS]
         );
         // The View menu's check marks say the same.
         click_label(&mut harness, "View");
@@ -1837,10 +1821,91 @@ mod tests {
         settle(&mut harness);
         assert_eq!(harness.state().studio.dock().open_panels(), DEFAULT_PANELS);
         let text = std::fs::read_to_string(&layout).unwrap();
+        assert!(text.contains("\"properties\""), "{text}");
+    }
+
+    // Settings as a floating window in the editor (#238).
+
+    #[test]
+    fn in_the_editor_settings_is_a_floating_window_that_applies_and_saves() {
+        let path = settings_file("editor-settings-window", None);
+        let mut harness = editing(path.clone(), "Settings Game");
+        // Room around the window, so the editor can be clicked beside it.
+        harness.set_size(egui::vec2(1600.0, 1000.0));
+        settle(&mut harness);
+        let panels_before = harness.state().studio.dock().open_panels();
+        // The gear opens the window over the editor; the dock does not change.
+        harness.get_by_role_and_label(Role::Button, "Settings").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_settings_open());
+        harness.get_by_role_and_label(Role::Tab, "General");
+        assert_eq!(harness.state().studio.dock().open_panels(), panels_before);
         assert!(
-            text.contains("\"properties\"") && !text.contains("\"settings\""),
-            "{text}"
+            harness.query_by_role_and_label(Role::Tab, "Settings").is_none(),
+            "not a tab"
         );
+        // The editor is still there under it.
+        harness.get_by_role_and_label(Role::Tab, "Explorer");
+
+        // A setting changed in it applies at once and is saved.
+        harness.get_by_role_and_label(Role::Tab, "Appearance").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Light").click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.settings().appearance.mode,
+            crate::theme::ThemeMode::Light
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("mode = \"light\""), "{text}");
+
+        // While it has the focus, the panels' shortcuts do not reach the viewport under it.
+        let viewport = area_of(&harness.state().studio, panels::ids::VIEWPORT);
+        harness
+            .state_mut()
+            .studio
+            .dock_mut()
+            .set_focused(Some(panels::ids::VIEWPORT));
+        let window_has_focus = harness.state_mut().studio.settings_window().has_focus();
+        assert!(window_has_focus, "the last click was in it");
+        let before = camera(&harness);
+        hold(&mut harness, Key::W);
+        assert_eq!(
+            camera(&harness),
+            before,
+            "W in the Settings window does not fly the camera"
+        );
+        // A click in the viewport gives it the focus back.
+        let beside = viewport.left_bottom() + egui::vec2(20.0, -20.0);
+        let window = harness.state_mut().studio.settings_window().contains(beside);
+        assert!(!window, "{beside:?} is clear of the window");
+        harness.event(egui::Event::PointerMoved(beside));
+        harness.event(egui::Event::PointerButton {
+            pos: beside,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        harness.step();
+        harness.event(egui::Event::PointerButton {
+            pos: beside,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        settle(&mut harness);
+        assert!(!harness.state_mut().studio.settings_window().has_focus());
+        hold(&mut harness, Key::W);
+        assert_ne!(camera(&harness), before, "W in the viewport flies the camera again");
+
+        // Primary+, closes it, and opens it again.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_settings_open());
+        assert!(harness.query_by_role_and_label(Role::Tab, "General").is_none());
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        settle(&mut harness);
+        assert!(harness.state().studio.is_settings_open());
     }
 
     #[test]
@@ -2467,6 +2532,33 @@ mod tests {
         }
         assert!(studio.dock().is_dragging(&offscreen.ctx), "still dragging");
         write_png(&out.join("237-dock-guides.png"), offscreen.read());
+    }
+
+    /// The screenshot of #238 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_settings_window`): the
+    /// editor with the Settings window floating over it, on the Appearance page.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_the_settings_window() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-settings-window", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.open(project.clone());
+                for _ in 0..10_000 {
+                    if studio.poll_opening().is_none() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                studio.settings_window().show_category(Category::Appearance);
+                studio.settings_window().set_open(true);
+            }
+        });
+        assert_eq!(studio.screen(), Screen::Editor);
+        assert!(studio.is_settings_open());
+        write_png(&out.join("238-settings-window.png"), shot);
     }
 
     // The viewport (#217).
