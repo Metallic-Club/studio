@@ -177,6 +177,9 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   imported** as a file. Unknown ids are kept, not dropped, so a newer Studio's bindings survive a downgrade.
 - **The Keybinds settings page:** search by name, key or description; group by category; click to capture; right-click
   to add or remove a binding; reset one, or reset all.
+  - **Sections** (#264): commands are grouped in collapsible sections from their category path (`Viewport/Fly camera`
+    is Fly camera inside Viewport), so sections nest. A top-level section is a bordered card; one inside it is
+    indented along a line. A section with a changed command shows Reset, which resets everything in it.
 
 ### Viewport: the engine renders, the UI shows it
 
