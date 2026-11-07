@@ -494,8 +494,15 @@ const TAB_HEIGHT: f32 = 32.0;
 const TAB_GAP: f32 = 6.0;
 /// The close button's size.
 const CLOSE_SIZE: f32 = 18.0;
-/// The active tab's accent underline (#255: 1 px, thinner than the 3 px bars that mark selected list items).
-pub(crate) const TAB_LINE: f32 = 1.0;
+/// The active tab's fill (#288): the raised surface, clearly apart from the tab bar.
+pub(crate) fn active_tab_fill(p: &crate::theme::tokens::Palette) -> Color32 {
+    p.surface_hover
+}
+
+/// A hovered tab's fill: halfway between the bar and the active tab's.
+fn hovered_tab_fill(p: &crate::theme::tokens::Palette) -> Color32 {
+    p.header.lerp_to_gamma(p.surface_hover, 0.5)
+}
 
 /// Every group of tabs in `tree`: what the panel borders outline.
 fn tab_groups(tree: &Tree<PanelId>) -> Vec<TileId> {
@@ -548,13 +555,12 @@ fn tab_button(ui: &mut Ui, id: Id, title: &str, state: &TabState) -> (Response, 
     close.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), format!("Close {title}")));
     if ui.is_rect_visible(rect) && !state.is_being_dragged {
         let hovered = response.hovered() || close.hovered();
+        // The active tab stands out by its fill alone (#288: no accent line): the raised surface, clearly apart from the
+        // bar; a hovered one halfway there.
         if state.active {
-            ui.painter().rect_filled(rect, CornerRadius::ZERO, p.panel);
-            // The active tab's accent underline, where it meets its panel.
-            let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - TAB_LINE), rect.right_bottom());
-            ui.painter().rect_filled(line, CornerRadius::ZERO, colors.accent);
+            ui.painter().rect_filled(rect, CornerRadius::ZERO, active_tab_fill(&p));
         } else if hovered {
-            ui.painter().rect_filled(rect, CornerRadius::ZERO, p.surface);
+            ui.painter().rect_filled(rect, CornerRadius::ZERO, hovered_tab_fill(&p));
         }
         let ink = if state.active || hovered { p.text } else { p.muted };
         let at = pos2(rect.left() + space::S5, rect.center().y - galley.size().y / 2.0);
@@ -562,7 +568,7 @@ fn tab_button(ui: &mut Ui, id: Id, title: &str, state: &TabState) -> (Response, 
         if state.active || hovered {
             if close.hovered() {
                 ui.painter()
-                    .rect_filled(close_rect, CornerRadius::same(radius::ITEM / 2), p.surface_hover);
+                    .rect_filled(close_rect, CornerRadius::same(radius::ITEM / 2), p.border);
             }
             icons::paint_at(
                 ui.painter(),

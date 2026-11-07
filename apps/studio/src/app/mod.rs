@@ -2690,36 +2690,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // Dock tabs: titles only, a 1 px accent line (#255).
+    // Dock tabs: titles only (#255), the active one by its fill (#288).
 
     #[test]
-    fn dock_tabs_show_their_title_alone_over_a_one_pixel_accent_line() {
+    fn dock_tabs_show_their_title_alone_and_the_active_one_by_its_fill() {
         let mut harness = editing(settings_file("editor-tab-style", None), "Tabs Style Game");
         harness.set_size(egui::vec2(1280.0, 800.0));
         settle(&mut harness);
-        let accent = current_colors(&harness.ctx).accent;
+        let colors = current_colors(&harness.ctx);
+        let active = crate::dock::active_tab_fill(&colors.palette);
+        assert_ne!(active, colors.palette.header, "apart from the tab bar");
         let output = harness.output();
+        // Fills of rects exactly covering `tab`.
+        let fills = |tab: egui::Rect| -> Vec<egui::Color32> {
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect) if rect.rect == tab => Some(rect.fill),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Output is in front of Assets: it has the active fill, Assets none (#288).
+        let output_tab = harness.get_by_role_and_label(Role::Tab, "Output").rect();
+        let assets_tab = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
+        assert_eq!(fills(output_tab), [active]);
+        assert!(fills(assets_tab).is_empty(), "an inactive tab is the bar's colour");
         for (title, icon) in [
             ("Explorer", crate::theme::icons::Icon::PanelExplorer.glyph()),
             ("Viewport", crate::theme::icons::Icon::PanelViewport.glyph()),
         ] {
             let tab = harness.get_by_role_and_label(Role::Tab, title).rect();
-            // The underline: an accent rect along the tab's bottom, 1 px high.
-            let lines: Vec<egui::Rect> = output
-                .shapes
-                .iter()
-                .filter_map(|clipped| match &clipped.shape {
-                    egui::Shape::Rect(rect)
-                        if rect.fill == accent && (rect.rect.bottom() - tab.bottom()).abs() < 0.5 =>
-                    {
-                        Some(rect.rect)
-                    }
-                    _ => None,
-                })
-                .filter(|line| line.left() >= tab.left() - 0.5 && line.right() <= tab.right() + 0.5)
-                .collect();
-            assert_eq!(lines.len(), 1, "{title}: {lines:?}");
-            assert!((lines[0].height() - 1.0).abs() < 0.01, "{title}: {:?}", lines[0]);
+            // No accent underline any more.
+            let underline = output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) => {
+                    rect.fill == colors.accent && tab.contains_rect(rect.rect) && rect.rect.height() < 4.0
+                }
+                _ => false,
+            });
+            assert!(!underline, "{title} has an accent line");
             // No icon in the tab.
             let has_icon = output.shapes.iter().any(|clipped| match &clipped.shape {
                 egui::Shape::Text(text) => text.galley.text().contains(icon) && tab.contains(text.pos),
