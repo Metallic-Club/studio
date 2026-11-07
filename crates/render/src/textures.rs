@@ -49,6 +49,8 @@ pub(crate) struct TextureSpec {
     pub(crate) samples: u32,
     pub(crate) format: wgpu::TextureFormat,
     pub(crate) usage: wgpu::TextureUsages,
+    /// A second format its views may take (the same texels read another way), if any.
+    pub(crate) view_format: Option<wgpu::TextureFormat>,
 }
 
 impl TextureSpec {
@@ -69,12 +71,21 @@ impl TextureSpec {
             samples: 1,
             format,
             usage,
+            view_format: None,
         }
     }
 
     /// The same with `samples` per texel.
     pub(crate) fn multisampled(self, samples: u32) -> Self {
         Self { samples, ..self }
+    }
+
+    /// The same, its views also allowed to read it as `format`.
+    pub(crate) fn viewed_as(self, format: wgpu::TextureFormat) -> Self {
+        Self {
+            view_format: Some(format),
+            ..self
+        }
     }
 
     /// Its memory, about (the texels' bytes; drivers add a little for alignment and compression).
@@ -102,7 +113,7 @@ impl TextureSpec {
                 dimension: wgpu::TextureDimension::D2,
                 format: self.format,
                 usage: self.usage,
-                view_formats: &[],
+                view_formats: self.view_format.as_slice(),
             })
         })
     }

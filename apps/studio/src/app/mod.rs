@@ -2,14 +2,18 @@
 //! on Studio's own winit loop with the engine's render device ([`run`]).
 //!
 //! [`Studio`] knows nothing of winit or wgpu: it draws into an `egui::Ui` and asks the shell for window changes
-//! through [`WindowRequest`]s, so the UI tests drive it without a window or a GPU.
+//! through [`WindowRequest`]s, so the UI tests drive it without a window or a GPU. The engine's side of the viewport
+//! is the shell's too ([`viewport`]): it draws the game into the texture the Viewport panel shows.
 
 mod editor;
 mod native;
+#[cfg(test)]
+mod offscreen;
 mod shell;
 pub mod sign_in;
 pub mod splash;
 pub mod startup;
+pub mod viewport;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -268,6 +272,12 @@ impl Studio {
         self.loaded.as_ref()
     }
 
+    /// The renderer the splash made for the viewport, for the viewport to adopt; `None` once taken, or if there was
+    /// none.
+    pub fn take_viewport_renderer(&mut self) -> Option<metallic_engine::metallic_render::Renderer> {
+        self.loaded.as_mut()?.viewport_renderer.take()
+    }
+
     /// The window changes asked for since the last call.
     pub fn take_requests(&mut self) -> Vec<WindowRequest> {
         std::mem::take(&mut self.requests)
@@ -516,7 +526,17 @@ impl Studio {
             hovered,
             typing: ctx.egui_wants_keyboard_input(),
         };
-        for activation in self.keymap.dispatch(ctx, focus) {
+        let activations = self.keymap.dispatch(ctx, focus);
+        if let Some(EditorScreen::Open(editor)) = &mut self.editor {
+            let (pointer, dt) = ctx.input(|input| (input.pointer.delta(), input.stable_dt));
+            let pivot = editor
+                .selection
+                .and_then(|id| crate::viewport::position_of(&editor.dm, id));
+            if editor.viewport.navigate(&self.keymap, &activations, pointer, dt, pivot) {
+                ctx.request_repaint();
+            }
+        }
+        for activation in activations {
             if activation.kind != ActivationKind::Press {
                 continue;
             }
@@ -530,7 +550,7 @@ impl Studio {
                         self.open(path);
                     }
                 }
-                // The viewport's navigation, for #217.
+                // The viewport's navigation is the editor camera's, above.
                 _ => {}
             }
         }
@@ -675,6 +695,7 @@ mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
+    use super::offscreen::{self, Offscreen, read_texture};
     use super::startup::{Step, projects_step, settings_step, wait};
     use super::*;
     use crate::projects::dialog::ScriptedDialog;
@@ -1780,136 +1801,21 @@ mod tests {
     }
 
     /// Runs `studio` for `frames` frames of `size` points at `pixels_per_point`, drawn by egui-wgpu on the engine's
-    /// offscreen device as the shell draws them, calling `before(studio, frame)` before each. Returns the last frame
-    /// as RGBA rows.
+    /// offscreen device as the shell draws them (the viewport too), calling `before(studio, frame)` before each.
+    /// Returns the last frame as RGBA rows.
     fn render_offscreen(
         studio: &mut Studio,
         size: egui::Vec2,
         pixels_per_point: f32,
         frames: usize,
         mut before: impl FnMut(&mut Studio, usize),
-    ) -> (u32, u32, Vec<u8>) {
-        use metallic_engine::metallic_render::{ContextOptions, RenderContext, wgpu};
-
-        let context = RenderContext::new_offscreen(&ContextOptions::default()).expect("an offscreen device");
-        let (device, queue) = (context.device(), context.queue());
-        let ctx = egui::Context::default();
-        fonts::install(&ctx);
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let mut painter = egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default());
-        let (width, height) = (
-            (size.x * pixels_per_point).round() as u32,
-            (size.y * pixels_per_point).round() as u32,
-        );
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("studio screenshot"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let start = Instant::now();
+    ) -> offscreen::Pixels {
+        let mut offscreen = Offscreen::new(size, pixels_per_point).expect("an offscreen device");
         for frame in 0..frames {
             before(studio, frame);
-            let mut input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                time: Some(frame as f64 / 60.0),
-                ..Default::default()
-            };
-            input
-                .viewports
-                .entry(egui::ViewportId::ROOT)
-                .or_default()
-                .native_pixels_per_point = Some(pixels_per_point);
-            // The splash shows in the first frame, and its minimum time is out by the second.
-            let now = match frame {
-                0 => start,
-                _ => start + splash::MIN_TIME + Duration::from_millis(16 * frame as u64),
-            };
-            let mut output = ctx.run_ui(input, |ui| studio.ui(ui, now));
-            let mut textures = std::mem::take(&mut output.textures_delta);
-            for (id, deltas) in textures.set.drain() {
-                for delta in &deltas {
-                    painter.update_texture(device, queue, id, delta);
-                }
-            }
-            let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
-            let screen = egui_wgpu::ScreenDescriptor {
-                size_in_pixels: [width, height],
-                pixels_per_point: output.pixels_per_point,
-            };
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            let mut buffers = painter.update_buffers(device, queue, &mut encoder, &jobs, &screen);
-            let clear = egui::Rgba::from(studio.clear_color());
-            {
-                let mut pass = encoder
-                    .begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("studio screenshot"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: f64::from(clear.r()),
-                                    g: f64::from(clear.g()),
-                                    b: f64::from(clear.b()),
-                                    a: f64::from(clear.a()),
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        ..Default::default()
-                    })
-                    .forget_lifetime();
-                painter.render(&mut pass, &jobs, &screen);
-            }
-            buffers.push(encoder.finish());
-            context.submit(buffers);
-            for id in textures.free.drain() {
-                painter.free_texture(&id);
-            }
+            offscreen.frame(studio);
         }
-
-        let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("studio screenshot readback"),
-            size: u64::from(padded * height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(height),
-                },
-            },
-            target.size(),
-        );
-        context.submit(Some(encoder.finish()));
-        buffer.map_async(wgpu::MapMode::Read, .., |result| result.expect("map the readback"));
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("wait for the readback");
-        let data = buffer.get_mapped_range(..).expect("mapped");
-        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-        for row in data.chunks_exact(padded as usize) {
-            pixels.extend_from_slice(&row[..(width * 4) as usize]);
-        }
-        (width, height, pixels)
+        offscreen.read()
     }
 
     /// Writes RGBA rows to `path` as a PNG.
@@ -2055,5 +1961,378 @@ mod tests {
         });
         assert_eq!(studio.screen(), Screen::Editor);
         write_png(&out.join("216-editor.png"), shot);
+    }
+
+    // The viewport (#217).
+
+    /// A key press or release of `key`, as its physical key (the fly commands are bound to physical keys).
+    fn physical(key: Key, pressed: bool) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    /// The pointer moved to `at`, then `button` pressed or released there with `modifiers`, a frame each.
+    fn pointer(
+        harness: &mut Harness<'_, Test>,
+        at: egui::Pos2,
+        button: egui::PointerButton,
+        pressed: bool,
+        modifiers: Modifiers,
+    ) {
+        harness.event(egui::Event::PointerMoved(at));
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers,
+        });
+        harness.step();
+    }
+
+    /// `key` held for a few frames, then released.
+    fn hold(harness: &mut Harness<'_, Test>, key: Key) {
+        harness.event(physical(key, true));
+        harness.step();
+        for _ in 0..3 {
+            harness.step();
+        }
+        harness.event(physical(key, false));
+        harness.step();
+    }
+
+    /// A right-drag (look) from `from` by `by`.
+    fn right_drag(harness: &mut Harness<'_, Test>, from: egui::Pos2, by: egui::Vec2) {
+        let button = egui::PointerButton::Secondary;
+        harness.event(egui::Event::PointerMoved(from));
+        harness.step();
+        pointer(harness, from, button, true, Modifiers::NONE);
+        harness.event(egui::Event::PointerMoved(from + by));
+        harness.step();
+        pointer(harness, from + by, button, false, Modifiers::NONE);
+    }
+
+    /// One wheel line at `at`, with `modifiers`.
+    fn wheel(harness: &mut Harness<'_, Test>, at: egui::Pos2, modifiers: Modifiers) {
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        harness.step();
+    }
+
+    fn camera(harness: &Harness<'_, Test>) -> crate::viewport::EditorCamera {
+        harness.state().studio.editor().unwrap().viewport.camera
+    }
+
+    #[test]
+    fn the_editor_camera_moves_by_the_keymap_only_with_focus_or_hover() {
+        let mut harness = editing(settings_file("viewport-input", None), "Fly Game");
+        let rect = harness
+            .state()
+            .studio
+            .editor()
+            .unwrap()
+            .viewport
+            .rect
+            .expect("the viewport was drawn");
+        let inside = rect.center();
+        let explorer = harness
+            .get_by_role_and_label(Role::TreeItem, "Workspace")
+            .rect()
+            .center();
+        assert!(!rect.contains(explorer));
+        let start = camera(&harness);
+        // It starts where the template's camera is, looking down at the baseplate.
+        assert_eq!(
+            start.position,
+            metallic_engine::metallic_core::glam::Vec3::new(0.0, 20.0, 40.0)
+        );
+        assert!(start.forward().y < 0.0);
+
+        // Keys need the viewport's focus: nothing has it, then it is only hovered.
+        hold(&mut harness, Key::W);
+        assert_eq!(camera(&harness), start, "no focus");
+        harness.event(egui::Event::PointerMoved(inside));
+        harness.step();
+        hold(&mut harness, Key::W);
+        assert_eq!(camera(&harness), start, "hovered is not focused");
+
+        // A click gives it focus: W flies forward, E up.
+        pointer(
+            &mut harness,
+            inside,
+            egui::PointerButton::Primary,
+            true,
+            Modifiers::NONE,
+        );
+        pointer(
+            &mut harness,
+            inside,
+            egui::PointerButton::Primary,
+            false,
+            Modifiers::NONE,
+        );
+        assert_eq!(
+            harness.state().studio.dock().focus().focused,
+            Some(panels::ids::VIEWPORT)
+        );
+        hold(&mut harness, Key::W);
+        let flown = camera(&harness);
+        assert!(
+            (flown.position - start.position).dot(start.forward()) > 0.1,
+            "{flown:?}"
+        );
+        hold(&mut harness, Key::E);
+        assert!(camera(&harness).position.y > flown.position.y);
+
+        // Another panel takes the focus, and the keys with it.
+        pointer(
+            &mut harness,
+            explorer,
+            egui::PointerButton::Primary,
+            true,
+            Modifiers::NONE,
+        );
+        pointer(
+            &mut harness,
+            explorer,
+            egui::PointerButton::Primary,
+            false,
+            Modifiers::NONE,
+        );
+        assert_eq!(
+            harness.state().studio.dock().focus().focused,
+            Some(panels::ids::EXPLORER)
+        );
+        let before = camera(&harness);
+        hold(&mut harness, Key::W);
+        assert_eq!(camera(&harness), before, "the Explorer has focus");
+
+        // The mouse starts over the viewport without focus: right-drag looks, the wheel zooms, Shift+wheel sets the
+        // speed, Alt+left-drag orbits.
+        right_drag(&mut harness, explorer, egui::vec2(40.0, 0.0));
+        assert_eq!(camera(&harness), before, "a drag over the Explorer");
+        right_drag(&mut harness, inside, egui::vec2(40.0, 0.0));
+        let turned = camera(&harness);
+        assert!(turned.yaw() < before.yaw(), "turned right");
+        assert_eq!(turned.position, before.position, "looking does not move it");
+
+        wheel(&mut harness, explorer, Modifiers::NONE);
+        assert_eq!(camera(&harness), turned, "the wheel over the Explorer");
+        wheel(&mut harness, inside, Modifiers::NONE);
+        let zoomed = camera(&harness);
+        assert!(
+            (zoomed.position - turned.position).dot(turned.forward()) > 0.0,
+            "zoomed in"
+        );
+        wheel(&mut harness, inside, Modifiers::SHIFT);
+        assert!(camera(&harness).speed() > zoomed.speed());
+
+        let orbiting = camera(&harness);
+        let pivot = orbiting.position + orbiting.forward() * orbiting.focus();
+        pointer(&mut harness, inside, egui::PointerButton::Primary, true, Modifiers::ALT);
+        harness.event(egui::Event::PointerMoved(inside + egui::vec2(60.0, 0.0)));
+        harness.step();
+        pointer(
+            &mut harness,
+            inside + egui::vec2(60.0, 0.0),
+            egui::PointerButton::Primary,
+            false,
+            Modifiers::ALT,
+        );
+        let orbited = camera(&harness);
+        assert!(orbited.position.distance(orbiting.position) > 0.1, "it moved around");
+        assert!((orbited.position.distance(pivot) - orbiting.focus()).abs() < 1e-2);
+
+        // The game's own camera never moved.
+        let editor = harness.state().studio.editor().unwrap();
+        let workspace = editor
+            .dm
+            .service(editor.dm.registry().class_id("Workspace").unwrap())
+            .unwrap();
+        let game = metallic_engine::metallic_render::CameraReader::new()
+            .read(&editor.dm, workspace)
+            .unwrap();
+        assert_eq!(game.position, start.position);
+    }
+
+    /// Studio drawn offscreen with the template project open, its viewport drawn at the panel's size. `None` without
+    /// an adapter.
+    fn viewport_shown(test: &str, size: egui::Vec2) -> Option<(Studio, Offscreen)> {
+        let mut offscreen = Offscreen::new(size, 1.0)?;
+        let settings = "[general]\nskip_sign_in = true\n[rendering]\npreset = \"medium\"\nanti_aliasing = \"off\"\n";
+        let path = config(test, Some(settings), None);
+        let project = make_project_once(path.parent().unwrap(), "Viewport Game");
+        let mut studio = studio_after_startup(steps_reading(path));
+        offscreen.frame(&mut studio);
+        offscreen.frame(&mut studio);
+        assert_eq!(studio.screen(), Screen::Projects);
+        studio.open(project);
+        for _ in 0..10_000 {
+            if studio.poll_opening().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(studio.editor().is_some(), "{:?}", studio.projects().error());
+        settle_viewport(&mut studio, &mut offscreen);
+        Some((studio, offscreen))
+    }
+
+    /// Draws frames until the viewport's texture is at the panel's size and shown.
+    fn settle_viewport(studio: &mut Studio, offscreen: &mut Offscreen) {
+        for _ in 0..2000 {
+            offscreen.frame(studio);
+            let viewport = &studio.editor().unwrap().viewport;
+            let target = offscreen.viewport.scene().viewport().map(|target| target.size());
+            if viewport.texture.is_some() && target.is_some() && target == viewport.pixels {
+                // One more frame paints it.
+                offscreen.frame(studio);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("the viewport never settled at the panel's size");
+    }
+
+    /// The mean difference per channel of two RGBA images of the same size.
+    fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
+        assert_eq!(a.len(), b.len());
+        let sum: u64 = a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum();
+        sum as f64 / a.len() as f64
+    }
+
+    /// The RGB of pixel (`x`, `y`) of `image`.
+    fn rgb((width, _, pixels): &offscreen::Pixels, x: u32, y: u32) -> [u8; 3] {
+        let at = ((y * width + x) * 4) as usize;
+        [pixels[at], pixels[at + 1], pixels[at + 2]]
+    }
+
+    #[test]
+    fn the_viewport_shows_the_scene_as_the_engine_draws_it() {
+        use metallic_engine::metallic_render::settings::{GraphicsSettings, Preset};
+        use metallic_engine::{FrameStats, SceneRenderer};
+
+        let Some((mut studio, mut offscreen)) = viewport_shown("viewport-scene", egui::vec2(960.0, 600.0)) else {
+            return;
+        };
+        let target = offscreen.viewport.scene().viewport().unwrap();
+        let (width, height) = target.size();
+        let shown = read_texture(&offscreen.context, target.texture());
+        // The scene, not a flat fill: sky at the top, the baseplate at the bottom.
+        let [sky, ground] = [rgb(&shown, width / 2, 2), rgb(&shown, width / 2, height - 3)];
+        let apart: u32 = sky.iter().zip(ground).map(|(a, b)| u32::from(a.abs_diff(b))).sum();
+        assert!(apart > 40, "sky {sky:?} and ground {ground:?}");
+
+        // The engine's own render of the same game from the same camera, at the same size and settings.
+        let graphics = studio.settings().rendering.clone();
+        assert_eq!(graphics.preset, Preset::Medium);
+        let editor = studio.editor_mut().unwrap();
+        let mut reference = SceneRenderer::default();
+        reference.set_graphics(graphics);
+        reference.attach_viewport(&offscreen.context, width, height).unwrap();
+        reference.set_camera(Some(editor.viewport.camera.camera()));
+        for _ in 0..3 {
+            reference.render_viewport(&mut editor.dm, FrameStats::default());
+        }
+        let expected = read_texture(&offscreen.context, reference.viewport().unwrap().texture());
+        let difference = mean_difference(&shown.2, &expected.2);
+        assert!(
+            difference < 2.0,
+            "the viewport differs from the engine's render by {difference}"
+        );
+
+        // And the panel shows that texture, one texel to a pixel.
+        let frame = offscreen.read();
+        let rect = studio.editor().unwrap().viewport.rect.unwrap();
+        let (left, top) = (rect.left() as u32, rect.top() as u32);
+        let mut off = 0u64;
+        let mut samples = 0u64;
+        for y in (4..height - 4).step_by(23) {
+            for x in (4..width - 4).step_by(29) {
+                let [a, b] = [rgb(&frame, left + x, top + y), rgb(&shown, x, y)];
+                off += a.iter().zip(b).map(|(a, b)| u64::from(a.abs_diff(b))).sum::<u64>();
+                samples += 3;
+            }
+        }
+        let off = off as f64 / samples as f64;
+        assert!(off < 3.0, "the panel differs from the texture by {off}");
+
+        // Rendering settings apply live.
+        studio.settings.settings_mut().rendering = GraphicsSettings::new(Preset::Low);
+        offscreen.frame(&mut studio);
+        let graphics = offscreen.viewport.scene().graphics().unwrap();
+        assert_eq!(graphics.preset, Preset::Low);
+    }
+
+    #[test]
+    fn resizing_the_panel_resizes_the_target_without_a_black_frame() {
+        let Some((mut studio, mut offscreen)) = viewport_shown("viewport-resize", egui::vec2(960.0, 600.0)) else {
+            return;
+        };
+        let centre_of = |studio: &Studio, frame: &offscreen::Pixels| {
+            let centre = studio.editor().unwrap().viewport.rect.unwrap().center();
+            rgb(frame, centre.x as u32, centre.y as u32)
+        };
+        let before = centre_of(&studio, &offscreen.read());
+        let generation = offscreen.viewport.scene().viewport().unwrap().generation();
+        let old = offscreen.viewport.scene().viewport().unwrap().size();
+
+        offscreen.set_size(egui::vec2(800.0, 560.0));
+        let mut resized = false;
+        for _ in 0..2000 {
+            offscreen.frame(&mut studio);
+            // Every frame shows the scene: the old texture stretched until the new one is drawn.
+            let now = centre_of(&studio, &offscreen.read());
+            let off: u32 = now.iter().zip(before).map(|(a, b)| u32::from(a.abs_diff(b))).sum();
+            assert!(off < 60, "the centre went from {before:?} to {now:?}");
+            let target = offscreen.viewport.scene().viewport().unwrap();
+            if Some(target.size()) == studio.editor().unwrap().viewport.pixels {
+                assert!(target.generation() > generation);
+                assert_ne!(target.size(), old);
+                resized = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(resized, "the target never took the panel's new size");
+    }
+
+    /// The viewport's screenshot (`cargo test -p metallic_studio -- --ignored screenshot_of_the_viewport`): the
+    /// template project in the editor, the viewport showing the baseplate scene. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_the_viewport() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-viewport", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let mut offscreen = Offscreen::new(egui::vec2(1280.0, 800.0), 1.25).expect("an offscreen device");
+        offscreen.frame(&mut studio);
+        offscreen.frame(&mut studio);
+        studio.open(project);
+        for _ in 0..10_000 {
+            if studio.poll_opening().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        settle_viewport(&mut studio, &mut offscreen);
+        // Long enough for Auto's dynamic resolution and the pipelines to settle.
+        for _ in 0..60 {
+            offscreen.frame(&mut studio);
+        }
+        assert_eq!(studio.screen(), Screen::Editor);
+        write_png(&out.join("217-viewport.png"), offscreen.read());
     }
 }

@@ -22,6 +22,7 @@ use winit::monitor::MonitorHandle;
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
 use super::startup::{Startup, studio_steps};
+use super::viewport::ViewportRenderer;
 use super::{Studio, WindowRequest, native, splash};
 use crate::projects::FileDialog;
 use crate::theme::tokens::radius;
@@ -32,6 +33,8 @@ use crate::{STUDIO_APP_ID, StudioError, emblem};
 const MAIN_SIZE: LogicalSize<f64> = LogicalSize::new(1280.0, 800.0);
 /// The smallest the main window may be made, in points.
 const MAIN_MIN_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 600.0);
+/// How soon the viewport is drawn again while something it shows is still coming in, without input.
+const VIEWPORT_POLL: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// Opens Studio's window and runs it until it is closed. Call it on the main thread.
 pub fn run() -> Result<(), StudioError> {
@@ -59,6 +62,10 @@ struct StudioWindow {
     egui: egui_winit::State,
     painter: egui_wgpu::Renderer,
     studio: Studio,
+    /// The engine drawing the game into the Viewport panel's texture.
+    viewport: ViewportRenderer,
+    /// The Rendering settings' vsync as last applied to the window.
+    vsync: Option<bool>,
     /// When egui asked to be drawn again, if not at once.
     repaint_at: Option<Instant>,
 }
@@ -171,6 +178,8 @@ impl StudioWindow {
             egui,
             painter,
             studio,
+            viewport: ViewportRenderer::new(),
+            vsync: None,
             repaint_at: None,
         };
         // Shown once there is a frame to show, so it never flashes empty.
@@ -190,6 +199,9 @@ impl StudioWindow {
             .handle_platform_output(&self.window, std::mem::take(&mut output.platform_output));
         // Every delta is applied below; taken out, they are drained as they are.
         let mut textures = std::mem::take(&mut output.textures_delta);
+        // The game into the viewport's texture, from the camera this frame's input moved, before the UI shows it.
+        let viewport_busy = self.viewport.frame(&self.context, &mut self.painter, &mut self.studio);
+        self.apply_vsync();
 
         let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
         let (width, height) = self.surface.size();
@@ -254,10 +266,14 @@ impl StudioWindow {
                 WindowRequest::BecomeMainWindow => self.become_main_window(),
             }
         }
-        let delay = output
+        let mut delay = output
             .viewport_output
             .get(&ViewportId::ROOT)
             .map_or(std::time::Duration::MAX, |viewport| viewport.repaint_delay);
+        if viewport_busy {
+            // A resize, assets or pipelines still coming in: drawn as they land, even without input.
+            delay = delay.min(VIEWPORT_POLL);
+        }
         if delay.is_zero() {
             self.window.request_redraw();
             self.repaint_at = None;
@@ -265,6 +281,21 @@ impl StudioWindow {
             self.repaint_at = now.checked_add(delay);
         }
         Ok(())
+    }
+
+    /// Presents with vsync or without, as the Rendering settings say (with it when they leave it to Studio).
+    fn apply_vsync(&mut self) {
+        let vsync = self.studio.settings().rendering.vsync;
+        if vsync == self.vsync {
+            return;
+        }
+        self.vsync = vsync;
+        let mode = if vsync.unwrap_or(true) {
+            wgpu::PresentMode::Fifo
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
+        self.surface.set_present_mode(&self.context, mode);
     }
 
     /// Turns the splash into Studio's main window: decorated, resizable, [`MAIN_SIZE`], centred where the splash was
