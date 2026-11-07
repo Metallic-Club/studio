@@ -3292,6 +3292,45 @@ mod tests {
     }
 
     #[test]
+    fn a_dragged_tab_s_chip_shows_its_name_alone() {
+        use crate::dock::guides::Side;
+        let mut harness = editing(settings_file("drag-chip", None), "Drag Chip Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // Mid-drag, over the viewport's guides: the chip, and no panel icon anywhere (#303).
+        let from = harness.get_by_role_and_label(Role::Tab, "Output").rect().center();
+        let to = guide(&harness.state().studio, panels::ids::VIEWPORT, Side::Right);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        harness.event(egui::Event::PointerMoved(from));
+        harness.step();
+        harness.event(button(from, true));
+        harness.step();
+        for i in 1..=8 {
+            harness.event(egui::Event::PointerMoved(from.lerp(to, i as f32 / 8.0)));
+            harness.step();
+        }
+        assert!(
+            harness.state().studio.dock().is_dragging(&harness.ctx),
+            "still dragging"
+        );
+        let named = harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => text.galley.text() == "Output",
+            _ => false,
+        });
+        assert!(named, "the chip names the panel");
+        for panel in [Icon::PanelOutput, Icon::PanelViewport, Icon::PanelExplorer] {
+            assert!(icon_meshes(&harness, panel).is_empty(), "{panel:?} drawn");
+        }
+        harness.event(button(to, false));
+        settle(&mut harness);
+    }
+
+    #[test]
     fn dropping_on_a_dock_guide_docks_the_panel_there() {
         use crate::dock::guides::Side;
         let mut harness = editing(settings_file("editor-guides", None), "Guides Game");

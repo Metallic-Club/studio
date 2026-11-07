@@ -375,14 +375,13 @@ impl Dock {
             } else if let Some(guides) = &guides {
                 guides.paint(&painter, &colors, Some(at));
             }
-            let (title, icon) = match self.tree.tiles.get(dragged) {
-                Some(Tile::Pane(pane)) => match self.panel(&pane.0) {
-                    Some(panel) => (panel.title().to_owned(), Some(panel.icon())),
-                    None => (pane.0.clone(), None),
-                },
-                _ => ("Group".to_owned(), None),
+            let title = match self.tree.tiles.get(dragged) {
+                Some(Tile::Pane(pane)) => self
+                    .panel(&pane.0)
+                    .map_or_else(|| pane.0.clone(), |panel| panel.title().to_owned()),
+                _ => "Group".to_owned(),
             };
-            guides::paint_dragged(&painter, &colors, at, guides.as_ref(), icon, &title);
+            guides::paint_dragged(&painter, &colors, at, guides.as_ref(), &title);
         }
         if let (Some(before), Some((dragged, at))) = (before, drag) {
             self.tree = before;

@@ -10,12 +10,11 @@
 //! The guides are worked out from the last frame's layout, before the tree is drawn, so the frame that lets go docks
 //! where the user saw the guide.
 
-use egui::{Align2, CornerRadius, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
+use egui::{CornerRadius, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use egui_tiles::{Container, LinearDir, Tile, TileId, Tree};
 
 use super::PanelId;
 use super::layout;
-use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{Colors, fonts};
 
@@ -125,22 +124,14 @@ impl Guides {
     }
 }
 
-/// Draws the name of what is dragged (`icon` and `title`) in a chip: under the cross of `guides` when they show, so it
+/// Draws the name of what is dragged (`title`) in a chip: under the cross of `guides` when they show, so it
 /// never covers a square, or else beside the pointer at `at`. It stands in for egui_tiles' own label, which sits
 /// right on the pointer.
-pub(crate) fn paint_dragged(
-    painter: &Painter,
-    colors: &Colors,
-    at: Pos2,
-    guides: Option<&Guides>,
-    icon: Option<Icon>,
-    title: &str,
-) {
+pub(crate) fn paint_dragged(painter: &Painter, colors: &Colors, at: Pos2, guides: Option<&Guides>, title: &str) {
     let p = &colors.palette;
     let font = fonts::named(fonts::STRONG, text::SMALL + 1.0);
     let galley = painter.layout_no_wrap(title.to_owned(), font, p.text);
-    let icon_width = if icon.is_some() { text::BODY + space::S2 } else { 0.0 };
-    let extent = vec2(icon_width + galley.size().x, galley.size().y) + vec2(space::S4, space::S2) * 2.0;
+    let extent = vec2(galley.size().x, galley.size().y) + vec2(space::S4, space::S2) * 2.0;
     let top_left = match guides {
         Some(guides) => {
             let bottom = Side::Bottom.square(guides.area);
@@ -158,18 +149,8 @@ pub(crate) fn paint_dragged(
         Stroke::new(size::BORDER, p.border),
         StrokeKind::Inside,
     );
-    let mut x = chip.left() + space::S4;
-    if let Some(icon) = icon {
-        icons::paint_at(
-            painter,
-            pos2(x, chip.center().y),
-            Align2::LEFT_CENTER,
-            icon,
-            text::BODY,
-            icon.color(colors),
-        );
-        x += icon_width;
-    }
+    // The name alone (#303): no icon.
+    let x = chip.left() + space::S4;
     painter.galley(pos2(x, chip.center().y - galley.size().y / 2.0), galley, p.text);
 }
 
