@@ -1,13 +1,14 @@
 Icons bundled with Metallic Studio
 ==================================
 
-This folder ships beside Studio's executable (#291): the build copies it there. Studio draws every built-in icon from
-the SVG that icons.json names for it; edit icons.json to point an icon at another SVG. Icons are not crates, so
-`cargo deny` does not see them: this file is their record.
+This folder ships beside Studio's executable (#291): the build copies it there, and Studio copies it into its own
+folder (%APPDATA%\Metallic\Studio\icons on Windows) on start. Studio draws every built-in icon from the SVG that
+icons.json names for it, in the colour icons.json gives its colour group; edit icons.json to change either. Icons are
+not crates, so `cargo deny` does not see them: this file is their record.
 
-*.svg (except any you add)
-  Lucide icons (https://lucide.dev), version 1.70.0, unmodified, one file per icon Studio uses, named as Lucide names
-  them (box.svg, scroll.svg, ...).
+explorer/, assets/, panels/, toolbar/, interface/ (#322)
+  The SVGs, one folder per part of Studio that draws them: Lucide icons (https://lucide.dev), version 1.70.0,
+  unmodified, named as Lucide names them (box.svg, scroll.svg, ...). An icon used in two parts is in both folders.
   Copyright (c) 2026 Lucide Icons and Contributors. ISC License; the icons Lucide derives from Feather are also
   Copyright (c) 2013-present Cole Bemis under the MIT License. Both are in LICENSE-Lucide.txt (the package's LICENSE).
   Source: the npm package lucide-static 1.70.0 (https://registry.npmjs.org/lucide-static/-/lucide-static-1.70.0.tgz,

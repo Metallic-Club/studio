@@ -1,10 +1,13 @@
 //! Studio's built-in icons (#291, #312): Lucide SVGs in Studio's icons folder, not compiled into the executable.
 //!
-//! The folder holds one SVG per Lucide icon Studio uses (`box.svg`, `scroll.svg`), Lucide's licence, and
-//! `icons.json`, which says which file each of Studio's icon ids uses (`"explorer.part": { "file": "box.svg" }`), with a
-//! line on what the icon marks. Pointing an entry at another SVG changes that icon; a file that is missing or cannot
-//! be read falls back to the icon's default file, with one warning. The build copies the folder from
-//! `apps/studio/icons` to beside the executable.
+//! The folder (#322) holds `icons.json` and a folder per part of Studio that draws icons (`explorer`, `assets`,
+//! `panels`, `toolbar`, `interface`), each with the Lucide SVGs it uses (`explorer/box.svg`), and Lucide's licence in
+//! `licenses`. `icons.json` says which file each of Studio's icon ids uses and which colour group it is drawn in
+//! (`"explorer.part": { "file": "explorer/box.svg", "color": "object" }`), with a line on what the icon marks, and
+//! each colour group's colour on the dark and the light mode. Pointing an entry at another SVG or group changes that
+//! icon, and changing a group's colours changes every icon in it; a file that is missing or cannot be read falls back
+//! to the icon's default file, with one warning. The build copies the folder from `apps/studio/icons` to beside the
+//! executable.
 //!
 //! An icon is read on first use and drawn at exactly the pixel size it is shown at, so it stays sharp at every
 //! interface scale; each size is cached as a texture in the egui context. The custom icon folder setting
@@ -14,52 +17,110 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use egui::{Context, Id, TextureHandle, TextureId, TextureOptions};
+use egui::{Color32, Context, Id, TextureHandle, TextureId, TextureOptions};
 use serde::{Deserialize, Serialize};
 
-use super::Icon;
+use super::{Group, Icon};
 
 /// The folder's name, beside the executable.
 pub const FOLDER: &str = "icons";
 /// The manifest's name, in the folder.
 pub const MANIFEST: &str = "icons.json";
-/// The manifest's format version.
-pub const FORMAT: u32 = 1;
+/// The manifest's format version: 2 has the colours and the sub-folders (#322), 1 was a flat folder.
+pub const FORMAT: u32 = 2;
 
-/// `icons.json`: which SVG each icon id uses.
+/// `icons.json`: which SVG each icon id uses and in which colour, and the colour groups' colours.
 #[derive(Debug, Serialize, Deserialize)]
-struct Manifest {
-    format: u32,
+pub(crate) struct Manifest {
+    pub(crate) format: u32,
+    #[serde(default)]
     about: String,
-    icons: BTreeMap<String, Entry>,
+    /// Each colour group's colours, by its id (format 2).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    colors: BTreeMap<String, Colours>,
+    pub(crate) icons: BTreeMap<String, Entry>,
 }
 
 /// One icon in `icons.json`.
 #[derive(Debug, Serialize, Deserialize)]
-struct Entry {
+pub(crate) struct Entry {
     /// The SVG it uses, relative to the folder.
-    file: String,
+    pub(crate) file: String,
+    /// The colour group it is drawn in, by its id; none for the interface's icons, which take their text's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) color: Option<String>,
     /// What the icon marks, for people editing the file.
     #[serde(rename = "for", default)]
     used_for: String,
 }
 
-/// What `icons.json` says first, for people editing it.
-const ABOUT: &str = "Which SVG file each of Metallic Studio's icons uses, relative to this folder. To change an \
-                     icon, put an SVG here and point its entry's file at it. The ids never change.";
+/// A colour group in `icons.json`: its colour on the dark and the light mode, as `#rrggbb`.
+#[derive(Debug, Serialize, Deserialize)]
+struct Colours {
+    dark: String,
+    light: String,
+    /// Which icons it colours, for people editing the file.
+    #[serde(rename = "for", default)]
+    used_for: String,
+}
 
-/// `icons.json` as shipped: every icon with its default file, in the table's order of ids.
+/// What `icons.json` says first, for people editing it.
+const ABOUT: &str = "Which SVG file each of Metallic Studio's icons uses (relative to this folder) and which colour \
+                     it is drawn in. To change an icon, put an SVG here and point its entry's file at it. To change \
+                     a colour, edit its group's dark and light colours under colors, or point an icon's color at \
+                     another group. Icons without a color take the colour of the text beside them. The ids never \
+                     change. Studio reads this file when it starts.";
+
+/// `#rrggbb` for `color`.
+fn hex(color: Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b())
+}
+
+/// The colour `#rrggbb` (or `rrggbb`) names, if it is one.
+pub(crate) fn parse_hex(text: &str) -> Option<Color32> {
+    let digits = text.trim().trim_start_matches('#');
+    if digits.len() != 6 || !digits.is_ascii() {
+        return None;
+    }
+    let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+    Some(Color32::from_rgb(channel(0)?, channel(2)?, channel(4)?))
+}
+
+/// `icons.json` as shipped: every colour group with its colours, and every icon with its default file and group, in
+/// the table's order of ids.
 pub fn manifest_json() -> String {
+    manifest_json_with(&HashMap::new())
+}
+
+/// `icons.json` as shipped, but with the icons in `files` pointed at the files given there (relative to the folder):
+/// an older folder's own changes, carried into the new layout (#322).
+pub(crate) fn manifest_json_with(files: &HashMap<Icon, String>) -> String {
     let manifest = Manifest {
         format: FORMAT,
         about: ABOUT.to_owned(),
+        colors: Group::ALL
+            .iter()
+            .filter(|group| group.is_coloured())
+            .map(|group| {
+                let (dark, light) = group.default_colours();
+                (
+                    group.id().to_owned(),
+                    Colours {
+                        dark: hex(dark),
+                        light: hex(light),
+                        used_for: group.label().to_owned(),
+                    },
+                )
+            })
+            .collect(),
         icons: Icon::ALL
             .iter()
             .map(|icon| {
                 (
                     icon.id().to_owned(),
                     Entry {
-                        file: icon.default_file().to_owned(),
+                        file: files.get(icon).cloned().unwrap_or_else(|| icon.default_file()),
+                        color: icon.group().is_coloured().then(|| icon.group().id().to_owned()),
                         used_for: icon.description().to_owned(),
                     },
                 )
@@ -115,6 +176,75 @@ pub fn shipped_folder() -> Option<&'static Path> {
         .as_deref()
 }
 
+/// `dir`'s `icons.json`, or why it could not be read.
+pub(crate) fn read_manifest(dir: &Path) -> Result<Manifest, String> {
+    std::fs::read_to_string(dir.join(MANIFEST))
+        .map_err(|error| error.to_string())
+        .and_then(|text| serde_json::from_str::<Manifest>(&text).map_err(|error| error.to_string()))
+}
+
+/// The colours `icons.json` gives (#322): each group's where it differs from Studio's, and each icon's group where it
+/// differs from its own. Empty when there is none.
+#[derive(Debug, Default)]
+struct ColourTable {
+    groups: HashMap<Group, (Color32, Color32)>,
+    icons: HashMap<Icon, Group>,
+}
+
+impl ColourTable {
+    /// The table `manifest` gives; what it gets wrong is logged and left at Studio's own.
+    fn of(manifest: &Manifest) -> Self {
+        let mut table = Self::default();
+        for (id, colours) in &manifest.colors {
+            let Some(group) = Group::from_id(id).filter(|group| group.is_coloured()) else {
+                log::warn!("icons: {MANIFEST} has colours for `{id}`, which is not a colour group");
+                continue;
+            };
+            match (parse_hex(&colours.dark), parse_hex(&colours.light)) {
+                (Some(dark), Some(light)) if (dark, light) != group.default_colours() => {
+                    table.groups.insert(group, (dark, light));
+                }
+                (Some(_), Some(_)) => {}
+                _ => log::warn!("icons: {MANIFEST}: `{id}`'s colours are not #rrggbb; using Studio's"),
+            }
+        }
+        for (id, entry) in &manifest.icons {
+            let (Some(icon), Some(name)) = (Icon::from_id(id), &entry.color) else {
+                continue;
+            };
+            match Group::from_id(name).filter(|group| group.is_coloured()) {
+                Some(group) if group != icon.group() => {
+                    table.icons.insert(icon, group);
+                }
+                Some(_) => {}
+                None => log::warn!("icons: {MANIFEST}: `{id}`'s color `{name}` is not a colour group"),
+            }
+        }
+        table
+    }
+}
+
+/// The colours of the icons folder's `icons.json`, read once.
+fn colour_table() -> &'static ColourTable {
+    static TABLE: OnceLock<ColourTable> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        folder()
+            .and_then(|dir| read_manifest(dir).ok())
+            .map(|manifest| ColourTable::of(&manifest))
+            .unwrap_or_default()
+    })
+}
+
+/// `group`'s colours on the dark and the light mode as `icons.json` changes them, or `None` where it keeps Studio's.
+pub fn group_colours(group: Group) -> Option<(Color32, Color32)> {
+    colour_table().groups.get(&group).copied()
+}
+
+/// The colour group `icon` is drawn in: the one `icons.json` names for it, else its own.
+pub fn colour_group(icon: Icon) -> Group {
+    colour_table().icons.get(&icon).copied().unwrap_or(icon.group())
+}
+
 /// The built-in icons as read so far: from which folder, each icon's file, its SVG and its textures by size.
 struct Loaded {
     dir: Option<PathBuf>,
@@ -131,10 +261,7 @@ impl Loaded {
     fn new(dir: Option<PathBuf>) -> Self {
         let mut files = HashMap::new();
         if let Some(dir) = &dir {
-            let manifest = std::fs::read_to_string(dir.join(MANIFEST))
-                .map_err(|error| error.to_string())
-                .and_then(|text| serde_json::from_str::<Manifest>(&text).map_err(|error| error.to_string()));
-            match manifest {
+            match read_manifest(dir) {
                 Ok(manifest) => {
                     for (id, entry) in manifest.icons {
                         match Icon::from_id(&id) {
@@ -299,7 +426,32 @@ mod tests {
             "icons/icons.json is stale: run `cargo test -p metallic_studio write_the_icon_manifest -- --ignored`"
         );
         // Lucide's licence ships with them.
-        assert!(dir.join("LICENSE-Lucide.txt").is_file());
+        assert!(dir.join("licenses/LICENSE-Lucide.txt").is_file());
+        // Nothing else: icons.json alone at the top, each SVG in its part's folder and used (#322).
+        let mut top: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        top.sort();
+        assert_eq!(
+            top,
+            [
+                "assets",
+                "explorer",
+                "icons.json",
+                "interface",
+                "licenses",
+                "panels",
+                "toolbar"
+            ]
+        );
+        let used: std::collections::HashSet<String> = Icon::ALL.iter().map(|icon| icon.default_file()).collect();
+        for folder in ["assets", "explorer", "interface", "panels", "toolbar"] {
+            for entry in std::fs::read_dir(dir.join(folder)).unwrap() {
+                let file = format!("{folder}/{}", entry.unwrap().file_name().to_string_lossy());
+                assert!(used.contains(&file), "{file} is not used by any icon");
+            }
+        }
     }
 
     /// Writes `icons/icons.json` from the table.
@@ -321,7 +473,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for (file, text) in files {
-            std::fs::write(dir.join(file), text).unwrap();
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
         }
         dir
     }
@@ -340,17 +494,17 @@ mod tests {
             "manifest",
             &[
                 (MANIFEST, manifest),
-                ("box.svg", DOT),
-                ("shapes.svg", DOT),
-                ("folder.svg", DOT),
+                ("explorer/box.svg", DOT),
+                ("explorer/shapes.svg", DOT),
+                ("explorer/folder.svg", DOT),
             ],
         );
         std::fs::create_dir_all(dir.join("mine")).unwrap();
         std::fs::write(dir.join("mine/square.svg"), SQUARE).unwrap();
         let mut loaded = Loaded::new(Some(dir.clone()));
-        // The part uses the file the manifest names, not box.svg.
+        // The part uses the file the manifest names, not explorer/box.svg.
         assert_eq!(loaded.svg(Icon::ExplorerPart).as_deref(), Some(SQUARE.as_bytes()));
-        // The model's file is gone: its default, shapes.svg.
+        // The model's file is gone: its default, explorer/shapes.svg.
         assert_eq!(loaded.svg(Icon::ExplorerModel).as_deref(), Some(DOT.as_bytes()));
         // Not in the manifest: its default.
         assert_eq!(loaded.svg(Icon::ExplorerFolder).as_deref(), Some(DOT.as_bytes()));
@@ -371,8 +525,42 @@ mod tests {
     }
 
     #[test]
+    fn the_manifest_s_colours_change_groups_and_icons() {
+        let manifest = r##"{ "format": 2, "icons": {
+            "explorer.part": { "file": "explorer/box.svg", "color": "workspace" },
+            "explorer.model": { "file": "explorer/shapes.svg", "color": "object" },
+            "explorer.folder": { "file": "explorer/folder.svg", "color": "no_such_group" }
+        }, "colors": {
+            "light": { "dark": "#102030", "light": "a0b0c0" },
+            "workspace": { "dark": "#6bc98c", "light": "#2e7d4f" },
+            "value": { "dark": "red", "light": "#000000" },
+            "nobody": { "dark": "#000000", "light": "#000000" }
+        } }"##;
+        let table = ColourTable::of(&serde_json::from_str(manifest).unwrap());
+        // Changed colours are kept; Studio's own (the workspace's) and bad ones are not.
+        assert_eq!(
+            table.groups.get(&Group::Light),
+            Some(&(Color32::from_rgb(0x10, 0x20, 0x30), Color32::from_rgb(0xa0, 0xb0, 0xc0)))
+        );
+        assert_eq!(table.groups.len(), 1);
+        // The part is drawn in the workspace's colour; the model keeps its own; a bad group is ignored.
+        assert_eq!(table.icons.get(&Icon::ExplorerPart), Some(&Group::Workspace));
+        assert_eq!(table.icons.len(), 1);
+        assert_eq!(parse_hex("#FfA000"), Some(Color32::from_rgb(0xff, 0xa0, 0x00)));
+        assert_eq!(parse_hex("#ffa00"), None);
+        assert_eq!(parse_hex("#ffa0zz"), None);
+        // The shipped file changes nothing: every icon in its own group, in Studio's colours.
+        let shipped = ColourTable::of(&serde_json::from_str(&manifest_json()).unwrap());
+        assert!(shipped.groups.is_empty() && shipped.icons.is_empty());
+        assert_eq!(colour_group(Icon::ExplorerPart), Group::Object);
+    }
+
+    #[test]
     fn a_bad_manifest_uses_every_default() {
-        let dir = temp_folder("bad-manifest", &[(MANIFEST, "{ not json"), ("box.svg", SQUARE)]);
+        let dir = temp_folder(
+            "bad-manifest",
+            &[(MANIFEST, "{ not json"), ("explorer/box.svg", SQUARE)],
+        );
         let mut loaded = Loaded::new(Some(dir.clone()));
         assert_eq!(loaded.svg(Icon::ExplorerPart).as_deref(), Some(SQUARE.as_bytes()));
         // No folder: nothing, quietly.

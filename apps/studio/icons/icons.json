@@ -1,241 +1,372 @@
 {
-  "format": 1,
-  "about": "Which SVG file each of Metallic Studio's icons uses, relative to this folder. To change an icon, put an SVG here and point its entry's file at it. The ids never change.",
+  "format": 2,
+  "about": "Which SVG file each of Metallic Studio's icons uses (relative to this folder) and which colour it is drawn in. To change an icon, put an SVG here and point its entry's file at it. To change a colour, edit its group's dark and light colours under colors, or point an icon's color at another group. Icons without a color take the colour of the text beside them. The ids never change. Studio reads this file when it starts.",
+  "colors": {
+    "content": {
+      "dark": "#d987b0",
+      "light": "#a33d6e",
+      "for": "Panels and Assets: content"
+    },
+    "event": {
+      "dark": "#d987b0",
+      "light": "#a33d6e",
+      "for": "Explorer: bindable events and functions"
+    },
+    "light": {
+      "dark": "#dcc25a",
+      "light": "#806512",
+      "for": "Explorer: lighting and lights"
+    },
+    "local_script": {
+      "dark": "#6aa3e8",
+      "light": "#2f5fa8",
+      "for": "Explorer: local scripts"
+    },
+    "log": {
+      "dark": "#a88be0",
+      "light": "#6545b0",
+      "for": "Panels: log"
+    },
+    "module_script": {
+      "dark": "#a88be0",
+      "light": "#6545b0",
+      "for": "Explorer: module scripts"
+    },
+    "object": {
+      "dark": "#dcdcdc",
+      "light": "#3f3f3f",
+      "for": "Explorer and Assets: parts, models, folders, cameras"
+    },
+    "other": {
+      "dark": "#adadad",
+      "light": "#646464",
+      "for": "Explorer and Assets: other"
+    },
+    "run": {
+      "dark": "#6bc98c",
+      "light": "#2e7d4f",
+      "for": "Running the game"
+    },
+    "scene": {
+      "dark": "#6aa3e8",
+      "light": "#2f5fa8",
+      "for": "Panels: scene"
+    },
+    "server_script": {
+      "dark": "#6bc98c",
+      "light": "#2e7d4f",
+      "for": "Explorer and Assets: server scripts and server storage"
+    },
+    "settings_service": {
+      "dark": "#5cbcc8",
+      "light": "#1d6f7a",
+      "for": "Explorer: input and settings services"
+    },
+    "storage": {
+      "dark": "#e0995a",
+      "light": "#a65619",
+      "for": "Explorer: replicated storage"
+    },
+    "studio": {
+      "dark": "#adadad",
+      "light": "#646464",
+      "for": "Studio"
+    },
+    "value": {
+      "dark": "#adadad",
+      "light": "#646464",
+      "for": "Explorer: values"
+    },
+    "workspace": {
+      "dark": "#6bc98c",
+      "light": "#2e7d4f",
+      "for": "Explorer: the workspace"
+    }
+  },
   "icons": {
     "asset.audio": {
-      "file": "music.svg",
+      "file": "assets/music.svg",
+      "color": "content",
       "for": "A sound in the Assets panel."
     },
     "asset.file": {
-      "file": "file.svg",
+      "file": "assets/file.svg",
+      "color": "other",
       "for": "Any other file in the Assets panel."
     },
     "asset.image": {
-      "file": "image.svg",
+      "file": "assets/image.svg",
+      "color": "content",
       "for": "An image in the Assets panel."
     },
     "asset.mesh": {
-      "file": "cuboid.svg",
+      "file": "assets/cuboid.svg",
+      "color": "object",
       "for": "A mesh in the Assets panel."
     },
     "asset.scene": {
-      "file": "list-tree.svg",
+      "file": "assets/list-tree.svg",
+      "color": "object",
       "for": "A scene in the Assets panel."
     },
     "asset.script": {
-      "file": "scroll.svg",
+      "file": "assets/scroll.svg",
+      "color": "server_script",
       "for": "A script in the Assets panel."
     },
     "explorer.bool_value": {
-      "file": "toggle-left.svg",
+      "file": "explorer/toggle-left.svg",
+      "color": "value",
       "for": "A true-or-false value."
     },
     "explorer.camera": {
-      "file": "camera.svg",
+      "file": "explorer/camera.svg",
+      "color": "object",
       "for": "A camera."
     },
     "explorer.directional_light": {
-      "file": "sun.svg",
+      "file": "explorer/sun.svg",
+      "color": "light",
       "for": "A directional light."
     },
     "explorer.event": {
-      "file": "radio.svg",
+      "file": "explorer/radio.svg",
+      "color": "event",
       "for": "A bindable event."
     },
     "explorer.folder": {
-      "file": "folder.svg",
+      "file": "explorer/folder.svg",
+      "color": "object",
       "for": "A folder."
     },
     "explorer.function": {
-      "file": "square-function.svg",
+      "file": "explorer/square-function.svg",
+      "color": "event",
       "for": "A bindable function."
     },
     "explorer.game": {
-      "file": "gamepad-2.svg",
+      "file": "explorer/gamepad-2.svg",
+      "color": "object",
       "for": "The game (the data model)."
     },
     "explorer.input": {
-      "file": "mouse-pointer.svg",
+      "file": "explorer/mouse-pointer.svg",
+      "color": "other",
       "for": "An input object."
     },
     "explorer.instance": {
-      "file": "circle.svg",
+      "file": "explorer/circle.svg",
+      "color": "other",
       "for": "Any other instance."
     },
     "explorer.int_value": {
-      "file": "hash.svg",
+      "file": "explorer/hash.svg",
+      "color": "value",
       "for": "A whole-number value."
     },
     "explorer.light": {
-      "file": "lightbulb.svg",
+      "file": "explorer/lightbulb.svg",
+      "color": "light",
       "for": "Any other light."
     },
     "explorer.lighting": {
-      "file": "sun.svg",
+      "file": "explorer/sun.svg",
+      "color": "light",
       "for": "The lighting service."
     },
     "explorer.local_script": {
-      "file": "scroll.svg",
+      "file": "explorer/scroll.svg",
+      "color": "local_script",
       "for": "A local script, which runs on the player's machine: a script's scroll (#289), in its own colour."
     },
     "explorer.mesh_part": {
-      "file": "cuboid.svg",
+      "file": "explorer/cuboid.svg",
+      "color": "object",
       "for": "A mesh part."
     },
     "explorer.model": {
-      "file": "shapes.svg",
+      "file": "explorer/shapes.svg",
+      "color": "object",
       "for": "A model."
     },
     "explorer.module_script": {
-      "file": "scroll-text.svg",
+      "file": "explorer/scroll-text.svg",
+      "color": "module_script",
       "for": "A module script."
     },
     "explorer.number_value": {
-      "file": "binary.svg",
+      "file": "explorer/binary.svg",
+      "color": "value",
       "for": "A number value."
     },
     "explorer.object_value": {
-      "file": "link.svg",
+      "file": "explorer/link.svg",
+      "color": "value",
       "for": "A value that refers to another object."
     },
     "explorer.part": {
-      "file": "box.svg",
+      "file": "explorer/box.svg",
+      "color": "object",
       "for": "A part."
     },
     "explorer.replicated_storage": {
-      "file": "package.svg",
+      "file": "explorer/package.svg",
+      "color": "storage",
       "for": "Replicated storage."
     },
     "explorer.script": {
-      "file": "scroll.svg",
+      "file": "explorer/scroll.svg",
+      "color": "server_script",
       "for": "A script."
     },
     "explorer.script_service": {
-      "file": "scroll.svg",
+      "file": "explorer/scroll.svg",
+      "color": "server_script",
       "for": "The server script service."
     },
     "explorer.server_storage": {
-      "file": "hard-drive.svg",
+      "file": "explorer/hard-drive.svg",
+      "color": "server_script",
       "for": "Server storage."
     },
     "explorer.settings_service": {
-      "file": "sliders-horizontal.svg",
+      "file": "explorer/sliders-horizontal.svg",
+      "color": "settings_service",
       "for": "A settings or input service (user settings, input, run service)."
     },
     "explorer.spot_light": {
-      "file": "spotlight.svg",
+      "file": "explorer/spotlight.svg",
+      "color": "light",
       "for": "A spotlight."
     },
     "explorer.string_value": {
-      "file": "type.svg",
+      "file": "explorer/type.svg",
+      "color": "value",
       "for": "A text value."
     },
     "explorer.value": {
-      "file": "diamond.svg",
+      "file": "explorer/diamond.svg",
+      "color": "value",
       "for": "A value object."
     },
     "explorer.workspace": {
-      "file": "earth.svg",
+      "file": "explorer/earth.svg",
+      "color": "workspace",
       "for": "The workspace."
     },
     "panel.assets": {
-      "file": "files.svg",
+      "file": "panels/files.svg",
+      "color": "content",
       "for": "The Assets panel."
     },
     "panel.explorer": {
-      "file": "list-tree.svg",
+      "file": "panels/list-tree.svg",
+      "color": "scene",
       "for": "The Explorer panel."
     },
     "panel.game": {
-      "file": "gamepad-2.svg",
+      "file": "panels/gamepad-2.svg",
+      "color": "run",
       "for": "The Game tab."
     },
     "panel.output": {
-      "file": "square-terminal.svg",
+      "file": "panels/square-terminal.svg",
+      "color": "log",
       "for": "The Output panel."
     },
     "panel.properties": {
-      "file": "list.svg",
+      "file": "panels/list.svg",
+      "color": "scene",
       "for": "The Properties panel."
     },
     "panel.viewport": {
-      "file": "monitor.svg",
+      "file": "panels/monitor.svg",
+      "color": "scene",
       "for": "The Viewport panel."
     },
     "toolbar.close": {
-      "file": "folder-x.svg",
+      "file": "toolbar/folder-x.svg",
+      "color": "studio",
       "for": "The toolbar's Close project tool."
     },
     "toolbar.pause": {
-      "file": "pause.svg",
+      "file": "toolbar/pause.svg",
+      "color": "run",
       "for": "Pause."
     },
     "toolbar.play": {
-      "file": "play.svg",
+      "file": "toolbar/play.svg",
+      "color": "run",
       "for": "Play, and Resume while paused."
     },
     "toolbar.plugin": {
-      "file": "puzzle.svg",
+      "file": "toolbar/puzzle.svg",
+      "color": "studio",
       "for": "A plugin's tool that brings no icon of its own."
     },
     "toolbar.reset_layout": {
-      "file": "rotate-ccw.svg",
+      "file": "toolbar/rotate-ccw.svg",
+      "color": "scene",
       "for": "The toolbar's Reset layout tool."
     },
     "toolbar.save": {
-      "file": "save.svg",
+      "file": "toolbar/save.svg",
+      "color": "studio",
       "for": "The toolbar's Save tool."
     },
     "toolbar.settings": {
-      "file": "settings.svg",
+      "file": "toolbar/settings.svg",
+      "color": "studio",
       "for": "The gear that opens Settings."
     },
     "toolbar.step": {
-      "file": "skip-forward.svg",
+      "file": "toolbar/skip-forward.svg",
+      "color": "run",
       "for": "Step one frame."
     },
     "toolbar.stop": {
-      "file": "square.svg",
+      "file": "toolbar/square.svg",
+      "color": "run",
       "for": "Stop."
     },
     "ui.add": {
-      "file": "plus.svg",
+      "file": "interface/plus.svg",
       "for": "Add another."
     },
     "ui.check": {
-      "file": "check.svg",
+      "file": "interface/check.svg",
       "for": "A check mark."
     },
     "ui.close": {
-      "file": "x.svg",
+      "file": "interface/x.svg",
       "for": "Close, dismiss."
     },
     "ui.collapse": {
-      "file": "chevron-down.svg",
+      "file": "interface/chevron-down.svg",
       "for": "An expanded tree item or section."
     },
     "ui.error": {
-      "file": "circle-x.svg",
+      "file": "interface/circle-x.svg",
       "for": "An error."
     },
     "ui.expand": {
-      "file": "chevron-right.svg",
+      "file": "interface/chevron-right.svg",
       "for": "A collapsed tree item or section."
     },
     "ui.info": {
-      "file": "info.svg",
+      "file": "interface/info.svg",
       "for": "Information."
     },
     "ui.palette": {
-      "file": "palette.svg",
+      "file": "interface/palette.svg",
       "for": "A colour of your own."
     },
     "ui.search": {
-      "file": "search.svg",
+      "file": "interface/search.svg",
       "for": "A search box."
     },
     "ui.warning": {
-      "file": "triangle-alert.svg",
+      "file": "interface/triangle-alert.svg",
       "for": "A warning."
     }
   }

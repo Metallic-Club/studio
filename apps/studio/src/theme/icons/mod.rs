@@ -77,6 +77,40 @@ impl Group {
         Group::Interface,
     ];
 
+    /// Its id in `icons.json`'s colours: its name in snake case. Never renamed once shipped.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Group::Workspace => "workspace",
+            Group::Storage => "storage",
+            Group::SettingsService => "settings_service",
+            Group::ServerScript => "server_script",
+            Group::LocalScript => "local_script",
+            Group::ModuleScript => "module_script",
+            Group::Event => "event",
+            Group::Light => "light",
+            Group::Object => "object",
+            Group::Value => "value",
+            Group::Other => "other",
+            Group::Scene => "scene",
+            Group::Content => "content",
+            Group::Log => "log",
+            Group::Run => "run",
+            Group::Studio => "studio",
+            Group::Interface => "interface",
+        }
+    }
+
+    /// The group with the id `id`, if there is one.
+    pub fn from_id(id: &str) -> Option<Group> {
+        Group::ALL.iter().copied().find(|group| group.id() == id)
+    }
+
+    /// Whether it has a colour of its own: every group but [`Group::Interface`], whose icons take the colour of the
+    /// text they sit by.
+    pub const fn is_coloured(self) -> bool {
+        !matches!(self, Group::Interface)
+    }
+
     /// Its hue.
     pub const fn hue(self) -> Hue {
         match self {
@@ -95,7 +129,16 @@ impl Group {
     /// Its colour in `colors`. Selection and the accent still win where they mark something: callers draw a selected
     /// item's icon in the accent.
     pub fn color(self, colors: &Colors) -> Color32 {
-        colors.hue(self.hue())
+        match builtin::group_colours(self) {
+            Some(pair) => super::tokens::Hue::color_of(pair, colors.dark, colors.high_contrast),
+            None => colors.hue(self.hue()),
+        }
+    }
+
+    /// Its colours on the dark and the light mode as Studio ships them: its hue's (the palette's subtle grey for
+    /// [`Hue::Grey`]).
+    pub const fn default_colours(self) -> (Color32, Color32) {
+        self.hue().pair_or_subtle()
     }
 
     /// Where it is used and what it holds, as the docs name it.
@@ -157,11 +200,10 @@ macro_rules! icons {
                 }
             }
 
-            /// The SVG file it uses by default in the icons folder: its Lucide icon's, `<name>.svg` (#291).
-            pub const fn default_file(self) -> &'static str {
-                match self {
-                    $(Icon::$name => concat!($lucide, ".svg"),)*
-                }
+            /// The SVG file it uses by default in the icons folder: its Lucide icon's, `<name>.svg` (#291), in the
+            /// folder of the part of Studio that draws it (#322).
+            pub fn default_file(self) -> String {
+                format!("{}/{}.svg", self.folder(), self.lucide())
             }
 
             /// What it marks, from its doc comment: `icons.json` says so beside each entry.
@@ -304,9 +346,20 @@ impl Icon {
         Icon::ALL.iter().copied().find(|icon| icon.id() == id)
     }
 
-    /// Its group's colour in `colors`.
+    /// The colour it is drawn in in `colors`: its colour group's, as `icons.json` gives both (#322).
     pub fn color(self, colors: &Colors) -> Color32 {
-        self.group().color(colors)
+        builtin::colour_group(self).color(colors)
+    }
+
+    /// The folder of the icons folder its SVG ships in: the part of Studio that draws it (#322).
+    pub fn folder(self) -> &'static str {
+        match self.id().split_once('.').map(|(area, _)| area) {
+            Some("explorer") => "explorer",
+            Some("asset") => "assets",
+            Some("panel") => "panels",
+            Some("toolbar") => "toolbar",
+            _ => "interface",
+        }
     }
 
     /// The names of the files that replace it in a custom icon folder: `<id>.svg` and `<id>.png`.
@@ -379,9 +432,14 @@ pub fn docs_markdown() -> String {
          (ISC licence) in Studio's icons folder, drawn in its group's colour.\n\n\
          **The icons folder** is `icons` in Studio's own folder: `%APPDATA%\\Metallic\\Studio\\icons` on Windows. \
          Studio ships its icons beside its executable and copies any file missing there on start, so your edits \
-         are kept. `icons.json` in it says which SVG file each icon id uses, with a line on what it \
-         marks. To change an icon for good, put an SVG in the folder and point its entry's `file` at it. A file \
-         that is missing or cannot be read falls back to the default, with one warning in Output.\n\n\
+         are kept. `icons.json` sits at the top; the SVGs are in a folder per part of Studio that draws them \
+         (`explorer`, `assets`, `panels`, `toolbar`, `interface`), and Lucide's licence is in `licenses`. \
+         `icons.json` says which SVG file each icon id uses and which colour group it is drawn in, with a line on \
+         what it marks, and under `colors` each group's colour on the dark and the light mode (`#rrggbb`). To \
+         change an icon for good, put an SVG in the folder and point its entry's `file` at it; to change a colour, \
+         edit its group's colours, or point an icon's `color` at another group. A file that is missing or cannot \
+         be read falls back to the default, with one warning in Output. Studio reads `icons.json` when it \
+         starts.\n\n\
          **Custom icons:** set a folder in Settings → Appearance → Icon folder. A file in it named after an icon's id, \
          `<icon-id>.svg` or `<icon-id>.png` (the SVG wins when both are there), replaces that icon. Icons without a \
          file keep the built-in one, and a file that cannot be read keeps it too, with one warning in Output. \
@@ -389,14 +447,25 @@ pub fn docs_markdown() -> String {
          (one colour on transparency, such as Lucide's own SVGs) is drawn in its group's colour; a coloured one is \
          drawn as it is.\n\n\
          ## Groups\n\n\
-         | Group | Colour |\n|---|---|\n",
+         | Group | Id in `icons.json` | Colour | Dark | Light |\n|---|---|---|---|---|\n",
     );
     for group in Group::ALL {
-        let hue = match group {
-            Group::Interface => "its place's (neutral by default)".to_owned(),
-            _ => format!("{:?}", group.hue()).to_lowercase(),
+        let (hue, dark, light) = if group.is_coloured() {
+            let (dark, light) = group.default_colours();
+            let hex = |c: Color32| format!("`#{:02x}{:02x}{:02x}`", c.r(), c.g(), c.b());
+            (format!("{:?}", group.hue()).to_lowercase(), hex(dark), hex(light))
+        } else {
+            (
+                "its place's (neutral by default)".to_owned(),
+                String::new(),
+                String::new(),
+            )
         };
-        out.push_str(&format!("| {} | {hue} |\n", group.label()));
+        out.push_str(&format!(
+            "| {} | `{}` | {hue} | {dark} | {light} |\n",
+            group.label(),
+            group.id()
+        ));
     }
     out.push_str(
         "\n## Icons\n\n| Icon id | What it marks | Group | Default file | Custom files |\n|---|---|---|---|---|\n",
