@@ -79,6 +79,10 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `toolbar.step` | Step one frame. | Running the game | [`skip-forward.svg`](https://lucide.dev/icons/skip-forward) | `toolbar.step.svg`, `toolbar.step.png` |
 | `toolbar.stop` | Stop. | Running the game | [`square.svg`](https://lucide.dev/icons/square) | `toolbar.stop.svg`, `toolbar.stop.png` |
 | `toolbar.settings` | The gear that opens Settings. | Studio | [`settings.svg`](https://lucide.dev/icons/settings) | `toolbar.settings.svg`, `toolbar.settings.png` |
+| `toolbar.save` | The toolbar's Save tool. | Studio | [`save.svg`](https://lucide.dev/icons/save) | `toolbar.save.svg`, `toolbar.save.png` |
+| `toolbar.close` | The toolbar's Close project tool. | Studio | [`folder-x.svg`](https://lucide.dev/icons/folder-x) | `toolbar.close.svg`, `toolbar.close.png` |
+| `toolbar.reset_layout` | The toolbar's Reset layout tool. | Panels: scene | [`rotate-ccw.svg`](https://lucide.dev/icons/rotate-ccw) | `toolbar.reset_layout.svg`, `toolbar.reset_layout.png` |
+| `toolbar.plugin` | A plugin's tool that brings no icon of its own. | Studio | [`puzzle.svg`](https://lucide.dev/icons/puzzle) | `toolbar.plugin.svg`, `toolbar.plugin.png` |
 | `ui.search` | A search box. | Interface | [`search.svg`](https://lucide.dev/icons/search) | `ui.search.svg`, `ui.search.png` |
 | `ui.close` | Close, dismiss. | Interface | [`x.svg`](https://lucide.dev/icons/x) | `ui.close.svg`, `ui.close.png` |
 | `ui.warning` | A warning. | Interface | [`triangle-alert.svg`](https://lucide.dev/icons/triangle-alert) | `ui.warning.svg`, `ui.warning.png` |

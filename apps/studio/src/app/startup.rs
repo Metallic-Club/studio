@@ -37,6 +37,9 @@ pub struct Loaded {
     /// The editor's dock layout, read from `layout.json` beside the settings (the default one in memory if Studio has no
     /// config folder).
     pub layout: Dock,
+    /// The editor's toolbar, read from `toolbar.json` beside the settings (the default one in memory if Studio has no
+    /// config folder).
+    pub toolbar: crate::toolbar::Toolbar,
 }
 
 impl std::fmt::Debug for Loaded {
@@ -48,6 +51,7 @@ impl std::fmt::Debug for Loaded {
             .field("templates", &self.templates)
             .field("games_folder", &self.games_folder)
             .field("layout", &self.layout)
+            .field("toolbar", &self.toolbar)
             .finish()
     }
 }
@@ -240,6 +244,8 @@ pub fn settings_step(path: Option<PathBuf>) -> Step {
             Some(path) => {
                 log::info!("settings: {}", path.display());
                 loaded.layout = Dock::load(path.with_file_name(LAYOUT_FILE), PANELS);
+                loaded.toolbar =
+                    crate::toolbar::Toolbar::load(path.with_file_name(crate::toolbar::TOOLBAR_FILE), PANELS);
                 SettingsStore::load(path)
             }
             None => SettingsStore::in_memory(),

@@ -100,6 +100,23 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
   instance's properties from `PropMeta`, **read-only in this slice**, since editing comes with undo); Assets (the
   `.mtproj`'s asset index, #188); Output (engine and script log, with filter and clear).
 
+### Toolbar (#232)
+
+- **Under the menu bar, with tabs.** By default Home, Model, UI, Scripts and Plugins; Home holds Studio's tools (Save, the
+  game's controls, the panel toggles, Settings), the others start empty. Tabs can be added (+), renamed (double-click
+  or right-click), deleted and moved (right-click or drag). Switching tab changes the toolbar only, unless the tab's
+  **"Load a layout for this tab"** box is ticked (UI's is by default): then the dock shows that tab's own layout,
+  started from the main one, kept up to date while it shows, and the main layout (the only one `layout.json` holds)
+  comes back when another tab is in front.
+- **Elements:** tools, spacers and separators. Right-click the toolbar to add one, or one of them to add another
+  before it, move it or remove it; or drag one along the row.
+- **A tool registry** (`toolbar::ToolRegistry`): every tool has an id, a label, an icon, a description and an action.
+  Studio registers its own at start; **the plugin API will register plugins' tools the same way** (`Tool::plugin`,
+  ids `plugin.<plugin>.<name>`), and they appear in the Add menu under Plugins. A click reports the tool's action and
+  Studio carries it out, which is how a plugin's will reach its plugin; until then plugins' tools are disabled, and a
+  tool no longer registered shows greyed out.
+- Saved per user as `toolbar.json` beside the settings (versioned, repaired on load), each tab's own layout in it.
+
 ### Theme
 
 The reference is the **Metallic website** (`Metallic-Club/website`: `src/design.css`, which overrides

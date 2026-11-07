@@ -38,6 +38,7 @@ use crate::theme::icons::custom::CustomIcons;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
+use crate::toolbar::{self, StudioCommand, ToolAction, Toolbar};
 use editor::MenuAction;
 use metallic_engine::metallic_classes::input::feed::CursorState;
 pub use shell::run;
@@ -80,6 +81,19 @@ enum EditorScreen {
 /// Studio's name in the window's title.
 pub const APP_TITLE: &str = "Metallic Studio";
 
+/// Whether a toolbar tool can be used now (#232): the game's controls as the menus allow them; a plugin's tool only
+/// once the plugin API exists.
+fn tool_enabled(action: &ToolAction, play: editor::PlayState) -> bool {
+    match action {
+        ToolAction::Studio(StudioCommand::Play) => play.allows(MenuAction::Play),
+        ToolAction::Studio(StudioCommand::Pause) => play.allows(MenuAction::Pause),
+        ToolAction::Studio(StudioCommand::Step) => play.allows(MenuAction::Step),
+        ToolAction::Studio(StudioCommand::Stop) => play.allows(MenuAction::Stop),
+        ToolAction::Studio(_) => true,
+        ToolAction::Plugin { .. } => false,
+    }
+}
+
 /// Studio's interface state: the screen shown, the theme, the settings and what startup loaded.
 pub struct Studio {
     screen: Screen,
@@ -100,6 +114,12 @@ pub struct Studio {
     add_to_recent: bool,
     /// The editor's panels and their layout, which outlive any one project.
     dock: Dock,
+    /// The editor's toolbar (#232): its tabs and their tools.
+    toolbar: Toolbar,
+    /// The main layout, kept while a toolbar tab shows a layout of its own.
+    main_layout: Option<egui_tiles::Tree<crate::dock::PanelId>>,
+    /// The toolbar tab whose own layout the dock shows, by id.
+    shown_layout_tab: Option<u32>,
     /// The log the Output panel reads.
     log: Arc<LogBuffer>,
     theme: ThemeState,
@@ -161,6 +181,9 @@ impl Studio {
             open_after_splash: None,
             add_to_recent: false,
             dock: Dock::in_memory(panels::PANELS),
+            toolbar: Toolbar::in_memory(panels::PANELS),
+            main_layout: None,
+            shown_layout_tab: None,
             log: Arc::clone(crate::logging::global()),
             // The splash's look: the default dark mode and accent, before the settings are read.
             theme: ThemeState::new(Look {
@@ -363,6 +386,16 @@ impl Studio {
         self.notices.first().map(|notice| notice.body.as_str())
     }
 
+    /// The editor's toolbar (#232).
+    pub fn toolbar(&self) -> &Toolbar {
+        &self.toolbar
+    }
+
+    /// The editor's toolbar, to change: the plugin API registers its tools through it.
+    pub fn toolbar_mut(&mut self) -> &mut Toolbar {
+        &mut self.toolbar
+    }
+
     /// The keymap.
     pub fn keymap(&self) -> &Keymap {
         &self.keymap
@@ -448,7 +481,23 @@ impl Studio {
                 editor::top_bar(ui, editor, &self.dock, &self.keymap, settings_open)
             })
             .inner;
-        let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
+        // The toolbar under the menu bar (#232).
+        let strip = Rect::from_min_size(
+            pos2(full.left(), bar.bottom()),
+            vec2(full.width(), toolbar::TOOLBAR_HEIGHT),
+        );
+        let play = editor::PlayState::of(editor);
+        let dock = &self.dock;
+        let ran = ui
+            .scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+                self.toolbar.ui(
+                    ui,
+                    |action| tool_enabled(action, play),
+                    |action| matches!(action, ToolAction::Studio(StudioCommand::TogglePanel(id)) if dock.is_open(id)),
+                )
+            })
+            .inner;
+        let body = Rect::from_min_max(pos2(full.left(), strip.bottom()), full.max);
         let p = current_colors(&ctx).palette;
         ui.painter().rect_filled(body, 0.0, p.bg);
         let mut cx = PanelContext {
@@ -461,6 +510,11 @@ impl Studio {
         if let Some(action) = action {
             self.menu_action(action);
         }
+        for event in ran {
+            let toolbar::ToolbarEvent::Run(action) = event;
+            self.run_tool(action);
+        }
+        self.show_toolbar_layout();
         // After the menus' action, so it opens in the frame it was chosen in, as the Settings window does.
         if self.about_open {
             let mark = self.mark(&ctx, editor::ABOUT_MARK);
@@ -470,6 +524,9 @@ impl Studio {
         let busy = ctx.input(|input| input.pointer.any_down()) || self.dock.is_dragging(&ctx);
         if let Err(error) = self.dock.save_if_changed(busy) {
             log::warn!("layout: could not save it: {error}");
+        }
+        if let Err(error) = self.toolbar.save_if_changed(busy) {
+            log::warn!("toolbar: could not save it: {error}");
         }
     }
 
@@ -535,6 +592,83 @@ impl Studio {
             }
             MenuAction::Stop => self.stop(),
         }
+    }
+
+    /// Does what a toolbar tool asks (#232): Studio's own commands as the menus run them. A plugin's tool reaches its
+    /// plugin through the plugin API, once there is one.
+    fn run_tool(&mut self, action: ToolAction) {
+        let menu = match action {
+            ToolAction::Studio(command) => match command {
+                StudioCommand::Save => MenuAction::Save,
+                StudioCommand::Close => MenuAction::Close,
+                StudioCommand::Play => MenuAction::Play,
+                StudioCommand::Pause => MenuAction::Pause,
+                StudioCommand::Step => MenuAction::Step,
+                StudioCommand::Stop => MenuAction::Stop,
+                StudioCommand::ResetLayout => MenuAction::ResetLayout,
+                StudioCommand::Settings => MenuAction::Settings,
+                StudioCommand::TogglePanel(id) => MenuAction::Toggle(id),
+            },
+            ToolAction::Plugin { plugin, command } => {
+                log::warn!("toolbar: {plugin}'s `{command}` needs the plugin API, which Studio does not have yet");
+                return;
+            }
+        };
+        self.menu_action(menu);
+    }
+
+    /// Shows the dock layout the toolbar's front tab asks for (#232): a tab with "Load a layout for this tab" gets
+    /// its own (starting from the main one the first time), kept up to date while it shows; any other tab, the main
+    /// layout, which alone is written to `layout.json`.
+    fn show_toolbar_layout(&mut self) {
+        use crate::dock::layout::{from_json, to_json};
+
+        let want = self.toolbar.layout_tab();
+        if want == self.shown_layout_tab {
+            // The tab's layout follows what the user does to it.
+            if let Some(id) = want {
+                let json = to_json(&self.dock.persisted());
+                if let Some(tab) = self.toolbar.config_mut().tab_mut(id)
+                    && tab.layout.as_deref() != Some(json.as_str())
+                {
+                    tab.layout = Some(json);
+                }
+            }
+            return;
+        }
+        // Leaving: the main layout is kept (and written, if it changed), or the tab's layout was kept up to date.
+        if self.shown_layout_tab.is_none() {
+            if let Err(error) = self.dock.save_if_changed(false) {
+                log::warn!("layout: could not save it: {error}");
+            }
+            self.main_layout = Some(self.dock.persisted());
+        }
+        let playing = self.editor().is_some_and(EditorState::is_playing);
+        match want {
+            Some(id) => {
+                let own = self
+                    .toolbar
+                    .config()
+                    .tab(id)
+                    .and_then(|tab| tab.layout.as_deref())
+                    .and_then(|json| from_json(json, panels::PANELS).ok());
+                let tree = own
+                    .or_else(|| self.main_layout.clone())
+                    .unwrap_or_else(|| self.dock.persisted());
+                self.dock.set_saving(false);
+                self.dock.replace(tree);
+            }
+            None => {
+                let main = self.main_layout.take().unwrap_or_else(|| self.dock.persisted());
+                self.dock.replace(main);
+                self.dock.set_saving(true);
+            }
+        }
+        if playing {
+            // The Game tab is the session's, whichever layout shows.
+            self.dock.open(panels::ids::GAME);
+        }
+        self.shown_layout_tab = want;
     }
 
     /// The window's title (#254): the project's name with a `*` while it has unsaved changes, then the app's, in the
@@ -943,6 +1077,7 @@ impl Studio {
             self.projects.set_templates(std::mem::take(&mut loaded.templates));
             self.projects.set_games_folder(loaded.games_folder.clone());
             self.dock = std::mem::take(&mut loaded.layout);
+            self.toolbar = std::mem::take(&mut loaded.toolbar);
             self.loaded = Some(loaded);
             self.screen = if self.settings.settings().general.skip_sign_in {
                 Screen::Projects
@@ -1414,6 +1549,24 @@ mod tests {
         for _ in 0..30 {
             harness.step();
         }
+    }
+
+    /// The tint of each mesh in the last frame that draws `icon` inside `area`.
+    fn icon_meshes_in(harness: &Harness<'_, Test>, icon: Icon, area: egui::Rect) -> Vec<egui::Color32> {
+        let textures = crate::theme::icons::builtin::textures_of(&harness.ctx, icon);
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh)
+                    if textures.contains(&mesh.texture_id) && area.contains_rect(mesh.calc_bounds()) =>
+                {
+                    mesh.vertices.first().map(|v| v.color)
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// The tint of each mesh in the last frame that draws `icon` from the built-in icons folder (#291).
@@ -2132,7 +2285,12 @@ mod tests {
 
     /// Clicks the node labelled `label` and runs the frames that show what it did.
     fn click_label(harness: &mut Harness<'_, Test>, label: &str) {
-        harness.get_by_label(label).click();
+        // Not a toolbar tab of the same name (#232: the Plugins tab and the Plugins menu).
+        harness
+            .get_all_by_label(label)
+            .find(|node| egui_kittest::kittest::NodeT::accesskit_node(node).role() != Role::Tab)
+            .expect("a node with that label")
+            .click();
         settle(harness);
     }
 
@@ -2489,6 +2647,9 @@ mod tests {
         let grey = colors.palette.text.gamma_multiply(0.48);
         let green = editor::Control::Play.ink(&colors);
         let red = editor::Control::Stop.ink(&colors);
+        // The top bar's controls (the toolbar's Home tab has tools of the same icons, #232).
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, editor::BAR_HEIGHT + 8.0));
+        let icon_meshes = |harness: &Harness<'_, Test>, icon| icon_meshes_in(harness, icon, bar);
         // No game: Play is a green icon on no green fill; Pause, Step and Stop are greyed out (#302).
         assert_eq!(icon_meshes(&harness, Icon::ToolbarPlay), [green]);
         assert_eq!(icon_meshes(&harness, Icon::ToolbarStop), [grey]);
@@ -3268,6 +3429,176 @@ mod tests {
         );
     }
 
+    /// The toolbar's tab called `name`.
+    fn toolbar_tab(harness: &Harness<'_, Test>, name: &str) -> egui::Rect {
+        harness
+            .get_all_by_role_and_label(Role::Tab, name)
+            .map(|tab| tab.rect())
+            .find(|tab| tab.top() < editor::BAR_HEIGHT + toolbar::TAB_ROW)
+            .expect("a toolbar tab")
+    }
+
+    /// Clicks the toolbar's tab called `name`.
+    fn click_tab(harness: &mut Harness<'_, Test>, name: &str) {
+        let tab = toolbar_tab(harness, name);
+        left_click(harness, tab);
+    }
+
+    /// Clicks the middle of `rect`.
+    fn left_click(harness: &mut Harness<'_, Test>, rect: egui::Rect) {
+        let at = rect.center();
+        harness.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        settle(harness);
+    }
+
+    /// Opens the menu of `node` with a right-click.
+    fn right_click(harness: &mut Harness<'_, Test>, node: egui::Rect) {
+        let at = node.center();
+        harness.event(egui::Event::PointerMoved(at));
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        settle(harness);
+    }
+
+    #[test]
+    fn the_toolbar_has_tabs_of_tools_that_can_be_changed() {
+        let path = settings_file("toolbar", None);
+        let mut harness = editing(path.clone(), "Toolbar Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // The default tabs, Home in front with Studio's tools (#232).
+        for name in ["Home", "Model", "UI", "Scripts", "Plugins"] {
+            toolbar_tab(&harness, name);
+        }
+        assert_eq!(harness.state().studio.toolbar().config().active, 0);
+        // A tool runs its command: the Explorer tool closes the Explorer.
+        assert!(harness.state().studio.dock().is_open(panels::ids::EXPLORER));
+        harness.get_by_role_and_label(Role::Button, "Explorer tool").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.dock().is_open(panels::ids::EXPLORER));
+        harness.get_by_role_and_label(Role::Button, "Explorer tool").click();
+        settle(&mut harness);
+
+        // Model: an empty toolbar. Right-click it, Add, Separator.
+        click_tab(&mut harness, "Model");
+        assert_eq!(harness.state().studio.toolbar().config().active, 1);
+        assert!(harness.state().studio.toolbar().config().tabs[1].elements.is_empty());
+        let row = harness.get_by_role_and_label(Role::Toolbar, "Toolbar").rect();
+        right_click(&mut harness, row);
+        harness.get_by_label("Add").click();
+        settle(&mut harness);
+        harness.get_by_label("Save").click();
+        settle(&mut harness);
+        let model = |harness: &Harness<'_, Test>| harness.state().studio.toolbar().config().tabs[1].elements.clone();
+        assert_eq!(model(&harness), [toolbar::Element::tool(toolbar::tools::ids::SAVE)]);
+        // Right-click the new tool: Remove.
+        let save = harness.get_by_role_and_label(Role::Button, "Save tool").rect();
+        right_click(&mut harness, save);
+        harness.get_by_label("Remove").click();
+        settle(&mut harness);
+        assert!(model(&harness).is_empty());
+
+        // A plugin's tool, registered while Studio runs, is offered under Plugins.
+        let paint = toolbar::Tool::plugin("terrain", "paint", "Paint terrain", "Paints terrain.", None);
+        harness
+            .state_mut()
+            .studio
+            .toolbar_mut()
+            .registry_mut()
+            .register(paint)
+            .unwrap();
+        right_click(&mut harness, row);
+        harness.get_by_label("Add").click();
+        settle(&mut harness);
+        harness.get_by_label("Paint terrain").click();
+        settle(&mut harness);
+        assert_eq!(model(&harness), [toolbar::Element::tool("plugin.terrain.paint")]);
+        // Disabled until the plugin API runs it.
+        let tool = harness.get_by_role_and_label(Role::Button, "Paint terrain tool");
+        assert!(egui_kittest::kittest::NodeT::accesskit_node(&tool).is_disabled());
+
+        // Rename a tab from its menu, and delete another.
+        let scripts = toolbar_tab(&harness, "Scripts");
+        right_click(&mut harness, scripts);
+        harness.get_by_label("Rename").click();
+        settle(&mut harness);
+        harness
+            .get_all_by_role(Role::TextInput)
+            .find(|field| field.rect().top() < editor::BAR_HEIGHT + toolbar::TAB_ROW)
+            .expect("the tab's name, in place")
+            .type_text("Code");
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        let names = |harness: &Harness<'_, Test>| -> Vec<String> {
+            let config = harness.state().studio.toolbar().config();
+            config.tabs.iter().map(|tab| tab.name.clone()).collect()
+        };
+        assert!(names(&harness).contains(&"Code".to_owned()) || names(&harness).iter().any(|n| n.ends_with("Code")));
+        let plugins = toolbar_tab(&harness, "Plugins");
+        right_click(&mut harness, plugins);
+        harness.get_by_label("Delete").click();
+        settle(&mut harness);
+        assert!(!names(&harness).contains(&"Plugins".to_owned()));
+        // A new tab from the +.
+        harness.get_by_role_and_label(Role::Button, "New tab").click();
+        settle(&mut harness);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert!(names(&harness).contains(&"New tab".to_owned()));
+
+        // UI loads a layout of its own: closing Output there leaves the main layout as it was.
+        click_tab(&mut harness, "UI");
+        assert!(
+            harness.state().studio.dock().is_open(panels::ids::OUTPUT),
+            "starts as the main"
+        );
+        harness.state_mut().studio.dock_mut().close(panels::ids::OUTPUT);
+        settle(&mut harness);
+        click_tab(&mut harness, "Home");
+        assert!(
+            harness.state().studio.dock().is_open(panels::ids::OUTPUT),
+            "the main layout is back"
+        );
+        click_tab(&mut harness, "UI");
+        assert!(
+            !harness.state().studio.dock().is_open(panels::ids::OUTPUT),
+            "UI's own layout"
+        );
+        let layout = std::fs::read_to_string(path.with_file_name(crate::dock::LAYOUT_FILE)).unwrap_or_default();
+        assert!(
+            layout.is_empty() || layout.contains("\"output\""),
+            "layout.json keeps the main layout"
+        );
+        click_tab(&mut harness, "Home");
+
+        // Saved, and read back by the next Studio.
+        let saved = harness.state().studio.toolbar().config().clone();
+        let text = std::fs::read_to_string(path.with_file_name(toolbar::TOOLBAR_FILE)).unwrap();
+        assert!(text.contains("\"Code\"") || text.contains("Code"), "{text}");
+        let again = past_the_splash(path);
+        let mut read = again.state().studio.toolbar().config().clone();
+        read.active = saved.active;
+        assert_eq!(read, saved);
+    }
+
     #[test]
     fn the_top_bar_has_no_mark() {
         let mut harness = editing(settings_file("bar-no-mark", None), "Bar Game");
@@ -3308,9 +3639,9 @@ mod tests {
             (viewport.right() - explorer.left()).abs() < 0.01,
             "{viewport:?} {explorer:?}"
         );
-        // None around the dock: it meets the frame's left, right and bottom, and the top bar. The harness frames the
+        // None around the dock: it meets the frame's left, right and bottom, and the toolbar. The harness frames the
         // UI with a margin of its own (Studio's window has none): the top bar's top-left corner is the frame's.
-        let margin = viewport.top() - editor::BAR_HEIGHT;
+        let margin = viewport.top() - editor::BAR_HEIGHT - toolbar::TOOLBAR_HEIGHT;
         assert!(
             (viewport.left() - margin).abs() < 0.01 && (output.left() - margin).abs() < 0.01,
             "{viewport:?}"
@@ -3357,8 +3688,13 @@ mod tests {
             _ => false,
         });
         assert!(named, "the chip names the panel");
+        // Below the toolbar, whose Home tab has the panels' tools (#232).
+        let dock = egui::Rect::from_min_max(
+            egui::pos2(0.0, editor::BAR_HEIGHT + toolbar::TOOLBAR_HEIGHT + 8.0),
+            egui::pos2(1280.0, 800.0),
+        );
         for panel in [Icon::PanelOutput, Icon::PanelViewport, Icon::PanelExplorer] {
-            assert!(icon_meshes(&harness, panel).is_empty(), "{panel:?} drawn");
+            assert!(icon_meshes_in(&harness, panel, dock).is_empty(), "{panel:?} drawn");
         }
         harness.event(button(to, false));
         settle(&mut harness);

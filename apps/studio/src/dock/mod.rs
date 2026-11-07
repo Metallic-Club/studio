@@ -119,6 +119,8 @@ pub struct Dock {
     pointer: Option<Pos2>,
     /// Each tab as the last frame drew it: where a dragged tab goes in the bar it is over.
     tab_rects: Vec<(TileId, Rect)>,
+    /// Whether changes are written to `layout.json`: not while a toolbar tab shows a layout of its own (#232).
+    saving: bool,
 }
 
 impl std::fmt::Debug for Dock {
@@ -149,6 +151,7 @@ impl Dock {
             focus: DockFocus::default(),
             pointer: None,
             tab_rects: Vec::new(),
+            saving: true,
         }
     }
 
@@ -163,6 +166,7 @@ impl Dock {
             focus: DockFocus::default(),
             pointer: None,
             tab_rects: Vec::new(),
+            saving: true,
         }
     }
 
@@ -297,6 +301,23 @@ impl Dock {
         }
     }
 
+    /// Shows `tree` in place of the layout, and returns the layout it replaces, as saved (without Studio's
+    /// transient panels). For a toolbar tab's own layout (#232): while one shows, [`Dock::set_saving`] is off.
+    pub fn replace(&mut self, tree: Tree<PanelId>) -> Tree<PanelId> {
+        let old = self.persisted();
+        self.tree = tree;
+        layout::tidy(&mut self.tree);
+        self.focus = DockFocus::default();
+        old
+    }
+
+    /// Whether the layout is written to `layout.json` when it changes. Off while a toolbar tab shows a layout of its
+    /// own (#232), so the main layout keeps the user's; turning it back on after putting the main layout back
+    /// writes nothing more than the main layout's own changes.
+    pub fn set_saving(&mut self, on: bool) {
+        self.saving = on;
+    }
+
     /// Goes back to the default layout (saved like any other change).
     pub fn reset(&mut self) {
         self.tree = layout::default_tree(self.panels);
@@ -412,7 +433,7 @@ impl Dock {
     /// Writes the layout if it changed, unless `busy` (a drag is going on: it writes once the drag ends). Returns
     /// whether it wrote. A layout in memory is never written.
     pub fn save_if_changed(&mut self, busy: bool) -> std::io::Result<bool> {
-        if busy || !self.is_changed() {
+        if busy || !self.saving || !self.is_changed() {
             return Ok(false);
         }
         self.saved = self.tree.clone();

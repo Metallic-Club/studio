@@ -162,6 +162,10 @@
       "file": "monitor.svg",
       "for": "The Viewport panel."
     },
+    "toolbar.close": {
+      "file": "folder-x.svg",
+      "for": "The toolbar's Close project tool."
+    },
     "toolbar.pause": {
       "file": "pause.svg",
       "for": "Pause."
@@ -169,6 +173,18 @@
     "toolbar.play": {
       "file": "play.svg",
       "for": "Play, and Resume while paused."
+    },
+    "toolbar.plugin": {
+      "file": "puzzle.svg",
+      "for": "A plugin's tool that brings no icon of its own."
+    },
+    "toolbar.reset_layout": {
+      "file": "rotate-ccw.svg",
+      "for": "The toolbar's Reset layout tool."
+    },
+    "toolbar.save": {
+      "file": "save.svg",
+      "for": "The toolbar's Save tool."
     },
     "toolbar.settings": {
       "file": "settings.svg",
