@@ -130,11 +130,11 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   https://lucide.dev). All bundled with their licence files. egui's default fonts are replaced, because one of them
   is under a licence `deny.toml` rejects.
 - **Icons** (#231): every icon is an entry in one table (`theme::icons::Icon`): a stable id (`explorer.part`), a
-  group and a default Lucide glyph. **Groups are coloured** so sections are easy to tell apart. Since #277 they are vivid, like Roblox Studio's
-  object icons, and **every icon in a section shares one colour**, following the engine's class sections: services
-  blue, parts and models teal, cameras pink, lights orange, scripting (scripts and bindables) green, values violet,
-  folders yellow, the rest neutral; panels, assets and the play controls likewise. Theme tokens hold a dark and a
-  darker light-mode colour for each; high contrast pulls them towards the text.
+  group and a default Lucide glyph. **Groups are coloured** so sections are easy to tell apart. Since #290 they follow the owner's groups, moderately
+  saturated: the workspace, server scripts and the server script service green; local scripts blue; module scripts
+  purple; bindables pink; lighting and lights yellow; storage services orange; input and settings services cyan;
+  parts, models, folders and cameras white (near-black on light); values and the rest grey. Theme tokens hold a dark
+  and a darker light-mode colour for each; high contrast pulls them towards the text.
   Selection still wins: a selected row's icon is the accent. A **custom icon folder** (Settings → Appearance → Icon
   folder) replaces any icon with `<id>.svg` or `<id>.png`; it is read and rasterised (resvg, png) on a background
   thread when the setting changes or Reload is pressed, and cached as textures. A monochrome image takes its group's

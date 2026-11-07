@@ -246,27 +246,29 @@ impl Accent {
     }
 }
 
-/// The hues icons are coloured in, one per icon section (`theme::icons::Group`, #231, #277). Vivid, as Roblox
-/// Studio's object icons are, so sections stand apart at a glance; every icon in a section shares one. Each has a
-/// dark-mode colour and a darker light-mode one, and high contrast pulls either further from its ground.
+/// The hues icons are coloured in, one per icon group (`theme::icons::Group`; #290: the owner's groups). Moderately
+/// saturated: clear at a glance, never neon. Each has a dark-mode colour and a darker light-mode one, and high
+/// contrast pulls either further from its ground.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hue {
-    /// Services, the scene's panels.
-    Blue,
-    /// Parts, models and scenes.
-    Teal,
-    /// Cameras, images and sounds.
-    Pink,
-    /// Lights.
-    Orange,
-    /// Scripting, running the game.
+    /// The workspace, server scripts, running the game.
     Green,
-    /// Values, the log.
-    Violet,
-    /// Folders.
+    /// Local scripts, the scene's panels.
+    Blue,
+    /// Module scripts, the log.
+    Purple,
+    /// Bindable events and functions, images and sounds.
+    Pink,
+    /// Lighting and lights.
     Yellow,
-    /// Everything else: Studio itself and the interface's own icons.
-    Neutral,
+    /// The storage services.
+    Orange,
+    /// The input and settings services.
+    Cyan,
+    /// The game's objects: parts, models, folders, cameras (white on dark, near-black on light).
+    White,
+    /// Values, and everything else: the palette's subtle grey.
+    Grey,
 }
 
 /// How far a high-contrast icon hue is pulled towards the text colour: away from the ground, so stronger.
@@ -274,28 +276,30 @@ const ICON_STRONG: f32 = 0.3;
 
 impl Hue {
     /// Every hue.
-    pub const ALL: [Hue; 8] = [
-        Hue::Blue,
-        Hue::Teal,
-        Hue::Pink,
-        Hue::Orange,
+    pub const ALL: [Hue; 9] = [
         Hue::Green,
-        Hue::Violet,
+        Hue::Blue,
+        Hue::Purple,
+        Hue::Pink,
         Hue::Yellow,
-        Hue::Neutral,
+        Hue::Orange,
+        Hue::Cyan,
+        Hue::White,
+        Hue::Grey,
     ];
 
-    /// Its colours on the dark and the light mode; `None` for the neutral, which is the palette's.
+    /// Its colours on the dark and the light mode; `None` for the grey, which is the palette's.
     const fn pair(self) -> Option<(Color32, Color32)> {
         Some(match self {
-            Hue::Blue => (Color32::from_rgb(0x4c, 0x9e, 0xff), Color32::from_rgb(0x15, 0x65, 0xc0)),
-            Hue::Teal => (Color32::from_rgb(0x2d, 0xd4, 0xbf), Color32::from_rgb(0x0f, 0x76, 0x6e)),
-            Hue::Pink => (Color32::from_rgb(0xf4, 0x72, 0xb6), Color32::from_rgb(0xbe, 0x18, 0x5d)),
-            Hue::Orange => (Color32::from_rgb(0xfb, 0x92, 0x3c), Color32::from_rgb(0xc2, 0x41, 0x0c)),
-            Hue::Green => (Color32::from_rgb(0x4a, 0xde, 0x80), Color32::from_rgb(0x15, 0x80, 0x3d)),
-            Hue::Violet => (Color32::from_rgb(0xa7, 0x8b, 0xfa), Color32::from_rgb(0x6d, 0x28, 0xd9)),
-            Hue::Yellow => (Color32::from_rgb(0xfa, 0xcc, 0x15), Color32::from_rgb(0x85, 0x4d, 0x0e)),
-            Hue::Neutral => return None,
+            Hue::Green => (Color32::from_rgb(0x6b, 0xc9, 0x8c), Color32::from_rgb(0x2e, 0x7d, 0x4f)),
+            Hue::Blue => (Color32::from_rgb(0x6a, 0xa3, 0xe8), Color32::from_rgb(0x2f, 0x5f, 0xa8)),
+            Hue::Purple => (Color32::from_rgb(0xa8, 0x8b, 0xe0), Color32::from_rgb(0x65, 0x45, 0xb0)),
+            Hue::Pink => (Color32::from_rgb(0xd9, 0x87, 0xb0), Color32::from_rgb(0xa3, 0x3d, 0x6e)),
+            Hue::Yellow => (Color32::from_rgb(0xdc, 0xc2, 0x5a), Color32::from_rgb(0x80, 0x65, 0x12)),
+            Hue::Orange => (Color32::from_rgb(0xe0, 0x99, 0x5a), Color32::from_rgb(0xa6, 0x56, 0x19)),
+            Hue::Cyan => (Color32::from_rgb(0x5c, 0xbc, 0xc8), Color32::from_rgb(0x1d, 0x6f, 0x7a)),
+            Hue::White => (Color32::from_rgb(0xdc, 0xdc, 0xdc), Color32::from_rgb(0x3f, 0x3f, 0x3f)),
+            Hue::Grey => return None,
         })
     }
 
@@ -611,10 +615,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(Hue::Neutral.color(true, false), DARK.subtle);
+        assert_eq!(Hue::Grey.color(true, false), DARK.subtle);
         assert_eq!(
             Hue::Orange.color(false, true),
-            mix(Color32::from_rgb(0xc2, 0x41, 0x0c), LIGHT.text, ICON_STRONG)
+            mix(Color32::from_rgb(0xa6, 0x56, 0x19), LIGHT.text, ICON_STRONG)
         );
     }
 

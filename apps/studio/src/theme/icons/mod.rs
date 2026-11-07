@@ -13,29 +13,35 @@ use egui::{Align2, Color32, Painter, Pos2, Rect, Response, Sense, Ui, Vec2, pos2
 use super::tokens::Hue;
 use super::{Colors, fonts};
 
-/// A group of icons drawn in one colour, so the sections of the interface are easy to tell apart. Each group has one
-/// [`Hue`] (the accent family's, or neutral) from the theme's tokens, tuned for Dark, Light and high contrast.
+/// A group of icons drawn in one colour, so the parts of the interface are easy to tell apart (#290: the owner's
+/// groups). Each group has one [`Hue`] from the theme's tokens, tuned for Dark, Light and high contrast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
-    /// Explorer: the game and its services (the workspace, lighting, storage, script and settings services).
-    Service,
-    /// Explorer and Assets: parts, models and scenes (the engine's Parts section).
-    World,
-    /// Explorer: lights (the engine's Lights section).
+    /// Explorer: the workspace.
+    Workspace,
+    /// Explorer: the storage services (replicated and server storage).
+    Storage,
+    /// Explorer: the input and settings services (user input, user settings, run service).
+    SettingsService,
+    /// Explorer and Assets: server scripts and the server script service.
+    ServerScript,
+    /// Explorer: local scripts, which run on the player's machine.
+    LocalScript,
+    /// Explorer: module scripts.
+    ModuleScript,
+    /// Explorer: bindable events and functions.
+    Event,
+    /// Explorer: lighting and lights.
     Light,
-    /// Explorer and Assets: scripting (the engine's Scripts section, and bindable events and functions).
-    Script,
-    /// Explorer: cameras (the engine's World section).
-    Camera,
-    /// Explorer: values (the engine's Values section).
+    /// Explorer and Assets: the game's objects: parts, models, folders, cameras, meshes and scenes.
+    Object,
+    /// Explorer: values (Int, String, ...).
     Value,
-    /// Explorer: folders.
-    Folder,
     /// Explorer and Assets: everything else (input objects, any other file).
     Other,
     /// Panel tabs: the scene's panels (Viewport, Explorer, Properties).
     Scene,
-    /// Panels: the project's content (Assets, images, sounds).
+    /// Panels and Assets: the project's content (Assets, images, sounds).
     Content,
     /// Panels: the log (Output).
     Log,
@@ -50,14 +56,17 @@ pub enum Group {
 
 impl Group {
     /// Every group, in the order the docs list them.
-    pub const ALL: [Group; 14] = [
-        Group::Service,
-        Group::World,
+    pub const ALL: [Group; 17] = [
+        Group::Workspace,
+        Group::Storage,
+        Group::SettingsService,
+        Group::ServerScript,
+        Group::LocalScript,
+        Group::ModuleScript,
+        Group::Event,
         Group::Light,
-        Group::Script,
-        Group::Camera,
+        Group::Object,
         Group::Value,
-        Group::Folder,
         Group::Other,
         Group::Scene,
         Group::Content,
@@ -70,14 +79,15 @@ impl Group {
     /// Its hue.
     pub const fn hue(self) -> Hue {
         match self {
-            Group::Service | Group::Scene => Hue::Blue,
-            Group::World => Hue::Teal,
-            Group::Camera | Group::Content => Hue::Pink,
-            Group::Light => Hue::Orange,
-            Group::Script | Group::Run => Hue::Green,
-            Group::Value | Group::Log => Hue::Violet,
-            Group::Folder => Hue::Yellow,
-            Group::Other | Group::Studio | Group::Interface => Hue::Neutral,
+            Group::Workspace | Group::ServerScript | Group::Run => Hue::Green,
+            Group::LocalScript | Group::Scene => Hue::Blue,
+            Group::ModuleScript | Group::Log => Hue::Purple,
+            Group::Event | Group::Content => Hue::Pink,
+            Group::Light => Hue::Yellow,
+            Group::Storage => Hue::Orange,
+            Group::SettingsService => Hue::Cyan,
+            Group::Object => Hue::White,
+            Group::Value | Group::Other | Group::Studio | Group::Interface => Hue::Grey,
         }
     }
 
@@ -90,13 +100,16 @@ impl Group {
     /// Where it is used and what it holds, as the docs name it.
     pub const fn label(self) -> &'static str {
         match self {
-            Group::Service => "Explorer: services",
-            Group::World => "Explorer and Assets: parts, models and scenes",
-            Group::Light => "Explorer: lights",
-            Group::Script => "Explorer and Assets: scripting",
-            Group::Camera => "Explorer: cameras",
+            Group::Workspace => "Explorer: the workspace",
+            Group::Storage => "Explorer: storage services",
+            Group::SettingsService => "Explorer: input and settings services",
+            Group::ServerScript => "Explorer and Assets: server scripts",
+            Group::LocalScript => "Explorer: local scripts",
+            Group::ModuleScript => "Explorer: module scripts",
+            Group::Event => "Explorer: bindable events and functions",
+            Group::Light => "Explorer: lighting and lights",
+            Group::Object => "Explorer and Assets: parts, models, folders, cameras",
             Group::Value => "Explorer: values",
-            Group::Folder => "Explorer: folders",
             Group::Other => "Explorer and Assets: other",
             Group::Scene => "Panels: scene",
             Group::Content => "Panels and Assets: content",
@@ -155,27 +168,27 @@ macro_rules! icons {
 
 icons! {
     /// The game (the data model).
-    ExplorerGame = "explorer.game", Service, "gamepad-2", '\u{E0DF}';
+    ExplorerGame = "explorer.game", Object, "gamepad-2", '\u{E0DF}';
     /// The workspace.
-    ExplorerWorkspace = "explorer.workspace", Service, "earth", '\u{E1F3}';
+    ExplorerWorkspace = "explorer.workspace", Workspace, "earth", '\u{E1F3}';
     /// The lighting service.
-    ExplorerLighting = "explorer.lighting", Service, "sun", '\u{E178}';
+    ExplorerLighting = "explorer.lighting", Light, "sun", '\u{E178}';
     /// Replicated storage.
-    ExplorerReplicatedStorage = "explorer.replicated_storage", Service, "package", '\u{E129}';
+    ExplorerReplicatedStorage = "explorer.replicated_storage", Storage, "package", '\u{E129}';
     /// The server script service.
-    ExplorerScriptService = "explorer.script_service", Service, "scroll", '\u{E2ED}';
+    ExplorerScriptService = "explorer.script_service", ServerScript, "scroll", '\u{E2ED}';
     /// Server storage.
-    ExplorerServerStorage = "explorer.server_storage", Service, "hard-drive", '\u{E0ED}';
+    ExplorerServerStorage = "explorer.server_storage", Storage, "hard-drive", '\u{E0ED}';
     /// A settings or input service (user settings, input, run service).
-    ExplorerSettingsService = "explorer.settings_service", Service, "sliders-horizontal", '\u{E29A}';
+    ExplorerSettingsService = "explorer.settings_service", SettingsService, "sliders-horizontal", '\u{E29A}';
     /// A camera.
-    ExplorerCamera = "explorer.camera", Camera, "camera", '\u{E064}';
+    ExplorerCamera = "explorer.camera", Object, "camera", '\u{E064}';
     /// A part.
-    ExplorerPart = "explorer.part", World, "box", '\u{E061}';
+    ExplorerPart = "explorer.part", Object, "box", '\u{E061}';
     /// A mesh part.
-    ExplorerMeshPart = "explorer.mesh_part", World, "cuboid", '\u{E524}';
+    ExplorerMeshPart = "explorer.mesh_part", Object, "cuboid", '\u{E524}';
     /// A model.
-    ExplorerModel = "explorer.model", World, "shapes", '\u{E4B3}';
+    ExplorerModel = "explorer.model", Object, "shapes", '\u{E4B3}';
     /// A directional light.
     ExplorerDirectionalLight = "explorer.directional_light", Light, "sun", '\u{E178}';
     /// A spotlight.
@@ -183,17 +196,17 @@ icons! {
     /// Any other light.
     ExplorerLight = "explorer.light", Light, "lightbulb", '\u{E1C2}';
     /// A script.
-    ExplorerScript = "explorer.script", Script, "scroll", '\u{E2ED}';
+    ExplorerScript = "explorer.script", ServerScript, "scroll", '\u{E2ED}';
     /// A local script, which runs on the player's machine: a script's scroll (#289), in its own colour.
-    ExplorerLocalScript = "explorer.local_script", Script, "scroll", '\u{E2ED}';
+    ExplorerLocalScript = "explorer.local_script", LocalScript, "scroll", '\u{E2ED}';
     /// A module script.
-    ExplorerModuleScript = "explorer.module_script", Script, "scroll-text", '\u{E45F}';
+    ExplorerModuleScript = "explorer.module_script", ModuleScript, "scroll-text", '\u{E45F}';
     /// A bindable event.
-    ExplorerEvent = "explorer.event", Script, "radio", '\u{E142}';
+    ExplorerEvent = "explorer.event", Event, "radio", '\u{E142}';
     /// A bindable function.
-    ExplorerFunction = "explorer.function", Script, "square-function", '\u{E22D}';
+    ExplorerFunction = "explorer.function", Event, "square-function", '\u{E22D}';
     /// A folder.
-    ExplorerFolder = "explorer.folder", Folder, "folder", '\u{E0D7}';
+    ExplorerFolder = "explorer.folder", Object, "folder", '\u{E0D7}';
     /// A value object.
     ExplorerValue = "explorer.value", Value, "diamond", '\u{E2D2}';
     /// A true-or-false value.
@@ -223,15 +236,15 @@ icons! {
     /// The Game tab.
     PanelGame = "panel.game", Run, "gamepad-2", '\u{E0DF}';
     /// A mesh in the Assets panel.
-    AssetMesh = "asset.mesh", World, "cuboid", '\u{E524}';
+    AssetMesh = "asset.mesh", Object, "cuboid", '\u{E524}';
     /// An image in the Assets panel.
     AssetImage = "asset.image", Content, "image", '\u{E0F6}';
     /// A sound in the Assets panel.
     AssetAudio = "asset.audio", Content, "music", '\u{E122}';
     /// A scene in the Assets panel.
-    AssetScene = "asset.scene", World, "list-tree", '\u{E408}';
+    AssetScene = "asset.scene", Object, "list-tree", '\u{E408}';
     /// A script in the Assets panel.
-    AssetScript = "asset.script", Script, "scroll", '\u{E2ED}';
+    AssetScript = "asset.script", ServerScript, "scroll", '\u{E2ED}';
     /// Any other file in the Assets panel.
     AssetFile = "asset.file", Other, "file", '\u{E0C0}';
     /// Play, and Resume while paused.
@@ -418,39 +431,32 @@ mod tests {
     #[test]
     fn groups_take_their_hues_and_selection_is_left_to_the_caller() {
         let colors = Look::default().colors(None);
-        assert_eq!(Icon::ExplorerPart.color(&colors), colors.hue(Hue::Teal));
-        assert_eq!(Icon::ExplorerSpotLight.color(&colors), colors.hue(Hue::Orange));
-        assert_eq!(Icon::ExplorerScript.color(&colors), colors.hue(Hue::Green));
-        assert_eq!(
-            Icon::ExplorerEvent.color(&colors),
-            colors.hue(Hue::Green),
-            "scripting is one section"
-        );
-        assert_eq!(Icon::ExplorerCamera.color(&colors), colors.hue(Hue::Pink));
-        assert_eq!(Icon::ExplorerValue.color(&colors), colors.hue(Hue::Violet));
-        assert_eq!(Icon::ExplorerFolder.color(&colors), colors.hue(Hue::Yellow));
-        assert_eq!(Icon::ExplorerReplicatedStorage.color(&colors), colors.hue(Hue::Blue));
-        assert_eq!(
-            Icon::ExplorerLighting.color(&colors),
-            colors.hue(Hue::Blue),
-            "a service"
-        );
-        assert_eq!(Icon::ExplorerInput.color(&colors), colors.palette.subtle);
-        // The Explorer's eight sections have eight different colours (#277).
-        let explorer: HashSet<Color32> = [
-            Group::Service,
-            Group::World,
-            Group::Light,
-            Group::Script,
-            Group::Camera,
-            Group::Value,
-            Group::Folder,
-            Group::Other,
-        ]
-        .iter()
-        .map(|group| group.color(&colors))
-        .collect();
-        assert_eq!(explorer.len(), 8);
+        // The owner's groups (#290).
+        for (icon, hue) in [
+            (Icon::ExplorerWorkspace, Hue::Green),
+            (Icon::ExplorerScript, Hue::Green),
+            (Icon::ExplorerScriptService, Hue::Green),
+            (Icon::ExplorerLocalScript, Hue::Blue),
+            (Icon::ExplorerModuleScript, Hue::Purple),
+            (Icon::ExplorerLighting, Hue::Yellow),
+            (Icon::ExplorerSpotLight, Hue::Yellow),
+            (Icon::ExplorerLight, Hue::Yellow),
+            (Icon::ExplorerReplicatedStorage, Hue::Orange),
+            (Icon::ExplorerServerStorage, Hue::Orange),
+            (Icon::ExplorerSettingsService, Hue::Cyan),
+            (Icon::ExplorerCamera, Hue::White),
+            (Icon::ExplorerFolder, Hue::White),
+            (Icon::ExplorerModel, Hue::White),
+            (Icon::ExplorerPart, Hue::White),
+            (Icon::ExplorerIntValue, Hue::Grey),
+            (Icon::ExplorerStringValue, Hue::Grey),
+        ] {
+            assert_eq!(icon.color(&colors), colors.hue(hue), "{icon:?}");
+        }
+        assert_eq!(Icon::ExplorerValue.color(&colors), colors.palette.subtle);
+        // Every hue is used, and they differ from one another.
+        let all: HashSet<Color32> = Hue::ALL.iter().map(|&hue| colors.hue(hue)).collect();
+        assert_eq!(all.len(), Hue::ALL.len());
         // Every group is used by an icon.
         for group in Group::ALL {
             assert!(Icon::ALL.iter().any(|icon| icon.group() == group), "{group:?}");

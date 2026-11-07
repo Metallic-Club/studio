@@ -173,36 +173,36 @@ mod tests {
     }
 
     #[test]
-    fn every_class_in_an_engine_section_shares_its_colour() {
-        use std::collections::HashMap;
-
+    fn classes_take_the_owner_s_colour_groups() {
         use crate::theme::icons::Group;
 
         let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
-        let mut sections: HashMap<&str, Group> = HashMap::new();
-        for info in registry.classes() {
-            let Some(class) = registry.class_id(info.name()) else {
-                continue;
-            };
-            let group = class_icon(&registry, class).group();
-            // Every service is a service, whatever else it is (#277).
-            let section = if info.service_order().is_some() {
-                "Services"
-            } else {
-                info.desc().category
-            };
-            if section.is_empty() {
-                continue;
-            }
-            let first = *sections.entry(section).or_insert(group);
-            assert_eq!(group, first, "{} in {section}", info.name());
+        let group = |name: &str| class_icon(&registry, registry.class_id(name).unwrap()).group();
+        // #290.
+        for (class, expected) in [
+            ("Workspace", Group::Workspace),
+            ("Script", Group::ServerScript),
+            ("ServerScriptService", Group::ServerScript),
+            ("LocalScript", Group::LocalScript),
+            ("ModuleScript", Group::ModuleScript),
+            ("Lighting", Group::Light),
+            ("PointLight", Group::Light),
+            ("SpotLight", Group::Light),
+            ("DirectionalLight", Group::Light),
+            ("ReplicatedStorage", Group::Storage),
+            ("ServerStorage", Group::Storage),
+            ("UserInputService", Group::SettingsService),
+            ("Camera", Group::Object),
+            ("Folder", Group::Object),
+            ("Model", Group::Object),
+            ("Part", Group::Object),
+            ("MeshPart", Group::Object),
+            ("IntValue", Group::Value),
+            ("StringValue", Group::Value),
+            ("BindableEvent", Group::Event),
+        ] {
+            assert_eq!(group(class), expected, "{class}");
         }
-        assert!(sections.len() >= 5, "{sections:?}");
-        assert_eq!(sections["Services"], Group::Service);
-        assert_eq!(sections["Scripts"], Group::Script);
-        // Each section its own colour.
-        let groups: std::collections::HashSet<Group> = sections.values().copied().collect();
-        assert_eq!(groups.len(), sections.len(), "{sections:?}");
     }
 
     #[test]
