@@ -157,19 +157,19 @@ icons! {
     /// The game (the data model).
     ExplorerGame = "explorer.game", Service, "gamepad-2", '\u{E0DF}';
     /// The workspace.
-    ExplorerWorkspace = "explorer.workspace", Service, "globe", '\u{E0E8}';
+    ExplorerWorkspace = "explorer.workspace", Service, "earth", '\u{E1F3}';
     /// The lighting service.
     ExplorerLighting = "explorer.lighting", Service, "sun", '\u{E178}';
     /// Replicated storage.
     ExplorerReplicatedStorage = "explorer.replicated_storage", Service, "package", '\u{E129}';
     /// The server script service.
-    ExplorerScriptService = "explorer.script_service", Service, "braces", '\u{E36A}';
+    ExplorerScriptService = "explorer.script_service", Service, "scroll", '\u{E2ED}';
     /// Server storage.
     ExplorerServerStorage = "explorer.server_storage", Service, "hard-drive", '\u{E0ED}';
     /// A settings or input service (user settings, input, run service).
     ExplorerSettingsService = "explorer.settings_service", Service, "sliders-horizontal", '\u{E29A}';
     /// A camera.
-    ExplorerCamera = "explorer.camera", Camera, "video", '\u{E1A5}';
+    ExplorerCamera = "explorer.camera", Camera, "camera", '\u{E064}';
     /// A part.
     ExplorerPart = "explorer.part", World, "box", '\u{E061}';
     /// A mesh part.
@@ -179,15 +179,15 @@ icons! {
     /// A directional light.
     ExplorerDirectionalLight = "explorer.directional_light", Light, "sun", '\u{E178}';
     /// A spotlight.
-    ExplorerSpotLight = "explorer.spot_light", Light, "flashlight", '\u{E0D3}';
+    ExplorerSpotLight = "explorer.spot_light", Light, "spotlight", '\u{E682}';
     /// Any other light.
     ExplorerLight = "explorer.light", Light, "lightbulb", '\u{E1C2}';
     /// A script.
-    ExplorerScript = "explorer.script", Script, "file-code", '\u{E0C3}';
-    /// A local script, which runs on the player's machine.
-    ExplorerLocalScript = "explorer.local_script", Script, "file-user", '\u{E62D}';
+    ExplorerScript = "explorer.script", Script, "scroll", '\u{E2ED}';
+    /// A local script, which runs on the player's machine: a script's scroll (#289), in its own colour.
+    ExplorerLocalScript = "explorer.local_script", Script, "scroll", '\u{E2ED}';
     /// A module script.
-    ExplorerModuleScript = "explorer.module_script", Script, "braces", '\u{E36A}';
+    ExplorerModuleScript = "explorer.module_script", Script, "scroll-text", '\u{E45F}';
     /// A bindable event.
     ExplorerEvent = "explorer.event", Script, "radio", '\u{E142}';
     /// A bindable function.
@@ -231,7 +231,7 @@ icons! {
     /// A scene in the Assets panel.
     AssetScene = "asset.scene", World, "list-tree", '\u{E408}';
     /// A script in the Assets panel.
-    AssetScript = "asset.script", Script, "file-code", '\u{E0C3}';
+    AssetScript = "asset.script", Script, "scroll", '\u{E2ED}';
     /// Any other file in the Assets panel.
     AssetFile = "asset.file", Other, "file", '\u{E0C0}';
     /// Play, and Resume while paused.
