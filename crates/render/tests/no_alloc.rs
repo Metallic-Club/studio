@@ -3966,8 +3966,12 @@ fn nothing_accumulates_over_lit_frames() {
     }
 }
 
-/// A grid of parts on the GPU and a renderer for a viewport target of [`SIZE`] (#213), its pipelines compiled.
-fn viewport_frames(context: &RenderContext) -> (support::scenes::Game, GpuScene, Renderer, ViewportTarget) {
+/// A grid of parts on the GPU and a renderer for a viewport target of [`SIZE`] (#213), its pipelines compiled, timing
+/// its passes on the GPU if `gpu_timing`.
+fn viewport_frames(
+    context: &RenderContext,
+    gpu_timing: bool,
+) -> (support::scenes::Game, GpuScene, Renderer, ViewportTarget) {
     let mut game = support::scenes::Game::new();
     support::scenes::grid(&mut game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
     let scene = GpuScene::new(
@@ -3978,24 +3982,34 @@ fn viewport_frames(context: &RenderContext) -> (support::scenes::Game, GpuScene,
     )
     .expect("a scene");
     let target = ViewportTarget::new(context, SIZE, SIZE).expect("a viewport target");
-    let mut renderer =
-        Renderer::new(context, RendererSettings::new(ViewportTarget::FORMAT, SIZE, SIZE)).expect("a renderer");
+    let mut renderer = Renderer::new(
+        context,
+        RendererSettings {
+            gpu_timing,
+            ..RendererSettings::new(ViewportTarget::FORMAT, SIZE, SIZE)
+        },
+    )
+    .expect("a renderer");
     renderer.wait_for_pipelines();
     (game, scene, renderer, target)
 }
 
-/// A viewport frame (#213) makes exactly the wgpu calls of a scene frame into a view, so it allocates exactly what one
-/// does: the same renderer draws the same scene from the same orbiting camera into the viewport target
-/// ([`Renderer::render_viewport`]) and into the target's view ([`Renderer::render_scene`], held to the same calls by
-/// hand above), in alternating order, and the fewest allocations of each are compared. What the viewport adds (the
-/// check that the target matches the renderer, and looking for a resize when none is coming) allocates nothing.
-#[test]
-fn a_viewport_frame_allocates_what_a_scene_frame_does() {
-    let Some(context) = measuring_gpu(false) else { return };
-    let _padding = pad_tracker_indices(&context);
-    let (mut game, mut scene, mut renderer, mut target) = viewport_frames(&context);
+/// The fewest allocations of a viewport frame (#213), with `extra` allocations of the test's own added to each, and of
+/// a scene frame into the viewport target's view: the same renderer draws the same scene from the same orbiting camera
+/// into the target ([`Renderer::render_viewport`]) and into its view ([`Renderer::render_scene`]), in alternating
+/// order.
+///
+/// Measured as the other exact comparisons are (#223): GPU timing off, and every frame finished before the next.
+/// Otherwise whether wgpu-core allocates depends on how far the GPU has got, which neither side controls. With two
+/// frames in flight, what a submit's own maintenance finds finished varies from frame to frame: on CI's lavapipe most
+/// frames made an 80-byte allocation there and a few did not. And timing maps each frame's timestamp readback after
+/// its submit: the map is filed under that submission while it is in flight (its first mapped buffer, a 32-byte
+/// `Vec`), but as ready to map, with no allocation, once that maintenance saw the GPU finish it (the dev PC's DX12). A
+/// frame that won either race counted one fewer than the rest, so whichever side had one in its 100 frames had the
+/// lower minimum: 157 against 156 on lavapipe, 314 against 313 on llvmpipe, 148 against 147 on DX12.
+fn viewport_and_scene_frames(context: &RenderContext, extra: usize) -> (u64, u64) {
+    let (mut game, mut scene, mut renderer, mut target) = viewport_frames(context, false);
     let view = target.view().clone();
-    let mut pacer = Pacer::new();
     let mut viewport = Vec::with_capacity(FRAMES);
     let mut plain = Vec::with_capacity(FRAMES);
     for frame in 0..WARM_UP + FRAMES {
@@ -4004,6 +4018,9 @@ fn a_viewport_frame_allocates_what_a_scene_frame_does() {
         for viewport_turn in [frame % 2 == 0, frame % 2 != 0] {
             let (count, submission) = if viewport_turn {
                 allocations_in(|| {
+                    for _ in 0..extra {
+                        std::hint::black_box(Box::new(frame));
+                    }
                     renderer
                         .render_viewport(&mut target, &mut scene, Some(&camera))
                         .expect("the target matches")
@@ -4011,41 +4028,79 @@ fn a_viewport_frame_allocates_what_a_scene_frame_does() {
             } else {
                 allocations_in(|| renderer.render_scene(&view, &mut scene, Some(&camera)))
             };
-            pacer.submitted(context.device(), submission);
+            context
+                .device()
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: None,
+                })
+                .expect("wait for the frame");
             if frame >= WARM_UP {
                 if viewport_turn { &mut viewport } else { &mut plain }.push(count);
             }
         }
     }
-    let (ours, floor) = (
-        *viewport.iter().min().expect("frames"),
-        *plain.iter().min().expect("frames"),
-    );
+    assert_eq!(target.generation(), 0, "nothing was resized");
     eprintln!(
-        "viewport frames: allocations per frame {ours}..{} (median {}); scene frames into its view {floor}..{} \
-         (median {})",
+        "viewport frames{}: allocations per frame {}..{} (median {}); scene frames into its view {}..{} (median {})",
+        if extra > 0 {
+            format!(" with {extra} more")
+        } else {
+            String::new()
+        },
+        viewport.iter().min().expect("frames"),
         viewport.iter().max().expect("frames"),
         median(viewport.clone()),
+        plain.iter().min().expect("frames"),
         plain.iter().max().expect("frames"),
         median(plain.clone())
     );
+    (
+        *viewport.iter().min().expect("frames"),
+        *plain.iter().min().expect("frames"),
+    )
+}
+
+/// A viewport frame (#213) makes exactly the wgpu calls of a scene frame into a view, so it allocates exactly what one
+/// does ([`viewport_and_scene_frames`]; the scene frame is held to the same calls by hand above). What the viewport
+/// adds (the check that the target matches the renderer, and looking for a resize when none is coming) allocates
+/// nothing.
+#[test]
+fn a_viewport_frame_allocates_what_a_scene_frame_does() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let _padding = pad_tracker_indices(&context);
+    let (ours, floor) = viewport_and_scene_frames(&context, 0);
     report(
         "viewport frame",
         &context,
         &[("viewport, against a scene frame", ours, floor)],
     );
-    assert_eq!(target.generation(), 0, "nothing was resized");
     assert!(
         ours <= floor,
         "a viewport frame allocates {ours}, a scene frame into the same texture {floor}"
     );
 }
 
+/// The viewport comparison still catches a single allocation of the viewport path's own (#223): with one more in
+/// every viewport frame, it counts exactly one more than the scene frame.
+#[test]
+fn an_extra_allocation_fails_the_viewport_check() {
+    let Some(context) = measuring_gpu(false) else { return };
+    let _padding = pad_tracker_indices(&context);
+    let (ours, floor) = viewport_and_scene_frames(&context, 1);
+    report(
+        "viewport frame with one more allocation",
+        &context,
+        &[("viewport, against a scene frame", ours, floor)],
+    );
+    assert_eq!(ours, floor + 1, "one allocation more than a scene frame");
+}
+
 /// The heap does not grow over viewport frames (#213) of a grid of parts seen from an orbiting camera.
 #[test]
 fn nothing_accumulates_over_viewport_frames() {
     let Some(context) = measuring_gpu(false) else { return };
-    let (mut game, mut scene, mut renderer, mut target) = viewport_frames(&context);
+    let (mut game, mut scene, mut renderer, mut target) = viewport_frames(&context, true);
     let mut pacer = Pacer::new();
     let mut frame = |frame| {
         scene.sync(&mut game.dm);
