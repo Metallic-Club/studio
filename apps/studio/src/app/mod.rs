@@ -2049,19 +2049,113 @@ mod tests {
             [panels::ids::PROPERTIES, panels::ids::OUTPUT]
         );
         harness.get_by_label("The output is empty.");
-        // Dropped on a panel's middle, egui_tiles' own drop still works: Output back beside the viewport's bar.
+    }
+
+    // Dock guides (#237).
+
+    /// The area of the tab bar holding panel `id`, as last laid out.
+    fn area_of(studio: &Studio, id: &str) -> egui::Rect {
+        let tiles = &studio.dock().tree().tiles;
+        let pane = tiles.find_pane(&crate::dock::PanelId(id.into())).unwrap();
+        tiles.rect(tiles.parent_of(pane).unwrap()).unwrap()
+    }
+
+    /// Where the guide for `side` is drawn over the area of the tab bar holding `id`.
+    fn guide(studio: &Studio, id: &str, side: crate::dock::guides::Side) -> egui::Pos2 {
+        side.square(area_of(studio, id)).center()
+    }
+
+    #[test]
+    fn dropping_on_a_dock_guide_docks_the_panel_there() {
+        use crate::dock::guides::Side;
+        let mut harness = editing(settings_file("editor-guides", None), "Guides Game");
+        // Output on the right square of the viewport's area: beside the viewport, in a bar of its own.
         let output = harness.get_by_role_and_label(Role::Tab, "Output").rect();
-        let viewport = harness.get_by_role_and_label(Role::Tab, "Viewport").rect();
+        let to = guide(&harness.state().studio, panels::ids::VIEWPORT, Side::Right);
+        drag(&mut harness, output.center(), to);
+        let studio = &harness.state().studio;
+        assert_eq!(tab_bar_of(studio, panels::ids::OUTPUT), [panels::ids::OUTPUT]);
+        let (viewport, output) = (
+            area_of(studio, panels::ids::VIEWPORT),
+            area_of(studio, panels::ids::OUTPUT),
+        );
+        assert!(output.left() >= viewport.right(), "{output:?} right of {viewport:?}");
+        assert!((output.top() - viewport.top()).abs() < 0.5, "side by side");
+
+        // Assets on the centre square of the Properties area: a tab there, opened.
+        let assets = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
+        let to = guide(&harness.state().studio, panels::ids::PROPERTIES, Side::Centre);
+        drag(&mut harness, assets.center(), to);
+        assert_eq!(
+            tab_bar_of(&harness.state().studio, panels::ids::PROPERTIES),
+            [panels::ids::PROPERTIES, panels::ids::ASSETS]
+        );
+        harness.get_by_label("1 asset");
+
+        // Explorer on the bottom square of its own area is nothing to split: it is that area's only tab now.
+        let before = harness.state().studio.dock().tree().clone();
+        let explorer = harness.get_by_role_and_label(Role::Tab, "Explorer").rect();
+        let to = guide(&harness.state().studio, panels::ids::EXPLORER, Side::Bottom);
+        drag(&mut harness, explorer.center(), to);
+        assert_eq!(harness.state().studio.dock().tree(), &before);
+    }
+
+    #[test]
+    fn a_drop_away_from_the_guides_and_tab_bars_changes_nothing() {
+        let mut harness = editing(settings_file("editor-guides-miss", None), "Miss Game");
+        let before = harness.state().studio.dock().tree().clone();
+        // Into the viewport's area, well away from its cross and its tab bar.
+        let output = harness.get_by_role_and_label(Role::Tab, "Output").rect();
+        let viewport = area_of(&harness.state().studio, panels::ids::VIEWPORT);
         drag(
             &mut harness,
             output.center(),
-            egui::pos2(viewport.center().x, viewport.top() - 200.0),
+            viewport.left_bottom() + egui::vec2(30.0, -30.0),
         );
-        assert_eq!(
-            tab_bar_of(&harness.state().studio, panels::ids::PROPERTIES),
-            [panels::ids::PROPERTIES]
+        assert_eq!(harness.state().studio.dock().tree(), &before);
+    }
+
+    #[test]
+    fn the_guides_show_while_a_tab_is_dragged_over_an_area() {
+        use crate::dock::guides::{SQUARE, Side};
+        let mut harness = editing(settings_file("editor-guides-show", None), "Show Game");
+        let output = harness.get_by_role_and_label(Role::Tab, "Output").rect();
+        let to = guide(&harness.state().studio, panels::ids::VIEWPORT, Side::Left);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        harness.event(egui::Event::PointerMoved(output.center()));
+        harness.step();
+        harness.event(button(output.center(), true));
+        harness.step();
+        for i in 1..=8 {
+            harness.event(egui::Event::PointerMoved(output.center().lerp(to, i as f32 / 8.0)));
+            harness.step();
+        }
+        // Five squares in the foreground, one lit with the accent.
+        let accent = current_colors(&harness.ctx).accent;
+        let squares: Vec<egui::epaint::RectShape> = harness
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if (rect.rect.width() - SQUARE).abs() < 0.01 => Some(rect.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(squares.len(), 5, "{squares:?}");
+        let lit: Vec<_> = squares.iter().filter(|square| square.stroke.color == accent).collect();
+        assert_eq!(lit.len(), 1);
+        assert!(lit[0].rect.contains(to));
+        harness.event(button(to, false));
+        settle(&mut harness);
+        assert!(
+            area_of(&harness.state().studio, panels::ids::OUTPUT).right()
+                <= area_of(&harness.state().studio, panels::ids::VIEWPORT).left()
         );
-        assert!(harness.state().studio.dock().is_open(panels::ids::OUTPUT));
     }
 
     #[test]
@@ -2327,6 +2421,52 @@ mod tests {
             crop.extend_from_slice(&pixels[row..row + ((right - left) * 4) as usize]);
         }
         write_png(&out.join("230-properties.png"), (right - left, bottom - top, crop));
+    }
+
+    /// The screenshot of #237 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_dock_guides`): the Output
+    /// tab dragged over the viewport, its left guide lit. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_the_dock_guides() {
+        use crate::dock::guides::Side;
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-guides", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let mut offscreen = Offscreen::new(egui::vec2(1280.0, 800.0), 1.25).expect("an offscreen device");
+        for _ in 0..3 {
+            offscreen.frame(&mut studio);
+        }
+        studio.open(project);
+        for _ in 0..10_000 {
+            if studio.poll_opening().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for _ in 0..20 {
+            offscreen.frame(&mut studio);
+        }
+        assert_eq!(studio.screen(), Screen::Editor);
+        let from = area_of(&studio, panels::ids::OUTPUT).left_top() + egui::vec2(40.0, 16.0);
+        let to = guide(&studio, panels::ids::VIEWPORT, Side::Left);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        offscreen.frame_with(&mut studio, vec![egui::Event::PointerMoved(from)]);
+        offscreen.frame_with(&mut studio, vec![button(true)]);
+        for i in 1..=12 {
+            let at = from.lerp(to, i as f32 / 12.0);
+            offscreen.frame_with(&mut studio, vec![egui::Event::PointerMoved(at)]);
+        }
+        for _ in 0..4 {
+            offscreen.frame(&mut studio);
+        }
+        assert!(studio.dock().is_dragging(&offscreen.ctx), "still dragging");
+        write_png(&out.join("237-dock-guides.png"), offscreen.read());
     }
 
     // The viewport (#217).

@@ -8,13 +8,17 @@
 //!   [`EditorState`], so closing and reopening a panel, or resetting the layout, loses nothing.
 //! - **Persistence.** The layout is `layout.json` in the config folder ([`layout`]), repaired on load, and written
 //!   only when it changed and nothing is being dragged.
+//! - **Dock guides** (#237): while a tab is dragged, squares in the middle of the area under the pointer say where it
+//!   docks, and a drop anywhere but a square or a tab bar leaves the layout as it was ([`guides`]).
 
+pub(crate) mod guides;
 pub mod layout;
 
 use std::path::{Path, PathBuf};
 
 use egui::{
-    Align2, Color32, CornerRadius, Id, Rect, Response, Role, Sense, Stroke, Ui, UiBuilder, WidgetInfo, pos2, vec2,
+    Align2, Color32, CornerRadius, Id, LayerId, Order, Pos2, Rect, Response, Role, Sense, Stroke, Ui, UiBuilder,
+    WidgetInfo, pos2, vec2,
 };
 use egui_tiles::{Container, LinearDir, TabState, Tile, TileId, Tiles, Tree, UiResponse};
 use serde::{Deserialize, Serialize};
@@ -100,6 +104,8 @@ pub struct Dock {
     saved: Tree<PanelId>,
     path: Option<PathBuf>,
     focus: DockFocus,
+    /// Where the pointer last was: a release can come with the pointer leaving, and a drop needs the place.
+    pointer: Option<Pos2>,
 }
 
 impl std::fmt::Debug for Dock {
@@ -128,6 +134,7 @@ impl Dock {
             tree,
             path: None,
             focus: DockFocus::default(),
+            pointer: None,
         }
     }
 
@@ -140,6 +147,7 @@ impl Dock {
             tree,
             path: Some(path),
             focus: DockFocus::default(),
+            pointer: None,
         }
     }
 
@@ -286,8 +294,20 @@ impl Dock {
         self.focus.focused = id;
     }
 
-    /// Draws the dock filling `ui`.
+    /// Draws the dock filling `ui`, with the dock guides over it while a tab is dragged.
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        let ctx = ui.ctx().clone();
+        if let Some(at) = ctx.input(|input| input.pointer.latest_pos()) {
+            self.pointer = Some(at);
+        }
+        // What is dragged and where, from the last frame's layout, before the tree moves anything this frame.
+        let drag = self.tree.dragged_id(&ctx).zip(self.pointer);
+        let on_tab_bar = drag.is_some_and(|(_, at)| guides::on_tab_bar(&self.tree, at, TAB_HEIGHT));
+        let guides = drag.and_then(|(dragged, at)| guides::over(&self.tree, dragged, at));
+        let released = ctx.input(|input| input.pointer.any_released());
+        // egui_tiles drops a released tab at the nearest place it knows; off the tab bars that guess is undone.
+        let before = (drag.is_some() && released && !on_tab_bar).then(|| self.tree.clone());
+        let colors = current_colors(&ctx);
         let mut behavior = DockBehavior {
             panels: self.panels,
             cx,
@@ -296,11 +316,36 @@ impl Dock {
                 hovered: None,
             },
             close: Vec::new(),
-            colors: current_colors(ui.ctx()),
+            colors,
+            tiles_preview: on_tab_bar,
         };
         self.tree.ui(&mut behavior, ui);
         let DockBehavior { focus, close, .. } = behavior;
         self.focus = focus;
+        if let Some((dragged, at)) = drag
+            && !released
+        {
+            let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::unique("metallic.dock.guides")));
+            if let Some(guides) = &guides {
+                guides.paint(&painter, &colors, Some(at));
+            }
+            let (title, icon) = match self.tree.tiles.get(dragged) {
+                Some(Tile::Pane(pane)) => match self.panel(&pane.0) {
+                    Some(panel) => (panel.title().to_owned(), Some(panel.icon())),
+                    None => (pane.0.clone(), None),
+                },
+                _ => ("Group".to_owned(), None),
+            };
+            guides::paint_dragged(&painter, &colors, at, guides.as_ref(), icon, &title);
+        }
+        if let (Some(before), Some((dragged, at))) = (before, drag) {
+            self.tree = before;
+            if let Some(guides) = guides
+                && let Some(side) = guides.side_at(at)
+            {
+                guides::dock(&mut self.tree, dragged, guides.container, side);
+            }
+        }
         for tile in close {
             self.tree.remove_recursively(tile);
         }
@@ -347,6 +392,9 @@ struct DockBehavior<'a, 'b> {
     close: Vec<TileId>,
     /// The theme's colours: the behaviour's colour hooks are not given a context.
     colors: crate::theme::Colors,
+    /// Whether egui_tiles' own drop preview shows: over a tab bar only, where its drop is the one that happens.
+    /// Elsewhere the dock guides show where a tab goes.
+    tiles_preview: bool,
 }
 
 impl DockBehavior<'_, '_> {
@@ -490,6 +538,10 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
         parent_rect: Option<Rect>,
         preview_rect: Rect,
     ) {
+        if !self.tiles_preview {
+            return;
+        }
+        // egui_tiles' own preview, over a tab bar: where the tab will go in it.
         let stroke = self.drag_preview_stroke(visuals);
         if let Some(parent_rect) = parent_rect {
             painter.rect_stroke(parent_rect, 1.0, stroke, egui::StrokeKind::Inside);
@@ -501,6 +553,10 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
             stroke,
             egui::StrokeKind::Inside,
         );
+    }
+
+    fn drag_ui(&mut self, _tiles: &Tiles<PanelId>, _ui: &mut Ui, _tile: TileId) {
+        // The dock draws what is dragged beside the pointer (guides::paint_dragged), clear of the guides.
     }
 
     fn tab_bar_height(&self, _style: &egui::Style) -> f32 {
