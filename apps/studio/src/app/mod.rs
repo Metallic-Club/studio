@@ -1923,6 +1923,198 @@ mod tests {
         harness.get_by_label("The output is empty.");
     }
 
+    // Tab bars at the bottom or the top, and striped Properties rows (#230).
+
+    /// The panels in the tab bar holding panel `id`, in order.
+    fn tab_bar_of(studio: &Studio, id: &str) -> Vec<String> {
+        use egui_tiles::{Container, Tile};
+        let tiles = &studio.dock().tree().tiles;
+        for (_, tile) in tiles.iter() {
+            if let Tile::Container(Container::Tabs(tabs)) = tile {
+                let panes: Vec<String> = tabs
+                    .children
+                    .iter()
+                    .filter_map(|child| match tiles.get(*child) {
+                        Some(Tile::Pane(pane)) => Some(pane.0.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                if panes.iter().any(|pane| pane == id) {
+                    return panes;
+                }
+            }
+        }
+        panic!("{id} is in no tab bar");
+    }
+
+    /// Presses the primary button at `from`, drags to `to` over a few frames and lets go there.
+    fn drag(harness: &mut Harness<'_, Test>, from: egui::Pos2, to: egui::Pos2) {
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        harness.event(egui::Event::PointerMoved(from));
+        harness.step();
+        harness.event(button(from, true));
+        harness.step();
+        for i in 1..=8 {
+            harness.event(egui::Event::PointerMoved(from.lerp(to, i as f32 / 8.0)));
+            harness.step();
+        }
+        harness.event(button(to, false));
+        settle(harness);
+    }
+
+    #[test]
+    fn the_tab_bars_sit_under_their_panels_and_a_setting_puts_them_above() {
+        let path = settings_file("editor-tabs", None);
+        let mut harness = editing(path.clone(), "Tabs Game");
+        let below = |harness: &Harness<'_, Test>| {
+            let tab = harness.get_by_role_and_label(Role::Tab, "Properties").rect();
+            let note = harness
+                .get_by_label("Select something in the Explorer to see its properties.")
+                .rect();
+            let explorer = harness.get_by_role_and_label(Role::Tab, "Explorer").rect();
+            let workspace = harness.get_by_role_and_label(Role::TreeItem, "Workspace").rect();
+            match (tab.top() >= note.bottom(), explorer.top() >= workspace.bottom()) {
+                (true, true) => Some(true),
+                (false, false) if tab.bottom() <= note.top() && explorer.bottom() <= workspace.top() => Some(false),
+                _ => None,
+            }
+        };
+        assert_eq!(below(&harness), Some(true), "the default is the bottom");
+        // At the very bottom of their areas.
+        let tab = harness.get_by_role_and_label(Role::Tab, "Properties").rect();
+        let tiles = &harness.state().studio.dock().tree().tiles;
+        let area = tiles
+            .iter()
+            .find_map(|(&tile, kind)| match kind {
+                egui_tiles::Tile::Pane(pane) if pane.0 == panels::ids::PROPERTIES => tiles.rect(tile),
+                _ => None,
+            })
+            .unwrap();
+        assert!((tab.bottom() - area.bottom()).abs() < 0.5, "{tab:?} in {area:?}");
+
+        // Settings → Appearance → Panel tabs: Top, applied at once and saved.
+        harness.get_by_role_and_label(Role::Button, "Settings").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Tab, "Appearance").click();
+        settle(&mut harness);
+        // Tall enough that the page's last rows show above the Output panel.
+        harness.set_size(egui::vec2(1280.0, 1400.0));
+        settle(&mut harness);
+        harness.get_by_label("Panel tabs");
+        harness.get_by_role_and_label(Role::Button, "Top").click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.settings().appearance.tab_position,
+            crate::settings::TabPosition::Top
+        );
+        assert_eq!(below(&harness), Some(false), "above their panels");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("tab_position = \"top\""), "{text}");
+
+        harness.get_by_role_and_label(Role::Button, "Bottom").click();
+        settle(&mut harness);
+        assert_eq!(below(&harness), Some(true));
+        // A click on a bottom tab opens it, and its close button closes it.
+        harness.get_by_role_and_label(Role::Tab, "Assets").click();
+        settle(&mut harness);
+        harness.get_by_label("1 asset");
+        click_label(&mut harness, "Close Assets");
+        assert!(!harness.state().studio.dock().is_open(panels::ids::ASSETS));
+    }
+
+    #[test]
+    fn bottom_tabs_drag_to_a_new_place_and_into_another_bar() {
+        let mut harness = editing(settings_file("editor-drag", None), "Drag Game");
+        assert_eq!(
+            tab_bar_of(&harness.state().studio, panels::ids::EXPLORER),
+            [panels::ids::EXPLORER, panels::ids::ASSETS]
+        );
+        // Assets dragged to the left of Explorer, in the same bar.
+        let assets = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
+        let explorer = harness.get_by_role_and_label(Role::Tab, "Explorer").rect();
+        drag(
+            &mut harness,
+            assets.center(),
+            egui::pos2(explorer.left() + 4.0, explorer.center().y),
+        );
+        assert_eq!(
+            tab_bar_of(&harness.state().studio, panels::ids::EXPLORER),
+            [panels::ids::ASSETS, panels::ids::EXPLORER]
+        );
+        // Output dragged onto the Properties bar joins it, after Properties, and opens.
+        let output = harness.get_by_role_and_label(Role::Tab, "Output").rect();
+        let properties = harness.get_by_role_and_label(Role::Tab, "Properties").rect();
+        drag(
+            &mut harness,
+            output.center(),
+            egui::pos2(properties.right() + 20.0, properties.center().y),
+        );
+        assert_eq!(
+            tab_bar_of(&harness.state().studio, panels::ids::PROPERTIES),
+            [panels::ids::PROPERTIES, panels::ids::OUTPUT]
+        );
+        harness.get_by_label("The output is empty.");
+        // Dropped on a panel's middle, egui_tiles' own drop still works: Output back beside the viewport's bar.
+        let output = harness.get_by_role_and_label(Role::Tab, "Output").rect();
+        let viewport = harness.get_by_role_and_label(Role::Tab, "Viewport").rect();
+        drag(
+            &mut harness,
+            output.center(),
+            egui::pos2(viewport.center().x, viewport.top() - 200.0),
+        );
+        assert_eq!(
+            tab_bar_of(&harness.state().studio, panels::ids::PROPERTIES),
+            [panels::ids::PROPERTIES]
+        );
+        assert!(harness.state().studio.dock().is_open(panels::ids::OUTPUT));
+    }
+
+    #[test]
+    fn properties_rows_are_striped_with_alternating_shades() {
+        let mut harness = editing(settings_file("editor-stripes", None), "Stripes Game");
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        harness.get_by_label("TRANSFORM");
+        let shades = tokens::DARK.rows();
+        // The rows' fills, top to bottom.
+        let mut rows: Vec<(egui::Rect, egui::Color32)> = harness
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect)
+                    if (rect.fill == shades.darker || rect.fill == shades.brighter)
+                        && (rect.rect.height() - size::ROW).abs() < 0.01 =>
+                {
+                    Some((rect.rect, rect.fill))
+                }
+                _ => None,
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.top().total_cmp(&b.0.top()));
+        assert!(rows.len() >= 8, "{} rows", rows.len());
+        // Within a group the rows touch, keep one height, and alternate; each group starts on the darker shade.
+        let mut runs = 0;
+        for pair in rows.windows(2) {
+            let ((above, upper), (below, lower)) = (pair[0], pair[1]);
+            if (below.top() - above.bottom()).abs() < 0.01 {
+                assert_ne!(upper, lower, "two touching rows of one shade at {}", below.top());
+            } else {
+                assert!(below.top() > above.bottom());
+                assert_eq!(lower, shades.darker, "a group starts on the darker shade");
+                runs += 1;
+            }
+        }
+        assert!(runs >= 1, "more than one group");
+        // A long value is cut short, and a row keeps its height.
+        harness.get_by_label("512, 16, 512");
+    }
+
     /// Runs `studio` for `frames` frames of `size` points at `pixels_per_point`, drawn by egui-wgpu on the engine's
     /// offscreen device as the shell draws them (the viewport too), calling `before(studio, frame)` before each.
     /// Returns the last frame as RGBA rows.
@@ -2084,6 +2276,72 @@ mod tests {
         });
         assert_eq!(studio.screen(), Screen::Editor);
         write_png(&out.join("216-editor.png"), shot);
+    }
+
+    /// The screenshots of #230 (`cargo test -p metallic_studio -- --ignored screenshots_of_bottom_tabs`): the editor
+    /// with its tab bars at the bottom, the template project open and a part selected, and its Properties panel's
+    /// striped rows close up. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshots_of_bottom_tabs_and_striped_properties() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-bottom-tabs", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let pixels_per_point = 1.25;
+        let shot = render_offscreen(
+            &mut studio,
+            egui::vec2(1280.0, 800.0),
+            pixels_per_point,
+            40,
+            |studio, frame| {
+                if frame == 2 {
+                    studio.open(project.clone());
+                    for _ in 0..10_000 {
+                        if studio.poll_opening().is_none() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    let editor = studio.editor_mut().expect("the project opened");
+                    let workspace = editor
+                        .dm
+                        .service(editor.dm.registry().class_id("Workspace").unwrap())
+                        .unwrap();
+                    let part = editor.dm.find_first_child(workspace, "Baseplate", false).unwrap();
+                    editor.select(part);
+                }
+            },
+        );
+        assert_eq!(studio.screen(), Screen::Editor);
+        assert_eq!(
+            studio.settings().appearance.tab_position,
+            crate::settings::TabPosition::Bottom
+        );
+        // The Properties panel's area, from the dock's last layout.
+        let tiles = &studio.dock().tree().tiles;
+        let area = tiles
+            .iter()
+            .find_map(|(&tile, kind)| match kind {
+                egui_tiles::Tile::Pane(pane) if pane.0 == panels::ids::PROPERTIES => tiles.rect(tile),
+                _ => None,
+            })
+            .expect("the Properties panel is laid out");
+        let (width, _, pixels) = &shot;
+        let to_px = |v: f32| (v * pixels_per_point).round() as u32;
+        let (left, top, right, bottom) = (
+            to_px(area.left()),
+            to_px(area.top()),
+            to_px(area.right()),
+            to_px(area.bottom()),
+        );
+        let mut crop = Vec::with_capacity(((right - left) * (bottom - top) * 4) as usize);
+        for y in top..bottom {
+            let row = ((y * width + left) * 4) as usize;
+            crop.extend_from_slice(&pixels[row..row + ((right - left) * 4) as usize]);
+        }
+        write_png(&out.join("230-bottom-tabs.png"), shot.clone());
+        write_png(&out.join("230-properties.png"), (right - left, bottom - top, crop));
     }
 
     // The viewport (#217).

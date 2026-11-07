@@ -3,8 +3,13 @@
 //!
 //! Values are formatted for reading: vectors as their components, a colour as a swatch and its 0-255 channels, an
 //! enum as its item, a reference as the instance's name, a boolean as a check box.
+//!
+//! Each group's rows are striped (#230): alternately a little darker and a little brighter than the panel, with faint
+//! 1 px lines between the rows and between the name and value columns ([`crate::theme::tokens::RowShades`]).
 
-use egui::{Align, Color32, CornerRadius, Label, Layout, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
+use egui::{
+    Align, Color32, CornerRadius, Label, Layout, Rect, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
+};
 use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, ResolvedProp, Value};
 
 use super::{class_icon, empty_note, icon, ids};
@@ -198,85 +203,121 @@ impl Panel for Properties {
             .show(ui, |ui| {
                 for group in groups(dm, id) {
                     section_label(ui, group.name);
-                    for row in &group.rows {
-                        ui.push_id(row.label, |ui| row_ui(ui, dm, row));
-                    }
+                    // The rows touch, so the stripes and the lines between them are continuous.
+                    ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        let shades = p.rows();
+                        for (index, row) in group.rows.iter().enumerate() {
+                            let last = index + 1 == group.rows.len();
+                            ui.push_id(row.label, |ui| row_ui(ui, dm, row, shades.fill(index), last));
+                        }
+                    });
                     ui.add_space(space::S5);
                 }
             });
     }
 }
 
-/// One property: its name on the left, its value on the right.
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow) {
+/// One property, a row of a fixed height striped with `fill`: its name on the left and its value on the right, each
+/// cut short with an ellipsis (and shown whole on hover) when it does not fit. A faint line sits above the row and
+/// between its columns, and under it when it is the group's `last`.
+fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool) {
     let p = current_colors(ui.ctx()).palette;
+    let line = Stroke::new(size::BORDER, p.rows().line);
     let width = ui.available_width();
-    ui.horizontal(|ui| {
-        ui.set_min_height(size::ROW);
-        let name_width = (width * NAME_SHARE).max(80.0);
-        ui.allocate_ui_with_layout(
-            vec2(name_width, size::ROW),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.set_width(name_width);
-                let name = ui.add(
-                    Label::new(RichText::new(row.label).size(text::BODY).color(p.muted))
-                        .truncate()
-                        .selectable(false),
-                );
-                if !row.description.is_empty() {
-                    name.on_hover_text(row.description);
-                }
-            },
-        );
-        let shown = format_value(dm, &row.value);
-        match &row.value {
-            Value::Color3(color) => {
-                let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                let fill = Color32::from_rgb(
-                    (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
-                    (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
-                    (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
-                );
-                ui.painter().rect(
-                    rect,
-                    CornerRadius::same(3),
-                    fill,
-                    Stroke::new(size::BORDER, p.border),
-                    egui::StrokeKind::Inside,
-                );
-            }
-            Value::Bool(on) => {
-                let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                ui.painter().rect(
-                    rect,
-                    CornerRadius::same(3),
-                    if *on { p.action } else { p.input },
-                    Stroke::new(size::BORDER, if *on { p.action } else { p.border }),
-                    egui::StrokeKind::Inside,
-                );
-                if *on {
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        icon::CHECK,
-                        fonts::named(fonts::ICONS, text::SMALL - 1.0),
-                        p.action_text,
-                    );
-                }
-            }
-            _ => {}
-        }
-        let color = match row.value {
-            Value::Ref(None) => p.subtle,
-            _ => p.text,
-        };
-        ui.add(
-            Label::new(RichText::new(shown).size(text::BODY).color(color))
+    let (rect, _) = ui.allocate_exact_size(vec2(width, size::ROW), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let split = rect.left() + (width * NAME_SHARE).max(80.0).min(width);
+    ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
+    // The lines are drawn inside the row (half a point in), so the next row's fill never covers them.
+    let half = size::BORDER / 2.0;
+    ui.painter().hline(rect.x_range(), rect.top() + half, line);
+    if last {
+        ui.painter().hline(rect.x_range(), rect.bottom() - half, line);
+    }
+    ui.painter().vline(split - half, rect.y_range(), line);
+
+    let cell = |left: f32, right: f32| {
+        Rect::from_min_max(
+            pos2(left + space::S3, rect.top()),
+            pos2(right - space::S3, rect.bottom()),
+        )
+    };
+    let (name_cell, value_cell) = (cell(rect.left(), split), cell(split, rect.right()));
+    let in_cell = |cell: Rect| {
+        UiBuilder::new()
+            .max_rect(cell)
+            .layout(Layout::left_to_right(Align::Center))
+    };
+    ui.scope_builder(in_cell(name_cell), |ui| {
+        ui.set_clip_rect(name_cell.intersect(ui.clip_rect()));
+        let name = ui.add(
+            Label::new(RichText::new(row.label).size(text::BODY).color(p.muted))
                 .truncate()
-                .selectable(true),
+                .selectable(false),
         );
+        if !row.description.is_empty() {
+            name.on_hover_text(row.description);
+        }
     });
+    ui.scope_builder(in_cell(value_cell), |ui| {
+        ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
+        value_ui(ui, dm, &row.value);
+    });
+}
+
+/// A property's value, as text after a swatch (a colour) or a check box (a boolean).
+fn value_ui(ui: &mut Ui, dm: &DataModel, value: &Value) {
+    let p = current_colors(ui.ctx()).palette;
+    let shown = format_value(dm, value);
+    match value {
+        Value::Color3(color) => {
+            let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            let fill = Color32::from_rgb(
+                (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+                (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+                (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+            );
+            ui.painter().rect(
+                rect,
+                CornerRadius::same(3),
+                fill,
+                Stroke::new(size::BORDER, p.border),
+                egui::StrokeKind::Inside,
+            );
+        }
+        Value::Bool(on) => {
+            let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            ui.painter().rect(
+                rect,
+                CornerRadius::same(3),
+                if *on { p.action } else { p.input },
+                Stroke::new(size::BORDER, if *on { p.action } else { p.border }),
+                egui::StrokeKind::Inside,
+            );
+            if *on {
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    icon::CHECK,
+                    fonts::named(fonts::ICONS, text::SMALL - 1.0),
+                    p.action_text,
+                );
+            }
+        }
+        _ => {}
+    }
+    let color = match value {
+        Value::Ref(None) => p.subtle,
+        _ => p.text,
+    };
+    ui.add(
+        Label::new(RichText::new(shown).size(text::BODY).color(color))
+            .truncate()
+            .selectable(true),
+    );
 }
 
 #[cfg(test)]
