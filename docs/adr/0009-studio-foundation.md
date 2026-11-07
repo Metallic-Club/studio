@@ -123,8 +123,9 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   splash), 15 (dialogs); 1 px borders. Shadows only on what floats: menus and popovers (`0 8 24 #0005`) and dialogs.
 - **Type:** **Inter** (OFL 1.1) for the interface: heavy headings with tight negative tracking, body 14–15 px,
   controls 14 px (weight 650 once a variable Inter is bundled), uppercase 10–11 px section labels with +1.3 px
-  tracking. JetBrains Mono (OFL 1.1) for code. Phosphor icons (MIT). All bundled with their licence files. egui's
-  default fonts are replaced, because one of them is under a licence `deny.toml` rejects.
+  tracking. JetBrains Mono (OFL 1.1) for code. Phosphor icons (MIT); since #257, Lucide icons (ISC,
+  https://lucide.dev). All bundled with their licence files. egui's default fonts are replaced, because one of them
+  is under a licence `deny.toml` rejects.
 - **Motion:** 0.12–0.2 s, eased. **Reduced motion** (a setting, and the OS's switch where Studio can read it) turns
   off fades and eases.
 

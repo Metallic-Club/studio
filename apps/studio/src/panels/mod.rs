@@ -43,84 +43,85 @@ pub mod ids {
     pub const GAME: &str = "game";
 }
 
-/// Phosphor icons the panels use beyond the theme's own, by their code points in `Phosphor.ttf`.
+/// Lucide icons (https://lucide.dev/icons, #257) the panels use beyond the theme's own, by their code points in
+/// `Lucide.ttf` (`lucide-static` 1.70.0's `font/codepoints.json`). Each names the Lucide icon it is.
 pub mod icon {
-    /// A cube: a part.
-    pub const CUBE: char = '\u{E1DA}';
-    /// A see-through cube: a mesh part.
-    pub const CUBE_TRANSPARENT: char = '\u{EC7C}';
-    /// Shapes: a model.
-    pub const SHAPES: char = '\u{EC5E}';
-    /// A globe: the workspace.
-    pub const GLOBE: char = '\u{E28C}';
-    /// The sun: lighting, a directional light.
-    pub const SUN: char = '\u{E472}';
-    /// A light bulb: a light.
-    pub const LIGHTBULB: char = '\u{E2DC}';
-    /// A flashlight: a spotlight.
-    pub const FLASHLIGHT: char = '\u{E246}';
-    /// A video camera: a camera.
-    pub const VIDEO_CAMERA: char = '\u{E4DA}';
-    /// A file of code: a script.
-    pub const FILE_CODE: char = '\u{E914}';
-    /// Brackets: a module script, script services.
-    pub const CODE: char = '\u{E1BC}';
-    /// A folder.
-    pub const FOLDER: char = '\u{E25A}';
-    /// A package: replicated storage.
-    pub const PACKAGE: char = '\u{E390}';
-    /// Drives: server storage.
-    pub const HARD_DRIVES: char = '\u{E2A0}';
-    /// A diamond: a value.
-    pub const DIAMOND: char = '\u{E1EC}';
-    /// A broadcast: a bindable event or function.
-    pub const BROADCAST: char = '\u{E0F2}';
-    /// A cursor: an input object.
-    pub const CURSOR: char = '\u{E1DC}';
-    /// Sliders: settings services.
-    pub const SLIDERS: char = '\u{E434}';
-    /// A game controller: the game.
-    pub const GAME_CONTROLLER: char = '\u{E26E}';
-    /// A circle: any other class.
-    pub const CIRCLE: char = '\u{E18A}';
-    /// A caret pointing right: collapsed.
-    pub const CARET_RIGHT: char = '\u{E13A}';
-    /// A caret pointing down: expanded.
-    pub const CARET_DOWN: char = '\u{E136}';
-    /// A tree: the Explorer.
-    pub const TREE: char = '\u{E67C}';
-    /// A list: Properties.
-    pub const LIST_BULLETS: char = '\u{E2F2}';
-    /// Files: Assets.
-    pub const FILES: char = '\u{E710}';
-    /// A terminal window: Output.
-    pub const TERMINAL: char = '\u{EAE8}';
-    /// A monitor: the viewport.
-    pub const MONITOR: char = '\u{E32E}';
-    /// A circle with a cross: an error.
-    pub const X_CIRCLE: char = '\u{E4F8}';
-    /// A circle with an i: information.
-    pub const INFO: char = '\u{E2CE}';
-    /// A check mark.
-    pub const CHECK: char = '\u{E182}';
-    /// A floppy disk: save.
-    pub const FLOPPY_DISK: char = '\u{E248}';
-    /// A broom: clear.
-    pub const BROOM: char = '\u{EC54}';
-    /// A file.
-    pub const FILE: char = '\u{E230}';
-    /// A picture: an image asset.
-    pub const IMAGE: char = '\u{E2CA}';
-    /// A note: an audio asset.
-    pub const MUSIC_NOTE: char = '\u{E33C}';
-    /// A triangle: play.
-    pub const PLAY: char = '\u{E3D0}';
-    /// Two bars: pause.
-    pub const PAUSE: char = '\u{E39E}';
-    /// A square: stop.
-    pub const STOP: char = '\u{E46C}';
-    /// Skip forward (a triangle against a bar): step one frame.
-    pub const STEP: char = '\u{E5A6}';
+    /// `box`: a part.
+    pub const CUBE: char = '\u{E061}';
+    /// `cuboid`: a mesh part.
+    pub const CUBE_TRANSPARENT: char = '\u{E524}';
+    /// `shapes`: a model.
+    pub const SHAPES: char = '\u{E4B3}';
+    /// `globe`: the workspace.
+    pub const GLOBE: char = '\u{E0E8}';
+    /// `sun`: lighting, a directional light.
+    pub const SUN: char = '\u{E178}';
+    /// `lightbulb`: a light.
+    pub const LIGHTBULB: char = '\u{E1C2}';
+    /// `flashlight`: a spotlight.
+    pub const FLASHLIGHT: char = '\u{E0D3}';
+    /// `video`: a camera.
+    pub const VIDEO_CAMERA: char = '\u{E1A5}';
+    /// `file-code`: a script.
+    pub const FILE_CODE: char = '\u{E0C3}';
+    /// `braces`: a module script, script services.
+    pub const CODE: char = '\u{E36A}';
+    /// `folder`.
+    pub const FOLDER: char = '\u{E0D7}';
+    /// `package`: replicated storage.
+    pub const PACKAGE: char = '\u{E129}';
+    /// `hard-drive`: server storage.
+    pub const HARD_DRIVES: char = '\u{E0ED}';
+    /// `diamond`: a value.
+    pub const DIAMOND: char = '\u{E2D2}';
+    /// `radio`: a bindable event or function.
+    pub const BROADCAST: char = '\u{E142}';
+    /// `mouse-pointer`: an input object.
+    pub const CURSOR: char = '\u{E11F}';
+    /// `sliders-horizontal`: settings services.
+    pub const SLIDERS: char = '\u{E29A}';
+    /// `gamepad-2`: the game.
+    pub const GAME_CONTROLLER: char = '\u{E0DF}';
+    /// `circle`: any other class.
+    pub const CIRCLE: char = '\u{E076}';
+    /// `chevron-right`: collapsed.
+    pub const CARET_RIGHT: char = '\u{E06F}';
+    /// `chevron-down`: expanded.
+    pub const CARET_DOWN: char = '\u{E06D}';
+    /// `list-tree`: the Explorer.
+    pub const TREE: char = '\u{E408}';
+    /// `list`: Properties.
+    pub const LIST_BULLETS: char = '\u{E106}';
+    /// `files`: Assets.
+    pub const FILES: char = '\u{E0CF}';
+    /// `square-terminal`: Output.
+    pub const TERMINAL: char = '\u{E20A}';
+    /// `monitor`: the viewport.
+    pub const MONITOR: char = '\u{E11D}';
+    /// `circle-x`: an error.
+    pub const X_CIRCLE: char = '\u{E084}';
+    /// `info`: information.
+    pub const INFO: char = '\u{E0F9}';
+    /// `check`.
+    pub const CHECK: char = '\u{E06C}';
+    /// `save`.
+    pub const FLOPPY_DISK: char = '\u{E14D}';
+    /// `eraser`: clear.
+    pub const BROOM: char = '\u{E28F}';
+    /// `file`.
+    pub const FILE: char = '\u{E0C0}';
+    /// `image`: an image asset.
+    pub const IMAGE: char = '\u{E0F6}';
+    /// `music`: an audio asset.
+    pub const MUSIC_NOTE: char = '\u{E122}';
+    /// `play`.
+    pub const PLAY: char = '\u{E13C}';
+    /// `pause`.
+    pub const PAUSE: char = '\u{E12E}';
+    /// `square`: stop.
+    pub const STOP: char = '\u{E167}';
+    /// `skip-forward`: step one frame.
+    pub const STEP: char = '\u{E160}';
 }
 
 /// The icon of `class`: its own, or its nearest ancestor's.
@@ -264,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn the_icons_are_in_phosphor() {
+    fn the_icons_are_in_lucide() {
         let ctx = egui::Context::default();
         ctx.set_fonts(fonts::definitions());
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
