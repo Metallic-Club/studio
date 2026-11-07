@@ -11,7 +11,7 @@
 //! - **Dock guides** (#237): while a tab is dragged, squares in the middle of the area under the pointer say where it
 //!   docks, and a drop anywhere but a square or a tab bar leaves the layout as it was ([`guides`]).
 //! - **Panel borders** (#262): with Settings → Appearance → Panel borders on, each group of tabs is outlined with the
-//!   Settings window's border and rounded corners, a little apart from the next.
+//!   Settings window's 1 px border, square, a little apart from the next.
 
 pub(crate) mod guides;
 pub mod layout;
@@ -492,9 +492,6 @@ pub(crate) const TAB_LINE: f32 = 1.0;
 
 /// The space between outlined groups of tabs (#262).
 const BORDER_GAP: f32 = space::S2;
-/// The points an outline's rounded corner is drawn with.
-const CORNER_STEPS: usize = 8;
-
 /// Every group of tabs in `tree`: what the panel borders outline.
 fn tab_groups(tree: &Tree<PanelId>) -> Vec<TileId> {
     tree.tiles
@@ -504,35 +501,11 @@ fn tab_groups(tree: &Tree<PanelId>) -> Vec<TileId> {
         .collect()
 }
 
-/// Outlines `rect` as the Settings window is outlined: rounded by `radius`, with the square corners outside the
-/// rounding covered in `ground` (the tab bar and the panel under it are drawn square), then a 1 px `edge`.
-fn paint_border(painter: &egui::Painter, rect: Rect, radius: f32, ground: Color32, edge: Color32) {
-    let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
-    // Each corner: the square's corner, and the centre its arc turns around, as signs from that centre.
-    let corners = [
-        (rect.left_top(), vec2(1.0, 1.0)),
-        (rect.right_top(), vec2(-1.0, 1.0)),
-        (rect.right_bottom(), vec2(-1.0, -1.0)),
-        (rect.left_bottom(), vec2(1.0, -1.0)),
-    ];
-    for (corner, inward) in corners {
-        let centre = corner + inward * radius;
-        // A fan from the square's corner over the arc: the arc is all in view from there.
-        let mut mesh = egui::Mesh::default();
-        mesh.colored_vertex(corner, ground);
-        for step in 0..=CORNER_STEPS {
-            let angle = std::f32::consts::FRAC_PI_2 * step as f32 / CORNER_STEPS as f32;
-            let at = centre - vec2(inward.x * angle.cos(), inward.y * angle.sin()) * radius;
-            mesh.colored_vertex(at, ground);
-        }
-        for step in 1..=CORNER_STEPS as u32 {
-            mesh.add_triangle(0, step, step + 1);
-        }
-        painter.add(mesh);
-    }
+/// Outlines `rect` with the Settings window's 1 px border in `edge`: square, as docked panels are (owner, #262).
+fn paint_border(painter: &egui::Painter, rect: Rect, edge: Color32) {
     painter.rect_stroke(
         rect,
-        CornerRadius::same(radius as u8),
+        CornerRadius::ZERO,
         Stroke::new(size::BORDER, edge),
         egui::StrokeKind::Inside,
     );
@@ -672,7 +645,7 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
     fn paint_on_top_of_tile(&self, painter: &egui::Painter, _style: &egui::Style, tile_id: TileId, rect: Rect) {
         if self.borders && self.groups.contains(&tile_id) {
             let p = self.colors.palette;
-            paint_border(painter, rect, f32::from(radius::PANEL), p.bg, p.border);
+            paint_border(painter, rect, p.border);
         }
     }
 
@@ -789,40 +762,26 @@ mod tests {
     }
 
     #[test]
-    fn panel_borders_outline_each_group_of_tabs_with_rounded_corners() {
+    fn panel_borders_outline_each_group_of_tabs_square() {
         let dock = Dock::in_memory(PANELS);
         // Viewport, Assets and Output, Explorer, Properties.
         assert_eq!(tab_groups(dock.tree()).len(), 4);
 
         let ctx = egui::Context::default();
         let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(200.0, 100.0));
-        let (ground, edge) = (Color32::RED, Color32::BLUE);
+        let edge = Color32::BLUE;
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            paint_border(ui.painter(), rect, 12.0, ground, edge);
+            paint_border(ui.painter(), rect, edge);
         });
         let shapes: Vec<&egui::Shape> = output.shapes.iter().map(|clipped| &clipped.shape).collect();
-        let corners: Vec<&egui::Mesh> = shapes
-            .iter()
-            .filter_map(|shape| match shape {
-                egui::Shape::Mesh(mesh) => Some(&**mesh),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(corners.len(), 4, "one cover per corner");
-        for mesh in corners {
-            assert!(mesh.vertices.iter().all(|vertex| vertex.color == ground));
-            // Each stays in its corner's 12 × 12 square.
-            let bounds = mesh.calc_bounds();
-            assert!(bounds.width() <= 12.01 && bounds.height() <= 12.01, "{bounds:?}");
-            assert!(rect.expand(0.01).contains_rect(bounds));
-        }
+        assert_eq!(shapes.len(), 1, "the outline alone");
         let outline = shapes.iter().find_map(|shape| match shape {
             egui::Shape::Rect(outline) => Some(outline),
             _ => None,
         });
         let outline = outline.expect("an outline");
         assert_eq!(outline.rect, rect);
-        assert_eq!(outline.corner_radius, CornerRadius::same(12));
+        assert_eq!(outline.corner_radius, CornerRadius::ZERO, "square, not rounded");
         assert_eq!(outline.stroke, Stroke::new(size::BORDER, edge));
         // epaint checks the frame's font texture was taken.
         output.textures_delta.clear();
