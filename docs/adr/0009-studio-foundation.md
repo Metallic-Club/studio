@@ -89,7 +89,8 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
   menu, shortcuts and close buttons all use that one fact.
 - The layout is saved per user as versioned JSON in the config folder. A layout with unknown or duplicate panels is
   repaired on load (they are dropped, and the default layout is used if nothing is left). **Reset layout** is in the
-  View menu.
+  View menu (since #239, in the Window menu of the Roblox-style menu bar: File, Edit, View, Plugins, Test, Window,
+  Help, with items for features still to come shown disabled).
 - **Default layout:** Viewport in the centre; Explorer on the left with Assets as a tab beside it; Properties on the
   right; Output along the bottom.
 - **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection, search); Properties (the selected

@@ -1,11 +1,14 @@
-//! The Editor screen's own pieces: the progress overlay while a project opens, and the top bar with its menus.
+//! The Editor screen's own pieces: the progress overlay while a project opens, the top bar with its menus, and the
+//! About window.
 //!
-//! The menus act through [`MenuAction`]s the app carries out, the same as the keymap's commands, and show every
-//! binding of each command from the keymap.
+//! The menu bar is Roblox Studio's (#239): **File, Edit, View, Plugins, Test, Window, Help**, listed as data in
+//! [`MENUS`]. Items that work act through [`MenuAction`]s the app carries out, the same as the keymap's commands, and
+//! show every binding of their command from the keymap. Items for features still to come are shown disabled
+//! ([`Entry::Planned`]); enabling one is changing its line in [`MENUS`].
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, Frame, Layout, Rect, Response, RichText, Role, Sense, Stroke, Ui, UiBuilder,
-    WidgetInfo, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, Frame, Id, Layout, Rect, Response, RichText, Role, Sense, Stroke, Ui,
+    UiBuilder, WidgetInfo, pos2, vec2,
 };
 
 use crate::dock::Dock;
@@ -13,16 +16,20 @@ use crate::editor::{EditorState, STEPS};
 use crate::keymap::{Keymap, ids};
 use crate::panels;
 use crate::theme::tokens::{radius, shadow, size, space, text};
-use crate::theme::{current_colors, fonts};
+use crate::theme::{ButtonKind, button, current_colors, fonts};
 
 /// The top bar's height.
 pub(crate) const BAR_HEIGHT: f32 = 40.0;
 /// A menu's width.
 const MENU_WIDTH: f32 = 240.0;
-/// The width the File and View menus take in the bar.
-const MENUS_WIDTH: f32 = 96.0;
+/// A menu item's height.
+const ITEM_HEIGHT: f32 = 28.0;
+/// A menu title's height in the bar.
+const TITLE_HEIGHT: f32 = 28.0;
 /// The progress card's width.
 const CARD_WIDTH: f32 = 420.0;
+/// The About window's width.
+const ABOUT_WIDTH: f32 = 360.0;
 
 /// What a menu item asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,10 +40,124 @@ pub(crate) enum MenuAction {
     Close,
     /// View: open or close a panel.
     Toggle(&'static str),
-    /// View, Reset layout.
+    /// Window, Reset layout.
     ResetLayout,
-    /// The gear: open or close the Settings window.
+    /// File or Window, Settings, and the gear: open or close the Settings window.
     Settings,
+    /// Help, Keyboard shortcuts: the Settings window on its Keybinds page.
+    KeyboardShortcuts,
+    /// Help, About Metallic Studio.
+    About,
+}
+
+/// One line of a menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Entry {
+    /// An item that works: `label`, doing `action`, with the bindings of keymap command `command` beside it.
+    Item {
+        /// Its name.
+        label: &'static str,
+        /// What it does.
+        action: MenuAction,
+        /// The keymap command it is, whose bindings it shows.
+        command: Option<&'static str>,
+    },
+    /// An item for a feature still to come, shown disabled.
+    Planned(&'static str),
+    /// A check item for each of the dock's panels, opening or closing it.
+    Panels,
+    /// A line between groups of items.
+    Separator,
+}
+
+/// A menu in the bar: its title and its lines.
+#[derive(Debug)]
+pub(crate) struct Menu {
+    /// The name in the bar.
+    pub title: &'static str,
+    /// Its lines, top to bottom.
+    pub entries: &'static [Entry],
+}
+
+/// An item that works.
+const fn item(label: &'static str, action: MenuAction, command: Option<&'static str>) -> Entry {
+    Entry::Item { label, action, command }
+}
+
+/// The menu bar, left to right, as in Roblox Studio.
+pub(crate) static MENUS: &[Menu] = &[
+    Menu {
+        title: "File",
+        entries: &[
+            Entry::Planned("New project"),
+            Entry::Planned("Open project"),
+            Entry::Separator,
+            item("Save", MenuAction::Save, Some(ids::FILE_SAVE)),
+            Entry::Planned("Save as"),
+            Entry::Separator,
+            item("Settings", MenuAction::Settings, Some(ids::SETTINGS_OPEN)),
+            Entry::Separator,
+            item("Close project", MenuAction::Close, Some(ids::PROJECT_CLOSE)),
+        ],
+    },
+    Menu {
+        title: "Edit",
+        entries: &[
+            Entry::Planned("Undo"),
+            Entry::Planned("Redo"),
+            Entry::Separator,
+            Entry::Planned("Cut"),
+            Entry::Planned("Copy"),
+            Entry::Planned("Paste"),
+            Entry::Planned("Duplicate"),
+            Entry::Planned("Delete"),
+            Entry::Separator,
+            Entry::Planned("Select all"),
+        ],
+    },
+    Menu {
+        title: "View",
+        entries: &[Entry::Panels],
+    },
+    Menu {
+        title: "Plugins",
+        entries: &[Entry::Planned("Manage plugins"), Entry::Planned("Plugins folder")],
+    },
+    Menu {
+        title: "Test",
+        entries: &[
+            Entry::Planned("Play"),
+            Entry::Planned("Play here"),
+            Entry::Planned("Run"),
+            Entry::Separator,
+            Entry::Planned("Stop"),
+        ],
+    },
+    Menu {
+        title: "Window",
+        entries: &[
+            item("Reset layout", MenuAction::ResetLayout, Some(ids::VIEW_RESET_LAYOUT)),
+            Entry::Separator,
+            item("Settings", MenuAction::Settings, Some(ids::SETTINGS_OPEN)),
+        ],
+    },
+    Menu {
+        title: "Help",
+        entries: &[
+            // Studio does not open links yet.
+            Entry::Planned("Documentation"),
+            item("Keyboard shortcuts", MenuAction::KeyboardShortcuts, None),
+            Entry::Planned("Report a bug"),
+            Entry::Separator,
+            item("About Metallic Studio", MenuAction::About, None),
+        ],
+    },
+];
+
+/// Where the menu titles were drawn last frame, by title, in the context's temporary data under this id (for tests
+/// and screenshots that click them).
+pub(crate) fn menu_titles_id() -> Id {
+    Id::unique("metallic.menu_titles")
 }
 
 /// The progress overlay while the project `name` opens, at step `step` (from 0) of [`STEPS`].
@@ -96,8 +217,8 @@ pub(crate) fn opening_overlay(ui: &mut Ui, name: &str, step: usize) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 }
 
-/// The top bar: the mark, the File and View menus, the project's name, and the gear (raised while the Settings
-/// window is open, `settings_open`). Returns what was asked for.
+/// The top bar: the mark, the menus ([`MENUS`]), the project's name, and the gear (raised while the Settings window
+/// is open, `settings_open`). Returns what was asked for.
 pub(crate) fn top_bar(
     ui: &mut Ui,
     mark: Option<&egui::TextureHandle>,
@@ -125,42 +246,46 @@ pub(crate) fn top_bar(
                 ui.add(egui::Image::new((mark.id(), egui::Vec2::splat(20.0))));
                 ui.add_space(space::S4);
             }
-            // A menu bar takes all the width it is given; it gets the menus' only, so the rest of the bar follows it.
+            // A menu bar takes all the width it is given; it gets the titles' only, so the rest of the bar follows it.
+            let title_font = egui::FontId::proportional(text::BODY);
+            let widths: Vec<f32> = MENUS
+                .iter()
+                .map(|menu| {
+                    let galley = ui
+                        .painter()
+                        .layout_no_wrap(menu.title.to_owned(), title_font.clone(), p.text);
+                    galley.size().x + 2.0 * space::S4
+                })
+                .collect();
+            let menus_width = widths.iter().sum::<f32>() + space::S1 * MENUS.len() as f32;
+            let mut titles = Vec::with_capacity(MENUS.len());
             ui.allocate_ui_with_layout(
-                vec2(MENUS_WIDTH, BAR_HEIGHT),
+                vec2(menus_width, BAR_HEIGHT),
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     egui::MenuBar::new().ui(ui, |ui| {
-                        ui.menu_button("File", |ui| {
-                            ui.set_min_width(MENU_WIDTH);
-                            if menu_item(ui, "Save", keymap.shortcut_text(ids::FILE_SAVE), None).clicked() {
-                                action = Some(MenuAction::Save);
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Close project", keymap.shortcut_text(ids::PROJECT_CLOSE), None).clicked()
-                            {
-                                action = Some(MenuAction::Close);
-                            }
-                        });
-                        ui.menu_button("View", |ui| {
-                            ui.set_min_width(MENU_WIDTH);
-                            for panel in dock.panels() {
-                                let open = dock.is_open(panel.id());
-                                if menu_item(ui, panel.title(), None, Some(open)).clicked() {
-                                    action = Some(MenuAction::Toggle(panel.id()));
+                        ui.spacing_mut().item_spacing.x = space::S1;
+                        for (menu, width) in MENUS.iter().zip(&widths) {
+                            let title = egui::Button::new(RichText::new(menu.title).font(title_font.clone()))
+                                .min_size(vec2(*width, TITLE_HEIGHT))
+                                .corner_radius(CornerRadius::same(radius::ITEM));
+                            let (response, _) = egui::containers::menu::MenuButton::from_button(title).ui(ui, |ui| {
+                                ui.set_min_width(MENU_WIDTH);
+                                if let Some(chosen) = menu_entries(ui, menu, dock, keymap) {
+                                    action = Some(chosen);
                                 }
-                            }
-                            ui.separator();
-                            if menu_item(ui, "Reset layout", keymap.shortcut_text(ids::VIEW_RESET_LAYOUT), None)
-                                .clicked()
-                            {
-                                action = Some(MenuAction::ResetLayout);
-                            }
-                        });
+                            });
+                            titles.push((menu.title, response.rect));
+                        }
                     });
                 },
             );
-            ui.add_space(space::S5);
+            ui.ctx().data_mut(|data| data.insert_temp(menu_titles_id(), titles));
+            // A divider between the menus and the project.
+            ui.add_space(space::S4);
+            let (divider, _) = ui.allocate_exact_size(vec2(size::BORDER, TITLE_HEIGHT - 8.0), Sense::hover());
+            ui.painter().rect_filled(divider, CornerRadius::ZERO, p.border);
+            ui.add_space(space::S4);
             ui.label(
                 RichText::new(editor.name())
                     .font(fonts::named(fonts::STRONG, text::BODY))
@@ -205,19 +330,54 @@ fn gear(ui: &mut Ui, open: bool) -> Response {
     response
 }
 
+/// Draws `menu`'s lines into its open popup. Returns what was chosen.
+fn menu_entries(ui: &mut Ui, menu: &Menu, dock: &Dock, keymap: &Keymap) -> Option<MenuAction> {
+    let mut chosen = None;
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for entry in menu.entries {
+        match *entry {
+            Entry::Item { label, action, command } => {
+                let keys = command.and_then(|id| keymap.shortcut_text(id));
+                if menu_item(ui, label, keys, None, true).clicked() {
+                    chosen = Some(action);
+                }
+            }
+            Entry::Planned(label) => {
+                menu_item(ui, label, None, None, false).on_hover_text("Coming in a later version of Studio.");
+            }
+            Entry::Panels => {
+                for panel in dock.panels() {
+                    let open = dock.is_open(panel.id());
+                    if menu_item(ui, panel.title(), None, Some(open), true).clicked() {
+                        chosen = Some(MenuAction::Toggle(panel.id()));
+                    }
+                }
+            }
+            Entry::Separator => {
+                ui.separator();
+            }
+        }
+    }
+    chosen
+}
+
 /// A menu item: a check mark when `checked` is `Some(true)`, the label, and the shortcut on the right. A click closes
-/// the menu.
-fn menu_item(ui: &mut Ui, label: &str, shortcut: Option<String>, checked: Option<bool>) -> Response {
+/// the menu. Not `enabled`, it is drawn at the theme's disabled strength and does nothing.
+fn menu_item(ui: &mut Ui, label: &str, shortcut: Option<String>, checked: Option<bool>, enabled: bool) -> Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
-    let width = ui.available_width().max(MENU_WIDTH);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
+    // A fixed width: a popup's available width is not its own, and items sized from it widen the menu every frame.
+    let width = MENU_WIDTH;
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, ITEM_HEIGHT), sense);
     response.widget_info(|| match checked {
-        Some(on) => WidgetInfo::selected(Role::MenuItemCheckBox, true, on, label),
-        None => WidgetInfo::labeled(Role::MenuItem, true, label),
+        Some(on) => WidgetInfo::selected(Role::MenuItemCheckBox, enabled, on, label),
+        None => WidgetInfo::labeled(Role::MenuItem, enabled, label),
     });
+    // The website's disabled strength: 48 %.
+    let ink = if enabled { p.text } else { p.text.gamma_multiply(0.48) };
     if ui.is_rect_visible(rect) {
-        if response.hovered() {
+        if enabled && response.hovered() {
             ui.painter()
                 .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface_hover);
         }
@@ -239,7 +399,7 @@ fn menu_item(ui: &mut Ui, label: &str, shortcut: Option<String>, checked: Option
             Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(text::BODY),
-            p.text,
+            ink,
         );
         if let Some(keys) = shortcut {
             ui.painter().text(
@@ -255,4 +415,87 @@ fn menu_item(ui: &mut Ui, label: &str, shortcut: Option<String>, checked: Option
         ui.close();
     }
     response
+}
+
+/// The About window while `open`: the mark, Studio's name and version, and a Close button.
+pub(crate) fn about_window(ctx: &egui::Context, open: &mut bool, mark: Option<&egui::TextureHandle>) {
+    if !*open {
+        return;
+    }
+    let p = current_colors(ctx).palette;
+    let mut keep = true;
+    let mut close = false;
+    egui::Window::new("About Metallic Studio")
+        .id(Id::unique("metallic.about"))
+        .pivot(Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .open(&mut keep)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(ABOUT_WIDTH)
+        .show(ctx, |ui| {
+            ui.set_width(ABOUT_WIDTH);
+            ui.vertical_centered(|ui| {
+                ui.add_space(space::S4);
+                if let Some(mark) = mark {
+                    ui.add(egui::Image::new((mark.id(), egui::Vec2::splat(ABOUT_MARK))));
+                    ui.add_space(space::S4);
+                }
+                ui.label(
+                    RichText::new("Metallic Studio")
+                        .font(fonts::named(fonts::HEADING, text::TITLE))
+                        .color(p.text),
+                );
+                ui.label(
+                    RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                        .size(text::BODY)
+                        .color(p.muted),
+                );
+                ui.add_space(space::S3);
+                ui.label(
+                    RichText::new("The editor of the Metallic game engine and platform.")
+                        .size(text::SMALL)
+                        .color(p.subtle),
+                );
+                ui.add_space(space::S5);
+                close = button(ui, ButtonKind::Secondary, "Close").clicked();
+                ui.add_space(space::S2);
+            });
+        });
+    *open = keep && !close;
+}
+
+/// The mark's size in the About window, in points.
+pub(crate) const ABOUT_MARK: f32 = 56.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keymap::Overrides;
+
+    #[test]
+    fn the_menus_are_roblox_studios_and_name_real_commands() {
+        let titles: Vec<&str> = MENUS.iter().map(|menu| menu.title).collect();
+        assert_eq!(titles, ["File", "Edit", "View", "Plugins", "Test", "Window", "Help"]);
+        let keymap = Keymap::studio(&Overrides::new());
+        for menu in MENUS {
+            assert!(!menu.entries.is_empty(), "{} is empty", menu.title);
+            assert_ne!(menu.entries.first(), Some(&Entry::Separator), "{}", menu.title);
+            assert_ne!(menu.entries.last(), Some(&Entry::Separator), "{}", menu.title);
+            for entry in menu.entries {
+                if let Entry::Item {
+                    label,
+                    command: Some(id),
+                    ..
+                } = entry
+                {
+                    assert!(
+                        keymap.registry().commands().iter().any(|command| command.id == *id),
+                        "{}: {label} names `{id}`, which is not a command",
+                        menu.title
+                    );
+                }
+            }
+        }
+    }
 }
