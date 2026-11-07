@@ -2337,9 +2337,9 @@ mod tests {
     const DEFAULT_PANELS: [&str; 5] = [
         panels::ids::VIEWPORT,
         panels::ids::EXPLORER,
-        panels::ids::ASSETS,
         panels::ids::PROPERTIES,
         panels::ids::OUTPUT,
+        panels::ids::ASSETS,
     ];
 
     #[test]
@@ -3395,19 +3395,19 @@ mod tests {
         settle(&mut harness);
         assert_eq!(
             tab_bar_of(&harness.state().studio, panels::ids::OUTPUT),
-            [panels::ids::ASSETS, panels::ids::OUTPUT]
+            [panels::ids::OUTPUT, panels::ids::ASSETS]
         );
-        // Output dragged to the left of Assets, in the same bar.
+        // Assets dragged to the left of Output, in the same bar.
         let output = harness.get_by_role_and_label(Role::Tab, "Output").rect();
         let assets = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
         drag(
             &mut harness,
-            output.center(),
-            egui::pos2(assets.left() + 4.0, assets.center().y),
+            assets.center(),
+            egui::pos2(output.left() + 4.0, output.center().y),
         );
         assert_eq!(
             tab_bar_of(&harness.state().studio, panels::ids::OUTPUT),
-            [panels::ids::OUTPUT, panels::ids::ASSETS]
+            [panels::ids::ASSETS, panels::ids::OUTPUT]
         );
         // Assets dragged onto the Properties bar joins it, after Properties, and opens.
         let assets = harness.get_by_role_and_label(Role::Tab, "Assets").rect();

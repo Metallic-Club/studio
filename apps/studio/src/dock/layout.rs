@@ -224,7 +224,8 @@ pub fn default_tree(panels: &[&dyn Panel]) -> Tree<PanelId> {
         (one, other) => one.or(other),
     };
     let right = match (upper, lower) {
-        (Some(upper), Some(lower)) => Some(split(&mut tiles, LinearDir::Vertical, &[(upper, 1.0), (lower, 1.2)])),
+        // The Explorer above takes two fifths, the Properties under it three (#323).
+        (Some(upper), Some(lower)) => Some(split(&mut tiles, LinearDir::Vertical, &[(upper, 2.0), (lower, 3.0)])),
         (one, other) => one.or(other),
     };
     let columns: Vec<(TileId, f32)> = [(left, 1.0), (middle, 3.4), (right, 1.2)]

@@ -22,9 +22,10 @@ use crate::theme::tokens::{space, text};
 pub static PANELS: &[&dyn Panel] = &[
     &viewport::Viewport,
     &explorer::Explorer,
-    &assets::Assets,
     &properties::Properties,
+    // Output before Assets: the first tab at the bottom (#323).
     &output::Output,
+    &assets::Assets,
     &game::Game,
 ];
 

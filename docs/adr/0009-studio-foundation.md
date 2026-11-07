@@ -94,8 +94,8 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
 - **Panel borders** (#262, #273): docked groups sit flush, with no gap between them or around the dock. A line exactly one
   physical pixel wide, snapped to the pixel grid (#287), in the border colour parts neighbours (square: rounded corners looked wrong on docked panels); a side along the
   window's edge has none. Settings → Appearance → Panel borders turns the lines off (on by default).
-- **Default layout:** Viewport in the centre; Explorer on the left with Assets as a tab beside it; Properties on the
-  right; Output along the bottom.
+- **Default layout:** Viewport in the centre with Output and Assets as tabs under it (Output first and in front,
+  #323); on the right, the Explorer over the Properties, two fifths of the column to three (#256, #323).
 - **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection, search; since #274 its rows touch and are striped like Properties'); Properties (the selected
   instance's properties from `PropMeta`, **read-only in this slice**, since editing comes with undo); Assets (the
   `.mtproj`'s asset index, #188); Output (engine and script log, with filter and clear).
