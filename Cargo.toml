@@ -111,6 +111,9 @@ egui_tiles = { version = "0.18.0", features = ["serde"] }
 # Studio's native file dialogs (pick a `.mtproj`, pick a folder). Desktop only, like egui. On Linux it asks the XDG
 # desktop portal over D-Bus (no GTK); on Windows and macOS it shows the system's own dialogs. MIT.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
+# Rasterises the SVGs in Studio's custom icon folder (#231). Without its defaults: no text (fonts), no raster images
+# inside an SVG, no gzip, so it is usvg, tiny-skia and their parsers. Apache-2.0 OR MIT (tiny-skia BSD-3-Clause).
+resvg = { version = "0.49", default-features = false }
 # Windows-only dev-dependency of `metallic_render`'s allocation tests, which keep the Direct3D 12 debug layer's
 # messages away from wgpu-hal's message handler (crates/render/tests/no_alloc.rs, #125). Already in the tree via wgpu.
 # Also `metallic_platform`'s per-user file association (registry, shell notify) and Studio's splash window.

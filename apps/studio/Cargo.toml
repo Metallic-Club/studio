@@ -22,6 +22,8 @@ log.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 rfd.workspace = true
+# The custom icon folder's SVGs (src/theme/icons/custom.rs).
+resvg.workspace = true
 egui_tiles.workspace = true
 # The saved dock layout (`layout.json`).
 serde.workspace = true

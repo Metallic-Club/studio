@@ -240,6 +240,63 @@ impl Accent {
     }
 }
 
+/// The hues icons are coloured in, one per icon group (`theme::icons::Group`, #231): the accent family's five colours
+/// and a neutral. Calm, not neon: on the dark mode each is the accent pulled a quarter of the way towards the muted
+/// grey, on the light mode the light accent a fifth of the way; high contrast uses the accents as they are (the
+/// brighter hover colour on dark). Selection and the accent still win where they mark something.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Hue {
+    /// Lights, transform tools.
+    Orange,
+    /// Services, the scene's panels, the File menu.
+    Blue,
+    /// Scripts, the log, the View menu.
+    Violet,
+    /// The world: parts and models; content; running the game.
+    Mint,
+    /// Cameras, inserting.
+    Rose,
+    /// Everything else: folders, values, Studio itself, the interface's own icons.
+    Neutral,
+}
+
+/// How far a dark-mode icon hue is pulled towards the muted grey.
+const ICON_CALM_DARK: f32 = 0.25;
+/// How far a light-mode icon hue is pulled towards the muted grey.
+const ICON_CALM_LIGHT: f32 = 0.2;
+
+impl Hue {
+    /// Every hue.
+    pub const ALL: [Hue; 6] = [Hue::Orange, Hue::Blue, Hue::Violet, Hue::Mint, Hue::Rose, Hue::Neutral];
+
+    /// The accent it is drawn from; `None` for the neutral.
+    const fn accent(self) -> Option<Accent> {
+        match self {
+            Hue::Orange => Some(Accent::Orange),
+            Hue::Blue => Some(Accent::Blue),
+            Hue::Violet => Some(Accent::Violet),
+            Hue::Mint => Some(Accent::Mint),
+            Hue::Rose => Some(Accent::Rose),
+            Hue::Neutral => None,
+        }
+    }
+
+    /// Its colour on the dark or the light mode, with or without high contrast.
+    pub const fn color(self, dark: bool, high_contrast: bool) -> Color32 {
+        let palette = if dark { DARK } else { LIGHT };
+        let Some(accent) = self.accent() else {
+            return if high_contrast { palette.text } else { palette.subtle };
+        };
+        let c = accent.colors();
+        match (dark, high_contrast) {
+            (true, false) => mix(c.color, palette.muted, ICON_CALM_DARK),
+            (true, true) => c.hover,
+            (false, false) => mix(c.light, palette.muted, ICON_CALM_LIGHT),
+            (false, true) => c.light,
+        }
+    }
+}
+
 /// Spacing on a 4 px grid, in points.
 pub mod space {
     /// 2.
@@ -502,6 +559,44 @@ mod tests {
             contrast(blend(strong.line, strong.darker), strong.darker)
                 > contrast(blend(DARK.rows().line, strong.darker), strong.darker)
         );
+    }
+
+    #[test]
+    fn icon_hues_are_distinct_calm_and_show_on_every_ground() {
+        for dark in [true, false] {
+            for strong in [false, true] {
+                let mode = format!("dark {dark}, high contrast {strong}");
+                let p = if dark { DARK } else { LIGHT };
+                let p = if strong { p.high_contrast(dark) } else { p };
+                let colors: Vec<Color32> = Hue::ALL.iter().map(|hue| hue.color(dark, strong)).collect();
+                for (i, a) in colors.iter().enumerate() {
+                    for b in &colors[i + 1..] {
+                        assert_ne!(a, b, "{mode}: two hues are the same");
+                    }
+                    // An icon is a graphic: 3:1 against every ground it is drawn on (WCAG 1.4.11).
+                    let rows = p.rows();
+                    for ground in [p.bg, p.panel, p.surface, p.surface_hover, rows.darker, rows.brighter] {
+                        assert!(contrast(*a, ground) >= 3.0, "{mode}: {a:?} on {ground:?}");
+                    }
+                }
+                for hue in Hue::ALL {
+                    if strong {
+                        // High contrast never weakens a hue.
+                        let ground = p.panel;
+                        assert!(contrast(hue.color(dark, true), ground) >= contrast(hue.color(dark, false), ground));
+                    }
+                }
+            }
+            // Calm: on the dark mode each hue is softer (less saturated) than the accent it comes from.
+            if dark {
+                let chroma = |c: Color32| c.r().max(c.g()).max(c.b()) - c.r().min(c.g()).min(c.b());
+                for (hue, accent) in Hue::ALL.iter().zip(Accent::ALL) {
+                    assert!(chroma(hue.color(true, false)) < chroma(accent.colors().color), "{hue:?}");
+                }
+            }
+        }
+        assert_eq!(Hue::Neutral.color(true, false), DARK.subtle);
+        assert_eq!(Hue::Orange.color(false, true), Accent::Orange.colors().light);
     }
 
     #[test]

@@ -6,13 +6,15 @@
 //! system's mode) changes, so a frame never rebuilds it.
 
 pub mod fonts;
+pub mod icons;
+pub mod lucide;
 pub mod tokens;
 
 use egui::epaint::{CornerRadius, Margin, Stroke};
 use egui::style::{Selection, WidgetVisuals, Widgets};
 use egui::{Color32, FontFamily, FontId, Pos2, Rect, TextStyle, Vec2, pos2, vec2};
 
-use tokens::{ACCENT_INK, Accent, Motion, Palette, radius, shadow, size, space, text};
+use tokens::{ACCENT_INK, Accent, Hue, Motion, Palette, radius, shadow, size, space, text};
 
 /// Dark, light, or whichever the system uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -89,6 +91,7 @@ impl Look {
             accent: self.accent.on(dark),
             accent_fill: self.accent.colors().color,
             accent_hover: self.accent.colors().hover,
+            high_contrast: self.high_contrast,
         }
     }
 }
@@ -106,6 +109,15 @@ pub struct Colors {
     pub accent_fill: Color32,
     /// The accent under the pointer.
     pub accent_hover: Color32,
+    /// Whether the high-contrast option is on (the icon hues follow it).
+    pub high_contrast: bool,
+}
+
+impl Colors {
+    /// The colour of an icon hue in these colours (#231).
+    pub fn hue(&self, hue: Hue) -> Color32 {
+        hue.color(self.dark, self.high_contrast)
+    }
 }
 
 impl Default for Colors {
