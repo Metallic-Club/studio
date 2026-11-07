@@ -21,6 +21,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::monitor::MonitorHandle;
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
+use super::game::GameRenderer;
 use super::startup::{Startup, studio_steps};
 use super::viewport::ViewportRenderer;
 use super::{Studio, WindowRequest, native, splash};
@@ -70,6 +71,8 @@ struct StudioWindow {
     studio: Studio,
     /// The engine drawing the game into the Viewport panel's texture.
     viewport: ViewportRenderer,
+    /// The running game drawn into the Game tab's texture (Play in Studio).
+    game: GameRenderer,
     /// The Rendering settings' vsync as last applied to the window.
     vsync: Option<bool>,
     /// When egui asked to be drawn again, if not at once.
@@ -188,6 +191,7 @@ impl StudioWindow {
             painter,
             studio,
             viewport: ViewportRenderer::new(),
+            game: GameRenderer::new(),
             vsync: None,
             repaint_at: None,
         };
@@ -209,7 +213,8 @@ impl StudioWindow {
         // Every delta is applied below; taken out, they are drained as they are.
         let mut textures = std::mem::take(&mut output.textures_delta);
         // The game into the viewport's texture, from the camera this frame's input moved, before the UI shows it.
-        let viewport_busy = self.viewport.frame(&self.context, &mut self.painter, &mut self.studio);
+        let viewport_busy = self.viewport.frame(&self.context, &mut self.painter, &mut self.studio)
+            | self.game.frame(&self.context, &mut self.painter, &mut self.studio);
         self.apply_vsync();
 
         let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);

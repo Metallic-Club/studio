@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderError, wgpu};
 
+use super::game::GameRenderer;
 use super::viewport::ViewportRenderer;
 use super::{Studio, splash};
 use crate::theme::fonts;
@@ -21,6 +22,7 @@ pub(super) struct Offscreen {
     pub(super) ctx: egui::Context,
     painter: egui_wgpu::Renderer,
     pub(super) viewport: ViewportRenderer,
+    pub(super) game: GameRenderer,
     target: wgpu::Texture,
     size: egui::Vec2,
     pixels_per_point: f32,
@@ -57,6 +59,7 @@ impl Offscreen {
             ctx,
             painter,
             viewport: ViewportRenderer::new(),
+            game: GameRenderer::new(),
             target,
             size,
             pixels_per_point,
@@ -115,6 +118,7 @@ impl Offscreen {
         let mut output = self.ctx.run_ui(input, |ui| studio.ui(ui, now));
         let mut textures = std::mem::take(&mut output.textures_delta);
         self.viewport.frame(&self.context, &mut self.painter, studio);
+        self.game.frame(&self.context, &mut self.painter, studio);
         for (id, deltas) in textures.set.drain() {
             for delta in &deltas {
                 self.painter.update_texture(device, queue, id, delta);

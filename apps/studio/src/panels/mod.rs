@@ -5,6 +5,7 @@
 
 pub mod assets;
 pub mod explorer;
+pub mod game;
 pub mod output;
 pub mod properties;
 pub mod viewport;
@@ -23,6 +24,7 @@ pub static PANELS: &[&dyn Panel] = &[
     &assets::Assets,
     &properties::Properties,
     &output::Output,
+    &game::Game,
 ];
 
 /// The panels' ids.
@@ -37,6 +39,8 @@ pub mod ids {
     pub const PROPERTIES: &str = "properties";
     /// The Output panel.
     pub const OUTPUT: &str = "output";
+    /// The running game (Play in Studio).
+    pub const GAME: &str = "game";
 }
 
 /// Phosphor icons the panels use beyond the theme's own, by their code points in `Phosphor.ttf`.
@@ -109,6 +113,14 @@ pub mod icon {
     pub const IMAGE: char = '\u{E2CA}';
     /// A note: an audio asset.
     pub const MUSIC_NOTE: char = '\u{E33C}';
+    /// A triangle: play.
+    pub const PLAY: char = '\u{E3D0}';
+    /// Two bars: pause.
+    pub const PAUSE: char = '\u{E39E}';
+    /// A square: stop.
+    pub const STOP: char = '\u{E46C}';
+    /// Skip forward (a triangle against a bar): step one frame.
+    pub const STEP: char = '\u{E5A6}';
 }
 
 /// The icon of `class`: its own, or its nearest ancestor's.
@@ -191,7 +203,14 @@ mod tests {
         for panel in PANELS {
             assert!(seen.insert(panel.id()), "{} twice", panel.id());
         }
-        for id in [ids::VIEWPORT, ids::EXPLORER, ids::ASSETS, ids::PROPERTIES, ids::OUTPUT] {
+        for id in [
+            ids::VIEWPORT,
+            ids::EXPLORER,
+            ids::ASSETS,
+            ids::PROPERTIES,
+            ids::OUTPUT,
+            ids::GAME,
+        ] {
             assert!(seen.contains(id), "{id}");
         }
     }
@@ -249,6 +268,10 @@ mod tests {
                 icon::FILE,
                 icon::IMAGE,
                 icon::MUSIC_NOTE,
+                icon::PLAY,
+                icon::PAUSE,
+                icon::STOP,
+                icon::STEP,
             ] {
                 let has = ui
                     .ctx()

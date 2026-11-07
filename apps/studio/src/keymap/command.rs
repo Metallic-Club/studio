@@ -149,6 +149,14 @@ pub mod ids {
     pub const PROJECT_CLOSE: &str = "project.close";
     /// Puts the editor's panels back where they start.
     pub const VIEW_RESET_LAYOUT: &str = "view.reset_layout";
+    /// Starts a game session in the Game tab (Play in Studio).
+    pub const TEST_PLAY: &str = "test.play";
+    /// Pauses or resumes the game session.
+    pub const TEST_PAUSE: &str = "test.pause";
+    /// Runs one frame of the paused game.
+    pub const TEST_STEP: &str = "test.step";
+    /// Ends the game session.
+    pub const TEST_STOP: &str = "test.stop";
     /// Opens the project selected on the projects page.
     pub const PROJECTS_OPEN: &str = "projects.open";
     /// Starts a new project from a template.
@@ -244,6 +252,41 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Reset layout",
             "View",
             "Puts the editor's panels back where they were when Studio was new.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["F5"],
+        ..Command::new(
+            ids::TEST_PLAY,
+            "Play",
+            "Test",
+            "Runs the game in the Game tab, from the scene as it is now.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["F7"],
+        ..Command::new(
+            ids::TEST_PAUSE,
+            "Pause or resume",
+            "Test",
+            "Freezes the running game's time, or lets it run again.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["F6"],
+        ..Command::new(ids::TEST_STEP, "Step", "Test", "Runs one frame of the paused game.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Shift+F5"],
+        ..Command::new(
+            ids::TEST_STOP,
+            "Stop",
+            "Test",
+            "Ends the game and puts the scene back as it was before Play.",
         )
     },
     Command {
