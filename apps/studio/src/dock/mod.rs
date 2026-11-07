@@ -10,8 +10,8 @@
 //!   only when it changed and nothing is being dragged.
 //! - **Dock guides** (#237): while a tab is dragged, squares in the middle of the area under the pointer say where it
 //!   docks, and a drop anywhere but a square or a tab bar leaves the layout as it was ([`guides`]).
-//! - **Panel borders** (#262): with Settings → Appearance → Panel borders on, each group of tabs is outlined with the
-//!   Settings window's 1 px border, square, a little apart from the next.
+//! - **Panel borders** (#262, #273): the groups sit flush, and with Settings → Appearance → Panel borders on, a 1 px
+//!   line parts each from the next; a side along the window's edge has none.
 
 pub(crate) mod guides;
 pub mod layout;
@@ -351,6 +351,7 @@ impl Dock {
             panels: self.panels,
             borders,
             groups,
+            area: ui.max_rect(),
             cx,
             focus: DockFocus {
                 focused: self.focus.focused,
@@ -461,6 +462,8 @@ struct DockBehavior<'a, 'b> {
     borders: bool,
     /// The groups of tabs, which the borders outline.
     groups: Vec<TileId>,
+    /// The dock's whole area: a group's side along it has no border (#273).
+    area: Rect,
     /// Each tab drawn this frame and where: where a dragged tab goes in a bar it is dropped on.
     tabs: Vec<(TileId, Rect)>,
 }
@@ -491,8 +494,6 @@ const CLOSE_SIZE: f32 = 18.0;
 /// The active tab's accent underline (#255: 1 px, thinner than the 3 px bars that mark selected list items).
 pub(crate) const TAB_LINE: f32 = 1.0;
 
-/// The space between outlined groups of tabs (#262).
-const BORDER_GAP: f32 = space::S2;
 /// Every group of tabs in `tree`: what the panel borders outline.
 fn tab_groups(tree: &Tree<PanelId>) -> Vec<TileId> {
     tree.tiles
@@ -502,14 +503,26 @@ fn tab_groups(tree: &Tree<PanelId>) -> Vec<TileId> {
         .collect()
 }
 
-/// Outlines `rect` with the Settings window's 1 px border in `edge`: square, as docked panels are (owner, #262).
-fn paint_border(painter: &egui::Painter, rect: Rect, edge: Color32) {
-    painter.rect_stroke(
-        rect,
-        CornerRadius::ZERO,
-        Stroke::new(size::BORDER, edge),
-        egui::StrokeKind::Inside,
-    );
+/// The 1 px lines a group in `rect` draws (#273): borders only between docked panels, never along the dock's edge
+/// (`area`, the window's). Each group draws its right and bottom sides when another group is there, so two
+/// neighbours share one line rather than two.
+fn inner_edges(rect: Rect, area: Rect) -> Vec<Rect> {
+    // Within half a point: layouts are fractional.
+    const SAME: f32 = 0.5;
+    let mut lines = Vec::new();
+    if area.right() - rect.right() > SAME {
+        lines.push(Rect::from_min_max(
+            pos2(rect.right() - size::BORDER, rect.top()),
+            rect.right_bottom(),
+        ));
+    }
+    if area.bottom() - rect.bottom() > SAME {
+        lines.push(Rect::from_min_max(
+            pos2(rect.left(), rect.bottom() - size::BORDER),
+            rect.right_bottom(),
+        ));
+    }
+    lines
 }
 
 /// Draws one tab (its title and close button; no icon, #255) filling the bar's height, interacting as `id`. Returns
@@ -631,14 +644,13 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
     }
 
     fn gap_width(&self, _style: &egui::Style) -> f32 {
-        if self.borders { BORDER_GAP } else { 2.0 }
+        // Flush (#273): the borders, not gaps, part the groups.
+        0.0
     }
 
     fn resize_stroke(&self, style: &egui::Style, resize_state: ResizeState) -> Stroke {
         match resize_state {
-            // Outlined groups stand apart on the background; without borders the gap is the tab bars' colour.
-            ResizeState::Idle if self.borders => Stroke::NONE,
-            ResizeState::Idle => Stroke::new(self.gap_width(style), self.colors.palette.header),
+            ResizeState::Idle => Stroke::NONE,
             ResizeState::Hovering => style.visuals.widgets.hovered.fg_stroke,
             ResizeState::Dragging => style.visuals.widgets.active.fg_stroke,
         }
@@ -646,8 +658,9 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
 
     fn paint_on_top_of_tile(&self, painter: &egui::Painter, _style: &egui::Style, tile_id: TileId, rect: Rect) {
         if self.borders && self.groups.contains(&tile_id) {
-            let p = self.colors.palette;
-            paint_border(painter, rect, p.border);
+            for line in inner_edges(rect, self.area) {
+                painter.rect_filled(line, CornerRadius::ZERO, self.colors.palette.border);
+            }
         }
     }
 
@@ -764,29 +777,32 @@ mod tests {
     }
 
     #[test]
-    fn panel_borders_outline_each_group_of_tabs_square() {
+    fn panel_borders_are_lines_between_groups_only() {
         let dock = Dock::in_memory(PANELS);
         // Viewport, Assets and Output, Explorer, Properties.
         assert_eq!(tab_groups(dock.tree()).len(), 4);
 
-        let ctx = egui::Context::default();
-        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(200.0, 100.0));
-        let edge = Color32::BLUE;
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            paint_border(ui.painter(), rect, edge);
-        });
-        let shapes: Vec<&egui::Shape> = output.shapes.iter().map(|clipped| &clipped.shape).collect();
-        assert_eq!(shapes.len(), 1, "the outline alone");
-        let outline = shapes.iter().find_map(|shape| match shape {
-            egui::Shape::Rect(outline) => Some(outline),
-            _ => None,
-        });
-        let outline = outline.expect("an outline");
-        assert_eq!(outline.rect, rect);
-        assert_eq!(outline.corner_radius, CornerRadius::ZERO, "square, not rounded");
-        assert_eq!(outline.stroke, Stroke::new(size::BORDER, edge));
-        // epaint checks the frame's font texture was taken.
-        output.textures_delta.clear();
+        let area = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 600.0));
+        let left_top = Rect::from_min_max(pos2(0.0, 0.0), pos2(700.0, 400.0));
+        let left_bottom = Rect::from_min_max(pos2(0.0, 400.0), pos2(700.0, 600.0));
+        let right = Rect::from_min_max(pos2(700.0, 0.0), pos2(1000.0, 600.0));
+        // Top left: a line along its right (the column beside it) and its bottom (the group under it).
+        assert_eq!(
+            inner_edges(left_top, area),
+            [
+                Rect::from_min_max(pos2(699.0, 0.0), pos2(700.0, 400.0)),
+                Rect::from_min_max(pos2(0.0, 399.0), pos2(700.0, 400.0)),
+            ]
+        );
+        // Bottom left: its bottom and left touch the window's edge, so only its right has a line.
+        assert_eq!(
+            inner_edges(left_bottom, area),
+            [Rect::from_min_max(pos2(699.0, 400.0), pos2(700.0, 600.0))]
+        );
+        // The right column touches the window on three sides and its neighbour draws the line between: none.
+        assert!(inner_edges(right, area).is_empty());
+        // Fractional layouts still count as touching.
+        assert!(inner_edges(Rect::from_min_max(pos2(700.0, 0.0), pos2(999.8, 600.2)), area).is_empty());
     }
 
     #[test]
