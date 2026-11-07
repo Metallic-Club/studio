@@ -5,6 +5,7 @@
 //! editor's, so it outlives the project.
 
 pub mod open;
+pub mod play;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use crate::panels::explorer::ExplorerState;
 use crate::panels::output::OutputState;
 use crate::viewport::ViewportState;
 pub use open::{AssetRow, Opened, Opening, STEPS};
+pub use play::{GameView, PlaySession};
 
 /// The open project, its game, and the panels' state.
 pub struct EditorState {
@@ -39,6 +41,8 @@ pub struct EditorState {
     pub output: OutputState,
     /// The viewport's camera and texture.
     pub viewport: ViewportState,
+    /// The game session, while one runs (Play in Studio, ADR 0010).
+    pub play: Option<PlaySession>,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -72,6 +76,7 @@ impl EditorState {
             explorer,
             output: OutputState::new(log),
             viewport,
+            play: None,
         }
     }
 

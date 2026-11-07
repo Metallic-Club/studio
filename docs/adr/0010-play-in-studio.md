@@ -76,7 +76,7 @@ members, as the Player reads them from a file.
 |---|---|---|
 | **Play** | F5 | Copies the scene, starts the Player, opens the Game tab in front with the game's input |
 | **Pause / Resume** | F7 | Freezes game time (`Engine::pause`); scripts and simulation stop, the view keeps drawing |
-| **Step** | F10 | While paused, runs one frame of one fixed step (`Engine::step_frame`) |
+| **Step** | F6 | While paused, runs one frame of one fixed step (`Engine::step_frame`) |
 | **Stop** | Shift+F5 | Ends the session (§2); the Game tab closes and the Viewport's tab comes back to the front |
 
 They are keymap commands (rebindable, ADR 0009 Keybinds), in the **Test** menu, and in a group of play buttons in the

@@ -6,6 +6,7 @@
 //! is the shell's too ([`viewport`]): it draws the game into the texture the Viewport panel shows.
 
 mod editor;
+pub mod game;
 mod native;
 #[cfg(test)]
 mod offscreen;
@@ -118,6 +119,8 @@ pub struct Studio {
     /// The mark at the sizes the screens after the splash show it, in pixels: drawn for each, never scaled.
     marks: Vec<(u32, TextureHandle)>,
     requests: Vec<WindowRequest>,
+    /// Game sessions started so far: each gets the next number.
+    sessions: u64,
 }
 
 impl std::fmt::Debug for Studio {
@@ -165,6 +168,7 @@ impl Studio {
             emblem: None,
             marks: Vec::new(),
             requests: Vec::new(),
+            sessions: 0,
         }
     }
 
@@ -408,6 +412,12 @@ impl Studio {
             self.show_projects();
             return;
         };
+        if editor.is_playing() {
+            // The game's frame first, so the panels show it; it runs every frame, Game tab in front or not.
+            let dt = ctx.input(|input| input.stable_dt);
+            editor.tick(std::time::Duration::from_secs_f32(dt.max(0.0)));
+            ctx.request_repaint();
+        }
         let full = ui.max_rect();
         let bar = Rect::from_min_size(full.min, vec2(full.width(), editor::BAR_HEIGHT));
         let action = ui
@@ -483,13 +493,76 @@ impl Studio {
             MenuAction::Save => self.save(),
             MenuAction::Close => self.show_projects(),
             MenuAction::Toggle(id) => self.dock.toggle(id),
-            MenuAction::ResetLayout => self.dock.reset(),
+            MenuAction::ResetLayout => self.reset_layout(),
             MenuAction::Settings => self.toggle_settings(),
             MenuAction::KeyboardShortcuts => {
                 self.settings_window.show_category(crate::settings::Category::Keybinds);
                 self.settings_window.set_open(true);
             }
             MenuAction::About => self.about_open = true,
+            MenuAction::Play => self.play(),
+            MenuAction::Pause => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.toggle_pause();
+                }
+            }
+            MenuAction::Step => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.step();
+                }
+            }
+            MenuAction::Stop => self.stop(),
+        }
+    }
+
+    /// Whether a game session runs in the editor (Play in Studio).
+    pub fn is_playing(&self) -> bool {
+        self.editor().is_some_and(EditorState::is_playing)
+    }
+
+    /// Starts a game session of the open project (ADR 0010): the scene as it is now runs in an embedded Player, drawn
+    /// with the Rendering settings, its output in Output, and the Game tab opens in front with the focus. Tells the
+    /// user why if it cannot start.
+    fn play(&mut self) {
+        let graphics = self.settings.settings().rendering.clone();
+        let log = Arc::clone(&self.log);
+        self.sessions += 1;
+        let number = self.sessions;
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        if editor.is_playing() {
+            return;
+        }
+        match editor.play(graphics, log, number) {
+            Ok(()) => {
+                self.dock.open(panels::ids::GAME);
+                self.dock.set_focused(Some(panels::ids::GAME));
+            }
+            Err(error) => {
+                log::warn!("play: the game could not start: {error}");
+                self.notices.push(Notice {
+                    title: "The game could not start",
+                    body: error,
+                });
+            }
+        }
+    }
+
+    /// Ends the game session: the Game tab closes, the Viewport's comes to the front, and the scene is as it was
+    /// before Play.
+    fn stop(&mut self) {
+        if self.editor_mut().is_some_and(EditorState::stop) {
+            self.dock.close(panels::ids::GAME);
+            self.dock.open(panels::ids::VIEWPORT);
+        }
+    }
+
+    /// Puts the panels back where they start; the Game tab stays while a game runs.
+    fn reset_layout(&mut self) {
+        self.dock.reset();
+        if self.is_playing() {
+            self.dock.open(panels::ids::GAME);
         }
     }
 
@@ -503,6 +576,11 @@ impl Studio {
         let Some(editor) = self.editor_mut() else {
             return;
         };
+        if editor.is_playing() {
+            // ADR 0010 §3: a save never looks like saving the game's state.
+            log::warn!("projects: saving is off while the game runs; stop it first");
+            return;
+        }
         if let Err(error) = editor.save() {
             log::warn!("projects: could not save: {error}");
             self.notices.push(Notice {
@@ -606,7 +684,11 @@ impl Studio {
                 ids::SETTINGS_OPEN => self.toggle_settings(),
                 ids::PROJECT_CLOSE if editing => self.show_projects(),
                 ids::FILE_SAVE if editing => self.save(),
-                ids::VIEW_RESET_LAYOUT if editing => self.dock.reset(),
+                ids::VIEW_RESET_LAYOUT if editing => self.reset_layout(),
+                ids::TEST_PLAY if editing => self.menu_action(MenuAction::Play),
+                ids::TEST_PAUSE if editing => self.menu_action(MenuAction::Pause),
+                ids::TEST_STEP if editing => self.menu_action(MenuAction::Step),
+                ids::TEST_STOP if editing => self.menu_action(MenuAction::Stop),
                 id @ (ids::PROJECTS_OPEN | ids::PROJECTS_NEW | ids::PROJECTS_ADD) if context == Context::Projects => {
                     if let Some(path) = self.projects.run(id) {
                         self.open(path);
@@ -1859,8 +1941,10 @@ mod tests {
             click_label(&mut harness, menu.title);
             for entry in menu.entries {
                 match *entry {
-                    editor::Entry::Item { label, .. } => {
-                        assert!(menu_item_enabled(&harness, label), "{}: {label}", menu.title);
+                    editor::Entry::Item { label, action, .. } => {
+                        // Without a game, Pause, Step and Stop are off (#246).
+                        let expected = editor::PlayState::default().allows(action);
+                        assert_eq!(menu_item_enabled(&harness, label), expected, "{}: {label}", menu.title);
                     }
                     editor::Entry::Planned(label) => {
                         assert!(!menu_item_enabled(&harness, label), "{}: {label}", menu.title);
@@ -1952,6 +2036,199 @@ mod tests {
         click_label(&mut harness, "File");
         let save = harness.state().studio.keymap().shortcut_text(ids::FILE_SAVE).unwrap();
         assert!(painted(&harness, &save), "Save shows {save}");
+    }
+
+    // Play in Studio: the Game tab with Play, Pause, Step and Stop (#246).
+
+    use crate::logging::LogBuffer;
+    use metallic_engine::metallic_core::Value;
+
+    /// The editor's game has a Script whose source `Scripts/Play.luau` prints a line, then on Heartbeat turns the
+    /// Baseplate and counts the game's frames in a `NumberValue` called Frames under `ReplicatedStorage`.
+    fn add_play_script(harness: &mut Harness<'static, Test>) {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let dm = &mut editor.dm;
+        let registry = dm.registry().clone();
+        let class = |name: &str| registry.class_id(name).unwrap();
+        let service = dm.service(class("ServerScriptService")).unwrap();
+        let script = dm.create(class("Script")).unwrap();
+        dm.set_name(script, "Play".into()).unwrap();
+        dm.set_by_name(script, "Source", Value::String("Scripts/Play.luau".into()))
+            .unwrap();
+        dm.set_parent(script, Some(service)).unwrap();
+        editor
+            .project
+            .write(
+                "Scripts/Play.luau",
+                "print('hello from play')\n\
+                 local frames = Instance.new('NumberValue')\n\
+                 frames.Name = 'Frames'\n\
+                 frames.Parent = game:GetService('ReplicatedStorage')\n\
+                 local part = workspace:FindFirstChild('Baseplate') :: Part\n\
+                 game:GetService('RunService').Heartbeat:Connect(function(dt)\n\
+                     frames.Value += 1\n\
+                     part.CFrame = part.CFrame * CFrame.Angles(0, dt, 0)\n\
+                 end)\n",
+            )
+            .unwrap();
+    }
+
+    /// `Workspace.Baseplate`'s `CFrame` in `dm`.
+    fn baseplate(dm: &metallic_engine::metallic_core::DataModel) -> Value {
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap();
+        dm.get_by_name(part, "CFrame").unwrap()
+    }
+
+    /// The game's frame count (the Play script's `Frames` value).
+    fn game_frames(studio: &Studio) -> f64 {
+        let session = studio.editor().unwrap().play.as_ref().unwrap();
+        let dm = session.player.engine().data_model();
+        let storage = dm
+            .service(dm.registry().class_id("ReplicatedStorage").unwrap())
+            .unwrap();
+        let frames = dm.find_first_child(storage, "Frames", false).unwrap().unwrap();
+        match dm.get_by_name(frames, "Value").unwrap() {
+            Value::Number(n) => n,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn play_runs_the_scene_in_a_game_tab_and_stop_puts_everything_back() {
+        let path = settings_file("editor-play", None);
+        let layout = path.with_file_name(crate::dock::LAYOUT_FILE);
+        let log = Arc::new(LogBuffer::new());
+        let mut harness = editing(path, "Play Game");
+        harness.state_mut().studio.set_log(Arc::clone(&log));
+        add_play_script(&mut harness);
+        settle(&mut harness);
+        let before = baseplate(&harness.state().studio.editor().unwrap().dm);
+        assert!(
+            harness.query_by_role_and_label(Role::Tab, "Game").is_none(),
+            "no Game tab yet"
+        );
+
+        // F5: the Game tab opens in front, and the scene's script runs in the Player.
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        let studio = &harness.state().studio;
+        assert!(studio.is_playing());
+        assert!(studio.dock().is_open(panels::ids::GAME));
+        harness.get_by_role_and_label(Role::Tab, "Game");
+        let mut lines = Vec::new();
+        log.read_since(0, &mut lines);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.message == "hello from play" && line.origin == crate::logging::Origin::Script),
+            "{lines:?}"
+        );
+        let session = studio.editor().unwrap().play.as_ref().unwrap();
+        assert_ne!(
+            baseplate(session.player.engine().data_model()),
+            before,
+            "the game's Baseplate turns"
+        );
+        assert_eq!(baseplate(&studio.editor().unwrap().dm), before, "the editor's does not");
+
+        // Save is off while playing, in the menu and by its shortcut.
+        click_label(&mut harness, "File");
+        assert!(!menu_item_enabled(&harness, "Save"));
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(menu_item_enabled_after(&mut harness, "Test", "Stop"));
+
+        // F7 pauses: the game's frames stop. F6 steps one frame. F7 again resumes.
+        harness.key_press(Key::F7);
+        settle(&mut harness);
+        assert!(harness.state().studio.editor().unwrap().is_paused());
+        let paused = game_frames(&harness.state().studio);
+        settle(&mut harness);
+        assert_eq!(
+            game_frames(&harness.state().studio),
+            paused,
+            "nothing runs while paused"
+        );
+        harness.key_press(Key::F6);
+        settle(&mut harness);
+        assert_eq!(
+            game_frames(&harness.state().studio),
+            paused + 1.0,
+            "a step is one frame"
+        );
+        harness.key_press(Key::F7);
+        settle(&mut harness);
+        assert!(!harness.state().studio.editor().unwrap().is_paused());
+        assert!(game_frames(&harness.state().studio) > paused + 1.0);
+
+        // The layout is saved without the Game tab.
+        harness.state_mut().studio.dock_mut().close(panels::ids::OUTPUT);
+        settle(&mut harness);
+        let text = std::fs::read_to_string(&layout).unwrap();
+        assert!(!text.contains("\"game\""), "{text}");
+
+        // Shift+F5 stops: the Game tab goes, the Viewport is in front, and the editor's scene is as it was.
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
+        settle(&mut harness);
+        let studio = &harness.state().studio;
+        assert!(!studio.is_playing());
+        assert!(!studio.dock().is_open(panels::ids::GAME));
+        assert!(harness.query_by_role_and_label(Role::Tab, "Game").is_none());
+        assert_eq!(baseplate(&studio.editor().unwrap().dm), before);
+
+        // And again.
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        assert!(harness.state().studio.is_playing());
+        assert!(game_frames(&harness.state().studio) >= 1.0, "a new game from the start");
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_playing());
+    }
+
+    /// Opens menu `menu` and says whether its item `label` is enabled, then closes the menu.
+    fn menu_item_enabled_after(harness: &mut Harness<'static, Test>, menu: &str, label: &str) -> bool {
+        click_label(harness, menu);
+        let enabled = menu_item_enabled(harness, label);
+        harness.key_press(Key::Escape);
+        settle(harness);
+        enabled
+    }
+
+    #[test]
+    fn the_play_buttons_and_the_test_menu_drive_a_session() {
+        let mut harness = editing(settings_file("editor-play-buttons", None), "Buttons Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        add_play_script(&mut harness);
+        settle(&mut harness);
+        // Without a game only Play is on.
+        let enabled = |harness: &Harness<'_, Test>, label: &str| {
+            let button = harness.get_by_role_and_label(Role::Button, label);
+            !egui_kittest::kittest::NodeT::accesskit_node(&button).is_disabled()
+        };
+        assert!(enabled(&harness, "Play"));
+        for label in ["Pause", "Step", "Stop"] {
+            assert!(!enabled(&harness, label), "{label}");
+        }
+        harness.get_by_role_and_label(Role::Button, "Play").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_playing());
+        assert!(!enabled(&harness, "Play"));
+        assert!(enabled(&harness, "Pause") && enabled(&harness, "Stop") && !enabled(&harness, "Step"));
+        harness.get_by_role_and_label(Role::Button, "Pause").click();
+        settle(&mut harness);
+        assert!(enabled(&harness, "Resume") && enabled(&harness, "Step"));
+        // Test, Stop.
+        click_label(&mut harness, "Test");
+        harness.get_by_role_and_label(Role::MenuItem, "Stop").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_playing());
+        // Test, Play.
+        click_label(&mut harness, "Test");
+        harness.get_by_role_and_label(Role::MenuItem, "Play").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_playing());
     }
 
     // Settings as a floating window in the editor (#238).
@@ -2736,6 +3013,61 @@ mod tests {
             offscreen.frame(&mut studio);
         }
         write_png(&out.join("239-menu-bar.png"), offscreen.read());
+    }
+
+    /// The screenshot of #246 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_game_tab`): a game
+    /// running in the Game tab, its script's output in Output, and the play buttons in the top bar.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_the_game_tab() {
+        use metallic_engine::metallic_core::Value;
+
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-game-tab", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        studio.set_log(Arc::new(crate::logging::LogBuffer::new()));
+        let mut offscreen = Offscreen::new(egui::vec2(1280.0, 800.0), 1.25).expect("an offscreen device");
+        for _ in 0..3 {
+            offscreen.frame(&mut studio);
+        }
+        studio.open(project);
+        for _ in 0..10_000 {
+            if studio.poll_opening().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        offscreen.frame(&mut studio);
+        // A script that spins the spawn pad and tints it, and says so.
+        let editor = studio.editor_mut().expect("the project opened");
+        let dm = &mut editor.dm;
+        let registry = dm.registry().clone();
+        let class = |name: &str| registry.class_id(name).unwrap();
+        let service = dm.service(class("ServerScriptService")).unwrap();
+        let script = dm.create(class("Script")).unwrap();
+        dm.set_name(script, "Spin".into()).unwrap();
+        dm.set_by_name(script, "Source", Value::String("Scripts/Spin.luau".into()))
+            .unwrap();
+        dm.set_parent(script, Some(service)).unwrap();
+        editor
+            .project
+            .write(
+                "Scripts/Spin.luau",
+                "print('Spin: the spawn pad turns while the game runs')\n\
+                 local pad = workspace:FindFirstChild('SpawnLocation') :: Part\n\
+                 pad.Color = Color3.fromRGB(255, 155, 84)\n\
+                 game:GetService('RunService').Heartbeat:Connect(function(dt)\n\
+                     pad.CFrame = pad.CFrame * CFrame.Angles(0, dt * 2, 0)\n\
+                 end)\n",
+            )
+            .unwrap();
+        studio.menu_action(MenuAction::Play);
+        assert!(studio.is_playing(), "{:?}", studio.notice());
+        for _ in 0..40 {
+            offscreen.frame(&mut studio);
+        }
+        write_png(&out.join("246-game-tab.png"), offscreen.read());
     }
 
     // The viewport (#217).

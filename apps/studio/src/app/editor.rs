@@ -15,7 +15,8 @@ use crate::dock::Dock;
 use crate::editor::{EditorState, STEPS};
 use crate::keymap::{Keymap, ids};
 use crate::panels;
-use crate::theme::tokens::{radius, shadow, size, space, text};
+use crate::panels::icon;
+use crate::theme::tokens::{self, radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
 /// The top bar's height.
@@ -48,6 +49,44 @@ pub(crate) enum MenuAction {
     KeyboardShortcuts,
     /// Help, About Metallic Studio.
     About,
+    /// Test, Play: start a game session in the Game tab.
+    Play,
+    /// Test, Pause: pause or resume the game.
+    Pause,
+    /// Test, Step: one frame of the paused game.
+    Step,
+    /// Test, Stop: end the game session.
+    Stop,
+}
+
+/// Where a game session is, for what the menus and the play buttons allow.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PlayState {
+    /// A session runs (paused or not).
+    pub playing: bool,
+    /// The session's game is paused.
+    pub paused: bool,
+}
+
+impl PlayState {
+    /// The state of `editor`'s session.
+    pub(crate) fn of(editor: &EditorState) -> Self {
+        Self {
+            playing: editor.is_playing(),
+            paused: editor.is_paused(),
+        }
+    }
+
+    /// Whether `action` can run now: Play without a session; Pause and Stop with one; Step while paused; Save only
+    /// without one (ADR 0010 §3). Everything else always.
+    pub(crate) fn allows(self, action: MenuAction) -> bool {
+        match action {
+            MenuAction::Play | MenuAction::Save => !self.playing,
+            MenuAction::Pause | MenuAction::Stop => self.playing,
+            MenuAction::Step => self.paused,
+            _ => true,
+        }
+    }
 }
 
 /// One line of a menu.
@@ -126,11 +165,14 @@ pub(crate) static MENUS: &[Menu] = &[
     Menu {
         title: "Test",
         entries: &[
-            Entry::Planned("Play"),
+            item("Play", MenuAction::Play, Some(ids::TEST_PLAY)),
             Entry::Planned("Play here"),
             Entry::Planned("Run"),
             Entry::Separator,
-            Entry::Planned("Stop"),
+            item("Pause", MenuAction::Pause, Some(ids::TEST_PAUSE)),
+            item("Step", MenuAction::Step, Some(ids::TEST_STEP)),
+            Entry::Separator,
+            item("Stop", MenuAction::Stop, Some(ids::TEST_STOP)),
         ],
     },
     Menu {
@@ -236,6 +278,7 @@ pub(crate) fn top_bar(
         Stroke::new(size::BORDER, p.border),
     );
     let mut action = None;
+    let play = PlayState::of(editor);
     let inner = rect.shrink2(vec2(space::S5, 0.0));
     ui.scope_builder(
         UiBuilder::new()
@@ -271,7 +314,7 @@ pub(crate) fn top_bar(
                                 .corner_radius(CornerRadius::same(radius::ITEM));
                             let (response, _) = egui::containers::menu::MenuButton::from_button(title).ui(ui, |ui| {
                                 ui.set_min_width(MENU_WIDTH);
-                                if let Some(chosen) = menu_entries(ui, menu, dock, keymap) {
+                                if let Some(chosen) = menu_entries(ui, menu, dock, keymap, play) {
                                     action = Some(chosen);
                                 }
                             });
@@ -303,10 +346,69 @@ pub(crate) fn top_bar(
                 if gear(ui, settings_open).on_hover_text(tip).clicked() {
                     action = Some(MenuAction::Settings);
                 }
+                ui.add_space(space::S4);
+                let (divider, _) = ui.allocate_exact_size(vec2(size::BORDER, TITLE_HEIGHT - 8.0), Sense::hover());
+                ui.painter().rect_filled(divider, CornerRadius::ZERO, p.border);
+                ui.add_space(space::S4);
+                // Right to left: the buttons read Play, Pause, Step, Stop.
+                ui.spacing_mut().item_spacing.x = space::S1;
+                let pause = if play.paused {
+                    (icon::PLAY, "Resume")
+                } else {
+                    (icon::PAUSE, "Pause")
+                };
+                for (kind, glyph, label, command) in [
+                    (MenuAction::Stop, icon::STOP, "Stop", ids::TEST_STOP),
+                    (MenuAction::Step, icon::STEP, "Step", ids::TEST_STEP),
+                    (MenuAction::Pause, pause.0, pause.1, ids::TEST_PAUSE),
+                    (MenuAction::Play, icon::PLAY, "Play", ids::TEST_PLAY),
+                ] {
+                    let tip = match keymap.shortcut_text(command) {
+                        Some(keys) => format!("{label} ({keys})"),
+                        None => label.to_owned(),
+                    };
+                    let green = kind == MenuAction::Play;
+                    if play_button(ui, glyph, label, play.allows(kind), green)
+                        .on_hover_text(tip)
+                        .on_disabled_hover_text(label)
+                        .clicked()
+                    {
+                        action = Some(kind);
+                    }
+                }
             });
         },
     );
     action
+}
+
+/// A play control in the top bar: `glyph` in a square button labelled `label`, the theme's green play fill when
+/// `green`, at the disabled strength and inert unless `enabled`.
+fn play_button(ui: &mut Ui, glyph: char, label: &str, enabled: bool, green: bool) -> Response {
+    let p = current_colors(ui.ctx()).palette;
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(vec2(TITLE_HEIGHT + 4.0, TITLE_HEIGHT), sense);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
+    if ui.is_rect_visible(rect) {
+        let hovered = enabled && response.hovered();
+        let (fill, ink) = match (green, enabled) {
+            (true, true) if hovered => (tokens::play::HOVER, tokens::play::TEXT),
+            (true, true) => (tokens::play::FILL, tokens::play::TEXT),
+            (_, true) if hovered => (p.surface_hover, p.text),
+            (_, true) => (Color32::TRANSPARENT, p.text),
+            // The website's disabled strength: 48 %.
+            (_, false) => (Color32::TRANSPARENT, p.text.gamma_multiply(0.48)),
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(radius::ITEM), fill);
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            glyph,
+            fonts::named(fonts::ICONS, text::BODY_LG),
+            ink,
+        );
+    }
+    response
 }
 
 /// The gear that opens Settings; raised while Settings is open.
@@ -331,14 +433,19 @@ fn gear(ui: &mut Ui, open: bool) -> Response {
 }
 
 /// Draws `menu`'s lines into its open popup. Returns what was chosen.
-fn menu_entries(ui: &mut Ui, menu: &Menu, dock: &Dock, keymap: &Keymap) -> Option<MenuAction> {
+fn menu_entries(ui: &mut Ui, menu: &Menu, dock: &Dock, keymap: &Keymap, play: PlayState) -> Option<MenuAction> {
     let mut chosen = None;
     ui.spacing_mut().item_spacing.y = 2.0;
     for entry in menu.entries {
         match *entry {
             Entry::Item { label, action, command } => {
                 let keys = command.and_then(|id| keymap.shortcut_text(id));
-                if menu_item(ui, label, keys, None, true).clicked() {
+                let label = if action == MenuAction::Pause && play.paused {
+                    "Resume"
+                } else {
+                    label
+                };
+                if menu_item(ui, label, keys, None, play.allows(action)).clicked() {
                     chosen = Some(action);
                 }
             }
@@ -346,7 +453,7 @@ fn menu_entries(ui: &mut Ui, menu: &Menu, dock: &Dock, keymap: &Keymap) -> Optio
                 menu_item(ui, label, None, None, false).on_hover_text("Coming in a later version of Studio.");
             }
             Entry::Panels => {
-                for panel in dock.panels() {
+                for panel in dock.panels().iter().filter(|panel| !panel.transient()) {
                     let open = dock.is_open(panel.id());
                     if menu_item(ui, panel.title(), None, Some(open), true).clicked() {
                         chosen = Some(MenuAction::Toggle(panel.id()));

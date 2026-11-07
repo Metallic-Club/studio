@@ -67,6 +67,11 @@ pub trait Panel: Sync {
     fn open_by_default(&self) -> bool {
         true
     }
+    /// Whether Studio alone opens and closes it (the Game tab, while a game runs): it is not in the View menu, and
+    /// the layout is saved without it.
+    fn transient(&self) -> bool {
+        false
+    }
     /// Draws it, filling `ui`.
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>);
 }
@@ -368,8 +373,27 @@ impl Dock {
         let Some(path) = &self.path else {
             return Ok(false);
         };
-        crate::settings::store::write_atomically(path, &layout::to_json(&self.tree))?;
+        crate::settings::store::write_atomically(path, &layout::to_json(&self.persisted()))?;
         Ok(true)
+    }
+
+    /// The layout as it is saved: without the panels Studio alone opens ([`Panel::transient`], the Game tab), so a
+    /// layout saved during a game does not bring back an empty Game tab.
+    pub fn persisted(&self) -> Tree<PanelId> {
+        let mut tree = self.tree.clone();
+        let transient: Vec<TileId> = tree
+            .tiles
+            .iter()
+            .filter_map(|(&tile, kind)| match kind {
+                Tile::Pane(pane) if self.panel(&pane.0).is_some_and(|panel| panel.transient()) => Some(tile),
+                _ => None,
+            })
+            .collect();
+        for tile in transient {
+            tree.remove_recursively(tile);
+        }
+        layout::tidy(&mut tree);
+        tree
     }
 
     /// Whether a tab is being dragged.
