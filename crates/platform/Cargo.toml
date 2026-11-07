@@ -38,6 +38,10 @@ gilrs = { workspace = true, optional = true }
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { workspace = true, optional = true, features = ["android-native-activity"] }
 
+# The per-user file association (src/file_types.rs): the registry, and telling Explorer it changed.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Registry", "Win32_UI_Shell"] }
+
 [target.'cfg(target_os = "ios")'.dependencies]
 winit = { workspace = true, optional = true }
 

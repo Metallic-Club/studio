@@ -89,6 +89,10 @@ pub struct Studio {
     open_project: Option<PathBuf>,
     /// The Editor screen's project, opening or open.
     editor: Option<EditorScreen>,
+    /// The project the command line named, opened once the splash is done.
+    open_after_splash: Option<PathBuf>,
+    /// Whether the project opening came from the command line, so it joins Recent once it has opened.
+    add_to_recent: bool,
     /// The editor's panels and their layout, which outlive any one project.
     dock: Dock,
     /// The log the Output panel reads.
@@ -139,6 +143,8 @@ impl Studio {
             projects: Projects::new(),
             open_project: None,
             editor: None,
+            open_after_splash: None,
+            add_to_recent: false,
             dock: Dock::in_memory(panels::PANELS),
             log: Arc::clone(crate::logging::global()),
             // The splash's look: the default dark mode and accent, before the settings are read.
@@ -162,6 +168,12 @@ impl Studio {
     /// Asks `dialog` for files and folders (the shell gives the system's; until then every dialog is cancelled).
     pub fn set_file_dialog(&mut self, dialog: Box<dyn FileDialog>) {
         self.projects.set_file_dialog(dialog);
+    }
+
+    /// Opens the project at `path` once the splash is done, skipping sign-in and the projects page (a `.mtproj` given
+    /// on the command line). It joins Recent once it has opened; if it cannot be opened, the projects page says why.
+    pub fn open_after_splash(&mut self, path: PathBuf) {
+        self.open_after_splash = Some(path);
     }
 
     /// Has the Output panel read `log` instead of the process's log.
@@ -219,6 +231,7 @@ impl Studio {
     fn show_projects(&mut self) {
         self.editor = None;
         self.open_project = None;
+        self.add_to_recent = false;
         self.projects.refresh();
         self.screen = Screen::Projects;
     }
@@ -238,6 +251,26 @@ impl Studio {
                 self.projects
                     .set_error(format!("Could not open the project: no thread could start ({error})."));
             }
+        }
+    }
+
+    /// Opens the project the command line named. A path with no file lands on the projects page with the error;
+    /// a file that is not a project fails while opening and lands there the same way.
+    fn open_from_command_line(&mut self, path: PathBuf) {
+        if !path.is_file() {
+            self.show_projects();
+            self.projects.set_error(format!(
+                "Could not open {}: there is no project file there.",
+                path.display()
+            ));
+            return;
+        }
+        self.open(path);
+        if self.screen == Screen::Editor {
+            self.add_to_recent = true;
+        } else {
+            // No thread could start: the projects page already says so.
+            self.show_projects();
         }
     }
 
@@ -416,6 +449,19 @@ impl Studio {
         match opening.poll() {
             None => Some(opening.step()),
             Some(Ok(opened)) => {
+                if std::mem::take(&mut self.add_to_recent)
+                    && let Some(path) = self.open_project.clone()
+                {
+                    // Only now, so a file that is not a project never joins Recent.
+                    let name = match opened.project.manifest().name.trim() {
+                        "" => name_from_path(&path),
+                        name => name.to_owned(),
+                    };
+                    let list = self.projects.list_mut();
+                    list.opened(&path, &name, std::time::SystemTime::now());
+                    list.save_or_log();
+                    self.projects.select(path);
+                }
                 let editor = EditorState::new(*opened, Arc::clone(&self.log));
                 self.editor = Some(EditorScreen::Open(Box::new(editor)));
                 None
@@ -677,6 +723,10 @@ impl Studio {
             } else {
                 Screen::SignIn
             };
+            // A project from the command line skips sign-in and the projects page (ADR 0009).
+            if let Some(path) = self.open_after_splash.take() {
+                self.open_from_command_line(path);
+            }
             self.requests.push(WindowRequest::BecomeMainWindow);
         }
         // Polls the steps and runs the minimum time out; vsync paces it.
@@ -1552,6 +1602,79 @@ mod tests {
         let studio = &harness.state().studio;
         assert!(studio.editor().is_some(), "{:?}", studio.projects().error());
         harness
+    }
+
+    /// Studio given `project` on the command line, run past its splash on the settings at `path`.
+    fn launched_with(path: PathBuf, project: PathBuf) -> Harness<'static, Test> {
+        let mut harness = harness(steps_reading(path));
+        harness.state_mut().studio.open_after_splash(project);
+        finish_steps(&mut harness, splash::MIN_TIME);
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        harness
+    }
+
+    #[test]
+    fn a_project_on_the_command_line_opens_straight_into_the_editor_and_joins_recent() {
+        // Sign-in is not skipped in the settings: the command line skips it, and the projects page, anyway.
+        let path = config("launch", None, None);
+        let dir = path.parent().unwrap().join("with spaces");
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = make_project_once(&dir, "Launched Game");
+        let mut harness = launched_with(path.clone(), project.clone());
+        let studio = &mut harness.state_mut().studio;
+        assert_eq!(studio.screen(), Screen::Editor);
+        assert!(studio.is_opening());
+        assert_eq!(studio.take_requests(), [WindowRequest::BecomeMainWindow]);
+
+        wait_open(&mut harness);
+        let studio = &harness.state().studio;
+        assert_eq!(studio.screen(), Screen::Editor);
+        assert_eq!(studio.editor().unwrap().path(), project);
+        let recent = &studio.projects().list().entries()[0];
+        assert_eq!(
+            (recent.path.as_path(), recent.name.as_str()),
+            (project.as_path(), "Launched Game")
+        );
+        assert!(recent.last_opened.is_some());
+        harness.get_by_label("Launched Game");
+        let list = std::fs::read_to_string(path.with_file_name(PROJECTS_FILE)).unwrap();
+        assert!(list.contains("name = \"Launched Game\""), "{list}");
+
+        // Closing it goes to the projects page, where it is listed.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        harness.get_by_label("Launched Game");
+    }
+
+    #[test]
+    fn a_bad_path_on_the_command_line_lands_on_the_projects_page_with_the_error() {
+        let path = config("launch-missing", None, None);
+        let missing = path.parent().unwrap().join("Not Here.mtproj");
+        let mut harness = launched_with(path.clone(), missing.clone());
+        settle(&mut harness);
+        let studio = &harness.state().studio;
+        assert_eq!(studio.screen(), Screen::Projects);
+        assert!(studio.editor().is_none());
+        let error = studio.projects().error().unwrap().to_owned();
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+        assert!(studio.projects().list().entries().is_empty());
+        harness.get_by_label(&error);
+
+        // A file that is not a project fails while it opens, and lands there the same way, not in Recent.
+        let path = config("launch-junk", None, None);
+        let junk = path.parent().unwrap().join("Junk.mtproj");
+        std::fs::write(&junk, "not a zip archive").unwrap();
+        let mut harness = launched_with(path.clone(), junk);
+        assert_eq!(harness.state().studio.screen(), Screen::Editor);
+        wait_open(&mut harness);
+        let studio = &harness.state().studio;
+        assert_eq!(studio.screen(), Screen::Projects);
+        let error = studio.projects().error().unwrap().to_owned();
+        assert!(error.starts_with("Could not open \u{201C}Junk\u{201D}."), "{error}");
+        assert!(studio.projects().list().entries().is_empty());
+        assert!(!path.with_file_name(PROJECTS_FILE).exists(), "nothing to save");
+        harness.get_by_label(&error);
     }
 
     /// Clicks the node labelled `label` and runs the frames that show what it did.

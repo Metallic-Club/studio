@@ -113,6 +113,7 @@ egui_tiles = { version = "0.18.0", features = ["serde"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 # Windows-only dev-dependency of `metallic_render`'s allocation tests, which keep the Direct3D 12 debug layer's
 # messages away from wgpu-hal's message handler (crates/render/tests/no_alloc.rs, #125). Already in the tree via wgpu.
+# Also `metallic_platform`'s per-user file association (registry, shell notify) and Studio's splash window.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
 
 [workspace.lints.rust]
