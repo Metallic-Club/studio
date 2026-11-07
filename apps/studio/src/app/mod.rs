@@ -100,8 +100,10 @@ pub struct Studio {
     theme: ThemeState,
     /// The settings: in memory until the splash has read them, then the file's.
     settings: SettingsStore,
-    /// The Settings pages: a window before the editor, a docked panel in it.
+    /// The Settings window, on every screen.
     settings_window: SettingsWindow,
+    /// Whether the editor's About window is open (Help, About Metallic Studio).
+    about_open: bool,
     /// Every shortcut's command and bindings: the settings' overrides over the defaults.
     keymap: Keymap,
     /// What to tell the user (about the settings file, or a new default shortcut left out), first shown first.
@@ -154,6 +156,7 @@ impl Studio {
             }),
             settings: SettingsStore::in_memory(),
             settings_window: SettingsWindow::default(),
+            about_open: false,
             keymap: Keymap::studio(&Overrides::new()),
             notices: Vec::new(),
             system_reduces_motion: reduce_motion,
@@ -426,6 +429,11 @@ impl Studio {
         if let Some(action) = action {
             self.menu_action(action);
         }
+        // After the menus' action, so it opens in the frame it was chosen in, as the Settings window does.
+        if self.about_open {
+            let mark = self.mark(&ctx, editor::ABOUT_MARK);
+            editor::about_window(&ctx, &mut self.about_open, Some(&mark));
+        }
         // Not while a tab or a divider is dragged: the layout is written once, when the drag ends.
         let busy = ctx.input(|input| input.pointer.any_down()) || self.dock.is_dragging(&ctx);
         if let Err(error) = self.dock.save_if_changed(busy) {
@@ -477,7 +485,17 @@ impl Studio {
             MenuAction::Toggle(id) => self.dock.toggle(id),
             MenuAction::ResetLayout => self.dock.reset(),
             MenuAction::Settings => self.toggle_settings(),
+            MenuAction::KeyboardShortcuts => {
+                self.settings_window.show_category(crate::settings::Category::Keybinds);
+                self.settings_window.set_open(true);
+            }
+            MenuAction::About => self.about_open = true,
         }
+    }
+
+    /// Whether the editor's About window is open.
+    pub fn is_about_open(&self) -> bool {
+        self.about_open
     }
 
     /// Saves the open project, telling the user if it failed.
@@ -1815,13 +1833,125 @@ mod tests {
         settle(&mut harness);
         assert!(harness.state().studio.dock().is_open(panels::ids::OUTPUT));
 
-        // Reset layout.
-        click_label(&mut harness, "View");
+        // Window, Reset layout.
+        click_label(&mut harness, "Window");
         harness.get_by_role_and_label(Role::MenuItem, "Reset layout").click();
         settle(&mut harness);
         assert_eq!(harness.state().studio.dock().open_panels(), DEFAULT_PANELS);
         let text = std::fs::read_to_string(&layout).unwrap();
         assert!(text.contains("\"properties\""), "{text}");
+    }
+
+    // The menu bar (#239).
+
+    /// Whether the menu item `label` is shown enabled.
+    fn menu_item_enabled(harness: &Harness<'_, Test>, label: &str) -> bool {
+        let item = harness.get_by_role_and_label(Role::MenuItem, label);
+        !egui_kittest::kittest::NodeT::accesskit_node(&item).is_disabled()
+    }
+
+    #[test]
+    fn the_seven_menus_open_with_working_items_enabled_and_planned_ones_not() {
+        let mut harness = editing(settings_file("editor-menus", None), "Menus Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        for menu in editor::MENUS {
+            click_label(&mut harness, menu.title);
+            for entry in menu.entries {
+                match *entry {
+                    editor::Entry::Item { label, .. } => {
+                        assert!(menu_item_enabled(&harness, label), "{}: {label}", menu.title);
+                    }
+                    editor::Entry::Planned(label) => {
+                        assert!(!menu_item_enabled(&harness, label), "{}: {label}", menu.title);
+                    }
+                    editor::Entry::Panels => {
+                        harness.get_by_role_and_label(Role::MenuItemCheckBox, "Explorer");
+                    }
+                    editor::Entry::Separator => {}
+                }
+            }
+            // Escape closes it, ready for the next.
+            harness.key_press(Key::Escape);
+            settle(&mut harness);
+            assert!(harness.query_by_role(Role::MenuItem).is_none(), "{} closed", menu.title);
+        }
+
+        // A planned item does nothing when clicked.
+        click_label(&mut harness, "Edit");
+        harness.get_by_role_and_label(Role::MenuItem, "Undo").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Editor);
+
+        // File, Settings opens the Settings window; Window, Settings closes it.
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        click_label(&mut harness, "File");
+        harness.get_by_role_and_label(Role::MenuItem, "Settings").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_settings_open());
+        click_label(&mut harness, "Window");
+        harness.get_by_role_and_label(Role::MenuItem, "Settings").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_settings_open());
+
+        // Help, Keyboard shortcuts opens Settings on its Keybinds page.
+        click_label(&mut harness, "Help");
+        harness
+            .get_by_role_and_label(Role::MenuItem, "Keyboard shortcuts")
+            .click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_settings_open());
+        assert_eq!(
+            harness.state_mut().studio.settings_window().category(),
+            Category::Keybinds
+        );
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        settle(&mut harness);
+
+        // Help, About shows the version, and Close closes it.
+        click_label(&mut harness, "Help");
+        harness
+            .get_by_role_and_label(Role::MenuItem, "About Metallic Studio")
+            .click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_about_open());
+        harness.get_by_label(&format!("Version {}", env!("CARGO_PKG_VERSION")));
+        harness.get_by_role_and_label(Role::Button, "Close").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_about_open());
+
+        // File, Close project goes back to the projects.
+        click_label(&mut harness, "File");
+        harness.get_by_role_and_label(Role::MenuItem, "Close project").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+    }
+
+    #[test]
+    fn the_menus_show_their_commands_bindings() {
+        let path = settings_file(
+            "editor-menu-keys",
+            Some("[keybinds]\n\"view.reset_layout\" = [\"F9\"]\n"),
+        );
+        let mut harness = editing(path, "Keys Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // The bindings are painted beside their items.
+        let painted = |harness: &Harness<'_, Test>, text: &str| {
+            harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) => shape.galley.text() == text,
+                _ => false,
+            })
+        };
+        assert!(!painted(&harness, "F9"));
+        click_label(&mut harness, "Window");
+        assert!(painted(&harness, "F9"), "Reset layout shows its binding");
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        click_label(&mut harness, "File");
+        let save = harness.state().studio.keymap().shortcut_text(ids::FILE_SAVE).unwrap();
+        assert!(painted(&harness, &save), "Save shows {save}");
     }
 
     // Settings as a floating window in the editor (#238).
@@ -2559,6 +2689,53 @@ mod tests {
         assert_eq!(studio.screen(), Screen::Editor);
         assert!(studio.is_settings_open());
         write_png(&out.join("238-settings-window.png"), shot);
+    }
+
+    /// The screenshot of #239 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_menu_bar`): the editor
+    /// with its File menu open, working items and planned (disabled) ones.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_the_menu_bar() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-menu-bar", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let mut offscreen = Offscreen::new(egui::vec2(1280.0, 800.0), 1.25).expect("an offscreen device");
+        for _ in 0..3 {
+            offscreen.frame(&mut studio);
+        }
+        studio.open(project);
+        for _ in 0..10_000 {
+            if studio.poll_opening().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for _ in 0..20 {
+            offscreen.frame(&mut studio);
+        }
+        assert_eq!(studio.screen(), Screen::Editor);
+        let titles: Vec<(&'static str, egui::Rect)> = offscreen
+            .ctx
+            .data(|data| data.get_temp(editor::menu_titles_id()))
+            .expect("the menu titles are drawn");
+        let file = titles.iter().find(|(title, _)| *title == "File").unwrap().1.center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: file,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        offscreen.frame_with(&mut studio, vec![egui::Event::PointerMoved(file)]);
+        offscreen.frame_with(&mut studio, vec![button(true)]);
+        offscreen.frame_with(&mut studio, vec![button(false)]);
+        // The pointer on Save, so its hover shows.
+        let save = file + egui::vec2(60.0, 4.0 + 28.0 * 3.0 + 18.0);
+        offscreen.frame_with(&mut studio, vec![egui::Event::PointerMoved(save)]);
+        for _ in 0..6 {
+            offscreen.frame(&mut studio);
+        }
+        write_png(&out.join("239-menu-bar.png"), offscreen.read());
     }
 
     // The viewport (#217).
