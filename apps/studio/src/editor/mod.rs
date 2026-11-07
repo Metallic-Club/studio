@@ -16,6 +16,7 @@ use metallic_engine::metallic_project::{Project, SceneIds, save_scene};
 use crate::logging::LogBuffer;
 use crate::panels::explorer::ExplorerState;
 use crate::panels::output::OutputState;
+use crate::viewport::ViewportState;
 pub use open::{AssetRow, Opened, Opening, STEPS};
 
 /// The open project, its game, and the panels' state.
@@ -28,14 +29,16 @@ pub struct EditorState {
     pub scene_ids: SceneIds,
     /// The asset index, by path, as the Assets panel lists it.
     pub assets: Vec<AssetRow>,
-    /// The mesh and texture loader the viewport's renderer is fed from (#217).
-    pub mesh_assets: MeshAssets,
+    /// The mesh and texture loader the viewport's renderer is fed from, until the renderer takes it.
+    pub mesh_assets: Option<MeshAssets>,
     /// The selected instance.
     pub selection: Option<Id>,
     /// The Explorer's expanded instances and search.
     pub explorer: ExplorerState,
     /// The Output panel's lines, filter and search.
     pub output: OutputState,
+    /// The viewport's camera and texture.
+    pub viewport: ViewportState,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -58,15 +61,17 @@ impl EditorState {
             mesh_assets,
         } = opened;
         let explorer = ExplorerState::new(&dm);
+        let viewport = ViewportState::new(&dm);
         Self {
             project,
             dm,
             scene_ids,
             assets,
-            mesh_assets,
+            mesh_assets: Some(mesh_assets),
             selection: None,
             explorer,
             output: OutputState::new(log),
+            viewport,
         }
     }
 

@@ -12,7 +12,7 @@ use metallic_render::resolution::ResolutionSettings;
 use metallic_render::scene::{RenderComponents, SyncStats, UploadStats};
 use metallic_render::settings::{Calibration, Calibrator, GraphicsSettings, Quality, Tier};
 use metallic_render::{
-    AntiAliasing, CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings,
+    AntiAliasing, Camera, CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings,
     LightingReader, LodSettings, PassId, PassSet, RenderContext, RenderError, RenderSurface, Renderer,
     RendererSettings, SceneLighting, ShadowSettings, SurfaceFrame, ViewportTarget, wgpu,
 };
@@ -70,7 +70,8 @@ struct Device {
 /// [`SceneRenderer::attach_viewport`] makes a [`ViewportTarget`] on that device, [`SceneRenderer::render_viewport`]
 /// draws the game into it each frame through the same frame as a window's (graphics settings, anti-aliasing,
 /// dynamic resolution and the overlay included; the frame cap is the caller's to apply, as the Player's is), and
-/// [`SceneRenderer::resize_viewport`] resizes it without a black frame. One `SceneRenderer` draws one viewport;
+/// [`SceneRenderer::resize_viewport`] resizes it without a black frame. An editor draws from its own camera with
+/// [`SceneRenderer::set_camera`], leaving the game's untouched. One `SceneRenderer` draws one viewport;
 /// several viewports are several of them on the same device.
 pub struct SceneRenderer {
     options: ContextOptions,
@@ -112,6 +113,8 @@ pub struct SceneRenderer {
     /// `Workspace`, the root of what is drawn and the owner of `CurrentCamera`.
     world: Option<Id>,
     camera: CameraReader,
+    /// The view drawn from instead of `Workspace.CurrentCamera`, while set ([`SceneRenderer::set_camera`]).
+    camera_override: Option<Camera>,
     /// The `Lighting` service, watched by the scene so it is read again only when it changes.
     lighting_service: Option<Id>,
     lighting_reader: LightingReader,
@@ -171,6 +174,7 @@ impl SceneRenderer {
             scene_stale: false,
             world: None,
             camera: CameraReader::new(),
+            camera_override: None,
             lighting_service: None,
             lighting_reader: LightingReader::new(),
             lighting: SceneLighting::default(),
@@ -192,6 +196,17 @@ impl SceneRenderer {
     /// part draws once its mesh is here ([`MeshAssets`], #189). Without it, mesh parts draw nothing.
     pub fn set_assets(&mut self, reader: AssetReader) {
         self.assets = Some(MeshAssets::new(reader));
+    }
+
+    /// [`SceneRenderer::set_assets`] with a loader made already (Studio starts one while a project opens).
+    pub fn set_mesh_assets(&mut self, assets: MeshAssets) {
+        self.assets = Some(assets);
+    }
+
+    /// Draws from `camera` instead of `Workspace.CurrentCamera` while it is `Some`: an editor's own camera, which
+    /// leaves the game as it is. `None` goes back to the game's camera.
+    pub fn set_camera(&mut self, camera: Option<Camera>) {
+        self.camera_override = camera;
     }
 
     /// The assets loaded for the game's mesh parts, once [`SceneRenderer::set_assets`] gave a project's: what is still
@@ -806,9 +821,10 @@ impl SceneRenderer {
     }
 
     /// Draws a frame of `dm` into the viewport target, as [`RenderHook::render`] draws one into a window: the scene
-    /// synced with the game's changes, seen from `Workspace.CurrentCamera`, with `stats` (the engine's numbers for
-    /// the frame, for the frame statistics) recorded. Submits it and waits for nothing; the caller then draws its UI,
-    /// which samples [`SceneRenderer::viewport`]'s view, and presents. Nothing happens without a viewport.
+    /// synced with the game's changes, seen from `Workspace.CurrentCamera` (or [`SceneRenderer::set_camera`]'s), with
+    /// `stats` (the engine's numbers for the frame, for the frame statistics) recorded. Submits it and waits for
+    /// nothing; the caller then draws its UI, which samples [`SceneRenderer::viewport`]'s
+    /// [`ViewportTarget::view`], and presents. Nothing happens without a viewport.
     pub fn render_viewport(&mut self, dm: &mut DataModel, stats: FrameStats) {
         if self.viewport.is_some() {
             self.draw(dm, stats);
@@ -931,7 +947,10 @@ impl SceneRenderer {
             return;
         }
         let status = self.overlay.then(|| self.graphics_status());
-        let camera = self.world.and_then(|world| self.camera.read(dm, world));
+        let camera = match self.camera_override {
+            Some(camera) => Some(camera),
+            None => self.world.and_then(|world| self.camera.read(dm, world)),
+        };
         let (Some(device), Some(scene)) = (self.device.as_mut(), self.scene.as_mut()) else {
             return;
         };

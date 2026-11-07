@@ -173,8 +173,8 @@ fn a_viewport_target_draws_the_scene_and_resizes_without_a_black_frame() {
     let Some(context) = gpu() else { return };
     collect_wgpu_messages();
     let mut viewport = Viewport::new(&context);
-    // What egui-wgpu samples: an 8-bit sRGB texture it can bind.
-    assert_eq!(viewport.target.format(), wgpu::TextureFormat::Rgba8UnormSrgb);
+    // What egui-wgpu samples: an 8-bit texture it can bind, holding gamma-encoded colour (not an sRGB format).
+    assert_eq!(viewport.target.format(), wgpu::TextureFormat::Rgba8Unorm);
     assert!(
         viewport
             .target
@@ -299,11 +299,11 @@ fn a_target_that_does_not_match_its_renderer_is_refused() {
         })
     ));
     // A renderer drawing another format.
-    let mut linear = Renderer::new(
+    let mut srgb = Renderer::new(
         &context,
-        RendererSettings::new(wgpu::TextureFormat::Rgba8Unorm, SIZE, SIZE),
+        RendererSettings::new(wgpu::TextureFormat::Rgba8UnormSrgb, SIZE, SIZE),
     )
     .expect("a renderer");
-    let drawn = linear.render_viewport(&mut viewport.target, &mut viewport.scene, camera.as_ref());
+    let drawn = srgb.render_viewport(&mut viewport.target, &mut viewport.scene, camera.as_ref());
     assert!(matches!(drawn, Err(RenderError::UnsupportedTarget { .. })));
 }

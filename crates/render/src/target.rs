@@ -76,8 +76,9 @@ impl OffscreenTarget {
 /// [`Renderer::resize_viewport`](crate::Renderer::resize_viewport) resizes it without a black frame: the old texture
 /// is drawn into and shown until the new one exists. Its texture is [`ViewportTarget::FORMAT`] with
 /// [`ViewportTarget::USAGE`], which `egui_wgpu::Renderer::register_native_texture` samples as it samples its own
-/// textures (8-bit sRGB, decoded to linear when read). After a resize, [`ViewportTarget::generation`] changes and the
-/// caller registers the new [`ViewportTarget::view`] again (`update_egui_texture_from_wgpu_texture`).
+/// textures: 8-bit `Rgba8Unorm` holding gamma-encoded colour, read without decoding. After a resize,
+/// [`ViewportTarget::generation`] changes and the caller registers the new [`ViewportTarget::view`] again
+/// (`update_egui_texture_from_wgpu_texture`).
 ///
 /// One renderer draws one target; nothing in the renderer knows of "the" viewport, so several are several renderers
 /// (and targets) on the same device.
@@ -89,9 +90,11 @@ pub struct ViewportTarget {
 }
 
 impl ViewportTarget {
-    /// The texture's format: 8-bit sRGB, what egui-wgpu samples. Make the renderer that draws it with this format
+    /// The texture's format: 8-bit, not an sRGB format, so the finish pass writes gamma-encoded colour itself. That is
+    /// what egui-wgpu samples: it keeps its own textures in gamma space, and an sRGB texture, decoded to linear when
+    /// read, shows far too dark there. Make the renderer that draws it with this format
     /// ([`crate::RendererSettings::color_format`]).
-    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+    pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
     /// The texture's usages: drawn into, sampled by the UI, and copied out (screenshots, thumbnails, tests).
     pub const USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT

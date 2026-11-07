@@ -7,7 +7,7 @@ use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, Color3, DataModel, Id, Value};
 use metallic_engine::metallic_render::settings::{GraphicsSettings, Preset, Quality};
 use metallic_engine::metallic_render::{
-    ContextOptions, RenderContext, RenderError, Renderer, RendererSettings, ViewportTarget, wgpu,
+    Camera, ContextOptions, RenderContext, RenderError, Renderer, RendererSettings, ViewportTarget, wgpu,
 };
 use metallic_engine::{FrameStats, SceneRenderer};
 
@@ -163,10 +163,13 @@ fn a_renderer_made_ahead_draws_the_viewport() {
     let Some(context) = gpu() else { return };
     let mut dm = red_wall();
     let mut renderer = SceneRenderer::new(ContextOptions::default());
-    let linear =
-        Renderer::new(&context, RendererSettings::new(wgpu::TextureFormat::Rgba8Unorm, 64, 64)).expect("a renderer");
+    let srgb = Renderer::new(
+        &context,
+        RendererSettings::new(wgpu::TextureFormat::Rgba8UnormSrgb, 64, 64),
+    )
+    .expect("a renderer");
     assert!(matches!(
-        renderer.attach_viewport_with(&context, linear),
+        renderer.attach_viewport_with(&context, srgb),
         Err(RenderError::UnsupportedTarget { .. })
     ));
     assert!(renderer.viewport().is_none());
@@ -188,5 +191,43 @@ fn a_renderer_made_ahead_draws_the_viewport() {
     assert_eq!(
         drawn_with.anti_aliasing(),
         low.anti_aliasing.supported(drawn_with.msaa_sample_counts())
+    );
+}
+
+/// An editor's camera ([`SceneRenderer::set_camera`]) is drawn from instead of the game's, which stays as it was.
+#[test]
+fn an_editors_camera_replaces_the_games_without_changing_it() {
+    let Some(context) = gpu() else { return };
+    let mut dm = red_wall();
+    let workspace = service(&dm, "Workspace");
+    let Ok(Value::Ref(Some(camera))) = dm.get_by_name(workspace, "CurrentCamera") else {
+        panic!("a CurrentCamera");
+    };
+    let before = dm.get_by_name(camera, "CFrame").expect("CFrame");
+    let mut renderer = SceneRenderer::new(ContextOptions::default());
+    renderer
+        .attach_viewport(&context, 64, 64)
+        .expect("a viewport on the caller's device");
+    // Turned around, away from the wall.
+    let away = CFrame::look_at(Vec3::new(0.0, 0.0, 5.0), Vec3::new(0.0, 0.0, 20.0), Vec3::Y);
+    renderer.set_camera(Some(Camera::from_cframe(away, 70.0)));
+    renderer.render_viewport(&mut dm, FrameStats::default());
+    let [r, g, b, _] = centre(&context, renderer.viewport().expect("a viewport"));
+    assert!(
+        r <= g.saturating_add(60) || r <= b.saturating_add(60),
+        "still the wall: {:?}",
+        [r, g, b]
+    );
+    assert_eq!(
+        dm.get_by_name(camera, "CFrame").expect("CFrame"),
+        before,
+        "the game's camera is untouched"
+    );
+
+    renderer.set_camera(None);
+    renderer.render_viewport(&mut dm, FrameStats::default());
+    assert_red(
+        centre(&context, renderer.viewport().expect("a viewport")),
+        "the game's camera again",
     );
 }
