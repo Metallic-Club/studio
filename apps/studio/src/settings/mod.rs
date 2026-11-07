@@ -58,6 +58,8 @@ pub struct Appearance {
     pub ui_scale: f32,
     /// Whether fades and eases play.
     pub motion: MotionPreference,
+    /// Where each dock area's tab bar sits: under its panel (the default) or above it.
+    pub tab_position: TabPosition,
 }
 
 impl Default for Appearance {
@@ -68,6 +70,7 @@ impl Default for Appearance {
             high_contrast: false,
             ui_scale: 1.0,
             motion: MotionPreference::default(),
+            tab_position: TabPosition::default(),
         }
     }
 }
@@ -149,6 +152,44 @@ impl MotionPreference {
     }
 }
 
+/// Where each dock area's tab bar sits (#230).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TabPosition {
+    /// Under the panel, the default (as in the owner's reference editor).
+    #[default]
+    Bottom,
+    /// Above the panel.
+    Top,
+}
+
+impl TabPosition {
+    /// Every choice, in the order Settings lists them.
+    pub const ALL: [TabPosition; 2] = [TabPosition::Bottom, TabPosition::Top];
+
+    /// The id the settings store.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TabPosition::Bottom => "bottom",
+            TabPosition::Top => "top",
+        }
+    }
+
+    /// The name people see.
+    pub fn label(self) -> &'static str {
+        match self {
+            TabPosition::Bottom => "Bottom",
+            TabPosition::Top => "Top",
+        }
+    }
+
+    /// Reads an id in any letter case; `None` for an unknown one.
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|choice| choice.as_str().eq_ignore_ascii_case(id.trim()))
+    }
+}
+
 /// The Keybinds category: the keymap's overrides ([`crate::keymap`]), `[keybinds]` in the file. Only bindings that
 /// differ from the defaults are stored (`"file.save" = ["Primary+S"]`, `[]` for unbound); ids this Studio does not
 /// know are kept, so a newer Studio's bindings survive a downgrade.
@@ -225,6 +266,12 @@ impl StudioSettings {
                 |v| v.as_str().and_then(MotionPreference::parse),
                 &mut a.motion,
             );
+            read(
+                appearance,
+                "tab_position",
+                |v| v.as_str().and_then(TabPosition::parse),
+                &mut a.tab_position,
+            );
         }
         if let Some(rendering) = section("rendering") {
             settings.rendering = rendering_from(rendering);
@@ -252,6 +299,7 @@ impl StudioSettings {
             let scale = (f64::from(a.ui_scale) * 100.0).round() / 100.0;
             appearance.insert("ui_scale".into(), Value::Float(scale));
             appearance.insert("reduce_motion".into(), Value::String(a.motion.as_str().into()));
+            appearance.insert("tab_position".into(), Value::String(a.tab_position.as_str().into()));
         });
         with_section(&mut document, "rendering", |rendering| {
             for key in RENDERING_KEYS {
@@ -390,6 +438,7 @@ mod tests {
             high_contrast: true,
             ui_scale: 1.25,
             motion: MotionPreference::Reduced,
+            tab_position: TabPosition::Top,
         };
         settings.rendering = GraphicsSettings {
             preset: Preset::High,
@@ -413,6 +462,11 @@ mod tests {
             "follows the system by default"
         );
         assert_eq!(settings.rendering.preset, Preset::Auto);
+        assert_eq!(
+            settings.appearance.tab_position,
+            TabPosition::Bottom,
+            "tab bars under their panels"
+        );
     }
 
     #[test]
@@ -422,6 +476,7 @@ mod tests {
         let text = document.to_string();
         assert!(text.contains("version = 1"), "{text}");
         assert!(text.contains("accent = \"violet\""), "{text}");
+        assert!(text.contains("tab_position = \"top\""), "{text}");
         assert!(text.contains("anti_aliasing = \"msaa4\""), "{text}");
         assert!(!text.contains("lod_bias"), "only overrides that are set: {text}");
         assert_eq!(parse(&text), settings);
@@ -541,5 +596,21 @@ mod tests {
         for choice in MotionPreference::ALL {
             assert_eq!(MotionPreference::parse(choice.as_str()), Some(choice));
         }
+    }
+
+    #[test]
+    fn tab_positions_parse_and_an_unknown_one_is_the_default() {
+        for choice in TabPosition::ALL {
+            assert_eq!(TabPosition::parse(&choice.as_str().to_uppercase()), Some(choice));
+        }
+        assert_eq!(TabPosition::parse("left"), None);
+        assert_eq!(
+            parse("[appearance]\ntab_position = \"left\"").appearance.tab_position,
+            TabPosition::Bottom
+        );
+        assert_eq!(
+            parse("[appearance]\ntab_position = \"top\"").appearance.tab_position,
+            TabPosition::Top
+        );
     }
 }

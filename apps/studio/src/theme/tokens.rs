@@ -85,6 +85,60 @@ impl Palette {
             ..self
         }
     }
+
+    /// The striped rows' colours (the Properties panel, #230), derived from this palette's surfaces so every mode
+    /// has them: a shade a little darker than the panel (towards the window's ground), one a little brighter (towards
+    /// a raised surface), and the border at low alpha for the 1 px lines between rows and columns.
+    pub const fn rows(self) -> RowShades {
+        RowShades {
+            darker: mix(self.panel, self.bg, 0.75),
+            brighter: mix(self.panel, self.surface, 0.5),
+            line: Color32::from_rgba_unmultiplied_const(
+                self.border.r(),
+                self.border.g(),
+                self.border.b(),
+                ROW_LINE_ALPHA,
+            ),
+        }
+    }
+}
+
+/// The opacity of the lines between striped rows: faint, so they separate without boxing.
+pub const ROW_LINE_ALPHA: u8 = 0x66;
+
+/// The striped rows' colours of one palette ([`Palette::rows`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowShades {
+    /// Every other row, starting with the first.
+    pub darker: Color32,
+    /// The rows between.
+    pub brighter: Color32,
+    /// The 1 px lines between rows and between the name and value columns: the border at [`ROW_LINE_ALPHA`].
+    pub line: Color32,
+}
+
+impl RowShades {
+    /// The fill of row `index` (from 0) of a striped list.
+    pub const fn fill(self, index: usize) -> Color32 {
+        if index.is_multiple_of(2) {
+            self.darker
+        } else {
+            self.brighter
+        }
+    }
+}
+
+/// `from` moved `t` (0 to 1) of the way to `to`, channel by channel. Both opaque.
+const fn mix(from: Color32, to: Color32, t: f32) -> Color32 {
+    const fn channel(a: u8, b: u8, t: f32) -> u8 {
+        let (a, b) = (a as f32, b as f32);
+        (a + (b - a) * t + 0.5) as u8
+    }
+    Color32::from_rgb(
+        channel(from.r(), to.r(), t),
+        channel(from.g(), to.g(), t),
+        channel(from.b(), to.b(), t),
+    )
 }
 
 /// The "play" button (run the game): green in every mode.
@@ -387,6 +441,67 @@ mod tests {
         assert!(contrast(DARK.high_contrast(true).border, DARK.bg) > contrast(DARK.border, DARK.bg));
         assert!(contrast(LIGHT.high_contrast(false).border, LIGHT.bg) > contrast(LIGHT.border, LIGHT.bg));
         assert!(contrast(DARK.high_contrast(true).border, DARK.bg) >= 3.0);
+    }
+
+    /// `over` with `line` (unmultiplied alpha) drawn on it.
+    fn blend(line: Color32, over: Color32) -> Color32 {
+        let a = f32::from(line.a()) / 255.0;
+        let channel = |l: u8, o: u8| (f32::from(o) + (f32::from(l) - f32::from(o)) * a).round() as u8;
+        let [r, g, b, _] = line.to_srgba_unmultiplied();
+        Color32::from_rgb(channel(r, over.r()), channel(g, over.g()), channel(b, over.b()))
+    }
+
+    #[test]
+    fn striped_rows_have_two_close_shades_and_faint_lines_in_every_mode() {
+        for (palette, dark) in [(DARK, true), (LIGHT, false)] {
+            for (p, strong) in [(palette, false), (palette.high_contrast(dark), true)] {
+                let mode = format!("dark {dark}, high contrast {strong}");
+                let rows = p.rows();
+                // Two different shades, the darker one darker, both close to the panel they sit on.
+                assert!(luminance(rows.darker) < luminance(rows.brighter), "{mode}: {rows:?}");
+                for shade in [rows.darker, rows.brighter] {
+                    let near = |a: u8, b: u8| a.abs_diff(b) <= 10;
+                    assert!(
+                        near(shade.r(), p.panel.r()) && near(shade.g(), p.panel.g()) && near(shade.b(), p.panel.b()),
+                        "{mode}: {shade:?} is far from the panel {:?}",
+                        p.panel
+                    );
+                    // Text reads on both (WCAG AA).
+                    for ink in [p.text, p.muted, p.subtle] {
+                        assert!(contrast(ink, shade) >= 4.5, "{mode}: {ink:?} on {shade:?}");
+                    }
+                    // The line shows on both, and is fainter than a full border.
+                    let drawn = blend(rows.line, shade);
+                    assert_ne!(drawn, shade, "{mode}: the line does not show on {shade:?}");
+                    assert!(
+                        contrast(drawn, shade) < contrast(p.border, shade),
+                        "{mode}: the line is not faint"
+                    );
+                }
+                assert_eq!(rows.line.a(), ROW_LINE_ALPHA);
+                const { assert!(ROW_LINE_ALPHA < 0x80, "low alpha") };
+                // The border's colour (give or take the rounding of premultiplied alpha).
+                let [r, g, b, _] = rows.line.to_srgba_unmultiplied();
+                for (ours, border) in [(r, p.border.r()), (g, p.border.g()), (b, p.border.b())] {
+                    assert!(ours.abs_diff(border) <= 2, "{mode}: {:?} is not the border", rows.line);
+                }
+                // Rows alternate, starting with the darker.
+                let fills: Vec<Color32> = (0..4).map(|i| rows.fill(i)).collect();
+                assert_eq!(fills, [rows.darker, rows.brighter, rows.darker, rows.brighter]);
+            }
+        }
+        // The website's dark panel gives these shades.
+        assert_eq!(
+            (DARK.rows().darker, DARK.rows().brighter),
+            (hex(0x171717), hex(0x212121))
+        );
+        // High contrast keeps the shades and strengthens the lines.
+        let strong = DARK.high_contrast(true).rows();
+        assert_eq!(strong.darker, DARK.rows().darker);
+        assert!(
+            contrast(blend(strong.line, strong.darker), strong.darker)
+                > contrast(blend(DARK.rows().line, strong.darker), strong.darker)
+        );
     }
 
     #[test]
