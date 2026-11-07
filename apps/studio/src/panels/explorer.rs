@@ -10,9 +10,10 @@ use std::collections::HashSet;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{DataModel, Id};
 
-use super::{class_icon, empty_note, icon, ids, matches_words, playing_banner, search_box};
+use super::{class_icon, empty_note, ids, matches_words, playing_banner, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{current_colors, fonts};
 
@@ -175,8 +176,8 @@ impl Panel for Explorer {
         "Explorer"
     }
 
-    fn icon(&self) -> char {
-        icon::TREE
+    fn icon(&self) -> Icon {
+        Icon::PanelExplorer
     }
 
     fn zone(&self) -> Zone {
@@ -281,28 +282,31 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool
         }
         if row.has_children {
             let hovered = caret_response.as_ref().is_some_and(|response| response.hovered());
-            ui.painter().text(
+            icons::paint_at(
+                ui.painter(),
                 caret.center(),
                 Align2::CENTER_CENTER,
-                if row.expanded {
-                    icon::CARET_DOWN
-                } else {
-                    icon::CARET_RIGHT
-                },
-                fonts::named(fonts::ICONS, text::SMALL),
+                if row.expanded { Icon::UiCollapse } else { Icon::UiExpand },
+                text::SMALL,
                 if hovered { p.text } else { p.subtle },
             );
         }
         let class_icon = dm
             .class_of(row.id)
-            .map_or(icon::CIRCLE, |class| class_icon(dm.registry(), class));
+            .map_or(Icon::ExplorerInstance, |class| class_icon(dm.registry(), class));
         let x = caret.right() + space::S1;
-        ui.painter().text(
+        // Its group's colour (#231); the selected row's in the accent, which marks the selection.
+        icons::paint_at(
+            ui.painter(),
             pos2(x, rect.center().y),
             Align2::LEFT_CENTER,
             class_icon,
-            fonts::named(fonts::ICONS, text::BODY),
-            if selected { colors.accent } else { p.muted },
+            text::BODY,
+            if selected {
+                colors.accent
+            } else {
+                class_icon.color(&colors)
+            },
         );
         let font = if selected {
             fonts::named(fonts::STRONG, text::BODY)

@@ -7,9 +7,10 @@ use std::time::Duration;
 use egui::emath::GuiRounding;
 use egui::{Align2, Color32, FontId, Rect, Sense, Ui, pos2};
 
-use super::{icon, ids};
+use super::ids;
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
+use crate::theme::icons::Icon;
 use crate::theme::tokens::text;
 use crate::theme::{current_colors, fonts};
 
@@ -26,8 +27,8 @@ impl Panel for Viewport {
         "Viewport"
     }
 
-    fn icon(&self) -> char {
-        icon::MONITOR
+    fn icon(&self) -> Icon {
+        Icon::PanelViewport
     }
 
     fn zone(&self) -> Zone {

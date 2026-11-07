@@ -3,10 +3,11 @@
 
 use egui::{Align2, CornerRadius, FontId, Rect, RichText, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 
-use super::{empty_note, icon, ids};
+use super::{empty_note, ids};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::editor::AssetRow;
 use crate::keymap::Context;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{current_colors, fonts};
 
@@ -57,14 +58,14 @@ impl AssetKind {
         }
     }
 
-    fn icon(self) -> char {
+    fn icon(self) -> Icon {
         match self {
-            AssetKind::Mesh => icon::CUBE_TRANSPARENT,
-            AssetKind::Image => icon::IMAGE,
-            AssetKind::Audio => icon::MUSIC_NOTE,
-            AssetKind::Scene => icon::TREE,
-            AssetKind::Script => icon::FILE_CODE,
-            AssetKind::Other => icon::FILE,
+            AssetKind::Mesh => Icon::AssetMesh,
+            AssetKind::Image => Icon::AssetImage,
+            AssetKind::Audio => Icon::AssetAudio,
+            AssetKind::Scene => Icon::AssetScene,
+            AssetKind::Script => Icon::AssetScript,
+            AssetKind::Other => Icon::AssetFile,
         }
     }
 }
@@ -100,8 +101,8 @@ impl Panel for Assets {
         "Assets"
     }
 
-    fn icon(&self) -> char {
-        icon::FILES
+    fn icon(&self) -> Icon {
+        Icon::PanelAssets
     }
 
     fn zone(&self) -> Zone {
@@ -196,16 +197,18 @@ fn row_ui(ui: &mut Ui, asset: &AssetRow) {
         );
         right = at.left() - space::S3;
     }
-    ui.painter().text(
+    let (icon, ink) = if asset.missing {
+        (Icon::UiWarning, colors.accent)
+    } else {
+        (kind.icon(), kind.icon().color(&colors))
+    };
+    icons::paint_at(
+        ui.painter(),
         pos2(rect.left() + space::S3, rect.center().y),
         Align2::LEFT_CENTER,
-        if asset.missing {
-            fonts::icon::WARNING
-        } else {
-            kind.icon()
-        },
-        fonts::named(fonts::ICONS, text::BODY),
-        if asset.missing { colors.accent } else { p.muted },
+        icon,
+        text::BODY,
+        ink,
     );
     let path_left = rect.left() + space::S3 + text::BODY + space::S3;
     let clip = Rect::from_min_max(pos2(path_left, rect.top()), pos2(right.max(path_left), rect.bottom()));

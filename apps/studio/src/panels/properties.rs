@@ -12,10 +12,11 @@ use egui::{
 };
 use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, ResolvedProp, Value};
 
-use super::{class_icon, empty_note, icon, ids, playing_banner};
+use super::{class_icon, empty_note, ids, playing_banner};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::settings::window::section_label;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
 use crate::theme::{current_colors, fonts};
 
@@ -156,8 +157,8 @@ impl Panel for Properties {
         "Properties"
     }
 
-    fn icon(&self) -> char {
-        icon::LIST_BULLETS
+    fn icon(&self) -> Icon {
+        Icon::PanelProperties
     }
 
     fn zone(&self) -> Zone {
@@ -185,12 +186,8 @@ impl Panel for Properties {
         ui.horizontal(|ui| {
             let icon = dm
                 .class_of(id)
-                .map_or(icon::CIRCLE, |class| class_icon(dm.registry(), class));
-            ui.label(
-                RichText::new(icon.to_string())
-                    .font(fonts::named(fonts::ICONS, text::BODY_LG))
-                    .color(p.muted),
-            );
+                .map_or(Icon::ExplorerInstance, |class| class_icon(dm.registry(), class));
+            icons::show(ui, icon, text::BODY_LG, icon.color(&current_colors(ui.ctx())));
             ui.label(
                 RichText::new(dm.name(id).unwrap_or_default())
                     .font(fonts::named(fonts::HEADING, text::BODY_LG))
@@ -304,11 +301,12 @@ fn value_ui(ui: &mut Ui, dm: &DataModel, value: &Value) {
                 egui::StrokeKind::Inside,
             );
             if *on {
-                ui.painter().text(
+                icons::paint_at(
+                    ui.painter(),
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    icon::CHECK,
-                    fonts::named(fonts::ICONS, text::SMALL - 1.0),
+                    Icon::UiCheck,
+                    text::SMALL - 1.0,
                     p.action_text,
                 );
             }

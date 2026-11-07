@@ -23,6 +23,7 @@ use super::{
     ui_scale,
 };
 use crate::keymap::{Command, Keymap};
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{Accent, radius, size, space, text};
 use crate::theme::{ButtonKind, ThemeMode, button, current_colors, fonts};
 
@@ -172,6 +173,27 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let choices = MotionPreference::ALL.map(|choice| (choice, choice.label()));
             segmented(ui, &mut s.appearance.motion, &choices);
+        },
+    },
+    Entry {
+        category: Category::Appearance,
+        name: "Icon folder",
+        description: "SVG or PNG files named after icon ids (such as explorer.part.svg) replace Studio's icons. \
+                      The ids are listed in docs/studio-icons.md.",
+        control: |ui, s| {
+            // Right to left: Reload, then the path filling the rest.
+            if button(ui, ButtonKind::Secondary, "Reload")
+                .on_hover_text("Read the folder again")
+                .clicked()
+            {
+                icons::custom::request_reload(ui.ctx());
+            }
+            ui.add(
+                TextEdit::singleline(&mut s.appearance.icon_folder)
+                    .hint_text("No folder: built-in icons")
+                    .desired_width(f32::INFINITY)
+                    .margin(vec2(space::S4, space::S3)),
+            );
         },
     },
     Entry {
@@ -474,11 +496,7 @@ impl SettingsWindow {
     pub fn contents(&mut self, ui: &mut Ui, settings: &mut StudioSettings, keymap: &mut Keymap) {
         let p = current_colors(ui.ctx()).palette;
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(fonts::icon::SEARCH.to_string())
-                    .font(fonts::named(fonts::ICONS, text::BODY_LG))
-                    .color(p.subtle),
-            );
+            icons::show(ui, Icon::UiSearch, text::BODY_LG, p.subtle);
             ui.add(
                 TextEdit::singleline(&mut self.query)
                     .hint_text("Search settings")
@@ -771,11 +789,12 @@ fn custom_accent(ui: &mut Ui) -> Response {
             // Drawn a step stronger than a live control: egui fades it as disabled.
             ui.painter()
                 .circle(centre, 11.0, p.input, Stroke::new(size::BORDER, p.subtle));
-            ui.painter().text(
+            icons::paint_at(
+                ui.painter(),
                 centre,
                 egui::Align2::CENTER_CENTER,
-                fonts::icon::PALETTE,
-                fonts::named(fonts::ICONS, text::BODY),
+                Icon::UiPalette,
+                text::BODY,
                 p.text,
             );
         }

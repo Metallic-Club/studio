@@ -34,6 +34,8 @@ use crate::logging::LogBuffer;
 use crate::panels;
 use crate::projects::{FileDialog, Projects, RAIL_MARK, name_from_path};
 use crate::settings::{SettingsStore, SettingsWindow, StudioSettings};
+use crate::theme::icons::custom::CustomIcons;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
 use editor::MenuAction;
@@ -118,6 +120,8 @@ pub struct Studio {
     system_reduces_motion: bool,
     /// The interface scale last applied.
     applied_scale: Option<f32>,
+    /// The custom icon folder's icons (#231).
+    icons: CustomIcons,
     /// The emblem, until the first frame uploads it.
     emblem_image: Option<ColorImage>,
     emblem: Option<TextureHandle>,
@@ -173,6 +177,7 @@ impl Studio {
             notices: Vec::new(),
             system_reduces_motion: reduce_motion,
             applied_scale: None,
+            icons: CustomIcons::default(),
             emblem_image: emblem,
             emblem: None,
             marks: Vec::new(),
@@ -715,8 +720,10 @@ impl Studio {
 
     /// Gives the interface the settings' look and scale. Each is applied only when it changed.
     fn apply_settings(&mut self, ctx: &egui::Context) {
-        let appearance = self.settings.settings().appearance;
+        let appearance = &self.settings.settings().appearance;
         self.theme.set(appearance.look(self.system_reduces_motion));
+        // Every frame: it also takes in a folder read in the background (#231).
+        self.icons.update(ctx, &appearance.icon_folder);
         if self.applied_scale != Some(appearance.ui_scale) {
             // The scale is the setting's alone: egui's own Ctrl +/- zoom would drift from it unseen.
             ctx.options_mut(|options| options.zoom_with_keyboard = false);
@@ -734,20 +741,27 @@ impl Studio {
             pos2(screen.right() - space::S5 - size::CONTROL, screen.top() + space::S5),
             vec2(size::CONTROL, size::CONTROL),
         );
-        let hovered = ui.rect_contains_pointer(at);
-        let icon = RichText::new(fonts::icon::GEAR.to_string())
-            .font(fonts::named(fonts::ICONS, text::TITLE))
-            .color(if hovered { p.text } else { p.muted });
-        let gear = egui::Button::new(icon)
-            .fill(if hovered { p.surface_hover } else { Color32::TRANSPARENT })
-            .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(radius::ITEM));
+        let response = ui.interact(at, ui.scope_id().with("gear"), egui::Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Settings"));
+        let hovered = response.hovered();
+        if hovered {
+            ui.painter()
+                .rect_filled(at, CornerRadius::same(radius::ITEM), p.surface_hover);
+        }
+        icons::paint_at(
+            ui.painter(),
+            at.center(),
+            egui::Align2::CENTER_CENTER,
+            Icon::ToolbarSettings,
+            text::TITLE,
+            if hovered { p.text } else { p.muted },
+        );
         // Every binding of the command, not just the first.
         let tip = match self.keymap.shortcut_text(ids::SETTINGS_OPEN) {
             Some(keys) => format!("Settings ({keys})"),
             None => "Settings".to_owned(),
         };
-        if ui.put(at, gear).on_hover_text(tip).clicked() {
+        if response.on_hover_text(tip).clicked() {
             self.toggle_settings();
         }
     }
@@ -866,11 +880,7 @@ impl Studio {
                     .show(ui, |ui| {
                         ui.set_width(520.0);
                         ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(fonts::icon::WARNING.to_string())
-                                    .font(fonts::named(fonts::ICONS, text::TITLE))
-                                    .color(colors.accent),
-                            );
+                            icons::show(ui, Icon::UiWarning, text::TITLE, colors.accent);
                             ui.label(
                                 RichText::new(*title)
                                     .font(fonts::named(fonts::STRONG, text::BODY_LG))
@@ -1163,7 +1173,7 @@ mod tests {
         assert_eq!(style(&harness).visuals.panel_fill, tokens::DARK.bg);
         assert!(!path.exists(), "nothing changed yet, so nothing written");
 
-        harness.get_by_label(&fonts::icon::GEAR.to_string()).click();
+        harness.get_by_role_and_label(Role::Button, "Settings").click();
         settle(&mut harness);
         assert!(harness.state().studio.is_settings_open());
         harness.get_by_role_and_label(Role::Tab, "Appearance").click();
@@ -1176,7 +1186,12 @@ mod tests {
         for _ in 0..5 {
             harness.step();
         }
-        let window = harness.get_by_label("Settings").rect();
+        // The window: the largest thing called Settings (the gear is too).
+        let window = harness
+            .query_all_by_label("Settings")
+            .map(|node| node.rect())
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap();
         assert!(window.width() < 900.0 && window.right() <= 1280.0, "{window:?}");
 
         harness.get_by_label("Light").click();
@@ -2542,6 +2557,84 @@ mod tests {
         assert!(harness.state().studio.is_playing());
     }
 
+    // Icons coloured by group and a custom icon folder (#231).
+
+    #[test]
+    fn a_custom_icon_folder_replaces_the_explorer_s_part_icon() {
+        use crate::theme::icons::custom;
+
+        let mut harness = editing(settings_file("custom-icons", None), "Icons Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // Every part is drawn with the built-in glyph, in the World group's colour.
+        let colors = current_colors(&harness.ctx);
+        let glyph = Icon::ExplorerPart.glyph().to_string();
+        let part_glyphs = |harness: &Harness<'_, Test>| {
+            harness
+                .output()
+                .shapes
+                .iter()
+                .filter(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => text.galley.text() == glyph,
+                    _ => false,
+                })
+                .count()
+        };
+        assert!(part_glyphs(&harness) >= 2, "Baseplate and SpawnLocation");
+        let tinted = harness.output().shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => {
+                text.galley.text() == glyph
+                    && text.galley.job.sections.first().map(|section| section.format.color)
+                        == Some(Icon::ExplorerPart.color(&colors))
+            }
+            _ => false,
+        });
+        assert!(tinted, "in its group's colour");
+
+        // A folder with explorer.part.svg: read in the background, then drawn in place of the glyph.
+        let dir = std::env::temp_dir().join(format!("metallic-studio-icons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("explorer.part.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" fill="currentColor"/></svg>"#,
+        )
+        .unwrap();
+        harness
+            .state_mut()
+            .studio
+            .settings
+            .settings_mut()
+            .appearance
+            .icon_folder = dir.display().to_string();
+        for _ in 0..2000 {
+            harness.step();
+            if custom::get(&harness.ctx, Icon::ExplorerPart).is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let texture = custom::get(&harness.ctx, Icon::ExplorerPart)
+            .expect("the folder's part icon")
+            .texture
+            .id();
+        settle(&mut harness);
+        assert_eq!(part_glyphs(&harness), 0, "no built-in part glyph left");
+        let images = harness
+            .output()
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(&clipped.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == texture))
+            .count();
+        assert!(images >= 2, "Baseplate and SpawnLocation draw the folder's icon");
+        // Saved with the settings.
+        assert_eq!(
+            harness.state().studio.settings().appearance.icon_folder,
+            dir.display().to_string()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // Dock tabs: titles only, a 1 px accent line (#255).
 
     #[test]
@@ -2551,7 +2644,10 @@ mod tests {
         settle(&mut harness);
         let accent = current_colors(&harness.ctx).accent;
         let output = harness.output();
-        for (title, icon) in [("Explorer", panels::icon::TREE), ("Viewport", panels::icon::MONITOR)] {
+        for (title, icon) in [
+            ("Explorer", crate::theme::icons::Icon::PanelExplorer.glyph()),
+            ("Viewport", crate::theme::icons::Icon::PanelViewport.glyph()),
+        ] {
             let tab = harness.get_by_role_and_label(Role::Tab, title).rect();
             // The underline: an accent rect along the tab's bottom, 1 px high.
             let lines: Vec<egui::Rect> = output
@@ -3551,6 +3647,48 @@ mod tests {
         });
         assert!(studio.settings_window().is_capturing());
         write_png(&out.join("266-keybind-recording.png"), shot);
+    }
+
+    /// The screenshot of #231 (`cargo test -p metallic_studio -- --ignored screenshot_of_custom_icons`): the editor
+    /// with a custom icon folder: a monochrome part icon drawn in its group's colour, a full-colour workspace icon as
+    /// it is. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_custom_icons() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-custom-icons", Some("[general]\nskip_sign_in = true\n"), None);
+        let icons = path.parent().unwrap().join("icons");
+        std::fs::create_dir_all(&icons).unwrap();
+        std::fs::write(
+            icons.join("explorer.part.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2 22 7v10l-10 5L2 17V7z" fill="currentColor"/></svg>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            icons.join("explorer.workspace.svg"),
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#3b82f6"/><path d="M4 9c4 2 8-2 12 0s4 3 4 3v3c-3-2-6 1-10-1S4 13 4 13z" fill="#22c55e"/></svg>"##,
+        )
+        .unwrap();
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.open(project.clone());
+                for _ in 0..10_000 {
+                    if studio.poll_opening().is_none() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                studio.settings.settings_mut().appearance.icon_folder = icons.display().to_string();
+            }
+            if frame == 4 {
+                // The folder is read in the background; a later frame takes it in.
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        assert_eq!(studio.screen(), Screen::Editor);
+        write_png(&out.join("231-custom-icons.png"), shot);
     }
 
     /// The screenshot of #239 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_menu_bar`): the editor

@@ -15,6 +15,7 @@ use egui_tiles::{Container, LinearDir, Tile, TileId, Tree};
 
 use super::PanelId;
 use super::layout;
+use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{Colors, fonts};
 
@@ -132,7 +133,7 @@ pub(crate) fn paint_dragged(
     colors: &Colors,
     at: Pos2,
     guides: Option<&Guides>,
-    icon: Option<char>,
+    icon: Option<Icon>,
     title: &str,
 ) {
     let p = &colors.palette;
@@ -159,12 +160,13 @@ pub(crate) fn paint_dragged(
     );
     let mut x = chip.left() + space::S4;
     if let Some(icon) = icon {
-        painter.text(
+        icons::paint_at(
+            painter,
             pos2(x, chip.center().y),
             Align2::LEFT_CENTER,
             icon,
-            fonts::named(fonts::ICONS, text::BODY),
-            colors.accent,
+            text::BODY,
+            icon.color(colors),
         );
         x += icon_width;
     }

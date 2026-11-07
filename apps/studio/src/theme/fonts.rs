@@ -40,23 +40,6 @@ pub mod weight {
 /// website's browsers pick for large text.
 const HEADING_OPTICAL_SIZE: f32 = 32.0;
 
-/// Lucide icons the whole interface uses, by their code points in `Lucide.ttf` (`lucide-static` 1.70.0's
-/// `font/codepoints.json`). Each names the Lucide icon it is.
-pub mod icon {
-    /// `settings` (a gear).
-    pub const GEAR: char = '\u{E154}';
-    /// `search`.
-    pub const SEARCH: char = '\u{E151}';
-    /// `triangle-alert`: a warning.
-    pub const WARNING: char = '\u{E193}';
-    /// `x`: close, dismiss.
-    pub const X: char = '\u{E1B2}';
-    /// `palette`: a colour of your own.
-    pub const PALETTE: char = '\u{E1DD}';
-    /// `plus`: add another.
-    pub const PLUS: char = '\u{E13D}';
-}
-
 /// Inter at the axis values `coords` names.
 fn inter(coords: &[(&[u8; 4], f32)]) -> Arc<FontData> {
     Arc::new(FontData::from_static(INTER).tweak(FontTweak {
@@ -195,23 +178,6 @@ mod tests {
             assert!(body < strong, "400 {body} vs 650 {strong}");
             let display = width(FontFamily::Name(DISPLAY_REGULAR.into()));
             assert!(display < heading, "display 400 {display} vs 800 {heading}");
-        });
-    }
-
-    #[test]
-    fn the_icons_are_in_lucide() {
-        with_fonts(|ui| {
-            for icon in [
-                icon::GEAR,
-                icon::SEARCH,
-                icon::WARNING,
-                icon::X,
-                icon::PALETTE,
-                icon::PLUS,
-            ] {
-                let has = ui.ctx().fonts_mut(|fonts| fonts.has_glyph(&named(ICONS, 16.0), icon));
-                assert!(has, "U+{:04X}", icon as u32);
-            }
         });
     }
 
