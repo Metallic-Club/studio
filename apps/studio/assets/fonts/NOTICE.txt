@@ -1,7 +1,7 @@
 Fonts bundled with Metallic Studio
 ==================================
 
-Studio draws all of its text and icons with the fonts in this folder (src/theme/fonts.rs); egui's own fonts are
+Studio draws all of its text with the fonts in this folder (src/theme/fonts.rs); egui's own fonts are
 never loaded. Each font keeps its licence text next to it, and packaging ships this folder's licence files with the
 app. Font files are not crates, so `cargo deny` does not see them: this file is their record.
 
@@ -20,13 +20,4 @@ JetBrainsMono-Variable.ttf
   SIL Open Font License 1.1, see OFL-JetBrainsMono.txt.
   Source: https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304, file fonts/variable/JetBrainsMono[wght].ttf.
 
-Lucide.ttf
-  Lucide icons (https://lucide.dev), version 1.70.0, the icon font, unmodified, renamed from lucide.ttf: every
-  Studio icon (#257, in place of Phosphor).
-  Copyright (c) 2026 Lucide Icons and Contributors. ISC License; the icons Lucide derives from Feather are also
-  Copyright (c) 2013-present Cole Bemis under the MIT License. Both are in LICENSE-Lucide.txt (the package's LICENSE).
-  Source: the npm package lucide-static 1.70.0 (https://registry.npmjs.org/lucide-static/-/lucide-static-1.70.0.tgz,
-  sha1 5e8408d50248890e4262e79b8f7477056bbc2400, sha256 of the tarball
-  3d1f09df1c468abe512ee6d6596db0dc773fa46c61050e365f0c5fee5120f16a), file font/lucide.ttf (986,208 bytes, sha256
-  a17478dfd261662eae3f64fd71c1a05465c70018b46a5d852af6a23459921d15). The code points Studio uses (the `icon` tables
-  in src/theme/fonts.rs and src/panels/mod.rs, each with its Lucide name) are the package's font/codepoints.json.
+(Studio's icons are not fonts since #291: they are Lucide SVGs in apps/studio/icons, recorded in NOTICE.txt there.)

@@ -140,6 +140,11 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   thread when the setting changes or Reload is pressed, and cached as textures. A monochrome image takes its group's
   colour; a coloured one is drawn as it is; a bad file keeps the built-in icon with one warning in Output. The ids are
   listed in `docs/studio-icons.md`, generated from the table.
+  **Since #291 the icons are files, not compiled in:** Lucide's SVGs ship in an `icons` folder beside the
+  executable (the build copies `apps/studio/icons` there), with `icons.json` naming the SVG each icon id uses and
+  what it marks; pointing an entry at another file changes that icon, and a missing or bad file falls back to the
+  default with one warning. Each icon is rasterised (resvg) at exactly the pixels it is drawn at and cached per size,
+  so it stays sharp at every scale. The Lucide font is gone from the binary.
   Since #278 egui's own glyphs are gone too: drop-downs draw Lucide's chevron, Studio's windows (Settings, About) have
   their own header with Lucide's close button, and checkboxes draw Lucide's check. Look-alike classes have their own
   icons (LocalScript, each value type, BindableFunction), still in their section's colour.

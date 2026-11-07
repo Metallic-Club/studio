@@ -213,30 +213,30 @@ pub fn load_file(path: &Path) -> Result<LoadedImage, String> {
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
     let image = if svg {
-        rasterise_svg(&bytes)?
+        rasterise_svg(&bytes, RASTER_SIZE)?
     } else {
         decode_png(&bytes)?
     };
     Ok(finish(image))
 }
 
-/// An SVG drawn into a [`RASTER_SIZE`] square, its aspect kept and centred.
-fn rasterise_svg(bytes: &[u8]) -> Result<ColorImage, String> {
+/// An SVG drawn into a `side`-pixel square, its aspect kept and centred.
+pub(super) fn rasterise_svg(bytes: &[u8], side_px: u32) -> Result<ColorImage, String> {
     use resvg::{tiny_skia, usvg};
 
     let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|error| error.to_string())?;
     let size = tree.size();
-    let side = RASTER_SIZE as f32;
+    let side = side_px as f32;
     let scale = side / size.width().max(size.height());
     if !scale.is_finite() || scale <= 0.0 {
         return Err("the SVG has no size".to_owned());
     }
-    let mut pixmap = tiny_skia::Pixmap::new(RASTER_SIZE, RASTER_SIZE).ok_or("could not make an image to draw in")?;
+    let mut pixmap = tiny_skia::Pixmap::new(side_px, side_px).ok_or("could not make an image to draw in")?;
     let offset = |extent: f32| (side - extent * scale) / 2.0;
     let transform =
         tiny_skia::Transform::from_scale(scale, scale).post_translate(offset(size.width()), offset(size.height()));
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    let side = RASTER_SIZE as usize;
+    let side = side_px as usize;
     Ok(ColorImage::from_rgba_premultiplied([side, side], pixmap.data()))
 }
 

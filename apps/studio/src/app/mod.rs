@@ -1173,23 +1173,12 @@ mod tests {
         window.show_category(Category::Appearance);
         settle(&mut harness);
         // The drop-down's arrow is Lucide's chevron (#278), not egui's triangle.
-        let chevron = Icon::UiCollapse.glyph().to_string();
-        let chevrons = harness
-            .output()
-            .shapes
-            .iter()
-            .filter(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == chevron))
-            .count();
-        assert!(chevrons >= 1, "the Interface scale drop-down");
-        // The window's own header closes it with Lucide's X.
-        let close = Icon::UiClose.glyph().to_string();
         assert!(
-            harness
-                .output()
-                .shapes
-                .iter()
-                .any(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == close))
+            !icon_meshes(&harness, Icon::UiCollapse).is_empty(),
+            "the Interface scale drop-down"
         );
+        // The window's own header closes it with Lucide's X.
+        assert!(!icon_meshes(&harness, Icon::UiClose).is_empty());
         harness.get_by_role_and_label(Role::Button, "Close Settings").click();
         settle(&mut harness);
         assert!(!harness.state().studio.is_settings_open());
@@ -1425,6 +1414,22 @@ mod tests {
         for _ in 0..30 {
             harness.step();
         }
+    }
+
+    /// The tint of each mesh in the last frame that draws `icon` from the built-in icons folder (#291).
+    fn icon_meshes(harness: &Harness<'_, Test>, icon: Icon) -> Vec<egui::Color32> {
+        let textures = crate::theme::icons::builtin::textures_of(&harness.ctx, icon);
+        harness
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if textures.contains(&mesh.texture_id) => {
+                    mesh.vertices.first().map(|v| v.color)
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Unbinds command `id`, so it differs from its default.
@@ -2621,29 +2626,13 @@ mod tests {
         let mut harness = editing(settings_file("custom-icons", None), "Icons Game");
         harness.set_size(egui::vec2(1280.0, 800.0));
         settle(&mut harness);
-        // Every part is drawn with the built-in glyph, in the World group's colour.
+        // Every part is drawn with the built-in SVG (#291), in its group's colour.
         let colors = current_colors(&harness.ctx);
-        let glyph = Icon::ExplorerPart.glyph().to_string();
-        let part_glyphs = |harness: &Harness<'_, Test>| {
-            harness
-                .output()
-                .shapes
-                .iter()
-                .filter(|clipped| match &clipped.shape {
-                    egui::Shape::Text(text) => text.galley.text() == glyph,
-                    _ => false,
-                })
-                .count()
-        };
+        let part_glyphs = |harness: &Harness<'_, Test>| icon_meshes(harness, Icon::ExplorerPart).len();
         assert!(part_glyphs(&harness) >= 2, "Baseplate and SpawnLocation");
-        let tinted = harness.output().shapes.iter().any(|clipped| match &clipped.shape {
-            egui::Shape::Text(text) => {
-                text.galley.text() == glyph
-                    && text.galley.job.sections.first().map(|section| section.format.color)
-                        == Some(Icon::ExplorerPart.color(&colors))
-            }
-            _ => false,
-        });
+        let tinted = icon_meshes(&harness, Icon::ExplorerPart)
+            .iter()
+            .all(|&tint| tint == Icon::ExplorerPart.color(&colors));
         assert!(tinted, "in its group's colour");
 
         // A folder with explorer.part.svg: read in the background, then drawn in place of the glyph.
@@ -2674,7 +2663,7 @@ mod tests {
             .texture
             .id();
         settle(&mut harness);
-        assert_eq!(part_glyphs(&harness), 0, "no built-in part glyph left");
+        assert_eq!(part_glyphs(&harness), 0, "no built-in part icon left");
         let images = harness
             .output()
             .shapes
@@ -2717,10 +2706,7 @@ mod tests {
         let assets_tab = harness.get_by_role_and_label(Role::Tab, "Assets").rect();
         assert_eq!(fills(output_tab), [active]);
         assert!(fills(assets_tab).is_empty(), "an inactive tab is the bar's colour");
-        for (title, icon) in [
-            ("Explorer", crate::theme::icons::Icon::PanelExplorer.glyph()),
-            ("Viewport", crate::theme::icons::Icon::PanelViewport.glyph()),
-        ] {
+        for (title, icon) in [("Explorer", Icon::PanelExplorer), ("Viewport", Icon::PanelViewport)] {
             let tab = harness.get_by_role_and_label(Role::Tab, title).rect();
             // No accent underline any more.
             let underline = output.shapes.iter().any(|clipped| match &clipped.shape {
@@ -2731,8 +2717,9 @@ mod tests {
             });
             assert!(!underline, "{title} has an accent line");
             // No icon in the tab.
+            let textures = crate::theme::icons::builtin::textures_of(&harness.ctx, icon);
             let has_icon = output.shapes.iter().any(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) => text.galley.text().contains(icon) && tab.contains(text.pos),
+                egui::Shape::Mesh(mesh) => textures.contains(&mesh.texture_id) && tab.intersects(mesh.calc_bounds()),
                 _ => false,
             });
             assert!(!has_icon, "{title} draws its icon");
