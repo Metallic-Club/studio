@@ -174,6 +174,11 @@ impl Projects {
         self.error.as_deref()
     }
 
+    /// Tells the user `error` at the top of the page until it is dismissed (a project that could not be opened).
+    pub fn set_error(&mut self, error: impl Into<String>) {
+        self.error = Some(error.into());
+    }
+
     /// Whether the New project dialog is open: the page's own commands wait until it closes.
     pub fn is_creating(&self) -> bool {
         self.new_project.is_some()

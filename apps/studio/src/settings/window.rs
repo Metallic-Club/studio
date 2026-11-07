@@ -1,7 +1,8 @@
 //! The Settings window (ADR 0009, Settings): a category list on the left, a search box over every setting, and each
 //! setting as a row with its name, a line saying what it does, and its control.
 //!
-//! A plain egui window for now; it becomes a dockable panel when docking lands (#216). Every setting is one
+//! A floating window on the screens before the editor; in the editor the same pages are a dockable panel
+//! (`panels::settings`, #216). Every setting is one
 //! [`Entry`] in [`ENTRIES`], so the pages and the search read the same list, and adding a setting is one line there
 //! plus its control.
 
@@ -401,7 +402,13 @@ impl SettingsWindow {
 
     /// Whether the keybind capture dialog is open: Studio does not run the keymap meanwhile.
     pub fn is_capturing(&self) -> bool {
-        self.open && self.keybinds.is_capturing()
+        self.keybinds.is_capturing()
+    }
+
+    /// The keybind capture dialog, while a capture is going on, over `ctx`. Studio calls it every frame, whether the
+    /// pages are in the window or docked.
+    pub fn dialog(&mut self, ctx: &egui::Context, keymap: &mut Keymap) {
+        self.keybinds.dialog(ctx, keymap);
     }
 
     /// Draws the window, if open, over `ctx`, changing `settings` and the `keymap` as the user does.
@@ -423,12 +430,10 @@ impl SettingsWindow {
             .min_height(360.0)
             .show(ctx, |ui| self.contents(ui, settings, keymap));
         self.open &= open;
-        if self.open {
-            self.keybinds.dialog(ctx, keymap);
-        }
     }
 
-    fn contents(&mut self, ui: &mut Ui, settings: &mut StudioSettings, keymap: &mut Keymap) {
+    /// The pages, filling `ui`: the search box, the category list and the page or the search's results.
+    pub fn contents(&mut self, ui: &mut Ui, settings: &mut StudioSettings, keymap: &mut Keymap) {
         let p = current_colors(ui.ctx()).palette;
         ui.horizontal(|ui| {
             ui.label(
@@ -532,7 +537,7 @@ fn page(ui: &mut Ui, category: Category, settings: &mut StudioSettings) {
 }
 
 /// An uppercase section label, as the website's.
-pub(super) fn section_label(ui: &mut Ui, label: &str) {
+pub(crate) fn section_label(ui: &mut Ui, label: &str) {
     let p = current_colors(ui.ctx()).palette;
     ui.label(
         RichText::new(label.to_uppercase())

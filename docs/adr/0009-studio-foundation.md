@@ -76,6 +76,11 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
 
 - **`egui_dock`** (tabs, splits, floating windows), in the release built for egui 0.37. If none exists, use
   `egui_tiles` and record it in #211.
+  - **Decided in #216: `egui_tiles` 0.18.** egui_dock had no release for egui 0.37 (its newest, 0.21, is built for
+    egui 0.36), and egui_tiles 0.18 is (the egui authors' own docking crate: tabs and splits, MIT or Apache-2.0). It
+    has no floating windows, so a panel lives in a tab bar of the main window; Settings opens as a tab beside the
+    viewport, and stays a floating window on the screens before the editor. Tab cycling with Ctrl+Tab is turned
+    off, because every shortcut goes through the keymap.
 - **A panel registry:** every panel implements one trait (stable id, title, icon, default zone, `ui()`), and one list
   registers them. Adding a panel is one new type plus one line, not an enum, a match arm and zone logic (Forge's pain
   point).

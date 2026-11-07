@@ -22,6 +22,10 @@ log.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 rfd.workspace = true
+egui_tiles.workspace = true
+# The saved dock layout (`layout.json`).
+serde.workspace = true
+serde_json.workspace = true
 
 # The splash's window shape and the system's animation switch (src/app/native.rs).
 [target.'cfg(windows)'.dependencies]

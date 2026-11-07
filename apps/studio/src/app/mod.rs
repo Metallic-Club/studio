@@ -4,27 +4,33 @@
 //! [`Studio`] knows nothing of winit or wgpu: it draws into an `egui::Ui` and asks the shell for window changes
 //! through [`WindowRequest`]s, so the UI tests drive it without a window or a GPU.
 
+mod editor;
 mod native;
-mod screens;
 mod shell;
 pub mod sign_in;
 pub mod splash;
 pub mod startup;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use egui::{
-    Align, Align2, Color32, ColorImage, CornerRadius, Frame, Id, Label, Layout, RichText, Stroke, TextureHandle,
-    TextureOptions, pos2, vec2,
+    Align, Align2, Color32, ColorImage, CornerRadius, Frame, Id, Label, Layout, Rect, RichText, Stroke, TextureHandle,
+    TextureOptions, UiBuilder, pos2, vec2,
 };
 
+use crate::dock::{Dock, PanelContext};
+use crate::editor::{EditorState, Opening};
 use crate::emblem;
 use crate::keymap::{ActivationKind, Context, Focus, Keymap, Overrides, ids};
+use crate::logging::LogBuffer;
+use crate::panels;
 use crate::projects::{FileDialog, Projects, RAIL_MARK, name_from_path};
 use crate::settings::{SettingsStore, SettingsWindow, StudioSettings};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
+use editor::MenuAction;
 pub use shell::run;
 use splash::{Splash, Status};
 use startup::{Loaded, Startup};
@@ -38,7 +44,7 @@ pub enum Screen {
     SignIn,
     /// The projects page.
     Projects,
-    /// The editor, with a project open.
+    /// The editor, with a project opening or open.
     Editor,
 }
 
@@ -56,21 +62,37 @@ struct Notice {
     body: String,
 }
 
+/// The Editor screen: the project opening behind the progress overlay, or open.
+enum EditorScreen {
+    Opening(Opening),
+    Open(Box<EditorState>),
+}
+
+/// The mark's size in the editor's top bar, in points.
+const BAR_MARK: f32 = 20.0;
+
 /// Studio's interface state: the screen shown, the theme, the settings and what startup loaded.
 pub struct Studio {
     screen: Screen,
     splash: Splash,
     startup: Startup,
     /// What the startup steps produced, once the splash is done: the renderer the viewport will use (#217). The
-    /// projects list and the templates move from it to `projects`.
+    /// projects list, the templates and the layout move from it to their owners.
     loaded: Option<Loaded>,
     /// The projects page and its list.
     projects: Projects,
     /// The project the Editor screen shows.
     open_project: Option<PathBuf>,
+    /// The Editor screen's project, opening or open.
+    editor: Option<EditorScreen>,
+    /// The editor's panels and their layout, which outlive any one project.
+    dock: Dock,
+    /// The log the Output panel reads.
+    log: Arc<LogBuffer>,
     theme: ThemeState,
     /// The settings: in memory until the splash has read them, then the file's.
     settings: SettingsStore,
+    /// The Settings pages: a window before the editor, a docked panel in it.
     settings_window: SettingsWindow,
     /// Every shortcut's command and bindings: the settings' overrides over the defaults.
     keymap: Keymap,
@@ -96,6 +118,7 @@ impl std::fmt::Debug for Studio {
             .field("loaded", &self.loaded)
             .field("projects", &self.projects)
             .field("open_project", &self.open_project)
+            .field("dock", &self.dock)
             .finish_non_exhaustive()
     }
 }
@@ -111,6 +134,9 @@ impl Studio {
             loaded: None,
             projects: Projects::new(),
             open_project: None,
+            editor: None,
+            dock: Dock::in_memory(panels::PANELS),
+            log: Arc::clone(crate::logging::global()),
             // The splash's look: the default dark mode and accent, before the settings are read.
             theme: ThemeState::new(Look {
                 reduce_motion,
@@ -134,6 +160,11 @@ impl Studio {
         self.projects.set_file_dialog(dialog);
     }
 
+    /// Has the Output panel read `log` instead of the process's log.
+    pub fn set_log(&mut self, log: Arc<LogBuffer>) {
+        self.log = log;
+    }
+
     /// The projects page and its list.
     pub fn projects(&self) -> &Projects {
         &self.projects
@@ -144,22 +175,74 @@ impl Studio {
         &mut self.projects
     }
 
-    /// The project the Editor screen shows.
+    /// The project the Editor screen shows, opening or open.
     pub fn open_project(&self) -> Option<&Path> {
         self.open_project.as_deref()
     }
 
-    /// Goes to the projects page, looking at the projects' files again.
+    /// The open project and its panels' state, once it has opened.
+    pub fn editor(&self) -> Option<&EditorState> {
+        match &self.editor {
+            Some(EditorScreen::Open(editor)) => Some(editor),
+            _ => None,
+        }
+    }
+
+    /// The open project and its panels' state, to change.
+    pub fn editor_mut(&mut self) -> Option<&mut EditorState> {
+        match &mut self.editor {
+            Some(EditorScreen::Open(editor)) => Some(editor),
+            _ => None,
+        }
+    }
+
+    /// Whether a project is opening behind the progress overlay.
+    pub fn is_opening(&self) -> bool {
+        matches!(self.editor, Some(EditorScreen::Opening(_)))
+    }
+
+    /// The editor's panels and their layout.
+    pub fn dock(&self) -> &Dock {
+        &self.dock
+    }
+
+    /// The editor's panels and their layout, to change.
+    pub fn dock_mut(&mut self) -> &mut Dock {
+        &mut self.dock
+    }
+
+    /// Goes to the projects page, looking at the projects' files again. A project open is closed.
     fn show_projects(&mut self) {
+        self.editor = None;
+        self.open_project = None;
         self.projects.refresh();
         self.screen = Screen::Projects;
     }
 
-    /// Goes to the Editor screen with the project at `path`.
+    /// Goes to the Editor screen and starts opening the project at `path` behind the progress overlay.
     fn open(&mut self, path: PathBuf) {
         log::info!("projects: opening {}", path.display());
-        self.open_project = Some(path);
-        self.screen = Screen::Editor;
+        match Opening::spawn(path.clone()) {
+            Ok(opening) => {
+                self.editor = Some(EditorScreen::Opening(opening));
+                self.open_project = Some(path);
+                // Settings is a docked panel in the editor, not the window.
+                self.settings_window.set_open(false);
+                self.screen = Screen::Editor;
+            }
+            Err(error) => {
+                self.projects
+                    .set_error(format!("Could not open the project: no thread could start ({error})."));
+            }
+        }
+    }
+
+    /// The name the projects list knows `path` by, or its file's.
+    fn project_name(&self, path: &Path) -> String {
+        self.projects
+            .list()
+            .get(path)
+            .map_or_else(|| name_from_path(path), |entry| entry.name.clone())
     }
 
     /// The mark, `points` square at `ctx`'s scale, drawn for that size the first time it is asked for.
@@ -204,9 +287,18 @@ impl Studio {
         self.settings.settings()
     }
 
-    /// The Settings window's state.
+    /// The Settings pages' state.
     pub fn settings_window(&mut self) -> &mut SettingsWindow {
         &mut self.settings_window
+    }
+
+    /// Whether Settings shows: the window before the editor, the docked panel in it.
+    pub fn is_settings_open(&self) -> bool {
+        if self.editor().is_some() {
+            self.dock.is_open(panels::ids::SETTINGS)
+        } else {
+            self.settings_window.is_open()
+        }
     }
 
     /// What Studio is telling the user (about the settings file, or the keymap), until it is dismissed.
@@ -231,6 +323,7 @@ impl Studio {
             // Before anything is drawn, so a key a command used reaches nothing else.
             self.run_keymap(&ctx);
         }
+        let before = (self.screen != Screen::Splash).then(|| self.settings.settings().clone());
         match self.screen {
             Screen::Splash => self.splash(ui, now),
             Screen::SignIn => {
@@ -246,33 +339,109 @@ impl Studio {
                     self.open(path);
                 }
             }
-            Screen::Editor => {
-                let path = self.open_project.clone().unwrap_or_default();
-                let name = self
-                    .projects
-                    .list()
-                    .get(&path)
-                    .map_or_else(|| name_from_path(&path), |entry| entry.name.clone());
-                let location = path.display().to_string();
-                let close = screens::placeholder(
-                    ui,
-                    "Project",
-                    &name,
-                    &[&location, "The editor's panels will be here."],
-                    "Close the project",
-                );
-                let close = match self.keymap.shortcut_text(ids::PROJECT_CLOSE) {
-                    Some(keys) => close.on_hover_text(format!("Close project ({keys})")),
-                    None => close,
-                };
-                if close.clicked() {
-                    self.show_projects();
-                }
+            Screen::Editor => self.editor_ui(ui),
+        }
+        if let Some(before) = before {
+            if self.screen != Screen::Editor {
+                self.gear(ui);
+            }
+            self.settings_ui(&ctx, &before);
+        }
+    }
+
+    /// The Editor screen: the progress overlay while the project opens, then the top bar and the dock.
+    fn editor_ui(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        if let Some(step) = self.poll_opening() {
+            let name = self.project_name(&self.open_project.clone().unwrap_or_default());
+            editor::opening_overlay(ui, &name, step);
+            return;
+        }
+        if self.screen != Screen::Editor {
+            // It could not be opened: the projects page says why from the next frame.
+            ui.ctx().request_repaint();
+            return;
+        }
+        let mark = self.mark(&ctx, BAR_MARK);
+        let Some(EditorScreen::Open(editor)) = &mut self.editor else {
+            // No project: nothing to edit.
+            self.show_projects();
+            return;
+        };
+        let full = ui.max_rect();
+        let bar = Rect::from_min_size(full.min, vec2(full.width(), editor::BAR_HEIGHT));
+        let action = ui
+            .scope_builder(UiBuilder::new().max_rect(bar), |ui| {
+                editor::top_bar(ui, Some(&mark), editor, &self.dock, &self.keymap)
+            })
+            .inner;
+        let body = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
+        let p = current_colors(&ctx).palette;
+        ui.painter().rect_filled(body, 0.0, p.bg);
+        let mut cx = PanelContext {
+            editor,
+            settings: self.settings.settings_mut(),
+            keymap: &mut self.keymap,
+            settings_page: &mut self.settings_window,
+        };
+        ui.scope_builder(UiBuilder::new().max_rect(body.shrink(space::S1)), |ui| {
+            self.dock.ui(ui, &mut cx);
+        });
+        if let Some(action) = action {
+            self.menu_action(action);
+        }
+        // Not while a tab or a divider is dragged: the layout is written once, when the drag ends.
+        let busy = ctx.input(|input| input.pointer.any_down()) || self.dock.is_dragging(&ctx);
+        if let Err(error) = self.dock.save_if_changed(busy) {
+            log::warn!("layout: could not save it: {error}");
+        }
+    }
+
+    /// Takes what the opening worker reported. Returns the step it is at while it still runs; once it is done the
+    /// editor has the project, or the projects page says why it could not be opened.
+    fn poll_opening(&mut self) -> Option<usize> {
+        let Some(EditorScreen::Opening(opening)) = &mut self.editor else {
+            return None;
+        };
+        match opening.poll() {
+            None => Some(opening.step()),
+            Some(Ok(opened)) => {
+                let editor = EditorState::new(*opened, Arc::clone(&self.log));
+                self.editor = Some(EditorScreen::Open(Box::new(editor)));
+                None
+            }
+            Some(Err(error)) => {
+                let name = self.project_name(&self.open_project.clone().unwrap_or_default());
+                self.show_projects();
+                self.projects
+                    .set_error(format!("Could not open \u{201C}{name}\u{201D}. {error}"));
+                None
             }
         }
-        if self.screen != Screen::Splash {
-            self.gear(ui);
-            self.settings_ui(&ctx);
+    }
+
+    /// Does what a menu item asked for.
+    fn menu_action(&mut self, action: MenuAction) {
+        match action {
+            MenuAction::Save => self.save(),
+            MenuAction::Close => self.show_projects(),
+            MenuAction::Toggle(id) => self.dock.toggle(id),
+            MenuAction::ResetLayout => self.dock.reset(),
+            MenuAction::Settings => self.toggle_settings(),
+        }
+    }
+
+    /// Saves the open project, telling the user if it failed.
+    fn save(&mut self) {
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        if let Err(error) = editor.save() {
+            log::warn!("projects: could not save: {error}");
+            self.notices.push(Notice {
+                title: "The project was not saved",
+                body: error,
+            });
         }
     }
 
@@ -288,7 +457,8 @@ impl Studio {
         }
     }
 
-    /// The gear in the screen's top-right corner, which opens and closes Settings.
+    /// The gear in the screen's top-right corner, which opens and closes Settings. The editor has its own, in its
+    /// top bar.
     fn gear(&mut self, ui: &mut egui::Ui) {
         let p = current_colors(ui.ctx()).palette;
         let screen = ui.max_rect();
@@ -314,9 +484,14 @@ impl Studio {
         }
     }
 
+    /// Opens or closes Settings: the docked panel in the editor, the window before it.
     fn toggle_settings(&mut self) {
-        let open = self.settings_window.is_open();
-        self.settings_window.set_open(!open);
+        if self.editor().is_some() {
+            self.dock.toggle(panels::ids::SETTINGS);
+        } else {
+            let open = self.settings_window.is_open();
+            self.settings_window.set_open(!open);
+        }
     }
 
     /// Runs the frame's input through the keymap and does what the commands ask. Every Studio shortcut is here; no
@@ -326,16 +501,19 @@ impl Studio {
             // The capture dialog is recording a key: it must not also run a command.
             return;
         }
-        // Panels arrive with docking (#216) and set the focused panel's context; until then the editor's own. The
-        // projects page has the focus unless a dialog or the Settings window is over it.
-        let context = match self.screen {
-            Screen::Editor => Context::Editor,
-            Screen::Projects if !self.projects.is_creating() && !self.settings_window.is_open() => Context::Projects,
-            _ => Context::Global,
+        // In the editor, the focused panel's context, and the one under the pointer for navigation. The projects
+        // page has the focus unless a dialog or the Settings window is over it.
+        let editing = self.editor().is_some();
+        let (context, hovered) = match self.screen {
+            Screen::Editor if editing => (self.dock.context(), self.dock.hovered_context()),
+            Screen::Projects if !self.projects.is_creating() && !self.settings_window.is_open() => {
+                (Context::Projects, None)
+            }
+            _ => (Context::Global, None),
         };
         let focus = Focus {
             context,
-            hovered: None,
+            hovered,
             typing: ctx.egui_wants_keyboard_input(),
         };
         for activation in self.keymap.dispatch(ctx, focus) {
@@ -344,7 +522,9 @@ impl Studio {
             }
             match activation.command {
                 ids::SETTINGS_OPEN => self.toggle_settings(),
-                ids::PROJECT_CLOSE if self.screen == Screen::Editor => self.show_projects(),
+                ids::PROJECT_CLOSE if editing => self.show_projects(),
+                ids::FILE_SAVE if editing => self.save(),
+                ids::VIEW_RESET_LAYOUT if editing => self.dock.reset(),
                 id @ (ids::PROJECTS_OPEN | ids::PROJECTS_NEW | ids::PROJECTS_ADD) if context == Context::Projects => {
                     if let Some(path) = self.projects.run(id) {
                         self.open(path);
@@ -356,15 +536,18 @@ impl Studio {
         }
     }
 
-    /// The Settings window, the notices, and saving what changed.
-    fn settings_ui(&mut self, ctx: &egui::Context) {
-        let before = self.settings.settings().clone();
-        self.settings_window
-            .show(ctx, self.settings.settings_mut(), &mut self.keymap);
+    /// The Settings window (before the editor) and the capture dialog, the notices, and saving what changed since
+    /// `before`.
+    fn settings_ui(&mut self, ctx: &egui::Context, before: &StudioSettings) {
+        if self.screen != Screen::Editor {
+            self.settings_window
+                .show(ctx, self.settings.settings_mut(), &mut self.keymap);
+        }
+        self.settings_window.dialog(ctx, &mut self.keymap);
         if self.keymap.take_changed() {
             self.settings.settings_mut().keybinds.overrides = self.keymap.overrides().clone();
         }
-        if *self.settings.settings() != before {
+        if self.settings.settings() != before {
             // Restyled at the start of the next pass, which this asks for at once.
             ctx.request_repaint();
         }
@@ -467,6 +650,7 @@ impl Studio {
             }
             self.projects.set_list(list);
             self.projects.set_templates(std::mem::take(&mut loaded.templates));
+            self.dock = std::mem::take(&mut loaded.layout);
             self.loaded = Some(loaded);
             self.screen = if self.settings.settings().general.skip_sign_in {
                 Screen::Projects
@@ -654,15 +838,21 @@ mod tests {
         harness.get_by_role_and_label(Role::Tab, "Recent");
         harness.get_by_label("No projects yet");
 
-        let path = std::env::temp_dir().join("A Game.mtproj");
+        let dir = std::env::temp_dir().join(format!("metallic-studio-app-screens-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = make_project_once(&dir, "A Game");
         harness.state_mut().studio.open(path.clone());
-        settle(&mut harness);
         assert_eq!(harness.state().studio.screen(), Screen::Editor);
+        assert!(harness.state().studio.is_opening());
+        wait_open(&mut harness);
+        assert_eq!(harness.state().studio.editor().unwrap().path(), path);
         harness.get_by_label("A Game");
-        harness.get_by_label(&path.display().to_string());
 
-        click(&mut harness, "Close the project");
+        click(&mut harness, "File");
+        harness.get_by_role_and_label(Role::MenuItem, "Close project").click();
+        settle(&mut harness);
         assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        assert!(harness.state().studio.editor().is_none());
         assert!(harness.state_mut().studio.take_requests().is_empty());
     }
 
@@ -684,7 +874,7 @@ mod tests {
 
         harness.get_by_label(&fonts::icon::GEAR.to_string()).click();
         settle(&mut harness);
-        assert!(harness.state_mut().studio.settings_window().is_open());
+        assert!(harness.state().studio.is_settings_open());
         harness.get_by_role_and_label(Role::Tab, "Appearance").click();
         settle(&mut harness);
         assert_eq!(
@@ -743,16 +933,16 @@ mod tests {
     #[test]
     fn primary_comma_opens_and_closes_settings() {
         let mut harness = past_the_splash(settings_file("shortcut", None));
-        assert!(!harness.state_mut().studio.settings_window().is_open());
+        assert!(!harness.state().studio.is_settings_open());
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         settle(&mut harness);
-        assert!(harness.state_mut().studio.settings_window().is_open());
+        assert!(harness.state().studio.is_settings_open());
         harness.get_by_role_and_label(Role::Tab, "General");
         // The screen stays under the window.
         harness.get_by_label("Continue offline");
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         settle(&mut harness);
-        assert!(!harness.state_mut().studio.settings_window().is_open());
+        assert!(!harness.state().studio.is_settings_open());
         assert!(harness.query_by_role_and_label(Role::Tab, "General").is_none());
     }
 
@@ -797,13 +987,12 @@ mod tests {
         harness.get_by_label("VIEWPORT NAVIGATION");
     }
 
-    /// Studio past the splash, on the Editor screen, with Settings open on the Keybinds page.
+    /// Studio past the splash, a project open in the editor, with the Settings panel on the Keybinds page.
     fn on_the_keybinds_page(path: PathBuf) -> Harness<'static, Test> {
-        let mut harness = past_the_splash(path);
-        harness.state_mut().studio.screen = Screen::Editor;
-        let window = harness.state_mut().studio.settings_window();
-        window.set_open(true);
-        window.show_category(Category::Keybinds);
+        let mut harness = editing(path, "Keybinds");
+        let studio = &mut harness.state_mut().studio;
+        studio.settings_window().show_category(Category::Keybinds);
+        studio.dock_mut().open(panels::ids::SETTINGS);
         settle(&mut harness);
         harness
     }
@@ -817,7 +1006,12 @@ mod tests {
     #[test]
     fn a_focused_text_field_keeps_its_keys_from_commands() {
         let mut harness = on_the_keybinds_page(settings_file("typing", None));
-        harness.get_by_label("Close the project");
+        // The settings' search box is then the only text field.
+        for panel in [panels::ids::EXPLORER, panels::ids::OUTPUT] {
+            harness.state_mut().studio.dock_mut().close(panel);
+        }
+        settle(&mut harness);
+        assert!(harness.state().studio.editor().is_some());
         // In the search box, Primary+W is text editing, not Close project.
         harness.get_all_by_role(Role::TextInput).next().unwrap().click();
         settle(&mut harness);
@@ -828,7 +1022,7 @@ mod tests {
         // Settings is marked "while typing": it still closes.
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         settle(&mut harness);
-        assert!(!harness.state_mut().studio.settings_window().is_open());
+        assert!(!harness.state().studio.is_settings_open());
         // Nothing focused now: Primary+W closes the project.
         harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
         settle(&mut harness);
@@ -848,7 +1042,7 @@ mod tests {
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         settle(&mut harness);
         assert!(!harness.state_mut().studio.settings_window().is_capturing());
-        assert!(harness.state_mut().studio.settings_window().is_open());
+        assert!(harness.state().studio.is_settings_open());
         assert!(harness.state().studio.keymap().is_default(ids::SETTINGS_OPEN));
 
         harness.get_by_label(&settings).click();
@@ -869,13 +1063,13 @@ mod tests {
         // The new key works, and the old one no longer does.
         harness.key_press(Key::F10);
         settle(&mut harness);
-        assert!(!harness.state_mut().studio.settings_window().is_open());
+        assert!(!harness.state().studio.is_settings_open());
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         settle(&mut harness);
-        assert!(!harness.state_mut().studio.settings_window().is_open());
+        assert!(!harness.state().studio.is_settings_open());
         harness.key_press(Key::F10);
         settle(&mut harness);
-        assert!(harness.state_mut().studio.settings_window().is_open());
+        assert!(harness.state().studio.is_settings_open());
 
         // Esc cancels a capture and changes nothing.
         harness.get_by_label("F10").click();
@@ -954,7 +1148,8 @@ mod tests {
         let keymap = harness.state().studio.keymap();
         assert_eq!(keymap.shortcut_text(ids::PROJECT_CLOSE), Some(close));
         assert!(keymap.bindings(ids::SETTINGS_OPEN).is_empty());
-        harness.get_by_label("Unbound");
+        // Settings, and Reset layout, which has no default.
+        assert_eq!(harness.query_all_by_label("Unbound").count(), 2);
         assert_eq!(
             harness.state().studio.settings().keybinds.overrides[ids::SETTINGS_OPEN],
             Vec::<String>::new()
@@ -1128,12 +1323,13 @@ mod tests {
         let project = metallic_engine::metallic_project::Project::open(&opened).unwrap();
         assert_eq!(project.manifest().name, "Space Race");
         assert_eq!(studio.projects().list().entries()[0].path, opened);
+        wait_open(&mut harness);
         harness.get_by_label("Space Race");
         let list = std::fs::read_to_string(path.with_file_name(PROJECTS_FILE)).unwrap();
         assert!(list.contains("name = \"Space Race\""), "{list}");
 
         // Making it again refuses to replace the file, and says so in the dialog.
-        harness.get_by_label("Close the project").click();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
         settle(&mut harness);
         harness.get_by_label("New project").click();
         settle(&mut harness);
@@ -1261,7 +1457,8 @@ mod tests {
         let studio = &harness.state().studio;
         assert_eq!(studio.screen(), Screen::Editor);
         assert_eq!(studio.open_project(), Some(second.as_path()));
-        harness.get_by_label(&second.display().to_string());
+        wait_open(&mut harness);
+        assert_eq!(harness.state().studio.editor().unwrap().path(), second);
         // It moved to the front of the list, with the time.
         let entries = harness.state().studio.projects().list().entries();
         assert_eq!(entries[0].path, second);
@@ -1308,6 +1505,278 @@ mod tests {
         harness.get_by_label("The projects list was reset");
         harness.get_by_label_contains("projects.toml.bak");
         harness.get_by_label("No projects yet");
+    }
+
+    // The editor (#216).
+
+    /// Runs frames until the project opening behind the overlay is open, or has failed; then settles.
+    fn wait_open(harness: &mut Harness<'_, Test>) {
+        for _ in 0..10_000 {
+            harness.step();
+            if !harness.state().studio.is_opening() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!harness.state().studio.is_opening(), "the project never opened");
+        settle(harness);
+    }
+
+    /// Studio past the splash on the settings at `path`, with a project called `name` (made beside them) open.
+    fn editing(path: PathBuf, name: &str) -> Harness<'static, Test> {
+        let mut harness = past_the_splash(path.clone());
+        let project = make_project_once(path.parent().unwrap(), name);
+        harness.state_mut().studio.open(project);
+        wait_open(&mut harness);
+        let studio = &harness.state().studio;
+        assert!(studio.editor().is_some(), "{:?}", studio.projects().error());
+        harness
+    }
+
+    /// Clicks the node labelled `label` and runs the frames that show what it did.
+    fn click_label(harness: &mut Harness<'_, Test>, label: &str) {
+        harness.get_by_label(label).click();
+        settle(harness);
+    }
+
+    /// The default layout's panels, in registry order.
+    const DEFAULT_PANELS: [&str; 5] = [
+        panels::ids::VIEWPORT,
+        panels::ids::EXPLORER,
+        panels::ids::ASSETS,
+        panels::ids::PROPERTIES,
+        panels::ids::OUTPUT,
+    ];
+
+    #[test]
+    fn the_template_opens_with_its_tree_and_the_selected_parts_properties() {
+        let mut harness = editing(settings_file("editor-tree", None), "Tree Game");
+        assert_eq!(harness.state().studio.dock().open_panels(), DEFAULT_PANELS);
+        for tab in ["Viewport", "Explorer", "Assets", "Properties", "Output"] {
+            harness.get_by_role_and_label(Role::Tab, tab);
+        }
+        harness.get_by_label("Tree Game");
+        harness.get_by_role_and_label(Role::TreeItem, "Workspace");
+        harness.get_by_role_and_label(Role::TreeItem, "Lighting");
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "RunService").is_none());
+        harness.get_by_label("Select something in the Explorer to see its properties.");
+
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        let studio = &harness.state().studio;
+        let editor = studio.editor().unwrap();
+        assert_eq!(editor.dm.name(editor.selection.unwrap()).unwrap(), "Baseplate");
+        // A click in a panel gives it the focus, and the keymap its context.
+        assert_eq!(studio.dock().focus().focused, Some(panels::ids::EXPLORER));
+        assert_eq!(studio.dock().context(), Context::Explorer);
+        harness.get_by_label("TRANSFORM");
+        harness.get_by_label("Size");
+        harness.get_by_label("512, 16, 512");
+        harness.get_by_label("Concrete");
+        harness.get_by_label("99, 95, 98");
+
+        // The Assets tab beside the Explorer: the template's one asset is its scene.
+        harness.get_by_role_and_label(Role::Tab, "Assets").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::ListItem, "Scenes/Main.scene");
+        harness.get_by_label("1 asset");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Workspace").is_none());
+        harness.get_by_role_and_label(Role::Tab, "Explorer").click();
+        settle(&mut harness);
+
+        // Collapsing the workspace hides what is in it.
+        click_label(&mut harness, "Collapse Workspace");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Baseplate").is_none());
+        click_label(&mut harness, "Expand Workspace");
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate");
+    }
+
+    #[test]
+    fn the_explorer_search_filters_the_tree() {
+        let mut harness = editing(settings_file("editor-search", None), "Search Game");
+        let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
+        explorer.set_query("spawn");
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Workspace");
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Baseplate").is_none());
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Lighting").is_none());
+
+        // A match is selected like any row.
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
+        settle(&mut harness);
+        harness.get_by_label("12, 1, 12");
+
+        let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
+        explorer.set_query("teleporter");
+        settle(&mut harness);
+        harness.get_by_label_contains("Nothing is called");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Workspace").is_none());
+    }
+
+    #[test]
+    fn a_project_that_cannot_be_opened_goes_back_to_the_projects_with_the_error() {
+        let path = config("editor-broken", Some("[general]\nskip_sign_in = true\n"), None);
+        let broken = path.with_file_name("Broken.mtproj");
+        std::fs::write(&broken, "not a zip archive").unwrap();
+        let mut harness = on_the_projects_page(path, &ScriptedDialog::default());
+        harness.state_mut().studio.open(broken);
+        assert_eq!(harness.state().studio.screen(), Screen::Editor);
+        wait_open(&mut harness);
+        let studio = &harness.state().studio;
+        assert_eq!(studio.screen(), Screen::Projects);
+        assert!(studio.editor().is_none() && studio.open_project().is_none());
+        let error = studio.projects().error().unwrap();
+        assert!(error.starts_with("Could not open \u{201C}Broken\u{201D}."), "{error}");
+        harness.get_by_label_contains("Could not open \u{201C}Broken\u{201D}");
+    }
+
+    #[test]
+    fn the_view_menu_and_close_buttons_change_the_layout_which_persists() {
+        let path = settings_file("editor-layout", None);
+        let layout = path.with_file_name(crate::dock::LAYOUT_FILE);
+        let mut harness = editing(path.clone(), "Layout Game");
+        assert!(!layout.exists(), "nothing changed, nothing written");
+
+        click_label(&mut harness, "View");
+        let output = harness.get_by_role_and_label(Role::MenuItemCheckBox, "Output");
+        assert_eq!(
+            egui_kittest::kittest::NodeT::accesskit_node(&output).toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+        output.click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.dock().is_open(panels::ids::OUTPUT));
+        assert!(harness.query_by_role_and_label(Role::Tab, "Output").is_none());
+        let text = std::fs::read_to_string(&layout).unwrap();
+        assert!(text.contains("\"version\": 1"), "{text}");
+        assert!(!text.contains("\"output\"") && text.contains("\"explorer\""), "{text}");
+
+        // A tab's close button.
+        click_label(&mut harness, "Close Properties");
+        assert!(!harness.state().studio.dock().is_open(panels::ids::PROPERTIES));
+
+        // The gear opens Settings as a panel, as a tab beside the viewport.
+        harness.get_by_role_and_label(Role::Button, "Settings").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_settings_open());
+        harness.get_by_role_and_label(Role::Tab, "Settings");
+        harness.get_by_role_and_label(Role::Tab, "General");
+        drop(harness);
+
+        // Started again, Studio has the same layout.
+        let mut harness = editing(path, "Layout Game");
+        assert_eq!(
+            harness.state().studio.dock().open_panels(),
+            [
+                panels::ids::VIEWPORT,
+                panels::ids::EXPLORER,
+                panels::ids::ASSETS,
+                panels::ids::SETTINGS
+            ]
+        );
+        // The View menu's check marks say the same.
+        click_label(&mut harness, "View");
+        let output = harness.get_by_role_and_label(Role::MenuItemCheckBox, "Output");
+        assert_eq!(
+            egui_kittest::kittest::NodeT::accesskit_node(&output).toggled(),
+            Some(egui::accesskit::Toggled::False)
+        );
+        output.click();
+        settle(&mut harness);
+        assert!(harness.state().studio.dock().is_open(panels::ids::OUTPUT));
+
+        // Reset layout.
+        click_label(&mut harness, "View");
+        harness.get_by_role_and_label(Role::MenuItem, "Reset layout").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.dock().open_panels(), DEFAULT_PANELS);
+        let text = std::fs::read_to_string(&layout).unwrap();
+        assert!(
+            text.contains("\"properties\"") && !text.contains("\"settings\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn reset_layout_is_a_command_and_the_menus_show_bindings() {
+        let path = settings_file("editor-reset", Some("[keybinds]\n\"view.reset_layout\" = [\"F9\"]\n"));
+        let mut harness = editing(path, "Reset Game");
+        harness.state_mut().studio.dock_mut().close(panels::ids::EXPLORER);
+        settle(&mut harness);
+        assert!(!harness.state().studio.dock().is_open(panels::ids::EXPLORER));
+        harness.key_press(Key::F9);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.dock().open_panels(), DEFAULT_PANELS);
+    }
+
+    #[test]
+    fn saving_writes_the_scene_into_the_project() {
+        let mut harness = editing(settings_file("editor-save", None), "Save Game");
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let workspace = editor
+            .dm
+            .service(editor.dm.registry().class_id("Workspace").unwrap())
+            .unwrap();
+        let baseplate = editor
+            .dm
+            .find_first_child(workspace, "Baseplate", false)
+            .unwrap()
+            .unwrap();
+        editor.dm.set_name(baseplate, "Floor".into()).unwrap();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::S);
+        settle(&mut harness);
+        assert!(harness.state().studio.notice().is_none());
+
+        let file = harness.state().studio.editor().unwrap().path().to_path_buf();
+        let mut project = metallic_engine::metallic_project::Project::open(&file).unwrap();
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        project.load_start_scene(&mut dm).unwrap();
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        assert!(dm.find_first_child(workspace, "Floor", false).unwrap().is_some());
+        assert!(dm.find_first_child(workspace, "Baseplate", false).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_output_shows_the_log_with_a_filter_and_clear() {
+        use crate::logging::Origin;
+        use log::Level;
+
+        let path = settings_file("editor-output", None);
+        let mut harness = past_the_splash(path.clone());
+        let log = Arc::new(LogBuffer::new());
+        log.push(Level::Info, "metallic_project", "opened the test game", Origin::Engine);
+        log.push(
+            Level::Warn,
+            "metallic_engine::mesh_assets",
+            "Meshes/Rock.glb is missing",
+            Origin::Engine,
+        );
+        harness.state_mut().studio.set_log(Arc::clone(&log));
+        let project = make_project_once(path.parent().unwrap(), "Output Game");
+        harness.state_mut().studio.open(project);
+        wait_open(&mut harness);
+        harness.get_by_label("opened the test game");
+        harness.get_by_label("Meshes/Rock.glb is missing");
+        // A script's line, logged while the panel shows.
+        log.push(
+            Level::Error,
+            "Workspace.Door.Script:3",
+            "attempt to index nil",
+            Origin::Script,
+        );
+        settle(&mut harness);
+        harness.get_by_label("attempt to index nil");
+
+        harness.get_by_role_and_label(Role::CheckBox, "Messages").click();
+        settle(&mut harness);
+        assert!(harness.query_by_label("opened the test game").is_none());
+        harness.get_by_label("attempt to index nil");
+
+        click_label(&mut harness, "Clear");
+        assert!(harness.query_by_label("attempt to index nil").is_none());
+        harness.get_by_label("The output is empty.");
     }
 
     /// Runs `studio` for `frames` frames of `size` points at `pixels_per_point`, drawn by egui-wgpu on the engine's
@@ -1520,5 +1989,71 @@ mod tests {
         });
         assert!(studio.projects().is_creating());
         write_png(&out.join("215-new-project.png"), shot);
+    }
+
+    /// The editor's screenshot (`cargo test -p metallic_studio -- --ignored screenshot_of_the_editor`): the template
+    /// project open, a part selected. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_the_editor() {
+        use crate::logging::Origin;
+        use log::Level;
+
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-editor", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let log = Arc::new(LogBuffer::new());
+        for (level, source, message) in [
+            (
+                Level::Info,
+                "metallic_studio::app",
+                "projects: opening Space Race.mtproj",
+            ),
+            (
+                Level::Info,
+                "metallic_render",
+                "render: NVIDIA GeForce RTX 3060 (Vulkan)",
+            ),
+            (
+                Level::Info,
+                "metallic_studio::editor",
+                "projects: opened Space Race.mtproj in 41ms",
+            ),
+            (
+                Level::Warn,
+                "metallic_project::scene",
+                "scene: Scenes/Main.scene: unknown property `Glow` on Part",
+            ),
+        ] {
+            log.push(level, source, message, Origin::Engine);
+        }
+        log.push(
+            Level::Info,
+            "Workspace.Spawner.Script:4",
+            "Round 1 starting",
+            Origin::Script,
+        );
+        studio.set_log(log);
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.open(project.clone());
+                for _ in 0..10_000 {
+                    if studio.poll_opening().is_none() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let editor = studio.editor_mut().expect("the project opened");
+                let workspace = editor
+                    .dm
+                    .service(editor.dm.registry().class_id("Workspace").unwrap())
+                    .unwrap();
+                let part = editor.dm.find_first_child(workspace, "SpawnLocation", false).unwrap();
+                editor.select(part);
+            }
+        });
+        assert_eq!(studio.screen(), Screen::Editor);
+        write_png(&out.join("216-editor.png"), shot);
     }
 }
