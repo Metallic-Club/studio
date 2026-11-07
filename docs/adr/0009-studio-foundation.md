@@ -170,7 +170,7 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
 - **Repeat policy:** commands ignore key auto-repeat by default (holding Primary+D duplicates once). Navigation and
   nudges opt in.
 - **Conflicts:** detected across overlapping contexts. Instead of only refusing, the capture dialog offers
-  **Replace** (unbind the other), **Swap**, or **Cancel**. Menus and tooltips show every binding of a command, not
+  **Replace** (unbind the other), **Swap**, or **Cancel**. (Since #266, the command's row offers them: there is no dialog.) Menus and tooltips show every binding of a command, not
   just the first.
 - **Storage:** only overrides are saved (`[keybinds] "file.save" = ["Primary+S"]`; `[]` means unbound). A new default
   never takes a key the user already uses, and Studio tells the user when that happens. A keymap can be **exported and
@@ -181,6 +181,10 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   - **Sections** (#264): commands are grouped in collapsible sections from their category path (`Viewport/Fly camera`
     is Fly camera inside Viewport), so sections nest. A top-level section is a bordered card; one inside it is
     indented along a line. A section with a changed command shows Reset, which resets everything in it.
+  - **Recording in place** (#266): the shortcut being recorded shows "..." (then what is held) instead of a dialog.
+    Everything held counts, in any order, and the binding is saved once every key and button is released; a click
+    on it records a mouse button, the wheel over it the wheel. Esc or a click elsewhere cancels, and a recording
+    that is no longer on screen stops. Right-click → "Record a two-step sequence" records Ctrl+K, then S.
 
 ### Viewport: the engine renders, the UI shows it
 

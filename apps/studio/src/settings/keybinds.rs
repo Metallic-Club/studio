@@ -1,16 +1,18 @@
-//! The Keybinds page of the Settings window (ADR 0009, Keybinds): every command by category, searchable by name,
-//! key or description. Click a shortcut to change it, right-click to add or remove one, reset one or all; conflicts
-//! show under the command, and the capture dialog settles a new one with Replace, Swap or Cancel. A keymap file can be
-//! exported and imported.
+//! The Keybinds page of the Settings window (ADR 0009, Keybinds): every command in nested sections, searchable by
+//! name, key or description. Click a shortcut to change it, + to add one, right-click to remove one, reset one, a
+//! section or all; conflicts show under the command, and a new one is settled in its row with Replace, Swap or Cancel.
+//! A keymap file can be exported and imported.
 //!
-//! The capture dialog is the one place besides a text field that reads keys itself: it records the next chord, and
-//! Esc cancels it. Studio does not run the keymap while it is open.
+//! Recording happens in place (#266): the shortcut being recorded shows "..." (then what is held), and the binding is
+//! saved once every key and button is released, so a combination can be pressed in any order. [`KeybindsPage::listen`]
+//! is the one place besides a text field that reads keys itself, before anything is drawn; Esc or a click elsewhere
+//! cancels. Studio does not run the keymap meanwhile.
 
 use std::path::PathBuf;
 
 use egui::{
-    Align, Color32, CornerRadius, Event, FontFamily, FontId, Id, Key, Label, Layout, Modal, Rect, Response, RichText,
-    Sense, Stroke, TextEdit, Ui, vec2,
+    Align, Color32, CornerRadius, Event, FontFamily, FontId, Id, Key, Label, Layout, Rect, Response, RichText, Sense,
+    Stroke, TextEdit, Ui, vec2,
 };
 use metallic_engine::metallic_platform::{AppId, UserPaths};
 
@@ -23,7 +25,10 @@ use crate::theme::{ButtonKind, button, current_colors, fonts};
 /// The keymap file's name, in Studio's config folder unless the user types another path.
 pub const KEYMAP_FILE: &str = "keymap.toml";
 
-/// The Keybinds page's own state: its filter, the capture dialog, and the keymap file.
+/// What the shortcut being recorded shows while nothing is held.
+pub const LISTENING: &str = "...";
+
+/// The Keybinds page's own state: its filter, the recording, and the keymap file.
 #[derive(Debug, Default)]
 pub struct KeybindsPage {
     filter: String,
@@ -34,7 +39,7 @@ pub struct KeybindsPage {
     status: Option<(bool, String)>,
 }
 
-/// The capture dialog: which binding of which command is being recorded, and how far it got.
+/// A recording: which binding of which command, and how far it got.
 #[derive(Clone, Debug, PartialEq)]
 struct Capture {
     command: &'static str,
@@ -44,8 +49,25 @@ struct Capture {
     sequence: bool,
     /// The first step, when recording a sequence.
     first: Option<Chord>,
+    /// What is held so far: the last key or button pressed, with every modifier held since. Saved once everything is
+    /// released.
+    held: Option<Chord>,
     /// The binding recorded, waiting for the user to settle its conflicts.
     recorded: Option<Binding>,
+    /// Where the shortcut being recorded was last drawn: a click there records a mouse button, the wheel over it
+    /// records the wheel, and a click anywhere else cancels.
+    chip: Option<Rect>,
+    /// Whether the page drew it last frame: a recording nobody can see (Settings closed, another page, a collapsed
+    /// section) is cancelled.
+    seen: bool,
+}
+
+/// What a command's row asks the page to do.
+enum RowAction {
+    /// Record binding `slot` (`None`: a new one), in one step or two.
+    Record(Option<usize>, bool),
+    /// Settle the recorded binding's conflict so, or cancel it (`None`).
+    Settle(Option<Resolution>),
 }
 
 impl KeybindsPage {
@@ -59,19 +81,27 @@ impl KeybindsPage {
         self.filter = filter.into();
     }
 
-    /// Whether the capture dialog is open: Studio does not run the keymap meanwhile.
+    /// Whether a shortcut is being recorded: Studio does not run the keymap meanwhile.
     pub fn is_capturing(&self) -> bool {
         self.capture.is_some()
     }
 
-    /// Opens the capture dialog for command `id`'s binding at `slot`, or to add one when `slot` is `None`.
+    /// Records command `id`'s binding at `slot`, or a new one when `slot` is `None`.
     pub fn capture(&mut self, id: &'static str, slot: Option<usize>) {
+        self.record(id, slot, false);
+    }
+
+    /// Records command `id`'s binding at `slot` (or a new one), as a two-step sequence when `sequence`.
+    fn record(&mut self, id: &'static str, slot: Option<usize>, sequence: bool) {
         self.capture = Some(Capture {
             command: id,
             slot,
-            sequence: false,
+            sequence,
             first: None,
+            held: None,
             recorded: None,
+            chip: None,
+            seen: true,
         });
     }
 
@@ -198,9 +228,7 @@ impl KeybindsPage {
     /// A section's commands, then the sections inside it.
     fn section_body(&mut self, ui: &mut Ui, section: &Section, keymap: &mut Keymap, searching: bool) {
         for command in &section.commands {
-            if let Some(request) = command_row(ui, command, keymap) {
-                self.capture(request.0, request.1);
-            }
+            self.command_row(ui, command, keymap);
         }
         for inner in &section.sections {
             ui.add_space(space::S3);
@@ -254,123 +282,6 @@ impl KeybindsPage {
                 )
                 .wrap(),
             );
-        }
-    }
-
-    /// The capture dialog, while open: records a chord (or two), then applies it or asks how to settle a conflict.
-    pub(super) fn dialog(&mut self, ctx: &egui::Context, keymap: &mut Keymap) {
-        let Some(mut capture) = self.capture.take() else {
-            return;
-        };
-        let Some(index) = keymap.registry().index(capture.command) else {
-            return;
-        };
-        let command = keymap.registry().commands()[index];
-        let colors = current_colors(ctx);
-        let p = colors.palette;
-        let mut open = true;
-        Modal::new(Id::unique("metallic.keybinds.capture")).show(ctx, |ui| {
-            ui.set_width(420.0);
-            let verb = if capture.slot.is_some() { "Change" } else { "Add" };
-            ui.label(
-                RichText::new(format!("{verb} a shortcut for {}", command.title))
-                    .font(fonts::named(fonts::STRONG, text::BODY_LG))
-                    .color(p.text),
-            );
-            ui.add_space(space::S4);
-            match capture.recorded {
-                None => {
-                    let shown = match capture.first {
-                        Some(first) => format!("{}, \u{2026}", keymap.label(&Binding::single(first))),
-                        None => "Press a key".to_owned(),
-                    };
-                    let pad = key_pad(ui, &shown);
-                    if let Some(done) = record(ui.ctx(), &mut capture, pad, keymap, index) {
-                        match done {
-                            Recorded::Cancelled => open = false,
-                            Recorded::Binding(binding) => {
-                                if keymap.conflicts_with(command.id, &binding).is_empty() {
-                                    keymap.assign(command.id, capture.slot, binding, None);
-                                    open = false;
-                                } else {
-                                    capture.recorded = Some(binding);
-                                }
-                            }
-                        }
-                    }
-                    ui.add(
-                        Label::new(
-                            RichText::new("Or click or scroll in the box to use the mouse. Esc cancels.")
-                                .size(text::SMALL)
-                                .color(p.muted),
-                        )
-                        .wrap(),
-                    );
-                    ui.add_space(space::S3);
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut capture.sequence, "Two-step sequence (such as Ctrl+K, then S)");
-                    });
-                    ui.add_space(space::S4);
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        if button(ui, ButtonKind::Secondary, "Cancel").clicked() {
-                            open = false;
-                        }
-                    });
-                }
-                Some(binding) => {
-                    let conflicts = keymap.conflicts_with(command.id, &binding);
-                    let label = keymap.label(&binding);
-                    ui.label(
-                        RichText::new(format!("{label} is already used by"))
-                            .size(text::BODY)
-                            .color(p.muted),
-                    );
-                    for conflict in &conflicts {
-                        if let Some(other) = keymap.registry().command(conflict.command) {
-                            ui.label(
-                                RichText::new(format!("{} ({})", other.title, contexts_label(other.contexts)))
-                                    .font(fonts::named(fonts::STRONG, text::BODY))
-                                    .color(p.text),
-                            );
-                        }
-                    }
-                    let old = capture
-                        .slot
-                        .and_then(|slot| keymap.bindings(command.id).get(slot).copied());
-                    let can_swap = conflicts.len() == 1 && old.is_some();
-                    ui.add_space(space::S3);
-                    let explain = match old {
-                        Some(old) if can_swap => format!(
-                            "Replace takes it from them. Swap gives them {} instead.",
-                            keymap.label(&old)
-                        ),
-                        _ => "Replace takes it from them.".to_owned(),
-                    };
-                    ui.add(Label::new(RichText::new(explain).size(text::SMALL).color(p.muted)).wrap());
-                    ui.add_space(space::S5);
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        if button(ui, ButtonKind::Primary, "Replace").clicked() {
-                            keymap.assign(command.id, capture.slot, binding, Some(Resolution::Replace));
-                            open = false;
-                        }
-                        let swap = ui.add_enabled_ui(can_swap, |ui| button(ui, ButtonKind::Secondary, "Swap"));
-                        if swap.inner.clicked() {
-                            keymap.assign(command.id, capture.slot, binding, Some(Resolution::Swap));
-                            open = false;
-                        }
-                        if button(ui, ButtonKind::Secondary, "Cancel").clicked() {
-                            open = false;
-                        }
-                    });
-                    // Esc still cancels here.
-                    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape)) {
-                        open = false;
-                    }
-                }
-            }
-        });
-        if open {
-            self.capture = Some(capture);
         }
     }
 }
@@ -520,106 +431,400 @@ fn section_header(ui: &mut Ui, section: &Section, keymap: &mut Keymap, open: boo
     toggle.clicked()
 }
 
-/// What the capture dialog recorded this frame.
-enum Recorded {
-    Cancelled,
-    Binding(Binding),
-}
-
-/// Reads this frame's input for the capture dialog: a key (by place for a command that binds places), a mouse button
-/// or the wheel in `pad`. Takes the key events, so nothing else in the dialog acts on them.
-fn record(ctx: &egui::Context, capture: &mut Capture, pad: Rect, keymap: &Keymap, index: usize) -> Option<Recorded> {
-    let physical = keymap.registry().prefers_physical(index);
-    let drag = keymap.registry().prefers_drag(index);
-    let platform = keymap.platform();
-    let events = ctx.input_mut(|input| {
-        let events = input.events.clone();
-        input
-            .events
-            .retain(|event| !matches!(event, Event::Key { .. } | Event::Text(_)));
-        events
-    });
-    let hovering = ctx
-        .input(|input| input.pointer.hover_pos())
-        .is_some_and(|at| pad.contains(at));
-    for event in events {
-        let chord = match event {
-            Event::Key {
-                key: Key::Escape,
-                pressed: true,
-                modifiers,
-                ..
-            } if modifiers.is_none() => return Some(Recorded::Cancelled),
-            Event::Key {
-                key,
-                physical_key,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            } => {
-                let trigger = if physical {
-                    Trigger::physical(physical_key.unwrap_or(key))
-                } else {
-                    Trigger::logical(key)
-                };
-                Chord::new(Mods::from_egui(modifiers, platform), trigger)
-            }
-            Event::PointerButton {
-                pos,
-                button,
-                pressed: true,
-                modifiers,
-            } if pad.contains(pos) && capture.first.is_none() => {
-                let button = MouseButton::from_egui(button);
-                let trigger = if drag {
-                    Trigger::Drag(button)
-                } else {
-                    Trigger::Mouse(button)
-                };
-                return Some(Recorded::Binding(Binding::single(Chord::new(
-                    Mods::from_egui(modifiers, platform),
-                    trigger,
-                ))));
-            }
-            Event::MouseWheel { modifiers, .. } if hovering && capture.first.is_none() => {
-                return Some(Recorded::Binding(Binding::single(Chord::new(
-                    Mods::from_egui(modifiers, platform),
-                    Trigger::Wheel,
-                ))));
-            }
-            _ => continue,
+impl KeybindsPage {
+    /// Reads this frame's input for the recording, before anything is drawn, and takes the key events so they reach
+    /// nothing else: a key (by place for a command that binds places), a mouse button pressed on the shortcut being
+    /// recorded, or the wheel over it. Everything held counts, in any order, and the binding is saved once every key
+    /// and button is released (#266); with a conflict, the command's row asks how to settle it. Esc, or a click
+    /// anywhere else, cancels.
+    pub fn listen(&mut self, ctx: &egui::Context, keymap: &mut Keymap) {
+        let Some(mut capture) = self.capture.take() else {
+            return;
         };
-        match capture.first {
-            Some(first) => return Some(Recorded::Binding(Binding::sequence(first, chord))),
-            None if capture.sequence => capture.first = Some(chord),
-            None => return Some(Recorded::Binding(Binding::single(chord))),
+        let Some(index) = keymap.registry().index(capture.command) else {
+            return;
+        };
+        if !capture.seen {
+            // Not drawn last frame: nobody can see it, so it stops.
+            return;
+        }
+        capture.seen = false;
+        let events = ctx.input_mut(|input| {
+            let events = input.events.clone();
+            input
+                .events
+                .retain(|event| !matches!(event, Event::Key { .. } | Event::Text(_)));
+            events
+        });
+        if capture.recorded.is_some() {
+            // Its row's buttons settle it; Esc still cancels.
+            let escape = events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::Key {
+                        key: Key::Escape,
+                        pressed: true,
+                        ..
+                    }
+                )
+            });
+            if !escape {
+                self.capture = Some(capture);
+            }
+            return;
+        }
+        let physical = keymap.registry().prefers_physical(index);
+        let drag = keymap.registry().prefers_drag(index);
+        let platform = keymap.platform();
+        let (modifiers, keys_down, pointer_down, hover) = ctx.input(|input| {
+            (
+                input.modifiers,
+                !input.keys_down.is_empty(),
+                input.pointer.any_down(),
+                input.pointer.hover_pos(),
+            )
+        });
+        let on_chip = |at: egui::Pos2| capture.chip.is_some_and(|chip| chip.contains(at));
+        let mut pressed = Vec::new();
+        for event in events {
+            match event {
+                Event::Key {
+                    key: Key::Escape,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.is_none() && capture.held.is_none() => return,
+                Event::Key {
+                    key,
+                    physical_key,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                } => {
+                    let trigger = if physical {
+                        Trigger::physical(physical_key.unwrap_or(key))
+                    } else {
+                        Trigger::logical(key)
+                    };
+                    pressed.push((modifiers, trigger));
+                }
+                Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: true,
+                    modifiers,
+                } => {
+                    if on_chip(pos) && capture.first.is_none() {
+                        let button = MouseButton::from_egui(button);
+                        let trigger = if drag {
+                            Trigger::Drag(button)
+                        } else {
+                            Trigger::Mouse(button)
+                        };
+                        pressed.push((modifiers, trigger));
+                    } else if capture.held.is_none() && pressed.is_empty() {
+                        // A click anywhere else cancels.
+                        return;
+                    }
+                }
+                Event::MouseWheel { modifiers, .. } if hover.is_some_and(on_chip) && capture.first.is_none() => {
+                    pressed.push((modifiers, Trigger::Wheel));
+                }
+                _ => {}
+            }
+        }
+        // The last key or button pressed, with every modifier held since the first: held before it or pressed after.
+        for (modifiers, trigger) in pressed {
+            let mods = capture.held.map_or(Mods::NONE, |held| held.mods);
+            capture.held = Some(Chord::new(union(mods, Mods::from_egui(modifiers, platform)), trigger));
+        }
+        if let Some(held) = &mut capture.held {
+            held.mods = union(held.mods, Mods::from_egui(modifiers, platform));
+        }
+        let released = !keys_down && !pointer_down && modifiers.is_none();
+        if released && let Some(chord) = capture.held.take() {
+            match capture.first {
+                None if capture.sequence => capture.first = Some(chord),
+                first => {
+                    let binding = match first {
+                        Some(first) => Binding::sequence(first, chord),
+                        None => Binding::single(chord),
+                    };
+                    if keymap.conflicts_with(capture.command, &binding).is_empty() {
+                        keymap.assign(capture.command, capture.slot, binding, None);
+                        return;
+                    }
+                    capture.recorded = Some(binding);
+                }
+            }
+        }
+        if capture.held.is_some() || capture.first.is_some() {
+            // What is held shows as it changes.
+            ctx.request_repaint();
+        }
+        self.capture = Some(capture);
+    }
+
+    /// One command: its name, description and conflicts on the left; its shortcuts, + and Reset on the right; and
+    /// while a binding it recorded clashes, how to settle that under it.
+    pub(super) fn command_row(&mut self, ui: &mut Ui, command: &Command, keymap: &mut Keymap) {
+        let colors = current_colors(ui.ctx());
+        let p = colors.palette;
+        let mut action = None;
+        // This command's recording, if it has one: which slot, and what it shows.
+        let recording = self.capture.as_ref().filter(|capture| capture.command == command.id);
+        let listening = recording.map(|capture| (capture.slot, listening_text(capture, keymap)));
+        let clash = recording.and_then(|capture| capture.recorded.map(|binding| (binding, capture.slot)));
+        let mut chip_rect = None;
+        ui.push_id(command.id, |ui| {
+            ui.horizontal(|ui| {
+                let words = (ui.available_width() - CONTROL_WIDTH - space::S6).max(160.0);
+                let words = ui.allocate_ui_with_layout(vec2(words, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(words);
+                    ui.add_space(space::S3);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(command.title)
+                                .font(fonts::named(fonts::STRONG, text::BODY))
+                                .color(p.text),
+                        );
+                        if command.contexts != [Context::Global] {
+                            ui.label(
+                                RichText::new(contexts_label(command.contexts))
+                                    .size(text::SMALL)
+                                    .color(p.subtle),
+                            );
+                        }
+                    });
+                    ui.add(Label::new(RichText::new(command.description).size(text::SMALL).color(p.muted)).wrap());
+                    for conflict in keymap.conflicts(command.id) {
+                        let other = keymap
+                            .registry()
+                            .command(conflict.command)
+                            .map_or(conflict.command, |other| other.title);
+                        warning_line(
+                            ui,
+                            &format!("{} is also bound to {other}", keymap.label(&conflict.mine)),
+                        );
+                    }
+                    ui.add_space(space::S3);
+                });
+                // Right-click on the command's name or description adds a binding. Over the words only: the chips
+                // beside them take their own clicks.
+                let response = ui.interact(words.response.rect, ui.scope_id().with("words"), Sense::click());
+                response.context_menu(|ui| {
+                    add_menu(ui, &mut action);
+                    if !keymap.is_default(command.id) && ui.button("Reset to default").clicked() {
+                        keymap.reset(command.id);
+                    }
+                });
+                ui.allocate_ui_with_layout(
+                    vec2(CONTROL_WIDTH, size::CONTROL),
+                    Layout::right_to_left(Align::Center),
+                    |ui| {
+                        ui.set_width(CONTROL_WIDTH);
+                        ui.spacing_mut().item_spacing.x = space::S3;
+                        if !keymap.is_default(command.id) {
+                            let reset = button(ui, ButtonKind::Quiet, "Reset").on_hover_text("Back to the default");
+                            if reset.clicked() {
+                                keymap.reset(command.id);
+                            }
+                        }
+                        // #265: + after the shortcuts adds another.
+                        let add = add_button(ui, command.title);
+                        if add.clicked() {
+                            action = Some(RowAction::Record(None, false));
+                        }
+                        add.context_menu(|ui| add_menu(ui, &mut action));
+                        // A new binding being recorded: after the others.
+                        if let Some((None, shown)) = &listening {
+                            chip_rect = Some(listening_chip(ui, shown).rect);
+                        }
+                        let bindings = keymap.bindings(command.id).to_vec();
+                        if bindings.is_empty() && listening.is_none() {
+                            let chip = chip(ui, "Unbound", false);
+                            if chip.clicked() {
+                                action = Some(RowAction::Record(None, false));
+                            }
+                            chip.context_menu(|ui| add_menu(ui, &mut action));
+                        }
+                        // Right to left: the last binding first, so they read in order.
+                        for (slot, binding) in bindings.iter().enumerate().rev() {
+                            if let Some((Some(at), shown)) = &listening
+                                && *at == slot
+                            {
+                                chip_rect = Some(listening_chip(ui, shown).rect);
+                                continue;
+                            }
+                            let chip = chip(ui, &keymap.label(binding), true);
+                            if chip.clicked() {
+                                action = Some(RowAction::Record(Some(slot), false));
+                            }
+                            chip.context_menu(|ui| {
+                                if ui.button("Record a two-step sequence").clicked() {
+                                    action = Some(RowAction::Record(Some(slot), true));
+                                }
+                                add_menu(ui, &mut action);
+                                if ui.button("Remove binding").clicked() {
+                                    keymap.remove_binding(command.id, slot);
+                                }
+                                if !keymap.is_default(command.id) && ui.button("Reset to default").clicked() {
+                                    keymap.reset(command.id);
+                                }
+                            });
+                        }
+                    },
+                );
+            });
+            if let Some((binding, slot)) = clash
+                && let Some(settle) = clash_row(ui, command, binding, slot, keymap)
+            {
+                action = Some(RowAction::Settle(settle));
+            }
+            let rect = ui.min_rect();
+            ui.painter().hline(
+                rect.x_range(),
+                ui.cursor().top() - ui.spacing().item_spacing.y / 2.0,
+                Stroke::new(size::BORDER, p.border),
+            );
+        });
+        if let Some(capture) = self.capture.as_mut().filter(|capture| capture.command == command.id) {
+            capture.seen = true;
+            capture.chip = chip_rect;
+        }
+        match action {
+            Some(RowAction::Record(slot, sequence)) => self.record(command.id, slot, sequence),
+            Some(RowAction::Settle(settle)) => {
+                if let (Some(resolution), Some(capture)) = (settle, &self.capture)
+                    && let Some(binding) = capture.recorded
+                {
+                    keymap.assign(command.id, capture.slot, binding, Some(resolution));
+                }
+                self.capture = None;
+            }
+            None => {}
         }
     }
-    None
 }
 
-/// The box that shows what is being pressed. Returns where it is, for the mouse.
-fn key_pad(ui: &mut Ui, shown: &str) -> Rect {
+/// Both sets of modifiers: what was held at any time while recording.
+fn union(a: Mods, b: Mods) -> Mods {
+    Mods {
+        primary: a.primary || b.primary,
+        ctrl: a.ctrl || b.ctrl,
+        shift: a.shift || b.shift,
+        alt: a.alt || b.alt,
+        super_key: a.super_key || b.super_key,
+    }
+}
+
+/// What the shortcut being recorded shows: "..." until something is held, then what is held; a sequence's first
+/// step before it.
+fn listening_text(capture: &Capture, keymap: &Keymap) -> String {
+    let first = capture
+        .first
+        .map(|first| format!("{}, ", keymap.label(&Binding::single(first))));
+    let held = match capture.held {
+        Some(held) => keymap.label(&Binding::single(held)),
+        None => LISTENING.to_owned(),
+    };
+    match capture.recorded {
+        Some(recorded) => keymap.label(&recorded),
+        None => format!("{}{held}", first.unwrap_or_default()),
+    }
+}
+
+/// The right-click choices that add a binding.
+fn add_menu(ui: &mut Ui, action: &mut Option<RowAction>) {
+    if ui.button("Add binding").clicked() {
+        *action = Some(RowAction::Record(None, false));
+    }
+    if ui.button("Add a two-step sequence").clicked() {
+        *action = Some(RowAction::Record(None, true));
+    }
+}
+
+/// A warning icon and a line beside it.
+fn warning_line(ui: &mut Ui, line: &str) {
+    let colors = current_colors(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = space::S2;
+        ui.label(
+            RichText::new(fonts::icon::WARNING.to_string())
+                .font(fonts::named(fonts::ICONS, text::SMALL))
+                .color(colors.accent),
+        );
+        ui.add(Label::new(RichText::new(line).size(text::SMALL).color(colors.palette.text)).wrap());
+    });
+}
+
+/// Under a command whose new binding clashes: who has it, and Replace, Swap (when there is one other and an old
+/// binding to give it) or Cancel. Returns the choice: `Some(None)` to cancel.
+fn clash_row(
+    ui: &mut Ui,
+    command: &Command,
+    binding: Binding,
+    slot: Option<usize>,
+    keymap: &Keymap,
+) -> Option<Option<Resolution>> {
+    let p = current_colors(ui.ctx()).palette;
+    let conflicts = keymap.conflicts_with(command.id, &binding);
+    let owners: Vec<String> = conflicts
+        .iter()
+        .filter_map(|conflict| keymap.registry().command(conflict.command))
+        .map(|other| format!("{} ({})", other.title, contexts_label(other.contexts)))
+        .collect();
+    let old = slot.and_then(|slot| keymap.bindings(command.id).get(slot).copied());
+    let can_swap = conflicts.len() == 1 && old.is_some();
+    let mut choice = None;
+    ui.add_space(space::S2);
+    warning_line(
+        ui,
+        &format!("{} is already used by {}.", keymap.label(&binding), owners.join(", ")),
+    );
+    let explain = match old {
+        Some(old) if can_swap => format!(
+            "Replace takes it from them. Swap gives them {} instead.",
+            keymap.label(&old)
+        ),
+        _ => "Replace takes it from them.".to_owned(),
+    };
+    ui.add(Label::new(RichText::new(explain).size(text::SMALL).color(p.muted)).wrap());
+    ui.add_space(space::S2);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = space::S3;
+        if button(ui, ButtonKind::Primary, "Replace").clicked() {
+            choice = Some(Some(Resolution::Replace));
+        }
+        let swap = ui.add_enabled_ui(can_swap, |ui| button(ui, ButtonKind::Secondary, "Swap"));
+        if swap.inner.clicked() {
+            choice = Some(Some(Resolution::Swap));
+        }
+        if button(ui, ButtonKind::Secondary, "Cancel").clicked() {
+            choice = Some(None);
+        }
+    });
+    ui.add_space(space::S3);
+    choice
+}
+
+/// The shortcut being recorded: what it shows, outlined in the accent while Studio listens.
+fn listening_chip(ui: &mut Ui, shown: &str) -> Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 72.0), Sense::click());
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(radius::INPUT),
-        p.input,
-        // The 3 px focus outline: the dialog is listening.
-        Stroke::new(size::ACCENT_BAR, colors.accent),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        shown,
-        FontId::new(text::BODY_LG, FontFamily::Monospace),
-        p.text,
-    );
-    ui.add_space(space::S3);
-    rect
+    let text = RichText::new(shown)
+        .font(FontId::new(text::MONO, FontFamily::Monospace))
+        .color(p.text);
+    // Hover only: a click on it records a mouse button (KeybindsPage::listen), it does not start again.
+    ui.add(
+        egui::Button::new(text)
+            .sense(Sense::hover())
+            .fill(p.input)
+            .stroke(Stroke::new(size::BORDER, colors.accent))
+            .corner_radius(CornerRadius::same(radius::ITEM))
+            .min_size(vec2(26.0, 26.0)),
+    )
+    .on_hover_text("Press the keys, then let go. Click here for a mouse button. Esc cancels.")
 }
 
 /// Whether every word of `query` is in the command's name, description, category or id, or one of its keys as shown.
@@ -647,131 +852,6 @@ fn contexts_label(contexts: &[Context]) -> String {
         .map(|context| context.label())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// One command: its name, description and conflicts on the left; its shortcuts and Reset on the right. Returns the
-/// binding to capture when one was asked for: the command and the slot (`None` to add).
-pub(super) fn command_row(
-    ui: &mut Ui,
-    command: &Command,
-    keymap: &mut Keymap,
-) -> Option<(&'static str, Option<usize>)> {
-    let colors = current_colors(ui.ctx());
-    let p = colors.palette;
-    let mut capture = None;
-    ui.push_id(command.id, |ui| {
-        ui.horizontal(|ui| {
-            let words = (ui.available_width() - CONTROL_WIDTH - space::S6).max(160.0);
-            let words = ui.allocate_ui_with_layout(vec2(words, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(words);
-                ui.add_space(space::S3);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(command.title)
-                            .font(fonts::named(fonts::STRONG, text::BODY))
-                            .color(p.text),
-                    );
-                    if command.contexts != [Context::Global] {
-                        ui.label(
-                            RichText::new(contexts_label(command.contexts))
-                                .size(text::SMALL)
-                                .color(p.subtle),
-                        );
-                    }
-                });
-                ui.add(Label::new(RichText::new(command.description).size(text::SMALL).color(p.muted)).wrap());
-                for conflict in keymap.conflicts(command.id) {
-                    let other = keymap
-                        .registry()
-                        .command(conflict.command)
-                        .map_or(conflict.command, |other| other.title);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = space::S2;
-                        ui.label(
-                            RichText::new(fonts::icon::WARNING.to_string())
-                                .font(fonts::named(fonts::ICONS, text::SMALL))
-                                .color(colors.accent),
-                        );
-                        ui.add(
-                            Label::new(
-                                RichText::new(format!("{} is also bound to {other}", keymap.label(&conflict.mine)))
-                                    .size(text::SMALL)
-                                    .color(p.text),
-                            )
-                            .wrap(),
-                        );
-                    });
-                }
-                ui.add_space(space::S3);
-            });
-            // Right-click on the command's name or description adds a binding. Over the words only: the chips beside
-            // them take their own clicks.
-            let response = ui.interact(words.response.rect, ui.scope_id().with("words"), Sense::click());
-            response.context_menu(|ui| {
-                if ui.button("Add binding").clicked() {
-                    capture = Some((command.id, None));
-                }
-                if !keymap.is_default(command.id) && ui.button("Reset to default").clicked() {
-                    keymap.reset(command.id);
-                }
-            });
-            ui.allocate_ui_with_layout(
-                vec2(CONTROL_WIDTH, size::CONTROL),
-                Layout::right_to_left(Align::Center),
-                |ui| {
-                    ui.set_width(CONTROL_WIDTH);
-                    ui.spacing_mut().item_spacing.x = space::S3;
-                    if !keymap.is_default(command.id) {
-                        let reset = button(ui, ButtonKind::Quiet, "Reset").on_hover_text("Back to the default");
-                        if reset.clicked() {
-                            keymap.reset(command.id);
-                        }
-                    }
-                    // #265: + after the shortcuts adds another.
-                    if add_button(ui, command.title).clicked() {
-                        capture = Some((command.id, None));
-                    }
-                    let bindings = keymap.bindings(command.id).to_vec();
-                    if bindings.is_empty() {
-                        let chip = chip(ui, "Unbound", false);
-                        if chip.clicked() {
-                            capture = Some((command.id, None));
-                        }
-                        chip.context_menu(|ui| {
-                            if ui.button("Add binding").clicked() {
-                                capture = Some((command.id, None));
-                            }
-                        });
-                    }
-                    // Right to left: the last binding first, so they read in order.
-                    for (slot, binding) in bindings.iter().enumerate().rev() {
-                        let chip = chip(ui, &keymap.label(binding), true);
-                        if chip.clicked() {
-                            capture = Some((command.id, Some(slot)));
-                        }
-                        chip.context_menu(|ui| {
-                            if ui.button("Add binding").clicked() {
-                                capture = Some((command.id, None));
-                            }
-                            if ui.button("Remove binding").clicked() {
-                                keymap.remove_binding(command.id, slot);
-                            }
-                            if !keymap.is_default(command.id) && ui.button("Reset to default").clicked() {
-                                keymap.reset(command.id);
-                            }
-                        });
-                    }
-                },
-            );
-        });
-        let rect = ui.min_rect();
-        ui.painter().hline(
-            rect.x_range(),
-            ui.cursor().top() - ui.spacing().item_spacing.y / 2.0,
-            Stroke::new(size::BORDER, p.border),
-        );
-    });
-    capture
 }
 
 /// The small + after a command's shortcuts (#265): adds another, as right-click → Add binding does.

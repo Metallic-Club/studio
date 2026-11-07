@@ -425,15 +425,15 @@ impl SettingsWindow {
         &mut self.keybinds
     }
 
-    /// Whether the keybind capture dialog is open: Studio does not run the keymap meanwhile.
+    /// Whether a keybind is being recorded: Studio does not run the keymap meanwhile.
     pub fn is_capturing(&self) -> bool {
         self.keybinds.is_capturing()
     }
 
-    /// The keybind capture dialog, while a capture is going on, over `ctx`. Studio calls it every frame, whether the
-    /// pages are in the window or docked.
-    pub fn dialog(&mut self, ctx: &egui::Context, keymap: &mut Keymap) {
-        self.keybinds.dialog(ctx, keymap);
+    /// Reads the frame's input for a keybind being recorded (#266). Studio calls it every frame before anything is
+    /// drawn, in place of the keymap, so the keys reach nothing else.
+    pub fn listen(&mut self, ctx: &egui::Context, keymap: &mut Keymap) {
+        self.keybinds.listen(ctx, keymap);
     }
 
     /// Draws the window, if open, over `ctx`, changing `settings` and the `keymap` as the user does.
@@ -551,9 +551,7 @@ impl SettingsWindow {
         if !commands.is_empty() {
             section_label(ui, Category::Keybinds.label());
             for command in &commands {
-                if let Some((id, slot)) = keybinds::command_row(ui, command, keymap) {
-                    self.keybinds.capture(id, slot);
-                }
+                self.keybinds.command_row(ui, command, keymap);
             }
         }
     }

@@ -762,7 +762,8 @@ impl Studio {
     /// screen or panel reads keys itself.
     fn run_keymap(&mut self, ctx: &egui::Context) {
         if self.settings_window.is_capturing() {
-            // The capture dialog is recording a key: it must not also run a command.
+            // A keybind is being recorded: its keys are recorded, not obeyed (#266).
+            self.settings_window.listen(ctx, &mut self.keymap);
             return;
         }
         // In the editor, the focused panel's context, and the one under the pointer for navigation, unless the
@@ -824,11 +825,10 @@ impl Studio {
         }
     }
 
-    /// The Settings window and its capture dialog, the notices, and saving what changed since `before`.
+    /// The Settings window, the notices, and saving what changed since `before`.
     fn settings_ui(&mut self, ctx: &egui::Context, before: &StudioSettings) {
         self.settings_window
             .show(ctx, self.settings.settings_mut(), &mut self.keymap);
-        self.settings_window.dialog(ctx, &mut self.keymap);
         if self.keymap.take_changed() {
             self.settings.settings_mut().keybinds.overrides = self.keymap.overrides().clone();
         }
@@ -969,6 +969,7 @@ mod tests {
     use super::*;
     use crate::projects::dialog::ScriptedDialog;
     use crate::projects::{PROJECTS_FILE, View, templates_dir};
+    use crate::settings::keybinds::LISTENING;
     use crate::settings::{Category, SETTINGS_FILE};
     use crate::theme::tokens::{self, Accent};
     use crate::theme::{ThemeMode, fonts};
@@ -1427,7 +1428,8 @@ mod tests {
         harness.get_by_label(&settings).click();
         settle(&mut harness);
         assert!(harness.state_mut().studio.settings_window().is_capturing());
-        harness.get_by_label("Change a shortcut for Settings");
+        // In place, no dialog (#266).
+        harness.get_by_label(LISTENING);
         // While capturing, the keymap does not run: Primary+, is recorded (the default again), not obeyed.
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         settle(&mut harness);
@@ -1474,11 +1476,9 @@ mod tests {
         );
 
         // A two-step sequence, in place of F10.
-        harness.get_by_label("F10").click();
+        harness.get_by_label("F10").click_secondary();
         settle(&mut harness);
-        harness
-            .get_by_role_and_label(Role::CheckBox, "Two-step sequence (such as Ctrl+K, then S)")
-            .click();
+        harness.get_by_label("Record a two-step sequence").click();
         settle(&mut harness);
         harness.key_press_modifiers(Modifiers::COMMAND, Key::K);
         settle(&mut harness);
@@ -1486,6 +1486,7 @@ mod tests {
             harness.state_mut().studio.settings_window().is_capturing(),
             "waits for the second key"
         );
+        harness.get_by_label_contains(", ...");
         harness.key_press(Key::S);
         settle(&mut harness);
         assert_eq!(
@@ -1499,6 +1500,60 @@ mod tests {
         assert!(harness.state().studio.keymap().is_default(ids::SETTINGS_OPEN));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("settings.open"), "{text}");
+    }
+
+    #[test]
+    fn a_shortcut_is_recorded_in_place_once_every_key_is_released() {
+        let path = settings_file("held", None);
+        let mut harness = on_the_keybinds_page(path);
+        let settings = label_of(&harness, ids::SETTINGS_OPEN);
+        let capturing = |harness: &mut Harness<'_, Test>| harness.state_mut().studio.settings_window().is_capturing();
+        harness.get_by_label(&settings).click();
+        settle(&mut harness);
+        // The shortcut itself shows "..." while Studio listens.
+        harness.get_by_label(LISTENING);
+        assert!(harness.query_by_label(&settings).is_none());
+
+        // F10 held, then Shift as well: nothing is saved while anything is held, and what is held shows.
+        harness.key_down(Key::F10);
+        settle(&mut harness);
+        assert!(capturing(&mut harness));
+        harness.get_by_label("F10");
+        harness.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+        settle(&mut harness);
+        harness.get_by_label("Shift+F10");
+        // F10 let go first: Shift is still held, so it keeps listening.
+        harness.key_up(Key::F10);
+        settle(&mut harness);
+        assert!(capturing(&mut harness), "Shift is still held");
+        assert!(harness.state().studio.keymap().is_default(ids::SETTINGS_OPEN));
+        // Everything let go: saved, with both.
+        harness.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        settle(&mut harness);
+        assert!(!capturing(&mut harness));
+        assert_eq!(
+            harness.state().studio.settings().keybinds.overrides[ids::SETTINGS_OPEN],
+            ["Shift+F10"]
+        );
+
+        // A click anywhere else cancels, and changes nothing.
+        harness.get_by_label("Shift+F10").click();
+        settle(&mut harness);
+        assert!(capturing(&mut harness));
+        harness.get_by_label("Opens or closes the Settings window.").click();
+        settle(&mut harness);
+        assert!(!capturing(&mut harness));
+        assert_eq!(
+            harness.state().studio.settings().keybinds.overrides[ids::SETTINGS_OPEN],
+            ["Shift+F10"]
+        );
+
+        // A recording nobody can see stops: Settings closed while listening.
+        harness.get_by_label("Shift+F10").click();
+        settle(&mut harness);
+        harness.state_mut().studio.settings_window().set_open(false);
+        settle(&mut harness);
+        assert!(!capturing(&mut harness));
     }
 
     #[test]
@@ -1536,8 +1591,7 @@ mod tests {
             settle(harness);
             harness.key_press_modifiers(Modifiers::COMMAND, Key::W);
             settle(harness);
-            harness.get_by_label(&format!("{close} is already used by"));
-            harness.get_by_label(owner);
+            harness.get_by_label(&format!("{close} is already used by {owner}."));
         };
         capture(&mut harness, &settings, "Close project (Editor)");
         harness.get_by_label("Cancel").click();
@@ -3467,6 +3521,36 @@ mod tests {
         });
         assert!(studio.is_settings_open());
         write_png(&out.join("264-keybind-sections.png"), shot);
+    }
+
+    /// The screenshot of #266 (`cargo test -p metallic_studio -- --ignored screenshot_of_recording_a_keybind`): the
+    /// Keybinds page with Save's shortcut being recorded in place. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_recording_a_keybind() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config("shot-keybind-recording", Some("[general]\nskip_sign_in = true\n"), None);
+        let project = make_project_once(path.parent().unwrap(), "Space Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.open(project.clone());
+                for _ in 0..10_000 {
+                    if studio.poll_opening().is_none() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                studio.settings_window().show_category(Category::Keybinds);
+                studio.settings_window().keybinds().set_filter("project");
+                studio.settings_window().set_open(true);
+            }
+            if frame == 4 {
+                studio.settings_window().keybinds().capture(ids::FILE_SAVE, Some(0));
+            }
+        });
+        assert!(studio.settings_window().is_capturing());
+        write_png(&out.join("266-keybind-recording.png"), shot);
     }
 
     /// The screenshot of #239 (`cargo test -p metallic_studio -- --ignored screenshot_of_the_menu_bar`): the editor
