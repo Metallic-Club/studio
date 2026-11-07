@@ -116,8 +116,8 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   muted and subtle text the body colour and the border `#898989` (dark) or `#6d6d6d` (light).
 - **Accent, chosen by the user:** orange `#ff9b54` by default (hover `#ffb47f`, light mode `#a34506`), or blue
   `#82b5ff`, violet `#ba9aff`, mint `#72d9b1` or rose `#ff9bb5` (their hovers and light-mode values as in
-  `themes.js`); ink on an accent fill `#24160d`. Used sparingly: the 3 px focus outline, the active tab's 3 px
-  underline, the selected list item's 3×19 px left bar, text selection (accent fill, ink text), progress. **Never a
+  `themes.js`); ink on an accent fill `#24160d`. Used sparingly: the 3 px focus outline, the selected list item's 3×19 px
+  left bar (since #288 the active dock tab has no accent underline: its raised fill marks it), text selection (accent fill, ink text), progress. **Never a
   button's fill.**
 - **Buttons:** primary is neutral (`#ebebeb` with `#242424` text, white on hover; `#303030`/white in light mode);
   secondary is a surface with a 1 px border that goes to subtle on hover; quiet is transparent with muted text; "play"
