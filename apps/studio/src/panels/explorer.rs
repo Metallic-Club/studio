@@ -14,7 +14,7 @@ use super::{class_icon, empty_note, ids, matches_words, playing_banner, search_b
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
 use crate::theme::icons::{self, Icon};
-use crate::theme::tokens::{radius, size, space, text};
+use crate::theme::tokens::{size, space, text};
 use crate::theme::{current_colors, fonts};
 
 /// How far each level is indented.
@@ -250,8 +250,8 @@ enum RowAction {
     Toggle,
 }
 
-/// One row on its `stripe` (#274): the caret, the class icon and the name; the selected row on a surface with the
-/// accent's bar.
+/// One row on its `stripe` (#274): the caret, the class icon and the name; the selected row on a square raised fill
+/// (#300).
 fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool, stripe: Color32) -> RowAction {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
@@ -277,14 +277,8 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, CornerRadius::same(radius::ITEM), fill);
-        if selected {
-            let bar = Rect::from_center_size(
-                pos2(rect.left() + size::ACCENT_BAR / 2.0, rect.center().y),
-                vec2(size::ACCENT_BAR, size::SELECTED_BAR),
-            );
-            ui.painter().rect_filled(bar, CornerRadius::same(2), colors.accent);
-        }
+        // Plain (#300): a square fill marks the selected row, with no accent bar.
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
         if row.has_children {
             let hovered = caret_response.as_ref().is_some_and(|response| response.hovered());
             icons::paint_at(
@@ -300,18 +294,14 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool
             .class_of(row.id)
             .map_or(Icon::ExplorerInstance, |class| class_icon(dm.registry(), class));
         let x = caret.right() + space::S1;
-        // Its group's colour (#231); the selected row's in the accent, which marks the selection.
+        // Its group's colour (#231), selected or not (#300).
         icons::paint_at(
             ui.painter(),
             pos2(x, rect.center().y),
             Align2::LEFT_CENTER,
             class_icon,
             text::BODY,
-            if selected {
-                colors.accent
-            } else {
-                class_icon.color(&colors)
-            },
+            class_icon.color(&colors),
         );
         let font = if selected {
             fonts::named(fonts::STRONG, text::BODY)
