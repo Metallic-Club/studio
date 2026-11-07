@@ -137,7 +137,7 @@ pub static ENTRIES: &[Entry] = &[
     },
     Entry {
         category: Category::Appearance,
-        name: "Accent colour",
+        name: "Accent Color",
         description: "Marks focus, the selected item, selected text and progress.",
         control: |ui, s| accent_swatches(ui, &mut s.appearance.accent),
     },
@@ -926,6 +926,9 @@ mod tests {
         assert_eq!(names(&search("shadow metres")), ["Shadow distance"]);
         assert!(names(&search("shadow")).contains(&"Shadow quality"));
         assert!(search("teleport").is_empty());
+        // Spelt as the owner asked (#318).
+        assert_eq!(names(&search("accent")), ["Accent Color"]);
+        assert_eq!(names(&search("color")), ["Accent Color"]);
     }
 
     #[test]
