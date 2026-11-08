@@ -287,6 +287,75 @@ fn checked_kids(dm: &DataModel, parent: Id) -> Vec<Id> {
 }
 
 #[test]
+fn set_parent_before_places_an_instance_among_its_new_siblings() {
+    let (mut dm, ids) = game();
+    let ws = ids.workspace;
+    let folder = folder_in(&mut dm, &ids, ws);
+    let p: Vec<Id> = (0..4)
+        .map(|i| part_in(&mut dm, &ids, folder, &format!("P{i}")))
+        .collect();
+    let other = part_in(&mut dm, &ids, ws, "Other");
+    assert_eq!(dm.next_sibling(p[1]), Ok(Some(p[2])));
+    assert_eq!(dm.next_sibling(p[3]), Ok(None), "the last child");
+    assert_eq!(dm.next_sibling(folder), Ok(Some(other)));
+
+    // Taken out and put back where it was: before the sibling it had.
+    let next = dm.next_sibling(p[1]).expect("next");
+    dm.set_parent(p[1], None).expect("out");
+    assert_eq!(dm.next_sibling(p[1]), Ok(None), "no parent, no sibling");
+    take_notices(&mut dm);
+    dm.set_parent_before(p[1], folder, next).expect("back");
+    assert_eq!(checked_kids(&dm, folder), p);
+    assert_eq!(
+        take_notices(&mut dm),
+        vec![Notice::ParentChanged {
+            id: p[1],
+            old: None,
+            new: Some(folder)
+        }]
+    );
+    // From another parent, at the front; `None` is the end.
+    dm.set_parent_before(other, folder, Some(p[0])).expect("front");
+    assert_eq!(checked_kids(&dm, folder), [other, p[0], p[1], p[2], p[3]]);
+    dm.set_parent_before(other, ws, None).expect("end");
+    assert_eq!(checked_kids(&dm, folder), p);
+    assert_eq!(kids(&dm, ws).last(), Some(&other));
+
+    // Under the same parent it reorders, reporting nothing.
+    take_notices(&mut dm);
+    dm.set_parent_before(p[3], folder, Some(p[1])).expect("reorder");
+    assert_eq!(checked_kids(&dm, folder), [p[0], p[3], p[1], p[2]]);
+    dm.set_parent_before(p[0], folder, Some(p[3])).expect("where it is");
+    dm.set_parent_before(p[0], folder, Some(p[0])).expect("before itself");
+    assert_eq!(checked_kids(&dm, folder), [p[0], p[3], p[1], p[2]]);
+    assert!(take_notices(&mut dm).is_empty());
+    let walked: Vec<Id> = dm.descendants(folder).expect("walk").collect();
+    assert_eq!(walked, [p[0], p[3], p[1], p[2]]);
+
+    // A sibling that is not the new parent's child, a stale one, and cycles are refused, changing nothing.
+    assert_eq!(
+        dm.set_parent_before(p[2], folder, Some(other)),
+        Err(DmError::NotASibling {
+            name: "P2".to_owned(),
+            sibling: "Other".to_owned()
+        })
+    );
+    let gone = part_in(&mut dm, &ids, folder, "Gone");
+    dm.destroy(gone).expect("destroy");
+    assert!(dm.set_parent_before(p[2], folder, Some(gone)).is_err());
+    let inner = part_in(&mut dm, &ids, p[0], "Inner");
+    assert!(matches!(
+        dm.set_parent_before(p[0], p[0], Some(inner)),
+        Err(DmError::WouldCreateCycle { .. })
+    ));
+    assert!(
+        dm.set_parent_before(ws, ids.game, None).is_err(),
+        "a service never moves"
+    );
+    assert_eq!(checked_kids(&dm, folder), [p[0], p[3], p[1], p[2]]);
+}
+
+#[test]
 fn removing_children_keeps_order_at_the_middle_front_and_back() {
     let (mut dm, ids) = game();
     let folder = folder_in(&mut dm, &ids, ids.workspace);
