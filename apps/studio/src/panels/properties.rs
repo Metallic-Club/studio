@@ -5,10 +5,12 @@
 //! enum as its item, a reference as the instance's name, a boolean as a check box.
 //!
 //! Each group's rows are striped (#230): alternately a little darker and a little brighter than the panel, with faint
-//! 1 px lines between the rows and between the name and value columns ([`crate::theme::tokens::RowShades`]).
+//! 1 px lines between the rows and between the name and value columns ([`crate::theme::tokens::RowShades`]). The line
+//! between the columns can be dragged left and right (#324), and stays where it was left.
 
 use egui::{
-    Align, Color32, CornerRadius, Label, Layout, Rect, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
+    Align, Color32, CornerRadius, CursorIcon, Label, Layout, Rect, RichText, Role, ScrollArea, Sense, Stroke, Ui,
+    UiBuilder, WidgetInfo, pos2, vec2,
 };
 use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, ResolvedProp, Value};
 
@@ -22,8 +24,29 @@ use crate::theme::{current_colors, fonts};
 
 /// The group of properties declared without one.
 const DEFAULT_GROUP: &str = "Data";
-/// The share of a row's width its name takes.
+/// The share of a row's width its name takes, until the line between the columns is dragged.
 const NAME_SHARE: f32 = 0.42;
+/// The narrowest either column can be dragged to.
+const MIN_COLUMN: f32 = 60.0;
+/// The width of the strip around the line between the columns that drags it.
+const GRIP: f32 = 6.0;
+
+/// Where the line between the columns was left (#324), kept in egui's memory.
+fn share_id() -> egui::Id {
+    egui::Id::unique("metallic.properties.name_share")
+}
+
+/// The share of a row's width the names take: where the line was dragged to, else [`NAME_SHARE`].
+pub fn name_share(ctx: &egui::Context) -> f32 {
+    ctx.data_mut(|data| *data.get_persisted_mut_or(share_id(), NAME_SHARE))
+}
+
+/// Where the line between the columns is in a row from `left`, `width` wide, the names taking `share` of it: each column
+/// at least [`MIN_COLUMN`] wide where the row has room for both.
+fn split_x(left: f32, width: f32, share: f32) -> f32 {
+    let narrowest = MIN_COLUMN.min(width / 2.0);
+    left + (width * share).clamp(narrowest, width - narrowest)
+}
 
 /// The Properties panel.
 #[derive(Clone, Copy, Debug)]
@@ -203,6 +226,8 @@ impl Panel for Properties {
             .id_salt("properties.rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let share = name_share(ui.ctx());
+                let top = ui.cursor().top();
                 for group in groups(dm, id) {
                     section_label(ui, group.name);
                     // The rows touch, so the stripes and the lines between them are continuous.
@@ -211,19 +236,21 @@ impl Panel for Properties {
                         let shades = p.rows();
                         for (index, row) in group.rows.iter().enumerate() {
                             let last = index + 1 == group.rows.len();
-                            ui.push_id(row.label, |ui| row_ui(ui, dm, row, shades.fill(index), last));
+                            ui.push_id(row.label, |ui| row_ui(ui, dm, row, shades.fill(index), last, share));
                         }
                     });
                     ui.add_space(space::S5);
                 }
+                let rows = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
+                split_grip(ui, rows, share);
             });
     }
 }
 
 /// One property, a row of a fixed height striped with `fill`: its name on the left and its value on the right, each
 /// cut short with an ellipsis (and shown whole on hover) when it does not fit. A faint line sits above the row and
-/// between its columns, and under it when it is the group's `last`.
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool) {
+/// between its columns, and under it when it is the group's `last`. The names take `share` of its width.
+fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool, share: f32) {
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
     let width = ui.available_width();
@@ -231,7 +258,7 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
     if !ui.is_rect_visible(rect) {
         return;
     }
-    let split = rect.left() + (width * NAME_SHARE).max(80.0).min(width);
+    let split = split_x(rect.left(), width, share);
     // The stripe and the lines between rows reach the panel's sides (#301).
     let (band_painter, band) = super::row_band(ui, rect);
     band_painter.rect_filled(band, CornerRadius::ZERO, fill);
@@ -270,6 +297,35 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
         ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
         value_ui(ui, dm, &row.value);
     });
+}
+
+/// The strip over the line between the columns, down every row in `rows` (#324): dragging it moves the line, which
+/// follows the pointer and stops short of either side. Under the pointer and while dragged, the line shows in the
+/// accent and the pointer as a resize arrow.
+fn split_grip(ui: &mut Ui, rows: Rect, share: f32) {
+    let width = rows.width();
+    if width <= 2.0 * MIN_COLUMN || rows.height() <= 0.0 {
+        return;
+    }
+    let x = split_x(rows.left(), width, share);
+    let grip = Rect::from_x_y_ranges(x - GRIP / 2.0..=x + GRIP / 2.0, rows.y_range());
+    let response = ui.interact(grip, ui.scope_id().with("metallic.properties.split"), Sense::drag());
+    response.widget_info(|| WidgetInfo::labeled(Role::Splitter, true, "Name column width"));
+    if response.dragged()
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        let moved = split_x(rows.left(), width, (pointer.x - rows.left()) / width);
+        let share = (moved - rows.left()) / width;
+        ui.data_mut(|data| data.insert_persisted(share_id(), share));
+        ui.ctx().request_repaint();
+    }
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+        let accent = current_colors(ui.ctx()).accent;
+        let half = size::BORDER / 2.0;
+        ui.painter()
+            .vline(x - half, rows.y_range(), Stroke::new(size::BORDER, accent));
+    }
 }
 
 /// A property's value, as text after a swatch (a colour) or a check box (a boolean).
