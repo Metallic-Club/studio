@@ -27,6 +27,20 @@ impl Bounds {
         })
     }
 
+    /// The centre of its face on the `sign` side (+1 or -1) of its axis `axis`.
+    pub fn face(&self, axis: usize, sign: f32) -> Vec3 {
+        let mut offset = Vec3::ZERO;
+        offset[axis] = sign * self.half[axis];
+        self.center + self.rot * offset
+    }
+
+    /// The outward direction of that face.
+    pub fn outward(&self, axis: usize, sign: f32) -> Vec3 {
+        let mut dir = Vec3::ZERO;
+        dir[axis] = sign;
+        (self.rot * dir).normalize()
+    }
+
     /// Where `ray` first meets it (the distance along it), if it does: 0 from inside.
     pub fn hit(&self, (origin, dir): Ray) -> Option<f32> {
         let inverse = self.rot.inverse();

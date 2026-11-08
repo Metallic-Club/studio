@@ -315,6 +315,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   everything in it), measured each frame from where they started, shown with a ruler marked every 5 studs and the
   distance. The drag writes the data model through the engine's `pivot_to`, so the scene notes the `CFrame`s it
   changed (`Scene::watching`): one undo step per drag.
+- **Scale (#356)**: six spheres off the faces of one part's own box, or the world-aligned box round several (shown
+  faintly). A drag moves that face, the opposite one staying; Ctrl both about the centre; Shift all three sizes by one
+  factor. Every part inside follows: resized along the axes its own line up with, moved with the box (a part turned
+  between the box's axes only moves, as a stretch would shear it). Shown with a ruler and the new size or factor.
+  `viewport::tools` keeps a file per gizmo (`moving`, `scale`), sharing the tool, the drag and the measurements.
 
 ## Not in this slice
 
