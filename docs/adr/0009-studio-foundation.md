@@ -350,6 +350,7 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   properties it watches as they were when it began.
 - **Check boxes alone (#378)**: a boolean is its check box, without "true" or "false" beside it ("Mixed" stays for
   a selection that disagrees), editable or not.
+- **No sliders (#379)**: a `Widget::Slider` property gets a number field like any other, still kept in its range.
 
 ## Not in this slice
 

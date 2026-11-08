@@ -4,7 +4,7 @@
 //! written when the field is left).
 //!
 //! - booleans: a check box alone (#378); numbers (and each component of a vector, a colour's channels): a field to drag or type
-//!   in, within the property's range, or a slider for a [`Widget::Slider`] property;
+//!   in, within the property's range (a [`Widget::Slider`] property too: no sliders, #379);
 //! - strings: a text field, written on Enter or when it loses the focus (Escape leaves the value as it was);
 //! - `CFrame`: two rows, its position and its orientation in degrees ([`Part`]);
 //! - `Color3`: the swatch opens a colour picker, and the 0-255 channels can be dragged or typed;
@@ -16,8 +16,7 @@
 //! component's adds its axis: `Size X`).
 
 use egui::{
-    Color32, ComboBox, CornerRadius, DragValue, Key, Response, Role, Sense, Slider, Stroke, TextEdit, Ui, WidgetInfo,
-    vec2,
+    Color32, ComboBox, CornerRadius, DragValue, Key, Response, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, vec2,
 };
 use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, Color3, DataModel, PropMeta, PropType, Value, Widget};
@@ -269,30 +268,18 @@ fn formatted(v: f64, mixed: bool) -> String {
     }
 }
 
-/// A number field `width` wide (a slider for a [`Widget::Slider`] property with a range), a dash when `mixed`.
+/// A number field `width` wide, within the property's range, a dash when `mixed`. A [`Widget::Slider`] property gets
+/// one too (#379): a value is typed or dragged, never slid.
 fn number(ui: &mut Ui, n: f64, meta: &PropMeta, label: &str, width: f32, mixed: bool) -> Option<f64> {
     let mut v = n;
-    let response = match (meta.widget, meta.range) {
-        (Widget::Slider, Some((min, max))) => {
-            ui.spacing_mut().slider_width = (width - 56.0).max(40.0);
-            ui.add(Slider::new(&mut v, min..=max).custom_formatter(move |v, _| formatted(v, mixed)))
-        }
-        _ => {
-            let mut drag = DragValue::new(&mut v)
-                .speed(drag_speed(meta, 0.1))
-                .custom_formatter(move |v, _| formatted(v, mixed));
-            if let Some((min, max)) = meta.range {
-                drag = drag.range(min..=max);
-            }
-            ui.add_sized([width, field_height(ui)], drag)
-        }
-    };
-    let kind = if meta.widget == Widget::Slider {
-        Role::Slider
-    } else {
-        Role::SpinButton
-    };
-    labelled(&response, kind, label);
+    let mut drag = DragValue::new(&mut v)
+        .speed(drag_speed(meta, 0.1))
+        .custom_formatter(move |v, _| formatted(v, mixed));
+    if let Some((min, max)) = meta.range {
+        drag = drag.range(min..=max);
+    }
+    let response = ui.add_sized([width, field_height(ui)], drag);
+    labelled(&response, Role::SpinButton, label);
     (response.changed() && v != n).then_some(v)
 }
 
@@ -414,6 +401,27 @@ mod tests {
             );
         harness.run();
         harness
+    }
+
+    #[test]
+    fn a_slider_property_is_a_field_kept_in_its_range() {
+        static BRIGHTNESS: PropMeta = PropMeta::number("Brightness", 0.5)
+            .range(0.0, 1.0)
+            .widget(Widget::Slider);
+        let mut harness = editor(&BRIGHTNESS, Value::Number(0.5), Mixed::default());
+        assert!(harness.query_by_role(Role::Slider).is_none());
+        let field = harness.get_by_role_and_label(Role::SpinButton, "Value");
+        field.click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.get_by_role_and_label(Role::SpinButton, "Value").type_text("7");
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(
+            *harness.state(),
+            Some(Edit::Whole(Value::Number(1.0))),
+            "kept within 0 to 1"
+        );
     }
 
     #[test]
