@@ -2748,6 +2748,18 @@ mod tests {
         };
         assert_eq!(color.r, 1.0);
         undo(&mut harness);
+        // One number fills every component (#382).
+        type_into(&mut harness, "Color", "255");
+        assert_eq!(
+            value(&harness, "Color"),
+            Value::Color3(metallic_engine::metallic_core::Color3::new(1.0, 1.0, 1.0))
+        );
+        harness.get_by_role_and_label(Role::TextInput, "Color");
+        assert!(
+            harness.query_all_by_value("255, 255, 255").next().is_some(),
+            "the field shows them all"
+        );
+        undo(&mut harness);
 
         // An enum, from its drop-down.
         harness.get_by_role_and_label(Role::ComboBox, "Material").click();

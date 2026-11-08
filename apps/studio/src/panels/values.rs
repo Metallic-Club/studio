@@ -148,9 +148,17 @@ fn set_component(value: &Value, part: Part, index: usize, x: f64) -> Option<Valu
 }
 
 /// The components typed in `text` for a value of `count` of them, each kept in `range` (#380): numbers one after
-/// another, a comma between, and a dash or nothing for one to leave as it is. `None` when it is not that.
+/// another, a comma between, and a dash or nothing for one to leave as it is; or a single number, which fills every
+/// component (#382: `255` is `255, 255, 255`). `None` when it is neither.
 pub fn parse_components(text: &str, count: usize, range: Option<(f64, f64)>) -> Option<[Option<f64>; 3]> {
-    let parts: Vec<&str> = text.split(',').map(str::trim).collect();
+    let mut parts: Vec<&str> = text.split(',').map(str::trim).collect();
+    if let [one] = parts[..]
+        && !one.is_empty()
+        && one != "-"
+        && one != MIXED
+    {
+        parts = vec![one; count];
+    }
     if parts.len() != count {
         return None;
     }
@@ -609,6 +617,14 @@ mod tests {
             Some([Some(255.0), Some(0.0), Some(0.0)])
         );
         assert_eq!(parse_components("1, 2", 2, None), Some([Some(1.0), Some(2.0), None]));
+        // One number fills them all (#382); a lone dash or nothing changes nothing.
+        assert_eq!(
+            parse_components(" 255 ", 3, Some((0.0, 255.0))),
+            Some([Some(255.0), Some(255.0), Some(255.0)])
+        );
+        assert_eq!(parse_components("4", 2, None), Some([Some(4.0), Some(4.0), None]));
+        assert_eq!(parse_components("-", 3, None), None);
+        assert_eq!(parse_components("", 3, None), None);
         for bad in ["1, 2", "1, 2, 3, 4", "a, b, c", "1, inf, 2"] {
             assert_eq!(parse_components(bad, 3, None), None, "{bad}");
         }

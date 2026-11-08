@@ -359,6 +359,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Dragging numbers (#381)**: a single number (an `Int` too) is plain text like the others; dragged left it goes
   down and right it goes up, from where the drag began, at the property's speed (the resize pointer over it says
   so), and a click makes it a text field with the value selected. Kept in its range, whole for an `Int`.
+- **One number fills all (#382)**: a single number typed into a vector or colour sets every component to it (`255`
+  then Enter is `255, 255, 255`).
 
 ## Not in this slice
 
