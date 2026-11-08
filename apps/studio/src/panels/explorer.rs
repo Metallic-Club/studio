@@ -48,6 +48,44 @@ pub struct ExplorerState {
     renaming: Option<Id>,
     /// The Insert Object window, while it is open (#352).
     inserting: Option<Inserting>,
+    /// Whether the selection is being dragged onto another row (#353).
+    dragging: bool,
+}
+
+/// Where dragged rows land (#353): inside a row, or among its siblings just before or after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drop {
+    /// Inside the row, last.
+    Into(Id),
+    /// Before the row.
+    Before(Id),
+    /// After the row.
+    After(Id),
+}
+
+impl Drop {
+    /// Where a drop on `rect` (row `id`) at height `y` lands: its top and bottom quarters are between rows, the rest
+    /// inside it. A service's row only takes drops inside it (the root holds nothing else).
+    pub fn at(dm: &DataModel, id: Id, rect: Rect, y: f32) -> Self {
+        let edge = rect.height() / 4.0;
+        let service = !is_movable(dm, id);
+        if service || (y - rect.top() >= edge && rect.bottom() - y >= edge) {
+            Drop::Into(id)
+        } else if y - rect.top() < edge {
+            Drop::Before(id)
+        } else {
+            Drop::After(id)
+        }
+    }
+
+    /// The parent and the sibling before which the rows go.
+    pub fn target(self, dm: &DataModel) -> Option<(Id, Option<Id>)> {
+        match self {
+            Drop::Into(id) => Some((id, None)),
+            Drop::Before(id) => Some((dm.parent(id).ok()??, Some(id))),
+            Drop::After(id) => Some((dm.parent(id).ok()??, dm.next_sibling(id).ok()?)),
+        }
+    }
 }
 
 impl ExplorerState {
@@ -299,6 +337,8 @@ impl Panel for Explorer {
         }
         let mut clicked = None;
         let mut toggled = None;
+        let mut dropped = None;
+        let pointer = ui.input(|input| input.pointer.interact_pos());
         let mut menu = None;
         let mut renamed = None;
         let renaming = editor
@@ -320,8 +360,29 @@ impl Panel for Explorer {
                     renaming: renaming == Some(row.id),
                     stripe: shades.fill(index),
                 };
-                match row_ui(ui, editor.dm, *row, look) {
+                let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_height));
+                let action = row_ui(ui, editor.dm, *row, look);
+                // While rows are dragged, the row under the pointer shows where they would land.
+                if editor.explorer.dragging
+                    && let Some(at) = pointer.filter(|at| rect.contains(*at))
+                {
+                    let drop = Drop::at(editor.dm, row.id, rect, at.y);
+                    let fits = drop
+                        .target(editor.dm)
+                        .is_some_and(|(parent, _)| editor.can_move_selection(parent));
+                    if fits {
+                        drop_marker(ui, rect, drop);
+                        dropped = Some(drop);
+                    }
+                }
+                match action {
                     RowAction::None => {}
+                    RowAction::Drag => {
+                        if !editor.selection.contains(row.id) {
+                            editor.selection.set_only(Some(row.id));
+                        }
+                        editor.explorer.dragging = true;
+                    }
                     RowAction::Select => clicked = Some(row.id),
                     RowAction::Toggle => toggled = Some(*row),
                     RowAction::Menu(edit) => menu = Some((row.id, edit)),
@@ -341,6 +402,16 @@ impl Panel for Explorer {
                 .click(&rows, editor.selection, id, modifiers.command, modifiers.shift);
         }
         let mut editor = editor;
+        if editor.explorer.dragging && ui.input(|input| input.pointer.any_released()) {
+            editor.explorer.dragging = false;
+            if let Some((parent, before)) = dropped.and_then(|drop| drop.target(editor.dm)) {
+                editor.move_selection(parent, before);
+                editor.explorer.set_expanded(parent, true);
+            }
+        }
+        if editor.explorer.dragging {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
         if let Some((id, name)) = renamed {
             editor.explorer.renaming = None;
             if let Some(name) = name
@@ -410,6 +481,8 @@ enum RowAction {
     KeepName,
     /// Its `+`, or Insert Object in its menu (#352).
     Insert,
+    /// A drag started on it (#353).
+    Drag,
 }
 
 /// One row on its stripe (#274): the caret, the class icon and the name (a text field while it is renamed, #351); a
@@ -426,7 +499,7 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let name = dm.name(row.id).unwrap_or("?").to_owned();
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::click_and_drag());
     response.widget_info(|| WidgetInfo::selected(Role::TreeItem, true, selected, &name));
     let indent = rect.left() + space::S3 + row.depth as f32 * INDENT;
     let caret = Rect::from_min_size(pos2(indent, rect.top()), vec2(CARET, rect.height()));
@@ -538,7 +611,9 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
             }
         }
     });
-    if insert {
+    if response.drag_started() && !renaming {
+        RowAction::Drag
+    } else if insert {
         RowAction::Insert
     } else if let Some(edit) = chosen {
         RowAction::Menu(edit)
@@ -552,6 +627,25 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
         RowAction::Select
     } else {
         RowAction::None
+    }
+}
+
+/// Where dragged rows would land on `rect` (#353): an accent outline round the row for inside it, an accent line along
+/// its top or bottom for before or after it.
+fn drop_marker(ui: &Ui, rect: Rect, drop: Drop) {
+    let accent = current_colors(ui.ctx()).accent;
+    let stroke = egui::Stroke::new(2.0, accent);
+    match drop {
+        Drop::Into(_) => {
+            ui.painter()
+                .rect_stroke(rect.shrink(1.0), CornerRadius::ZERO, stroke, egui::StrokeKind::Inside);
+        }
+        Drop::Before(_) => {
+            ui.painter().hline(rect.x_range(), rect.top() + 1.0, stroke);
+        }
+        Drop::After(_) => {
+            ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, stroke);
+        }
     }
 }
 

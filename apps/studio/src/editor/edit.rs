@@ -245,6 +245,37 @@ impl Scene<'_> {
         Ok(id)
     }
 
+    /// Whether the selection can move under `parent`: something in it moves, and `parent` is neither the root nor
+    /// inside (or one of) what moves.
+    pub fn can_move_selection(&self, parent: Id) -> bool {
+        let moving = self.movable_selection();
+        !moving.is_empty()
+            && self.dm.root() != Some(parent)
+            && moving
+                .iter()
+                .all(|&id| id != parent && !self.dm.is_descendant_of(parent, id).unwrap_or(true))
+    }
+
+    /// Moves the selection under `parent`, before its child `before` (`None`: last), as the Explorer's drops do
+    /// (#353). Returns how many moved; nothing when [`Scene::can_move_selection`] refuses.
+    pub fn move_selection(&mut self, parent: Id, before: Option<Id>) -> usize {
+        if !self.can_move_selection(parent) {
+            return 0;
+        }
+        let moving = self.movable_selection();
+        // Before an instance that moves too is before the next one that stays.
+        let mut before = before;
+        while let Some(id) = before.filter(|id| moving.contains(id)) {
+            before = self.dm.next_sibling(id).ok().flatten();
+        }
+        for &id in &moving {
+            if let Err(error) = self.move_to(id, Some(parent), before) {
+                log::warn!("edit: could not move: {error}");
+            }
+        }
+        moving.len()
+    }
+
     /// Renames `id` to `name` (trimmed; an empty name leaves it as it was).
     pub fn rename(&mut self, id: Id, name: &str) -> Result<(), DmError> {
         let name = name.trim();
