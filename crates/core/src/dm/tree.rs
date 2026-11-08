@@ -106,6 +106,14 @@ impl DataModel {
         })
     }
 
+    /// The sibling after the instance among its parent's children: `None` for the last child, an instance with no
+    /// parent, or a destroyed one. What a caller keeps to put an instance back where it was
+    /// ([`DataModel::set_parent_before`]).
+    pub fn next_sibling(&self, id: Id) -> Result<Option<Id>, DmError> {
+        self.view(id)?;
+        Ok(self.slots.next_sibling(id))
+    }
+
     /// How many children the instance has.
     pub fn child_count(&self, id: Id) -> Result<usize, DmError> {
         Ok(self.view(id)?.body.child_list().len as usize)
@@ -179,14 +187,7 @@ impl DataModel {
         let old = self.slots.parent(id);
         self.check_movable(id, class)?;
         if let Some(parent) = new_parent {
-            if !self.slots.contains(parent) {
-                return Err(self.not_live(parent));
-            }
-            if parent == id || self.is_ancestor(id, parent) {
-                return Err(DmError::WouldCreateCycle {
-                    name: self.name(id)?.to_owned(),
-                });
-            }
+            self.check_new_parent(id, parent)?;
         }
         if old == new_parent {
             return Ok(());
@@ -195,15 +196,69 @@ impl DataModel {
         if let Some(parent) = new_parent {
             self.attach(id, parent);
         }
+        self.moved(id, class, old, new_parent);
+        Ok(())
+    }
+
+    /// Moves the instance under `parent`, placed just before its child `before` (#346), or at the end with `None`
+    /// (as [`DataModel::set_parent`]). What puts an instance back where it was, with the sibling
+    /// [`DataModel::next_sibling`] gave.
+    ///
+    /// Refuses what `set_parent` refuses, and a `before` that is not a live child of `parent`
+    /// ([`DmError::NotASibling`]). A move under another parent is a `set_parent` (hooks, `ParentChanged`). Under the
+    /// same parent it only reorders the children: the subtree is marked `STRUCTURE`, and as the parent does not
+    /// change no hook runs and nothing is reported. Placing the instance before itself, or where it already is,
+    /// does nothing.
+    pub fn set_parent_before(&mut self, id: Id, parent: Id, before: Option<Id>) -> Result<(), DmError> {
+        let Some(before) = before else {
+            return self.set_parent(id, Some(parent));
+        };
+        let class = self.slot(id)?.class;
+        let old = self.slots.parent(id);
+        self.check_movable(id, class)?;
+        self.check_new_parent(id, parent)?;
+        if !self.slots.contains(before) {
+            return Err(self.not_live(before));
+        }
+        if self.slots.parent(before) != Some(parent) {
+            return Err(DmError::NotASibling {
+                name: self.name(id)?.to_owned(),
+                sibling: self.name(before)?.to_owned(),
+            });
+        }
+        if before == id || (old == Some(parent) && self.slots.next_sibling(id) == Some(before)) {
+            return Ok(());
+        }
+        self.detach(id);
+        self.slots.insert_before(id, parent, before);
+        if old == Some(parent) {
+            self.structure_revision += 1;
+            self.mark_subtree(id, DirtyBits::STRUCTURE);
+        } else {
+            self.moved(id, class, old, Some(parent));
+        }
+        Ok(())
+    }
+
+    /// Refuses a stale `parent`, and a parent that is `id` itself or one of its descendants.
+    fn check_new_parent(&self, id: Id, parent: Id) -> Result<(), DmError> {
+        if !self.slots.contains(parent) {
+            return Err(self.not_live(parent));
+        }
+        if parent == id || self.is_ancestor(id, parent) {
+            return Err(DmError::WouldCreateCycle {
+                name: self.name(id)?.to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// What follows a change of parent: the subtree is marked `STRUCTURE`, the hooks run and the move is reported.
+    fn moved(&mut self, id: Id, class: ClassId, old: Option<Id>, new: Option<Id>) {
         self.structure_revision += 1;
         self.mark_subtree(id, DirtyBits::STRUCTURE);
-        self.run_hooks(id, class, |b, dm| b.on_parent_changed(dm, id, old, new_parent));
-        self.notify(Notice::ParentChanged {
-            id,
-            old,
-            new: new_parent,
-        });
-        Ok(())
+        self.run_hooks(id, class, |b, dm| b.on_parent_changed(dm, id, old, new));
+        self.notify(Notice::ParentChanged { id, old, new });
     }
 
     /// Refuses the root and services, which never move, clone or die.

@@ -92,6 +92,14 @@ pub enum DmError {
         /// The name of the instance being moved.
         name: String,
     },
+    /// The sibling an instance was to be placed before is not a child of the new parent.
+    #[error("cannot place {name} before {sibling}: {sibling} is not a child of the new parent")]
+    NotASibling {
+        /// The name of the instance being moved.
+        name: String,
+        /// The name of the instance it was to be placed before.
+        sibling: String,
+    },
     /// The property is computed and has no setter.
     #[error("{prop} of {class} cannot be written")]
     ReadOnlyComputed {

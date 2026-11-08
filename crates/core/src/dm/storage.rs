@@ -354,6 +354,39 @@ impl Slots {
         }
     }
 
+    /// Puts `child`, which must have no parent, into `parent`'s children just before `before`, which must be one of
+    /// them. O(1). Does nothing when any of them is stale or `before` is not `parent`'s child.
+    pub(super) fn insert_before(&mut self, child: Id, parent: Id, before: Id) {
+        debug_assert!(self.parent(child).is_none(), "insert of an instance that has a parent");
+        if !self.contains(child) || child == before || self.parent(before) != Some(parent) {
+            return;
+        }
+        let (c, b) = (child.index(), before.index());
+        let Some(prev) = self.slots.get(b as usize).map(|slot| slot.prev) else {
+            return;
+        };
+        let Some(list) = self.body_mut(parent).and_then(|body| body.children.as_deref_mut()) else {
+            return;
+        };
+        if prev == NONE {
+            list.first = c;
+        }
+        list.len += 1;
+        if prev != NONE
+            && let Some(slot) = self.slots.get_mut(prev as usize)
+        {
+            slot.next = c;
+        }
+        if let Some(slot) = self.slots.get_mut(b as usize) {
+            slot.prev = c;
+        }
+        if let Some(slot) = self.slots.get_mut(c as usize) {
+            slot.parent = parent.index();
+            slot.prev = prev;
+            slot.next = b;
+        }
+    }
+
     /// Takes `id` out of its parent's children, closing the gap between its siblings, and returns the old parent.
     /// O(1) wherever the child sits.
     pub(super) fn unlink(&mut self, id: Id) -> Option<Id> {
