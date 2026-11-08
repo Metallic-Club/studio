@@ -23,7 +23,7 @@ use egui::{
 use crate::dock::Panel;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
-use crate::theme::{current_colors, fonts};
+use crate::theme::{PlayControl, current_colors, fonts};
 pub use model::{Element, TOOLBAR_FILE, TOOLBAR_VERSION, TabConfig, ToolbarConfig};
 pub use tools::{StudioCommand, Tool, ToolAction, ToolError, ToolRegistry};
 
@@ -477,15 +477,22 @@ impl Toolbar {
                     let ink = if usable { p.text } else { p.text.gamma_multiply(0.48) };
                     let colors = current_colors(ui.ctx());
                     let icon = tool.map_or(Icon::ToolbarPlugin, |tool| tool.icon);
-                    let tint = if usable { icon.color(&colors) } else { ink };
-                    icons::paint_at(
-                        ui.painter(),
+                    // The game's controls as the top bar draws them (#325); other tools in their group's colour.
+                    let look = tool.and_then(|tool| play_control(&tool.action));
+                    let tint = match look {
+                        Some(look) if usable => look.ink(&colors),
+                        None if usable => icon.color(&colors),
+                        _ => ink,
+                    };
+                    let at = Align2::CENTER_TOP.anchor_size(
                         pos2(rect.center().x, rect.top() + space::S2),
-                        Align2::CENTER_TOP,
-                        icon,
-                        TOOL_ICON,
-                        tint,
+                        vec2(TOOL_ICON, TOOL_ICON),
                     );
+                    if look.is_some_and(PlayControl::filled) {
+                        icons::paint_filled(ui.painter(), icon, at, tint);
+                    } else {
+                        icons::paint(ui.painter(), icon, at, tint);
+                    }
                     ui.painter().text(
                         pos2(rect.center().x, rect.bottom() - space::S2),
                         Align2::CENTER_BOTTOM,
@@ -527,6 +534,16 @@ impl Toolbar {
                 response
             }
         }
+    }
+}
+
+/// How `action` is drawn when it is one of the game's controls, as on the top bar (#325).
+fn play_control(action: &ToolAction) -> Option<PlayControl> {
+    match action {
+        ToolAction::Studio(StudioCommand::Play) => Some(PlayControl::Play),
+        ToolAction::Studio(StudioCommand::Stop) => Some(PlayControl::Stop),
+        ToolAction::Studio(StudioCommand::Pause | StudioCommand::Step) => Some(PlayControl::Plain),
+        _ => None,
     }
 }
 

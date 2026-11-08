@@ -381,6 +381,21 @@ pub fn texture(ctx: &Context, icon: Icon, side: u32, filled: bool) -> Option<Tex
     loaded.texture(ctx, icon, side.clamp(1, 512), filled)
 }
 
+/// Every texture `icon` has been drawn with so far, filled (or outlined, `filled` false), at any size.
+#[cfg(test)]
+pub fn textures_of_kind(ctx: &Context, icon: Icon, filled: bool) -> Vec<TextureId> {
+    let shared = shared(ctx);
+    let Ok(loaded) = shared.0.lock() else {
+        return Vec::new();
+    };
+    loaded
+        .textures
+        .iter()
+        .filter(|((drawn, _, kind), _)| *drawn == icon && *kind == filled)
+        .filter_map(|(_, texture)| texture.as_ref().map(TextureHandle::id))
+        .collect()
+}
+
 /// Every texture `icon` has been drawn with so far, at any size (tests look for an icon in a frame by them).
 #[cfg(test)]
 pub fn textures_of(ctx: &Context, icon: Icon) -> Vec<TextureId> {

@@ -15,7 +15,7 @@ use crate::dock::Dock;
 use crate::editor::{EditorState, STEPS};
 use crate::keymap::{Keymap, ids};
 use crate::theme::icons::{self, Icon};
-use crate::theme::tokens::{self, radius, shadow, size, space, text};
+use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
 /// The top bar's height.
@@ -373,34 +373,8 @@ pub(crate) fn top_bar(
     action
 }
 
-/// How a play control's icon is drawn (#302).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Control {
-    /// Play: a filled green triangle.
-    Play,
-    /// Stop: a filled red square.
-    Stop,
-    /// Pause and Step: the text colour, outlined.
-    Plain,
-}
-
-impl Control {
-    /// Its icon's colour while it can be used, on the dark or the light mode.
-    pub(crate) fn ink(self, colors: &crate::theme::Colors) -> Color32 {
-        match (self, colors.dark) {
-            (Control::Play, true) => tokens::play::ICON_DARK,
-            (Control::Play, false) => tokens::play::ICON_LIGHT,
-            (Control::Stop, true) => tokens::play::STOP_DARK,
-            (Control::Stop, false) => tokens::play::STOP_LIGHT,
-            (Control::Plain, _) => colors.palette.text,
-        }
-    }
-
-    /// Whether its icon is filled.
-    fn filled(self) -> bool {
-        self != Control::Plain
-    }
-}
+/// How a play control's icon is drawn (#302): the theme's, which the toolbar's play tools share (#325).
+pub(crate) use crate::theme::PlayControl as Control;
 
 /// A play control in the top bar (#302): `glyph` in a square button labelled `label`, drawn as `look` says, with no
 /// fill but the hover's; greyed out (the website's disabled strength) and inert unless `enabled`.
