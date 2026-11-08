@@ -924,7 +924,7 @@ end
 
 --- A cone of light shining forward from the light, like a torch or a stage light.
 declare extern type SpotLight extends Light with
-    --- How wide the cone is: the full angle from one edge to the other, in degrees.
+    --- How wide the cone is: the full angle from one edge to the other, in degrees, up to 180 (a half sphere).
     Angle: number
 end
 

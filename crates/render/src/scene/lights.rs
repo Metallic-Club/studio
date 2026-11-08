@@ -375,7 +375,7 @@ fn read(dm: &DataModel, id: Id, binding: &LightBinding, host: Option<Id>, link: 
             LightKind::Point | LightKind::Spot => number(props.range, 16.0).max(0.0),
         },
         angle: match binding.kind {
-            LightKind::Spot => number(props.angle, 90.0).clamp(1.0, 179.0),
+            LightKind::Spot => number(props.angle, 90.0).clamp(1.0, 180.0),
             LightKind::Point | LightKind::Directional => 0.0,
         },
         enabled: flag(props.enabled, true),
