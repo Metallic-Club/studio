@@ -13,13 +13,13 @@ use std::time::Duration;
 
 use egui::{Rect, TextureId};
 use metallic_engine::metallic_classes;
-use metallic_engine::metallic_core::{DataModel, Id};
+use metallic_engine::metallic_core::DataModel;
 use metallic_engine::metallic_project::{SceneIds, load_scene, save_scene};
 use metallic_engine::metallic_render::settings::GraphicsSettings;
 use metallic_engine::{RunState, project_sources};
 use metallic_player::Player;
 
-use super::EditorState;
+use super::{EditorState, Selection};
 use crate::logging::{LogBuffer, ScriptOutput};
 use crate::panels::explorer::ExplorerState;
 
@@ -35,7 +35,7 @@ pub struct PlaySession {
     /// A number no other session of this Studio had: the shell's texture belongs to one session.
     pub number: u64,
     /// The selection in the running game (live editing, ADR 0010 §5): the editor's carried in by scene id at Play.
-    pub selection: Option<Id>,
+    pub selection: Selection,
     /// The Explorer's state over the running game.
     pub explorer: ExplorerState,
 }
@@ -46,7 +46,7 @@ pub struct Scene<'a> {
     /// The game.
     pub dm: &'a mut DataModel,
     /// What is selected in it.
-    pub selection: &'a mut Option<Id>,
+    pub selection: &'a mut Selection,
     /// The Explorer's expanded instances and search over it.
     pub explorer: &'a mut ExplorerState,
     /// Whether it is the running game's.
@@ -111,13 +111,16 @@ impl EditorState {
             Player::hosted(game, sources, graphics, ScriptOutput::new(log)).map_err(|error| error.to_string())?;
         log::info!("play: started {}", self.name());
         // The selection comes along by scene id, revealed in the game's Explorer.
-        let selection = self
-            .selection
-            .and_then(|id| self.scene_ids.get(id))
-            .and_then(|scene_id| loaded.ids.instance(scene_id));
+        let selection = Selection::of(
+            self.selection
+                .ids()
+                .iter()
+                .filter_map(|&id| self.scene_ids.get(id))
+                .filter_map(|scene_id| loaded.ids.instance(scene_id)),
+        );
         let dm = player.engine().data_model();
         let mut explorer = ExplorerState::new(dm);
-        if let Some(id) = selection {
+        if let Some(id) = selection.active() {
             explorer.reveal(dm, id);
         }
         self.play = Some(PlaySession {

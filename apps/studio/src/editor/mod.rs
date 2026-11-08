@@ -6,6 +6,7 @@
 
 pub mod open;
 pub mod play;
+pub mod selection;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use crate::panels::output::OutputState;
 use crate::viewport::ViewportState;
 pub use open::{AssetRow, Opened, Opening, STEPS};
 pub use play::{GameView, PlaySession, Scene};
+pub use selection::Selection;
 
 /// The open project, its game, and the panels' state.
 pub struct EditorState {
@@ -33,8 +35,8 @@ pub struct EditorState {
     pub assets: Vec<AssetRow>,
     /// The mesh and texture loader the viewport's renderer is fed from, until the renderer takes it.
     pub mesh_assets: Option<MeshAssets>,
-    /// The selected instance.
-    pub selection: Option<Id>,
+    /// What is selected (#347).
+    pub selection: Selection,
     /// The Explorer's expanded instances and search.
     pub explorer: ExplorerState,
     /// The Output panel's lines, filter and search.
@@ -72,7 +74,7 @@ impl EditorState {
             scene_ids,
             assets,
             mesh_assets: Some(mesh_assets),
-            selection: None,
+            selection: Selection::new(),
             explorer,
             output: OutputState::new(log),
             viewport,
@@ -90,9 +92,9 @@ impl EditorState {
         &self.project.manifest().name
     }
 
-    /// Selects `id` (or nothing), and shows it in the Explorer.
+    /// Selects `id` alone (or nothing), and shows it in the Explorer.
     pub fn select(&mut self, id: Option<Id>) {
-        self.selection = id;
+        self.selection.set_only(id);
         if let Some(id) = id {
             self.explorer.reveal(&self.dm, id);
         }

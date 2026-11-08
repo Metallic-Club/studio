@@ -200,7 +200,8 @@ impl Panel for Properties {
             ui.ctx().request_repaint();
         }
         let dm: &_ = scene.dm;
-        let Some(id) = scene.selection.filter(|&id| dm.contains(id)) else {
+        // The active instance (#347); several at once is #350.
+        let Some(id) = scene.selection.active().filter(|&id| dm.contains(id)) else {
             empty_note(ui, "Select something in the Explorer to see its properties.");
             return;
         };

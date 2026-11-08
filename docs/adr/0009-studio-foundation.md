@@ -101,7 +101,7 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
   window's edge has none. Settings → Appearance → Panel borders turns the lines off (on by default).
 - **Default layout:** Viewport in the centre with Output and Assets as tabs under it (Output first and in front,
   #323); on the right, the Explorer over the Properties, two fifths of the column to three (#256, #323).
-- **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection, search; since #274 its rows touch and are striped like Properties'); Properties (the selected
+- **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection of several (#347), search; since #274 its rows touch and are striped like Properties'); Properties (the selected
   instance's properties from `PropMeta`, **read-only in this slice**, since editing comes with undo); Assets (the
   `.mtproj`'s asset index, #188); Output (engine and script log, with filter and clear).
 
@@ -260,6 +260,16 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   bundle's `Info.plist` at packaging) is registered **per user** by an explicit action: the installer (M8), or
   `metallic_studio --register-file-types`. It is **never** registered automatically or by tests.
 - A second launch with a file opens a second Studio for now. Single-instance forwarding is a later issue.
+
+### Editing (the owner's list of 2026-11-07, #346-#359)
+
+Built after Forge-Engine's editor, which the owner wrote with these systems in it.
+
+- **Selection (#347).** Several instances, in the order picked; the last is the active one, which Properties' header
+  and the camera's orbit lead with. Explorer clicks: alone selects only that row, Ctrl (Cmd) adds or removes it, Shift
+  selects from the anchor (the last row clicked without Shift), Ctrl+Shift adds that range; Edit, Select all
+  (Primary+A) takes every row shown. A closed row holding something selected has a dot. The editor and a running game
+  each have their own; what leaves the game drops out of it before each frame's panels.
 
 ## Not in this slice
 
