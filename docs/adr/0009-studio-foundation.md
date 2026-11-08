@@ -344,6 +344,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   Editing in place, and the Home tab has it after the transform tools.
 - **Drag trails (#376)**: a Move or Scale drag shows a dot where it started (the pivot, or the face) and a line from
   there to where it is now, with its measurement; the ruler marked every 5 studs is gone.
+- **Models turn properly (#377)**: a model without a `PrimaryPart` keeps no rotation, so the engine measures its pivot
+  from its parts. A drag placed it each frame from where it started with `PivotTo` while it was still turned from the
+  frame before, which turned it again, and a Rotate drag spun it away. Each frame of a drag now first puts back the
+  properties it watches as they were when it began.
 
 ## Not in this slice
 

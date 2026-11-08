@@ -4,9 +4,11 @@
 //! module of their own ([`moving`], [`scale`], [`rotate`]; [`carry`] picks parts up), and this module is what they share: which tool, what it acts on, the
 //! pointer, and the measurements' line and labels.
 //!
-//! **Drags are measured from where they began**: each frame places the instances from where they were when the drag
-//! started and from the pointer, never from the frame before, so nothing adds up rounding, and a key pressed half way
-//! only changes the formula. A drag is one undo step: the button is held throughout (see `editor::history`), and the
+//! **Drags are measured from where they began**: each frame puts what the drag can change back as it was when the drag
+//! started, then places the instances from there and from the pointer, never from the frame before, so nothing adds
+//! up rounding, and a key pressed half way only changes the formula. Putting it back matters for a model without a
+//! `PrimaryPart`: it keeps no rotation, so the engine measures its pivot from its parts, and moving it to a pivot
+//! from the start while it is still turned from the last frame would turn it again (#377). A drag is one undo step: the button is held throughout (see `editor::history`), and the
 //! engine code a drag runs writes the data model, so the scene notes the properties it changed
 //! ([`Scene::watching`]).
 
@@ -20,7 +22,7 @@ pub use rotate::quarter_turn;
 use egui::{Color32, Painter, Pos2, Stroke};
 use metallic_engine::metallic_classes::base::world_object;
 use metallic_engine::metallic_core::glam::Vec3;
-use metallic_engine::metallic_core::{CFrame, DataModel, Id, PropId};
+use metallic_engine::metallic_core::{CFrame, DataModel, Id, PropId, Value};
 
 use super::gizmo::{self, MoveHandle};
 use super::pick::{self, Bounds};
@@ -109,6 +111,8 @@ pub struct Drag {
     starts: Vec<Start>,
     /// Every property the drag can change, which the scene notes for undo.
     watched: Vec<(Id, PropId)>,
+    /// Those properties' values when the drag began, in the same order: each frame starts from them.
+    rest: Vec<Option<Value>>,
     kind: Kind,
 }
 
@@ -246,9 +250,15 @@ pub fn begin_drag(dm: &DataModel, handle: Handle, frame: Frame, ray: Ray, target
     Some(Drag {
         frame,
         starts,
+        rest: values(dm, &watched),
         watched,
         kind,
     })
+}
+
+/// The values of `watched` now.
+fn values(dm: &DataModel, watched: &[(Id, PropId)]) -> Vec<Option<Value>> {
+    watched.iter().map(|&(id, prop)| dm.get(id, prop).ok()).collect()
 }
 
 /// Picks up the selection with `ray` (#358), when the part it meets is selected or inside something selected.
@@ -260,6 +270,7 @@ pub fn carry(dm: &DataModel, selection: &Selection, ray: Ray) -> Option<Drag> {
     let targets = targets(dm, selection);
     let grab = ray.0 + ray.1 * t;
     let kind = Kind::Carry(carry::begin(dm, &targets, grab, ray)?);
+    let watched = watch_list(dm, &targets, &["CFrame"]);
     Some(Drag {
         frame: Frame {
             origin: grab,
@@ -271,7 +282,8 @@ pub fn carry(dm: &DataModel, selection: &Selection, ray: Ray) -> Option<Drag> {
             .iter()
             .filter_map(|&id| world_object::pivot(dm, id).ok().map(|pivot| Start { id, pivot }))
             .collect(),
-        watched: watch_list(dm, &targets, &["CFrame"]),
+        rest: values(dm, &watched),
+        watched,
         kind,
     })
 }
@@ -280,11 +292,20 @@ pub fn carry(dm: &DataModel, selection: &Selection, ray: Ray) -> Option<Drag> {
 /// scene's action under way, snapped to `snap`.
 pub fn update_drag(scene: &mut Scene<'_>, drag: &mut Drag, ray: Ray, keys: Keys, snap: Snap) {
     let watched = std::mem::take(&mut drag.watched);
-    scene.watching(&watched, |dm| match &mut drag.kind {
-        Kind::Move(state) => moving::update(dm, state, &drag.frame, &drag.starts, ray, snap.move_step),
-        Kind::Scale(state) => scale::update(dm, state, &drag.frame, ray, keys, snap.move_step),
-        Kind::Rotate(state) => rotate::update(dm, state, &drag.frame, &drag.starts, ray, snap.turn_step),
-        Kind::Carry(state) => carry::update(dm, state, &drag.starts, ray, snap.move_step),
+    scene.watching(&watched, |dm| {
+        for (&(id, prop), value) in watched.iter().zip(&drag.rest) {
+            if let Some(value) = value
+                && let Err(error) = dm.set(id, prop, value.clone())
+            {
+                log::warn!("tools: could not put a drag back where it began: {error}");
+            }
+        }
+        match &mut drag.kind {
+            Kind::Move(state) => moving::update(dm, state, &drag.frame, &drag.starts, ray, snap.move_step),
+            Kind::Scale(state) => scale::update(dm, state, &drag.frame, ray, keys, snap.move_step),
+            Kind::Rotate(state) => rotate::update(dm, state, &drag.frame, &drag.starts, ray, snap.turn_step),
+            Kind::Carry(state) => carry::update(dm, state, &drag.starts, ray, snap.move_step),
+        }
     });
     drag.watched = watched;
 }
