@@ -309,7 +309,7 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   orbit's. The selection is outlined in the accent colour, the part under the pointer faintly. Off while a game runs.
 - **Transform tools (#355)**, after Forge's: `viewport::gizmo` is the maths (handles, picking on the screen, rays
   against lines and planes), `viewport::tools` the tools, drags and drawing (an egui overlay on the viewport, always in
-  front). Select, Move, Scale and Rotate are toolbar tools (the default Model tab) and keybinds (Primary+1..4), with
+  front). Select, Move, Scale and Rotate are toolbar tools (the default Model tab) and keybinds (1..4 since #374), with
   world or local axes (Primary+L). The gizmo sits on the active instance's pivot, or the middle of several. Move: six
   arrows and three plane handles facing the camera; a drag moves every selected instance by its pivot (a model with
   everything in it), measured each frame from where they started, shown with a ruler marked every 5 studs and the
@@ -332,6 +332,12 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Snapping (#359)**: Settings, Editing has the move increment (1 stud) and the rotate increment (15 degrees), each
   with its switch, both on by default; moves, sizes and carried parts go in move steps, ring turns in rotate steps
   (the ring's marks follow the increment). The toolbar's Snap tool turns both on or off.
+
+### Viewport and Properties (the owner's list of 2026-11-08, #374-#387)
+
+- **Tools at hand (#374)**: the transform tools' keybinds are 1 (Select), 2 (Move), 3 (Scale) and 4 (Rotate), which
+  never fire while typing. The Home tab starts with them, at the far left; `toolbar.json` version 2 puts them at the
+  far left of a saved toolbar's first tab once, unless that tab already holds one of them.
 
 ## Not in this slice
 

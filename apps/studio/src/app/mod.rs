@@ -4494,6 +4494,14 @@ mod tests {
         assert!(!harness.state().studio.dock().is_open(panels::ids::EXPLORER));
         harness.get_by_role_and_label(Role::Button, "Explorer tool").click();
         settle(&mut harness);
+        // Home starts with the transform tools (#374), and 1..4 pick them.
+        harness.get_by_role_and_label(Role::Button, "Rotate tool");
+        harness.key_press(Key::Num3);
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.editor().unwrap().viewport.gizmo.tool,
+            crate::viewport::tools::Tool::Scale
+        );
 
         // Model holds the transform tools (#355): the one in use, and Snap while it is on (#359), are shown on.
         click_tab(&mut harness, "Model");
