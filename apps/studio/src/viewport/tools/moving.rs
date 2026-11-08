@@ -1,13 +1,14 @@
 //! The Move gizmo (#355): six arrows (both ways along each axis, starting a gap out from the centre and ending in a
 //! solid cone) and three plane handles, on the side of the axes that faces the camera. A drag moves every target by
-//! its pivot (a model with everything in it) along an arrow or across a plane, shown with a ruler and the distance.
+//! its pivot (a model with everything in it) along an arrow or across a plane, shown as a line from where it started
+//! with the distance.
 
 use egui::{Color32, Painter, Pos2, Shape, Stroke, pos2};
 use metallic_engine::metallic_classes::base::world_object;
 use metallic_engine::metallic_core::glam::{Vec2, Vec3};
 use metallic_engine::metallic_core::{CFrame, DataModel};
 
-use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, axis_colour, colour, label, ruler};
+use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, axis_colour, label, trail};
 use crate::viewport::gizmo::{self, MoveHandle};
 use crate::viewport::view::{Ray, View};
 
@@ -142,20 +143,19 @@ pub(super) fn paint_measurement(painter: &Painter, view: &View, f: &Frame, drag:
             vec![a, b]
         }
     };
-    for axis in axes {
-        let moved = drag.moved[axis];
-        ruler(painter, view, f.origin, f.dirs[axis], AXIS_RGB[axis], f.len, moved);
-        if let Some(at) = view.project(f.origin + f.dirs[axis] * moved) {
-            label(
-                painter,
-                at,
-                &format!("{} {moved:+.2}", AXIS_NAMES[axis]),
-                AXIS_RGB[axis],
-            );
-        }
-    }
-    if let Some(at) = view.project(f.origin) {
-        painter.circle_filled(at, 3.5, colour(HIGHLIGHT_RGB, 255));
+    let end = f.origin + axes.iter().map(|&axis| f.dirs[axis] * drag.moved[axis]).sum::<Vec3>();
+    trail(painter, view, f.origin, end);
+    let text: Vec<String> = axes
+        .iter()
+        .map(|&axis| format!("{} {:+.2}", AXIS_NAMES[axis], drag.moved[axis]))
+        .collect();
+    if let Some(at) = view.project(end) {
+        let rgb = if let [axis] = axes[..] {
+            AXIS_RGB[axis]
+        } else {
+            HIGHLIGHT_RGB
+        };
+        label(painter, at, &text.join("  "), rgb);
     }
 }
 
@@ -163,6 +163,36 @@ pub(super) fn paint_measurement(painter: &Painter, view: &View, f: &Frame, drag:
 mod tests {
     use super::super::testing::{Bench, look, position};
     use super::super::*;
+    use super::{MoveDrag, paint_measurement};
+
+    #[test]
+    fn a_move_drag_shows_a_dot_where_it_started_and_one_line_without_marks() {
+        let view = look(Vec3::new(0.0, 10.0, 30.0), Vec3::ZERO);
+        let frame = Frame {
+            origin: Vec3::ZERO,
+            dirs: gizmo::AXES,
+            len: 3.0,
+            bounds: None,
+        };
+        let drag = MoveDrag {
+            handle: MoveHandle::Plane(1),
+            t0: 0.0,
+            grab: Vec3::ZERO,
+            moved: [7.0, 0.0, -2.0],
+        };
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            paint_measurement(ui.painter(), &view, &frame, &drag);
+        });
+        output.textures_delta.clear();
+        let count = |want: fn(&egui::Shape) -> bool| output.shapes.iter().filter(|s| want(&s.shape)).count();
+        assert_eq!(
+            count(|s| matches!(s, egui::Shape::LineSegment { .. })),
+            1,
+            "one line, no marks"
+        );
+        assert_eq!(count(|s| matches!(s, egui::Shape::Circle(_))), 1, "one dot");
+    }
 
     #[test]
     fn a_move_drag_along_an_arrow_moves_every_target_from_where_it_started_as_one_step() {

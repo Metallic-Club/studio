@@ -2,7 +2,7 @@
 //! world or local axes. The tool's gizmo sits on the selection: on the active instance's pivot for one, at the middle
 //! of everything selected for several. [`super::gizmo`] has the maths; each tool's handles, drag and drawing are in a
 //! module of their own ([`moving`], [`scale`], [`rotate`]; [`carry`] picks parts up), and this module is what they share: which tool, what it acts on, the
-//! pointer, and the measurements' ruler and labels.
+//! pointer, and the measurements' line and labels.
 //!
 //! **Drags are measured from where they began**: each frame places the instances from where they were when the drag
 //! started and from the pointer, never from the frame before, so nothing adds up rounding, and a key pressed half way
@@ -380,41 +380,15 @@ fn axis_colour(axis: usize, lit: bool, alpha: u8) -> Color32 {
     colour(if lit { HIGHLIGHT_RGB } else { AXIS_RGB[axis] }, alpha)
 }
 
-/// How far apart a ruler's marks are, in studs.
-const RULER_STEP: f32 = 5.0;
-
-/// A ruler from `origin` along `dir`: the stretch travelled (`moved`) bright, a faint guide past both ends, and marks
-/// across it every [`RULER_STEP`], longest at the start and where it ends now. `size` is the gizmo's length.
-fn ruler(painter: &Painter, view: &View, origin: Vec3, dir: Vec3, rgb: [u8; 3], size: f32, moved: f32) {
-    let at = |s: f32| origin + dir * s;
-    let (lo, hi) = (moved.min(0.0) - RULER_STEP, moved.max(0.0) + RULER_STEP);
-    for (from, to, stroke) in [
-        (lo, moved.min(0.0), Stroke::new(1.5, colour(rgb, 110))),
-        (moved.max(0.0), hi, Stroke::new(1.5, colour(rgb, 110))),
-        (0.0, moved, Stroke::new(2.5, colour(HIGHLIGHT_RGB, 255))),
-    ] {
-        if (to - from).abs() > 1e-4
-            && let Some(line) = view.segment(at(from), at(to))
-        {
-            painter.line_segment(line, stroke);
-        }
+/// A drag's trail (#376): a dot where it started, `from`, and a line from there to where it is now, `to`.
+fn trail(painter: &Painter, view: &View, from: Vec3, to: Vec3) {
+    let ink = colour(HIGHLIGHT_RGB, 255);
+    if let Some(line) = view.segment(from, to) {
+        painter.line_segment(line, Stroke::new(2.0, ink));
     }
-    let across = dir.cross(view.pos - origin).normalize_or_zero();
-    let tick = |s: f32, half: f32, color: Color32| {
-        if let Some(line) = view.segment(at(s) - across * half, at(s) + across * half) {
-            painter.line_segment(line, Stroke::new(1.5, color));
-        }
-    };
-    let small = size * 0.06;
-    let first = (lo / RULER_STEP).ceil() as i32;
-    let last = (hi / RULER_STEP).floor() as i32;
-    // Never more than a couple of hundred marks, however far the drag went.
-    let stride = ((last - first).max(1) / 200).max(1);
-    for k in (first..=last).filter(|k| k % stride == 0) {
-        tick(k as f32 * RULER_STEP, small, colour(rgb, 230));
+    if let Some(at) = view.project(from) {
+        painter.circle_filled(at, 4.0, ink);
     }
-    tick(0.0, small * 1.8, colour(HIGHLIGHT_RGB, 255));
-    tick(moved, small * 2.4, colour(HIGHLIGHT_RGB, 255));
 }
 
 /// Text on a dark plate beside `at`, readable on any background.

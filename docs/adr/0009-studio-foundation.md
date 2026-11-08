@@ -312,13 +312,13 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   front). Select, Move, Scale and Rotate are toolbar tools (the default Model tab) and keybinds (1..4 since #374), with
   world or local axes (Primary+L). The gizmo sits on the active instance's pivot, or the middle of several. Move: six
   arrows and three plane handles facing the camera; a drag moves every selected instance by its pivot (a model with
-  everything in it), measured each frame from where they started, shown with a ruler marked every 5 studs and the
-  distance. The drag writes the data model through the engine's `pivot_to`, so the scene notes the `CFrame`s it
+  everything in it), measured each frame from where they started, shown with a line from where it started (#376) and
+  the distance. The drag writes the data model through the engine's `pivot_to`, so the scene notes the `CFrame`s it
   changed (`Scene::watching`): one undo step per drag.
 - **Scale (#356)**: six spheres off the faces of one part's own box, or the world-aligned box round several (shown
   faintly). A drag moves that face, the opposite one staying; Ctrl both about the centre; Shift all three sizes by one
   factor. Every part inside follows: resized along the axes its own line up with, moved with the box (a part turned
-  between the box's axes only moves, as a stretch would shear it). Shown with a ruler and the new size or factor.
+  between the box's axes only moves, as a stretch would shear it). Shown with a line and the new size or factor.
   `viewport::tools` keeps a file per gizmo (`moving`, `scale`), sharing the tool, the drag and the measurements.
 - **Rotate (#357)**: three rings and a trackball inside them. A ring turns the targets about its axis through the
   gizmo's centre (several swing round their middle), its angle counted through half and whole turns, shown with marks
@@ -342,6 +342,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   other (`toolbar::increments`): a check box for each switch, the Move or Rotate icon, the increment as a field to type
   in or drag, and arrows stepping through common values (0.01 to 100 studs, 1 to 180 degrees). It edits Settings,
   Editing in place, and the Home tab has it after the transform tools.
+- **Drag trails (#376)**: a Move or Scale drag shows a dot where it started (the pivot, or the face) and a line from
+  there to where it is now, with its measurement; the ruler marked every 5 studs is gone.
 
 ## Not in this slice
 
