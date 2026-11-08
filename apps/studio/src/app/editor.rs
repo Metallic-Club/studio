@@ -12,7 +12,8 @@ use egui::{
 };
 
 use crate::dock::Dock;
-use crate::editor::{EditorState, STEPS};
+use crate::editor::edit::is_movable;
+use crate::editor::{EditorState, STEPS, TreeEdit};
 use crate::keymap::{Keymap, ids};
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
@@ -64,6 +65,8 @@ pub(crate) enum MenuAction {
     Undo,
     /// Edit, Redo (#348).
     Redo,
+    /// Edit, Cut, Copy, Paste, Paste into, Duplicate, Rename and Delete (#351).
+    Tree(TreeEdit),
 }
 
 /// Where a game session is and what the history holds, for what the menus, the play buttons and the tools allow.
@@ -77,6 +80,10 @@ pub(crate) struct MenuState {
     pub can_undo: bool,
     /// There is a step to redo.
     pub can_redo: bool,
+    /// Something that can be moved, copied or deleted is selected (#351).
+    pub can_edit: bool,
+    /// The clipboard pastes into the game the panels show.
+    pub can_paste: bool,
 }
 
 impl MenuState {
@@ -87,6 +94,11 @@ impl MenuState {
             paused: editor.is_paused(),
             can_undo: editor.history().can_undo(),
             can_redo: editor.history().can_redo(),
+            can_edit: {
+                let (dm, selection) = editor.shown();
+                selection.ids().iter().any(|&id| is_movable(dm, id))
+            },
+            can_paste: editor.clipboard.can_paste_into(editor.shown().0),
         }
     }
 
@@ -99,6 +111,8 @@ impl MenuState {
             MenuAction::Step => self.paused,
             MenuAction::Undo => self.can_undo,
             MenuAction::Redo => self.can_redo,
+            MenuAction::Tree(edit) if edit.pastes() => self.can_paste,
+            MenuAction::Tree(_) => self.can_edit,
             _ => true,
         }
     }
@@ -160,11 +174,21 @@ pub(crate) static MENUS: &[Menu] = &[
             item("Undo", MenuAction::Undo, Some(ids::EDIT_UNDO)),
             item("Redo", MenuAction::Redo, Some(ids::EDIT_REDO)),
             Entry::Separator,
-            Entry::Planned("Cut"),
-            Entry::Planned("Copy"),
-            Entry::Planned("Paste"),
-            Entry::Planned("Duplicate"),
-            Entry::Planned("Delete"),
+            item("Cut", MenuAction::Tree(TreeEdit::Cut), Some(ids::EDIT_CUT)),
+            item("Copy", MenuAction::Tree(TreeEdit::Copy), Some(ids::EDIT_COPY)),
+            item("Paste", MenuAction::Tree(TreeEdit::Paste), Some(ids::EDIT_PASTE)),
+            item(
+                "Paste into",
+                MenuAction::Tree(TreeEdit::PasteInto),
+                Some(ids::EDIT_PASTE_INTO),
+            ),
+            item(
+                "Duplicate",
+                MenuAction::Tree(TreeEdit::Duplicate),
+                Some(ids::EDIT_DUPLICATE),
+            ),
+            item("Rename", MenuAction::Tree(TreeEdit::Rename), Some(ids::EDIT_RENAME)),
+            item("Delete", MenuAction::Tree(TreeEdit::Delete), Some(ids::EDIT_DELETE)),
             Entry::Separator,
             item("Select all", MenuAction::SelectAll, Some(ids::EDIT_SELECT_ALL)),
         ],

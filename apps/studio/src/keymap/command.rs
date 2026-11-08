@@ -194,6 +194,20 @@ pub mod ids {
     pub const EDIT_UNDO: &str = "edit.undo";
     /// Redo the last step undone.
     pub const EDIT_REDO: &str = "edit.redo";
+    /// Cut the selection (#351).
+    pub const EDIT_CUT: &str = "edit.cut";
+    /// Copy the selection.
+    pub const EDIT_COPY: &str = "edit.copy";
+    /// Paste beside the selection.
+    pub const EDIT_PASTE: &str = "edit.paste";
+    /// Paste inside the selection.
+    pub const EDIT_PASTE_INTO: &str = "edit.paste_into";
+    /// Duplicate the selection.
+    pub const EDIT_DUPLICATE: &str = "edit.duplicate";
+    /// Rename the selected instance.
+    pub const EDIT_RENAME: &str = "edit.rename";
+    /// Delete the selection.
+    pub const EDIT_DELETE: &str = "edit.delete";
 }
 
 /// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
@@ -322,6 +336,61 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Edit",
             "Makes the last change you took back again.",
         )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+X"],
+        ..Command::new(ids::EDIT_CUT, "Cut", "Edit", "Copies the selection, then deletes it.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+C"],
+        ..Command::new(ids::EDIT_COPY, "Copy", "Edit", "Copies the selection, to paste later.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+V"],
+        ..Command::new(
+            ids::EDIT_PASTE,
+            "Paste",
+            "Edit",
+            "Pastes what was copied beside the selection, or in Workspace.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+Shift+V"],
+        ..Command::new(
+            ids::EDIT_PASTE_INTO,
+            "Paste into",
+            "Edit",
+            "Pastes what was copied inside the selected instance.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+D"],
+        ..Command::new(
+            ids::EDIT_DUPLICATE,
+            "Duplicate",
+            "Edit",
+            "Copies the selection beside itself.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["F2"],
+        ..Command::new(
+            ids::EDIT_RENAME,
+            "Rename",
+            "Edit",
+            "Renames the selected instance in the Explorer.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Delete"],
+        ..Command::new(ids::EDIT_DELETE, "Delete", "Edit", "Deletes the selection.")
     },
     Command {
         contexts: &[Context::Editor],

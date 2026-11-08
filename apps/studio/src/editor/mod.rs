@@ -21,6 +21,7 @@ use crate::logging::LogBuffer;
 use crate::panels::explorer::ExplorerState;
 use crate::panels::output::OutputState;
 use crate::viewport::ViewportState;
+pub use edit::{Clipboard, TreeEdit};
 pub use history::History;
 pub use open::{AssetRow, Opened, Opening, STEPS};
 pub use play::{GameView, PlaySession, Scene};
@@ -42,6 +43,8 @@ pub struct EditorState {
     pub selection: Selection,
     /// The editor's undo history (#348); a running game has its own.
     pub history: History,
+    /// What was copied or cut (#351), in the editor's scene or a running game's.
+    pub clipboard: Clipboard,
     /// The Explorer's expanded instances and search.
     pub explorer: ExplorerState,
     /// The Output panel's lines, filter and search.
@@ -81,6 +84,7 @@ impl EditorState {
             mesh_assets: Some(mesh_assets),
             selection: Selection::new(),
             history: History::new(Selection::new()),
+            clipboard: Clipboard::default(),
             explorer,
             output: OutputState::new(log),
             viewport,
@@ -101,6 +105,14 @@ impl EditorState {
     /// The history the Edit menu undoes: the running game's while one runs (live editing), else the editor's.
     pub fn history(&self) -> &History {
         self.play.as_ref().map_or(&self.history, |session| &session.history)
+    }
+
+    /// The game the panels show and its selection: the running game's while one runs, else the editor's.
+    pub fn shown(&self) -> (&DataModel, &Selection) {
+        match &self.play {
+            Some(session) => (session.player.engine().data_model(), &session.selection),
+            None => (&self.dm, &self.selection),
+        }
     }
 
     /// Whether the project has changes not saved: in its files, or to its scene since it was saved or opened (#348).

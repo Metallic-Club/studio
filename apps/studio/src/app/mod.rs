@@ -27,7 +27,7 @@ use egui::{
 };
 
 use crate::dock::{Dock, PanelContext};
-use crate::editor::{EditorState, Opening};
+use crate::editor::{EditorState, Opening, TreeEdit};
 use crate::emblem;
 use crate::keymap::{ActivationKind, Context, Focus, Keymap, Overrides, ids};
 use crate::logging::LogBuffer;
@@ -622,6 +622,11 @@ impl Studio {
                     editor.scene().redo(Instant::now());
                 }
             }
+            MenuAction::Tree(edit) => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.scene().tree_edit(edit);
+                }
+            }
             MenuAction::SelectAll => {
                 if let Some(editor) = self.editor_mut() {
                     let scene = editor.scene();
@@ -1001,6 +1006,26 @@ impl Studio {
                 ids::EDIT_SELECT_ALL if editing => self.menu_action(MenuAction::SelectAll),
                 ids::EDIT_UNDO if editing => self.menu_action(MenuAction::Undo),
                 ids::EDIT_REDO if editing => self.menu_action(MenuAction::Redo),
+                id @ (ids::EDIT_CUT
+                | ids::EDIT_COPY
+                | ids::EDIT_PASTE
+                | ids::EDIT_PASTE_INTO
+                | ids::EDIT_DUPLICATE
+                | ids::EDIT_RENAME
+                | ids::EDIT_DELETE)
+                    if editing =>
+                {
+                    let edit = match id {
+                        ids::EDIT_CUT => TreeEdit::Cut,
+                        ids::EDIT_COPY => TreeEdit::Copy,
+                        ids::EDIT_PASTE => TreeEdit::Paste,
+                        ids::EDIT_PASTE_INTO => TreeEdit::PasteInto,
+                        ids::EDIT_DUPLICATE => TreeEdit::Duplicate,
+                        ids::EDIT_RENAME => TreeEdit::Rename,
+                        _ => TreeEdit::Delete,
+                    };
+                    self.menu_action(MenuAction::Tree(edit));
+                }
                 id @ (ids::PROJECTS_OPEN | ids::PROJECTS_NEW | ids::PROJECTS_ADD) if context == Context::Projects => {
                     if let Some(path) = self.projects.run(id) {
                         self.open(path);
@@ -2744,6 +2769,112 @@ mod tests {
         assert_eq!(selected_names(&harness), ["Pad", "Pad"]);
     }
 
+    /// The names under the editor's `parent` (a service's name), in order.
+    fn children_of(harness: &Harness<'_, Test>, parent: &str) -> Vec<String> {
+        let dm = &harness.state().studio.editor().unwrap().dm;
+        let service = dm.service(dm.registry().class_id(parent).unwrap()).unwrap();
+        dm.children(service)
+            .unwrap()
+            .map(|id| dm.name(id).unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn tree_edits_duplicate_delete_cut_copy_paste_and_rename_and_each_undoes() {
+        let mut harness = editing(settings_file("editor-tree-edits", None), "Tree Edits Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let original = children_of(&harness, "Workspace");
+        assert_eq!(original, ["Camera", "Baseplate", "SpawnLocation"]);
+        let press = |harness: &mut Harness<'_, Test>, modifiers: Modifiers, key: Key| {
+            harness.key_press_modifiers(modifiers, key);
+            settle(harness);
+        };
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+
+        // Duplicate: a copy just after it, selected.
+        press(&mut harness, Modifiers::COMMAND, Key::D);
+        assert_eq!(
+            children_of(&harness, "Workspace"),
+            ["Camera", "Baseplate", "Baseplate", "SpawnLocation"]
+        );
+        let copy = harness.state().studio.editor().unwrap().selection.active().unwrap();
+        assert_ne!(Some(copy), Some(editor_baseplate(&harness)));
+        press(&mut harness, Modifiers::COMMAND, Key::Z);
+        assert_eq!(children_of(&harness, "Workspace"), original);
+
+        // Delete: out of the tree, nothing selected; undo brings the same one back in its place, selected.
+        let baseplate = editor_baseplate(&harness);
+        press(&mut harness, Modifiers::NONE, Key::Delete);
+        assert_eq!(children_of(&harness, "Workspace"), ["Camera", "SpawnLocation"]);
+        assert!(selected_names(&harness).is_empty());
+        press(&mut harness, Modifiers::COMMAND, Key::Z);
+        assert_eq!(children_of(&harness, "Workspace"), original);
+        assert_eq!(editor_baseplate(&harness), baseplate);
+        assert_eq!(selected_names(&harness), ["Baseplate"]);
+
+        // Copy, then paste with a service selected: inside it. Paste into: inside the selected part.
+        press(&mut harness, Modifiers::COMMAND, Key::C);
+        harness
+            .get_by_role_and_label(Role::TreeItem, "ReplicatedStorage")
+            .click();
+        settle(&mut harness);
+        press(&mut harness, Modifiers::COMMAND, Key::V);
+        assert_eq!(children_of(&harness, "ReplicatedStorage"), ["Baseplate"]);
+        assert_eq!(selected_names(&harness), ["Baseplate"], "the pasted copy is selected");
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
+        settle(&mut harness);
+        press(&mut harness, Modifiers::COMMAND | Modifiers::SHIFT, Key::V);
+        {
+            let editor = harness.state().studio.editor().unwrap();
+            let pasted = editor.selection.active().unwrap();
+            assert_eq!(
+                editor.dm.name(editor.dm.parent(pasted).unwrap().unwrap()).unwrap(),
+                "SpawnLocation"
+            );
+        }
+        press(&mut harness, Modifiers::COMMAND, Key::Z);
+        press(&mut harness, Modifiers::COMMAND, Key::Z);
+        press(&mut harness, Modifiers::COMMAND, Key::Z);
+        assert!(children_of(&harness, "ReplicatedStorage").is_empty());
+
+        // Cut moves it to the clipboard; a service is never cut or deleted.
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
+        settle(&mut harness);
+        press(&mut harness, Modifiers::COMMAND, Key::X);
+        assert_eq!(children_of(&harness, "Workspace"), ["Camera", "Baseplate"]);
+        harness.get_by_role_and_label(Role::TreeItem, "Lighting").click();
+        settle(&mut harness);
+        press(&mut harness, Modifiers::NONE, Key::Delete);
+        harness.get_by_role_and_label(Role::TreeItem, "Lighting");
+        press(&mut harness, Modifiers::COMMAND, Key::V);
+        assert_eq!(children_of(&harness, "Lighting"), ["SpawnLocation"]);
+
+        // Rename in place: F2, type, Enter; Escape keeps the name.
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        press(&mut harness, Modifiers::NONE, Key::F2);
+        harness.get_by_role_and_label(Role::TextInput, "Name of Baseplate");
+        harness.key_press(Key::Backspace);
+        harness.event(egui::Event::Text("Floor".to_owned()));
+        press(&mut harness, Modifiers::NONE, Key::Enter);
+        harness.get_by_role_and_label(Role::TreeItem, "Floor");
+        press(&mut harness, Modifiers::NONE, Key::F2);
+        harness.event(egui::Event::Text("Nope".to_owned()));
+        press(&mut harness, Modifiers::NONE, Key::Escape);
+        harness.get_by_role_and_label(Role::TreeItem, "Floor");
+        press(&mut harness, Modifiers::COMMAND, Key::Z);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate");
+
+        // A row's right-click menu: Duplicate.
+        let row = harness.get_by_role_and_label(Role::TreeItem, "Baseplate").rect();
+        right_click(&mut harness, row);
+        harness.get_by_role_and_label(Role::Button, "Duplicate").click();
+        settle(&mut harness);
+        assert_eq!(children_of(&harness, "Workspace"), ["Camera", "Baseplate", "Baseplate"]);
+    }
+
     #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
@@ -2889,8 +3020,8 @@ mod tests {
         }
 
         // A planned item does nothing when clicked.
-        click_label(&mut harness, "Edit");
-        harness.get_by_role_and_label(Role::MenuItem, "Cut").click();
+        click_label(&mut harness, "File");
+        harness.get_by_role_and_label(Role::MenuItem, "New project").click();
         settle(&mut harness);
         assert_eq!(harness.state().studio.screen(), Screen::Editor);
 

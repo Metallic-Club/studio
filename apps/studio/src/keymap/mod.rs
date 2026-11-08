@@ -1202,7 +1202,7 @@ mod tests {
             "other modifiers, other binding"
         );
         assert!(
-            keymap.conflicts_with(ids::FLY_LEFT, &parse("F2")).is_empty(),
+            keymap.conflicts_with(ids::FLY_LEFT, &parse("F4")).is_empty(),
             "a key nothing uses"
         );
         assert!(

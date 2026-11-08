@@ -1,12 +1,13 @@
 //! Changing a scene (#348): every edit the panels and tools make goes through [`Scene`]'s methods here, which note
-//! it in the scene's history (see [`super::history`]), and the app ends the action under way once a frame.
+//! it in the scene's history (see [`super::history`]), and the app ends the action under way once a frame. The tree
+//! edits (#351: delete, duplicate, cut, copy, paste, rename) act on the selection through them.
 
 use std::time::Instant;
 
-use metallic_engine::metallic_core::{DmError, Id, PropId, Value};
+use metallic_engine::metallic_core::{DataModel, DmError, Id, PropId, Value};
 
-use super::Scene;
 use super::history::{Change, Place};
+use super::{Scene, Selection};
 
 impl Scene<'_> {
     /// Writes `prop` of `id`, as part of the action under way. The value noted is the one stored (clamped to the
@@ -78,6 +79,227 @@ impl Scene<'_> {
         }
         if let Some(active) = self.selection.active() {
             self.explorer.reveal(self.dm, active);
+        }
+    }
+}
+
+/// What was copied or cut (#351): copies of the instances, out of the tree, in the game they came from. Pasting
+/// copies them again, so it pastes as often as wanted. A running game's clipboard does not paste into the editor's
+/// scene, nor the other way round.
+#[derive(Debug, Default)]
+pub struct Clipboard {
+    /// The game the copies are in ([`DataModel::uid`]).
+    game: Option<u64>,
+    /// The copies, out of the tree.
+    items: Vec<Id>,
+}
+
+impl Clipboard {
+    /// Whether it holds something that pastes into `dm`.
+    pub fn can_paste_into(&self, dm: &DataModel) -> bool {
+        self.game == Some(dm.uid()) && self.items.iter().any(|&id| dm.contains(id))
+    }
+}
+
+impl Scene<'_> {
+    /// Whether `id` can be moved, copied or deleted: anything but the root and the services.
+    pub fn is_movable(&self, id: Id) -> bool {
+        is_movable(self.dm, id)
+    }
+
+    /// What the tree edits act on: the selection's instances that are not inside another selected one, without the
+    /// services.
+    fn movable_selection(&self) -> Vec<Id> {
+        self.selection
+            .top_level(self.dm)
+            .into_iter()
+            .filter(|&id| self.is_movable(id))
+            .collect()
+    }
+
+    /// Delete: takes the selection out of the tree (kept for undo) and selects nothing. Returns how many went.
+    pub fn delete(&mut self) -> usize {
+        let doomed = self.movable_selection();
+        for &id in &doomed {
+            if let Err(error) = self.move_to(id, None, None) {
+                log::warn!("edit: could not delete: {error}");
+            }
+        }
+        if !doomed.is_empty() {
+            self.selection.clear();
+        }
+        doomed.len()
+    }
+
+    /// Duplicate: a copy of each selected instance just after it, and selects the copies. Returns how many.
+    pub fn duplicate(&mut self) -> usize {
+        let mut copies = Vec::new();
+        for id in self.movable_selection() {
+            let parent = self.dm.parent(id).ok().flatten();
+            let before = self.dm.next_sibling(id).ok().flatten();
+            match self.dm.clone_tree(id) {
+                Ok(Some(copy)) => match self.move_to(copy, parent, before) {
+                    Ok(()) => copies.push(copy),
+                    Err(error) => log::warn!("edit: could not duplicate: {error}"),
+                },
+                // Not archivable: it is not copied, as `Clone` in scripts.
+                Ok(None) => {}
+                Err(error) => log::warn!("edit: could not duplicate: {error}"),
+            }
+        }
+        if !copies.is_empty() {
+            *self.selection = Selection::of(copies.iter().copied());
+        }
+        copies.len()
+    }
+
+    /// Copy: puts copies of the selection on the clipboard, in place of what it held. Returns how many.
+    pub fn copy(&mut self) -> usize {
+        let originals = self.movable_selection();
+        if originals.is_empty() {
+            return 0;
+        }
+        // The old copies were only the clipboard's.
+        if self.clipboard.game == Some(self.dm.uid()) {
+            for id in std::mem::take(&mut self.clipboard.items) {
+                if self.dm.contains(id) && self.dm.parent(id).ok().flatten().is_none() {
+                    let _ = self.dm.destroy(id);
+                }
+            }
+        }
+        self.clipboard.game = Some(self.dm.uid());
+        self.clipboard.items = originals
+            .into_iter()
+            .filter_map(|id| self.dm.clone_tree(id).ok().flatten())
+            .collect();
+        self.clipboard.items.len()
+    }
+
+    /// Cut: copies the selection, then deletes it. Returns how many.
+    pub fn cut(&mut self) -> usize {
+        if self.copy() == 0 {
+            return 0;
+        }
+        self.delete()
+    }
+
+    /// Where a paste goes: inside the active instance (`into`), or beside it (inside a selected service); in
+    /// Workspace with nothing selected.
+    fn paste_target(&self, into: bool) -> Option<Id> {
+        let workspace = self
+            .dm
+            .registry()
+            .class_id("Workspace")
+            .and_then(|class| self.dm.service(class));
+        match self.selection.active() {
+            Some(active) if into || !self.is_movable(active) => Some(active),
+            Some(active) => self.dm.parent(active).ok().flatten().or(workspace),
+            None => workspace,
+        }
+    }
+
+    /// Paste: copies of the clipboard's instances beside the active instance (or inside it, `into`), selected.
+    /// Returns how many.
+    pub fn paste(&mut self, into: bool) -> usize {
+        if !self.clipboard.can_paste_into(self.dm) {
+            return 0;
+        }
+        let Some(parent) = self.paste_target(into) else {
+            return 0;
+        };
+        let mut pasted = Vec::new();
+        for item in self.clipboard.items.clone() {
+            match self.dm.clone_tree(item) {
+                Ok(Some(copy)) => match self.move_to(copy, Some(parent), None) {
+                    Ok(()) => pasted.push(copy),
+                    Err(error) => log::warn!("edit: could not paste: {error}"),
+                },
+                Ok(None) => {}
+                Err(error) => log::warn!("edit: could not paste: {error}"),
+            }
+        }
+        if !pasted.is_empty() {
+            *self.selection = Selection::of(pasted.iter().copied());
+        }
+        pasted.len()
+    }
+
+    /// Renames `id` to `name` (trimmed; an empty name leaves it as it was).
+    pub fn rename(&mut self, id: Id, name: &str) -> Result<(), DmError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(());
+        }
+        self.set_by_name(id, "Name", Value::String(name.into()))
+    }
+}
+
+/// An edit of the tree the Edit menu, the keymap and the Explorer's menu ask for (#351).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TreeEdit {
+    /// Copy the selection, then delete it.
+    Cut,
+    /// Copy the selection.
+    Copy,
+    /// Paste beside the active instance.
+    Paste,
+    /// Paste inside the active instance.
+    PasteInto,
+    /// Copy the selection beside itself.
+    Duplicate,
+    /// Rename the active instance in the Explorer.
+    Rename,
+    /// Delete the selection.
+    Delete,
+}
+
+impl TreeEdit {
+    /// Whether it pastes (and so needs the clipboard rather than a selection).
+    pub fn pastes(self) -> bool {
+        matches!(self, TreeEdit::Paste | TreeEdit::PasteInto)
+    }
+}
+
+/// Whether `id` can be moved, copied or deleted: anything but the root and the services.
+pub fn is_movable(dm: &DataModel, id: Id) -> bool {
+    let Ok(class) = dm.class_of(id) else {
+        return false;
+    };
+    dm.root() != Some(id)
+        && dm
+            .registry()
+            .class(class)
+            .is_some_and(|info| info.service_order().is_none())
+}
+
+impl Scene<'_> {
+    /// Does `edit`. Rename starts renaming the active instance in its Explorer row.
+    pub fn tree_edit(&mut self, edit: TreeEdit) {
+        match edit {
+            TreeEdit::Cut => {
+                self.cut();
+            }
+            TreeEdit::Copy => {
+                self.copy();
+            }
+            TreeEdit::Paste => {
+                self.paste(false);
+            }
+            TreeEdit::PasteInto => {
+                self.paste(true);
+            }
+            TreeEdit::Duplicate => {
+                self.duplicate();
+            }
+            TreeEdit::Rename => {
+                if let Some(active) = self.selection.active().filter(|&id| self.is_movable(id)) {
+                    self.explorer.reveal(self.dm, active);
+                    self.explorer.start_rename(active);
+                }
+            }
+            TreeEdit::Delete => {
+                self.delete();
+            }
         }
     }
 }

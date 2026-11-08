@@ -19,7 +19,7 @@ use metallic_engine::metallic_render::settings::GraphicsSettings;
 use metallic_engine::{RunState, project_sources};
 use metallic_player::Player;
 
-use super::{EditorState, History, Selection};
+use super::{Clipboard, EditorState, History, Selection};
 use crate::logging::{LogBuffer, ScriptOutput};
 use crate::panels::explorer::ExplorerState;
 
@@ -53,6 +53,8 @@ pub struct Scene<'a> {
     pub explorer: &'a mut ExplorerState,
     /// Its undo history (#348).
     pub history: &'a mut History,
+    /// The clipboard (#351), shared by the editor's scene and a running game's.
+    pub clipboard: &'a mut Clipboard,
     /// Whether it is the running game's.
     pub playing: bool,
 }
@@ -148,6 +150,7 @@ impl EditorState {
                 selection: &mut session.selection,
                 explorer: &mut session.explorer,
                 history: &mut session.history,
+                clipboard: &mut self.clipboard,
                 playing: true,
             },
             None => Scene {
@@ -155,6 +158,7 @@ impl EditorState {
                 selection: &mut self.selection,
                 explorer: &mut self.explorer,
                 history: &mut self.history,
+                clipboard: &mut self.clipboard,
                 playing: false,
             },
         }

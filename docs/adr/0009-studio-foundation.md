@@ -290,6 +290,12 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Several instances in Properties (#350)**, as Forge's inspector: the properties they all have (same name and
   type), a value they disagree on shown mixed (a dash, "Mixed"); an edit reaches each of them as one undo step, a
   vector's component alone on each so they keep their others. The header names the count ("3 Parts", "4 objects").
+- **Tree edits (#351)**, one undo step each, on the selection's top-level instances (services never move): Rename
+  (F2, in place in the Explorer row: Enter or a click away keeps it, Escape drops it), Delete (Delete), Duplicate
+  (Primary+D, the copies just after the originals, selected), Cut / Copy / Paste (Primary+X / C / V: beside the active
+  instance, inside a selected service, in Workspace with nothing selected) and Paste into (Primary+Shift+V). The
+  clipboard holds copies out of the tree, so a paste copies them again; a running game's clipboard does not paste into
+  the editor's scene. The Edit menu has them, and a right-click on an Explorer row opens a menu of them.
 
 ## Not in this slice
 
