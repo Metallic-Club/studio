@@ -3,8 +3,9 @@
 //! writes it through the scene, so it is an undo step (a drag is one, as the button stays held; a typed value is one,
 //! written when the field is left).
 //!
-//! - booleans: a check box alone (#378); numbers: a field to drag or type in, within the property's range (a
-//!   [`Widget::Slider`] property too: no sliders, #379);
+//! - booleans: a check box alone (#378); numbers: plain text like the text fields (#381), which goes down when dragged
+//!   left and up when dragged right and is typed in when clicked, within the property's range (a [`Widget::Slider`]
+//!   property too: no sliders, #379);
 //! - strings, vectors and colours: one plain text field each, without a box (#380), written on Enter or when it loses
 //!   the focus (Escape leaves the value as it was). A vector is its numbers one after another (`-20, 40, 33`), a
 //!   colour its 0-255 channels;
@@ -18,7 +19,8 @@
 //! screen readers.
 
 use egui::{
-    Color32, ComboBox, CornerRadius, DragValue, Key, Response, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, vec2,
+    Align2, Color32, ComboBox, CornerRadius, CursorIcon, FontId, Key, Response, Role, Sense, Stroke, TextEdit, Ui,
+    WidgetInfo, pos2, vec2,
 };
 use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, Color3, DataModel, PropMeta, PropType, Value, Widget};
@@ -187,19 +189,22 @@ pub fn edit(
     match shown(value, part) {
         Value::Bool(on) => checkbox(ui, on, mixed.whole, label).map(|on| Edit::Whole(Value::Bool(on))),
         Value::Int(n) => {
-            let mut v = n;
-            let mut drag = DragValue::new(&mut v).speed(drag_speed(meta, 1.0));
-            if let Some((min, max)) = meta.range {
-                drag = drag.range(min as i64..=max as i64);
-            }
-            if mixed.whole {
-                drag = drag.custom_formatter(|_, _| MIXED.to_owned());
-            }
-            let response = ui.add_sized([width, field_height(ui)], drag);
-            labelled(&response, Role::SpinButton, label);
-            (response.changed() && v != n).then_some(Edit::Whole(Value::Int(v)))
+            let speed = drag_speed(meta, 1.0);
+            let field = Number {
+                range: meta.range,
+                speed,
+                whole: true,
+            };
+            number(ui, n as f64, field, label, width, mixed.whole).map(|n| Edit::Whole(Value::Int(n as i64)))
         }
-        Value::Number(n) => number(ui, n, meta, label, width, mixed.whole).map(|n| Edit::Whole(Value::Number(n))),
+        Value::Number(n) => {
+            let field = Number {
+                range: meta.range,
+                speed: drag_speed(meta, 0.1),
+                whole: false,
+            };
+            number(ui, n, field, label, width, mixed.whole).map(|n| Edit::Whole(Value::Number(n)))
+        }
         Value::String(s) => text_field(ui, label, &s, width, mixed.whole).map(|s| Edit::Whole(Value::String(s.into()))),
         Value::Vector2(v) => components_field(ui, &[v.x, v.y], &mixed.parts, meta.range, label, width),
         Value::Vector3(v) => components_field(ui, &[v.x, v.y, v.z], &mixed.parts, meta.range, label, width),
@@ -322,19 +327,79 @@ fn formatted(v: f64, mixed: bool) -> String {
     }
 }
 
-/// A number field `width` wide, within the property's range, a dash when `mixed`. A [`Widget::Slider`] property gets
-/// one too (#379): a value is typed or dragged, never slid.
-fn number(ui: &mut Ui, n: f64, meta: &PropMeta, label: &str, width: f32, mixed: bool) -> Option<f64> {
-    let mut v = n;
-    let mut drag = DragValue::new(&mut v)
-        .speed(drag_speed(meta, 0.1))
-        .custom_formatter(move |v, _| formatted(v, mixed));
-    if let Some((min, max)) = meta.range {
-        drag = drag.range(min..=max);
+/// How a number field keeps its value.
+#[derive(Clone, Copy, Debug)]
+struct Number {
+    /// The property's range.
+    range: Option<(f64, f64)>,
+    /// How much a point dragged changes it.
+    speed: f64,
+    /// Whether it is a whole number (an `Int`).
+    whole: bool,
+}
+
+impl Number {
+    /// `x` as the field keeps it: within the range, whole for an `Int`.
+    fn kept(self, x: f64) -> f64 {
+        let x = if self.whole { x.round() } else { x };
+        self.range.map_or(x, |(min, max)| x.clamp(min, max))
     }
-    let response = ui.add_sized([width, field_height(ui)], drag);
+}
+
+/// A single number as plain text `width` wide (#381), a dash when `mixed`: dragged left it goes down and right it goes
+/// up (the resize pointer over it says so), from where the drag began; clicked, it is a text field to type in, as the
+/// others. A [`Widget::Slider`] property gets one too (#379): a value is typed or dragged, never slid. Returns the
+/// new value.
+fn number(ui: &mut Ui, n: f64, field: Number, label: &str, width: f32, mixed: bool) -> Option<f64> {
+    let shown = formatted(n, mixed);
+    // The text field's id: the same place is the drag area until a click gives it the focus.
+    let id = ui.make_persistent_id(("metallic.properties.text", label)).with("field");
+    if ui.memory(|memory| memory.has_focus(id)) {
+        let typed = text_field(ui, label, &shown, width, false)?;
+        return parse_components(&typed, 1, None)
+            .and_then(|[x, ..]| x)
+            .map(|x| field.kept(x));
+    }
+    let (rect, _) = ui.allocate_exact_size(vec2(width, field_height(ui)), Sense::hover());
+    let response = ui.interact(rect, id, Sense::click_and_drag());
     labelled(&response, Role::SpinButton, label);
-    (response.changed() && v != n).then_some(v)
+    let p = current_colors(ui.ctx()).palette;
+    ui.painter().text(
+        pos2(rect.left(), rect.center().y),
+        Align2::LEFT_CENTER,
+        &shown,
+        FontId::proportional(text::BODY),
+        p.text,
+    );
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+    }
+    let start = id.with("drag");
+    if response.drag_started() {
+        ui.data_mut(|data| data.insert_temp(start, (n, 0.0f64)));
+    }
+    if response.dragged() {
+        let (from, moved) = ui.data(|data| data.get_temp::<(f64, f64)>(start)).unwrap_or((n, 0.0));
+        let moved = moved + f64::from(response.drag_delta().x) * field.speed;
+        ui.data_mut(|data| data.insert_temp(start, (from, moved)));
+        let x = field.kept(from + moved);
+        return (x != n).then_some(x);
+    }
+    if response.drag_stopped() {
+        ui.data_mut(|data| data.remove::<(f64, f64)>(start));
+    }
+    if response.clicked() {
+        // Typing starts with the whole value selected, to replace it.
+        response.request_focus();
+        let mut state = TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let all = egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(shown.chars().count()),
+        );
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), id);
+    }
+    None
 }
 
 /// A vector's or a colour's `values` as one plain text field `width` wide (#380): its numbers one after another
@@ -448,6 +513,42 @@ mod tests {
     }
 
     #[test]
+    fn a_number_drags_left_down_and_right_up_from_where_it_began() {
+        static SPEED: PropMeta = PropMeta::number("WalkSpeed", 16.0).widget(Widget::Drag { speed: 0.5 });
+        let mut harness = editor(&SPEED, Value::Number(16.0), Mixed::default());
+        let field = harness.get_by_role_and_label(Role::SpinButton, "Value").rect();
+        let at = field.left_center() + vec2(10.0, 0.0);
+        harness.drag_at(at);
+        harness.run();
+        harness.hover_at(at + vec2(20.0, 0.0));
+        harness.run();
+        assert_eq!(
+            *harness.state(),
+            Some(Edit::Whole(Value::Number(26.0))),
+            "20 points right, half a unit each"
+        );
+        harness.hover_at(at - vec2(10.0, 0.0));
+        harness.run();
+        assert_eq!(
+            *harness.state(),
+            Some(Edit::Whole(Value::Number(11.0))),
+            "from where it began, not the last frame"
+        );
+        harness.drop_at(at - vec2(10.0, 0.0));
+        harness.run();
+        // An Int stays whole.
+        static COUNT: PropMeta = PropMeta::int("Count", 3).widget(Widget::Drag { speed: 0.1 });
+        let mut harness = editor(&COUNT, Value::Int(3), Mixed::default());
+        let field = harness.get_by_role_and_label(Role::SpinButton, "Value").rect();
+        let at = field.left_center() + vec2(10.0, 0.0);
+        harness.drag_at(at);
+        harness.run();
+        harness.hover_at(at + vec2(24.0, 0.0));
+        harness.run();
+        assert_eq!(*harness.state(), Some(Edit::Whole(Value::Int(5))));
+    }
+
+    #[test]
     fn a_slider_property_is_a_field_kept_in_its_range() {
         static BRIGHTNESS: PropMeta = PropMeta::number("Brightness", 0.5)
             .range(0.0, 1.0)
@@ -457,8 +558,8 @@ mod tests {
         let field = harness.get_by_role_and_label(Role::SpinButton, "Value");
         field.click();
         harness.run();
-        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-        harness.get_by_role_and_label(Role::SpinButton, "Value").type_text("7");
+        // A click makes it a text field, all of it selected.
+        harness.get_by_role_and_label(Role::TextInput, "Value").type_text("7");
         harness.key_press(egui::Key::Enter);
         harness.run();
         assert_eq!(
