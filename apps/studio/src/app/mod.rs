@@ -505,7 +505,7 @@ impl Studio {
         // The toolbar under the menu bar (#232).
         let strip = Rect::from_min_size(
             pos2(full.left(), bar.bottom()),
-            vec2(full.width(), toolbar::TOOLBAR_HEIGHT),
+            vec2(full.width(), self.toolbar.height()),
         );
         let play = editor::MenuState::of(editor);
         let dock = &self.dock;
@@ -4639,6 +4639,43 @@ mod tests {
         settle(&mut harness);
         assert_eq!(harness.state().studio.toolbar().config().tabs[1].name, "Models");
         toolbar_tab(&harness, "Models");
+    }
+
+    #[test]
+    fn the_toolbar_resizes_from_its_bottom_line_and_keeps_its_height() {
+        let path = settings_file("toolbar-resize", None);
+        let mut harness = editing(path.clone(), "Toolbar Resize Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        let top = |harness: &Harness<'_, Test>| harness.get_by_role_and_label(Role::Tab, "Viewport").rect().top();
+        let before = top(&harness);
+        // Dragged down, like the lines between panels (#414): the dock moves down with it.
+        let grip = harness
+            .get_by_role_and_label(Role::Splitter, "Toolbar height")
+            .rect()
+            .center();
+        drag(&mut harness, grip, grip + egui::vec2(0.0, 20.0));
+        assert_eq!(harness.state().studio.toolbar().config().tool_row, 74);
+        assert!(
+            (top(&harness) - (before + 20.0)).abs() < 1.0,
+            "{} vs {before}",
+            top(&harness)
+        );
+        // Far up: as short as it goes, its tools icons alone, narrower.
+        let wide = harness.get_by_role_and_label(Role::Button, "Move tool").rect().width();
+        let grip = harness
+            .get_by_role_and_label(Role::Splitter, "Toolbar height")
+            .rect()
+            .center();
+        drag(&mut harness, grip, grip - egui::vec2(0.0, 200.0));
+        assert_eq!(
+            harness.state().studio.toolbar().config().tool_row,
+            toolbar::TOOL_ROW_RANGE.0
+        );
+        assert!(harness.get_by_role_and_label(Role::Button, "Move tool").rect().width() < wide);
+        // Kept in toolbar.json.
+        let text = std::fs::read_to_string(path.with_file_name(toolbar::TOOLBAR_FILE)).unwrap();
+        assert!(text.contains("\"tool_row\": 30"), "{text}");
     }
 
     #[test]

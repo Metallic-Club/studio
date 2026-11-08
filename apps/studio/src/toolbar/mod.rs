@@ -36,18 +36,29 @@ pub use tools::{StudioCommand, Tool, ToolAction, ToolError, ToolRegistry};
 
 /// The tab row's height.
 pub const TAB_ROW: f32 = 28.0;
-/// The tool row's height.
+/// The tool row's height to start with; the line under it drags it taller or shorter (#414).
 pub const TOOL_ROW: f32 = 54.0;
-/// The toolbar's whole height.
+/// How short and how tall the tool row may be dragged, in points.
+pub const TOOL_ROW_RANGE: (u16, u16) = (30, 96);
+/// The toolbar's whole height to start with.
 pub const TOOLBAR_HEIGHT: f32 = TAB_ROW + TOOL_ROW;
+/// The shortest tool row whose tools show their labels under their icons; a shorter one shows icons alone.
+const LABELS_FROM: f32 = 44.0;
+/// How far above the toolbar's bottom line its resize grip reaches, in points.
+const GRIP: f32 = 4.0;
 /// A tool button's narrowest width.
 const TOOL_WIDTH: f32 = 52.0;
 /// A spacer's width.
 const SPACER_WIDTH: f32 = 24.0;
 /// A separator's width (the line in its middle).
 const SEPARATOR_WIDTH: f32 = 13.0;
-/// A tool's icon size.
+/// A tool's icon size in the tool row as it starts, and as an empty tab's Add tool button has it.
 const TOOL_ICON: f32 = 20.0;
+
+/// A tool's icon size in a tool row `row` points tall: [`TOOL_ICON`] at the start, growing a little with the row.
+fn icon_side(row: f32) -> f32 {
+    (row * TOOL_ICON / TOOL_ROW).clamp(16.0, 28.0)
+}
 /// The room the + after the tabs takes.
 const PLUS_WIDTH: f32 = 28.0;
 /// What a tab being renamed has past its name: room for the text cursor (#326).
@@ -223,11 +234,15 @@ impl Toolbar {
         let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - pixel), rect.right_bottom());
         ui.painter().rect_filled(line, 0.0, p.border);
         let tabs = Rect::from_min_size(rect.min, vec2(rect.width(), TAB_ROW));
-        let tools = Rect::from_min_max(pos2(rect.left(), tabs.bottom()), rect.max);
+        let tools = Rect::from_min_size(
+            pos2(rect.left(), tabs.bottom()),
+            vec2(rect.width(), self.config.tool_row.into()),
+        );
         let mut changes = Vec::new();
         let mut events = Vec::new();
         self.tab_row(ui, tabs, &mut changes);
         self.tool_row(ui, tools, &enabled, &checked, editing, &mut changes, &mut events);
+        self.resize_grip(ui, tools);
         self.add_window(ui.ctx(), &mut changes);
         if self.tabs_open && !tabs::show(ui.ctx(), &mut self.config) {
             changes.push(Change::CloseTabs);
@@ -236,6 +251,44 @@ impl Toolbar {
             self.apply(change);
         }
         events
+    }
+
+    /// The toolbar's whole height: the tab row and the tool row as dragged (#414).
+    pub fn height(&self) -> f32 {
+        TAB_ROW + f32::from(self.config.tool_row)
+    }
+
+    /// The strip along the toolbar's bottom line (#414): dragging it makes the tool row taller or shorter, as the
+    /// lines between panels do; under the pointer and while dragged it shows in the accent, with the resize pointer.
+    fn resize_grip(&mut self, ui: &mut Ui, tools: Rect) {
+        let grip = Rect::from_min_max(pos2(tools.left(), tools.bottom() - GRIP), tools.max);
+        let response = ui.interact(grip, ui.scope_id().with("metallic.toolbar.resize"), Sense::drag());
+        response.widget_info(|| WidgetInfo::labeled(Role::Splitter, true, "Toolbar height"));
+        // From where the drag began: the row it had, and how far the pointer has gone since.
+        let start = response.id.with("start");
+        if response.drag_started() {
+            ui.data_mut(|data| data.insert_temp(start, tools.height()));
+        }
+        if response.dragged()
+            && let (Some(pointer), Some(origin)) = (
+                response.interact_pointer_pos(),
+                ui.input(|input| input.pointer.press_origin()),
+            )
+        {
+            let (low, high) = TOOL_ROW_RANGE;
+            let began = ui.data(|data| data.get_temp::<f32>(start)).unwrap_or(tools.height());
+            let row = (began + pointer.y - origin.y)
+                .round()
+                .clamp(f32::from(low), f32::from(high));
+            self.config.tool_row = row as u16;
+            ui.ctx().request_repaint();
+        }
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            let accent = current_colors(ui.ctx()).accent;
+            let line = Rect::from_min_max(pos2(tools.left(), tools.bottom() - size::BORDER), tools.max);
+            ui.painter().rect_filled(line, 0.0, accent);
+        }
     }
 
     fn apply(&mut self, change: Change) {
@@ -534,14 +587,20 @@ impl Toolbar {
         for (index, element) in elements.iter().enumerate() {
             let (width, label) = match element {
                 Element::Tool { id } if self.registry.get(id).is_some_and(is_increments) => {
-                    (increments::WIDTH, "Snap".to_owned())
+                    (increments::width(rect.height()), "Snap".to_owned())
                 }
                 Element::Tool { id } => {
                     let label = self.registry.get(id).map_or(id.as_str(), |tool| tool.label.as_str());
-                    let galley =
-                        ui.painter()
-                            .layout_no_wrap(label.to_owned(), FontId::proportional(text::SMALL), p.text);
-                    ((galley.size().x + 2.0 * space::S3).max(TOOL_WIDTH), label.to_owned())
+                    let width = if rect.height() < LABELS_FROM {
+                        // Icons alone in a short row.
+                        icon_side(rect.height()) + 2.0 * space::S3
+                    } else {
+                        let galley =
+                            ui.painter()
+                                .layout_no_wrap(label.to_owned(), FontId::proportional(text::SMALL), p.text);
+                        (galley.size().x + 2.0 * space::S3).max(TOOL_WIDTH)
+                    };
+                    (width, label.to_owned())
                 }
                 Element::Spacer => (SPACER_WIDTH, "Spacer".to_owned()),
                 Element::Separator => (SEPARATOR_WIDTH, "Separator".to_owned()),
@@ -636,22 +695,30 @@ impl Toolbar {
                         None if usable => icon.color(&colors),
                         _ => ink,
                     };
-                    let at = Align2::CENTER_TOP.anchor_size(
-                        pos2(rect.center().x, rect.top() + space::S2),
-                        vec2(TOOL_ICON, TOOL_ICON),
-                    );
+                    // The row's height decides (#414): the icon grows a little with it, and a short row shows it
+                    // alone, in the middle.
+                    let row = rect.height() + 2.0 * space::S1;
+                    let side = icon_side(row);
+                    let labelled = row >= LABELS_FROM;
+                    let at = if labelled {
+                        Align2::CENTER_TOP.anchor_size(pos2(rect.center().x, rect.top() + space::S2), vec2(side, side))
+                    } else {
+                        Rect::from_center_size(rect.center(), vec2(side, side))
+                    };
                     if look.is_some_and(PlayControl::filled) {
                         icons::paint_filled(ui.painter(), icon, at, tint);
                     } else {
                         icons::paint(ui.painter(), icon, at, tint);
                     }
-                    ui.painter().text(
-                        pos2(rect.center().x, rect.bottom() - space::S2),
-                        Align2::CENTER_BOTTOM,
-                        label,
-                        FontId::proportional(text::SMALL),
-                        ink,
-                    );
+                    if labelled {
+                        ui.painter().text(
+                            pos2(rect.center().x, rect.bottom() - space::S2),
+                            Align2::CENTER_BOTTOM,
+                            label,
+                            FontId::proportional(text::SMALL),
+                            ink,
+                        );
+                    }
                 }
                 let response = match tool {
                     Some(tool) if !tool.description.is_empty() => response.on_hover_text(&tool.description),

@@ -9,8 +9,15 @@ use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::space;
 use crate::theme::{self, current_colors};
 
-/// The element's width.
+/// The width of one increment's row.
 pub const WIDTH: f32 = 118.0;
+/// The shortest tool row the two increments stack in; in a shorter one (#414) they sit side by side.
+const STACKED_FROM: f32 = 40.0;
+
+/// The element's width in a tool row `row` points tall: one row's, or two side by side in a short row.
+pub fn width(row: f32) -> f32 {
+    if row >= STACKED_FROM { WIDTH } else { 2.0 * WIDTH }
+}
 /// The common move increments the arrows step through, in studs.
 const MOVES: &[f32] = &[
     0.01, 0.05, 0.1, 0.125, 0.2, 0.25, 0.5, 1.0, 2.0, 4.0, 5.0, 10.0, 20.0, 50.0, 100.0,
@@ -68,11 +75,18 @@ pub fn step(common: &[f32], value: f32, up: bool) -> f32 {
 
 /// Draws the increments in `rect`, editing `editing`.
 pub fn show(ui: &mut Ui, rect: Rect, editing: &mut Editing) {
-    let half = rect.height() / 2.0;
-    let top = Rect::from_min_size(rect.min, vec2(rect.width(), half));
-    let bottom = Rect::from_min_size(top.left_bottom(), vec2(rect.width(), half));
-    row(ui, top, &MOVE, &mut editing.snap_moves, &mut editing.move_step);
-    row(ui, bottom, &TURN, &mut editing.snap_turns, &mut editing.turn_step);
+    // The element's rect is the row's less a little air above and below.
+    let (first, second) = if rect.height() + 2.0 * space::S1 >= STACKED_FROM {
+        let half = rect.height() / 2.0;
+        let top = Rect::from_min_size(rect.min, vec2(rect.width(), half));
+        (top, Rect::from_min_size(top.left_bottom(), vec2(rect.width(), half)))
+    } else {
+        let half = rect.width() / 2.0;
+        let left = Rect::from_min_size(rect.min, vec2(half, rect.height()));
+        (left, Rect::from_min_size(left.right_top(), vec2(half, rect.height())))
+    };
+    row(ui, first, &MOVE, &mut editing.snap_moves, &mut editing.move_step);
+    row(ui, second, &TURN, &mut editing.snap_turns, &mut editing.turn_step);
 }
 
 fn row(ui: &mut Ui, rect: Rect, row: &Row, on: &mut bool, value: &mut f32) {

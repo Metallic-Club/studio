@@ -413,6 +413,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   pivot as before; `PivotTo` keeps where it moved the model to. It is kept in two hidden saved properties
   (`WorldPivotData`, `WorldPivotSet`), which the tools' drags watch for undo. So a turned model keeps its turn, and its
   outline and Scale box are the box round its parts along its pivot's axes, turning with it.
+- **Resizing the toolbar (#414)**: the line under the toolbar drags, as the lines between panels do, from 30 to 96
+  points (54 to start), kept as `tool_row` in `toolbar.json`. Icons grow a little with the row; under 44 points the
+  tools show icons alone, and under 40 the two increments sit side by side.
 
 ## Not in this slice
 

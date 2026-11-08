@@ -128,6 +128,15 @@ pub struct ToolbarConfig {
     /// Where the tabs sit in their row.
     #[serde(default)]
     pub align: TabAlign,
+    /// The tool row's height in points, as dragged (#414): [`super::TOOL_ROW`] by default, within
+    /// [`super::TOOL_ROW_RANGE`].
+    #[serde(default = "default_tool_row")]
+    pub tool_row: u16,
+}
+
+/// Serde's default for [`ToolbarConfig::tool_row`].
+fn default_tool_row() -> u16 {
+    super::TOOL_ROW as u16
 }
 
 impl Default for ToolbarConfig {
@@ -173,6 +182,7 @@ impl Default for ToolbarConfig {
             ],
             active: 0,
             align: TabAlign::default(),
+            tool_row: default_tool_row(),
         }
         .repaired()
     }
@@ -232,6 +242,7 @@ impl ToolbarConfig {
             }
         }
         self.active = self.active.min(self.tabs.len() - 1);
+        self.tool_row = self.tool_row.clamp(super::TOOL_ROW_RANGE.0, super::TOOL_ROW_RANGE.1);
         self.show_a_tab();
         self
     }
@@ -379,6 +390,7 @@ mod tests {
             tabs: vec![TabConfig::new("Only", Vec::new())],
             active: 0,
             align: TabAlign::Left,
+            tool_row: 54,
         }
         .repaired();
         assert!(!one.remove_tab(0));
