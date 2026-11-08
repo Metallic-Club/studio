@@ -1,33 +1,9 @@
-//! The Metallic mark: the splash's emblem and the window's icon. It is the website's mark
-//! (`branding/metallic-mark.svg`, the website's `public/favicon.svg`): a radius-10 square in `#191a1e` holding a white
-//! geometric "M", on a 40 × 40 grid.
-//!
-//! The shape is a few straight edges and four arcs, so it is drawn here from the same numbers as the SVG rather than
-//! through an SVG library: four samples per pixel on each axis.
+//! The Metallic mark: the splash's emblem, the window's icon and the marks on the sign-in and projects screens. It is
+//! `branding/metallic-mark.svg`: the Metallic logo (`branding/metallic-logo.svg`, #320) in white on a rounded square
+//! in `#191a1e`, built into Studio and drawn at exactly the size it is shown at.
 
-/// The mark's grid: the SVG's `viewBox` is `0 0 GRID GRID`.
-const GRID: f32 = 40.0;
-/// The square's corner radius on the grid.
-const RADIUS: f32 = 10.0;
-/// The square's colour, `#191a1e`.
-const SQUARE: [u8; 3] = [0x19, 0x1A, 0x1E];
-/// The "M", on the grid: the SVG's `M9 29V11h5l6 10 6-10h5v18h-5V20l-6 9-6-9v9z`.
-const LETTER: [(f32, f32); 12] = [
-    (9.0, 29.0),
-    (9.0, 11.0),
-    (14.0, 11.0),
-    (20.0, 21.0),
-    (26.0, 11.0),
-    (31.0, 11.0),
-    (31.0, 29.0),
-    (26.0, 29.0),
-    (26.0, 20.0),
-    (20.0, 29.0),
-    (14.0, 20.0),
-    (14.0, 29.0),
-];
-/// Samples per pixel on each axis.
-const SAMPLES: u32 = 4;
+/// The mark's SVG.
+const SVG: &str = include_str!("../../../branding/metallic-mark.svg");
 
 /// The mark as 8-bit RGBA pixels, unmultiplied.
 #[derive(Clone, Debug)]
@@ -40,41 +16,16 @@ pub struct Emblem {
     pub rgba: Vec<u8>,
 }
 
-/// The mark, `size` pixels square.
+/// The mark, `size` pixels square. Blank (and logged) in the unlikely case the built-in SVG cannot be drawn.
 pub fn render(size: u32) -> Emblem {
     let size = size.max(1);
-    let scale = GRID / size as f32;
-    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            let (mut square, mut letter) = (0u32, 0u32);
-            for sy in 0..SAMPLES {
-                for sx in 0..SAMPLES {
-                    let px = (x as f32 + (sx as f32 + 0.5) / SAMPLES as f32) * scale;
-                    let py = (y as f32 + (sy as f32 + 0.5) / SAMPLES as f32) * scale;
-                    if in_square(px, py) {
-                        square += 1;
-                        if in_letter(px, py) {
-                            letter += 1;
-                        }
-                    }
-                }
-            }
-            let total = SAMPLES * SAMPLES;
-            if square == 0 {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-                continue;
-            }
-            // The letter's share of the covered samples, blended from the square's colour to white.
-            let mix = |c: u8| (u32::from(c) * (square - letter) + 255 * letter) / square;
-            rgba.extend_from_slice(&[
-                mix(SQUARE[0]) as u8,
-                mix(SQUARE[1]) as u8,
-                mix(SQUARE[2]) as u8,
-                (255 * square / total) as u8,
-            ]);
+    let rgba = match draw(size) {
+        Ok(rgba) => rgba,
+        Err(error) => {
+            log::warn!("emblem: the mark could not be drawn: {error}");
+            vec![0; (size * size * 4) as usize]
         }
-    }
+    };
     Emblem {
         width: size,
         height: size,
@@ -82,22 +33,26 @@ pub fn render(size: u32) -> Emblem {
     }
 }
 
-/// Inside the rounded square.
-fn in_square(x: f32, y: f32) -> bool {
-    let cx = x.clamp(RADIUS, GRID - RADIUS);
-    let cy = y.clamp(RADIUS, GRID - RADIUS);
-    (0.0..=GRID).contains(&x) && (0.0..=GRID).contains(&y) && (x - cx).powi(2) + (y - cy).powi(2) <= RADIUS * RADIUS
-}
+/// The SVG drawn `size` pixels square, unmultiplied.
+fn draw(size: u32) -> Result<Vec<u8>, String> {
+    use resvg::{tiny_skia, usvg};
 
-/// Inside the "M" (even-odd rule).
-fn in_letter(x: f32, y: f32) -> bool {
-    let mut inside = false;
-    for (&(ax, ay), &(bx, by)) in LETTER.iter().zip(LETTER.iter().cycle().skip(1)) {
-        if (ay > y) != (by > y) && x < ax + (y - ay) * (bx - ax) / (by - ay) {
-            inside = !inside;
-        }
-    }
-    inside
+    let tree = usvg::Tree::from_str(SVG, &usvg::Options::default()).map_err(|error| error.to_string())?;
+    let scale = size as f32 / tree.size().width().max(tree.size().height());
+    let mut pixmap = tiny_skia::Pixmap::new(size, size).ok_or("no image to draw in")?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    Ok(pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let pixel = pixel.demultiply();
+            [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -110,25 +65,46 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_is_a_dark_square_with_a_white_m() {
-        let emblem = render(80);
-        assert_eq!((emblem.width, emblem.height), (80, 80));
-        assert_eq!(emblem.rgba.len(), 80 * 80 * 4);
-        // Rounded corners are clear; the square is #191a1e; the M's legs are white.
+    fn the_mark_is_a_dark_square_with_the_white_logo() {
+        let emblem = render(256);
+        assert_eq!((emblem.width, emblem.height), (256, 256));
+        assert_eq!(emblem.rgba.len(), 256 * 256 * 4);
+        // Rounded corners are clear; the square is #191a1e around the logo.
         assert_eq!(pixel(&emblem, 0, 0)[3], 0);
-        assert_eq!(pixel(&emblem, 79, 79)[3], 0);
-        assert_eq!(pixel(&emblem, 40, 4), [0x19, 0x1A, 0x1E, 255]);
-        assert_eq!(pixel(&emblem, 22, 40), [255, 255, 255, 255], "left leg");
-        assert_eq!(pixel(&emblem, 57, 40), [255, 255, 255, 255], "right leg");
-        assert_eq!(pixel(&emblem, 40, 30), [0x19, 0x1A, 0x1E, 255], "above the V");
-        assert_eq!(pixel(&emblem, 40, 50), [255, 255, 255, 255], "the V");
+        assert_eq!(pixel(&emblem, 255, 255)[3], 0);
+        assert_eq!(pixel(&emblem, 128, 12), [0x19, 0x1A, 0x1E, 255], "above the logo");
+        assert_eq!(pixel(&emblem, 12, 128), [0x19, 0x1A, 0x1E, 255], "left of the logo");
+        // The logo's body, below and right of its middle, is white; the hole in its head is the square's colour.
+        assert_eq!(pixel(&emblem, 150, 150), [255, 255, 255, 255], "the logo");
+        let white = emblem
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[..3] == [255, 255, 255] && p[3] == 255)
+            .count();
+        let share = white as f32 / (256.0 * 256.0);
+        assert!((0.15..0.4).contains(&share), "the logo covers {share} of the mark");
     }
 
     #[test]
-    fn the_numbers_are_the_svgs() {
-        let svg = include_str!("../../../branding/metallic-mark.svg");
-        assert!(svg.contains(r#"viewBox="0 0 40 40""#));
-        assert!(svg.contains(r##"rx="10" fill="#191a1e""##));
-        assert!(svg.contains(r##"d="M9 29V11h5l6 10 6-10h5v18h-5V20l-6 9-6-9v9z" fill="#fff""##));
+    fn the_mark_holds_the_logo() {
+        let logo = include_str!("../../../branding/metallic-logo.svg");
+        let path = logo
+            .split(" d=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        assert!(SVG.contains(path), "the mark draws branding/metallic-logo.svg's path");
+        assert!(SVG.contains(r##"rx="64" fill="#191a1e""##));
+    }
+
+    #[test]
+    fn every_size_draws() {
+        for size in [1, 16, 32, 144, 512] {
+            let emblem = render(size);
+            assert_eq!(emblem.rgba.len(), (size * size * 4) as usize);
+            assert!(emblem.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0), "{size}");
+        }
     }
 }
