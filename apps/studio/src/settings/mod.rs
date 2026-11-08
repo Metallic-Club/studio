@@ -78,14 +78,17 @@ pub const MOVE_STEP: (f32, f32) = (0.01, 1000.0);
 /// The rotate increment's range, in degrees.
 pub const TURN_STEP: (f32, f32) = (0.1, 180.0);
 
-/// The viewport's settings (#385): how fast its camera flies. Saved in the `[viewport]` section; the speeds are on
-/// Settings, Editing, and the wheel changes them in the viewport.
+/// The viewport's settings: how fast its camera flies (#385) and what it shows (#387). Saved in the `[viewport]`
+/// section; the speeds are on Settings, Editing, and the wheel changes them in the viewport; what it shows is in the
+/// Viewport's own menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Viewport {
     /// How fast the camera flies, in studs a second.
     pub fly_speed: f32,
     /// What Shift multiplies the fly speed by: above one faster, below it slower and more careful.
     pub secondary_speed: f32,
+    /// Whether the axis gizmo shows in the corner (#386).
+    pub show_axes: bool,
 }
 
 impl Default for Viewport {
@@ -93,6 +96,7 @@ impl Default for Viewport {
         Self {
             fly_speed: 40.0,
             secondary_speed: 3.0,
+            show_axes: true,
         }
     }
 }
@@ -277,6 +281,7 @@ impl StudioSettings {
             let v = &mut settings.viewport;
             read(viewport, "fly_speed", number, &mut v.fly_speed);
             read(viewport, "secondary_speed", number, &mut v.secondary_speed);
+            read(viewport, "show_axes", Value::as_bool, &mut v.show_axes);
         }
         if let Some(appearance) = section("appearance") {
             let a = &mut settings.appearance;
@@ -339,6 +344,7 @@ impl StudioSettings {
             let round = |speed: f32| Value::Float((f64::from(speed) * 100.0).round() / 100.0);
             viewport.insert("fly_speed".into(), round(v.fly_speed));
             viewport.insert("secondary_speed".into(), round(v.secondary_speed));
+            viewport.insert("show_axes".into(), Value::Boolean(v.show_axes));
         });
         let a = &self.appearance;
         with_section(&mut document, "appearance", |appearance| {
@@ -634,13 +640,15 @@ turn_step = 999
 
     #[test]
     fn the_camera_speeds_round_trip_and_stay_in_range() {
-        let document: Table = toml::from_str("[viewport]\nfly_speed = 12.5\nsecondary_speed = 0.01\n").unwrap();
+        let document: Table =
+            toml::from_str("[viewport]\nfly_speed = 12.5\nsecondary_speed = 0.01\nshow_axes = false\n").unwrap();
         let settings = StudioSettings::from_document(&document);
         assert_eq!(
             settings.viewport,
             Viewport {
                 fly_speed: 12.5,
                 secondary_speed: SECONDARY_SPEED.0,
+                show_axes: false,
             }
         );
         let written = settings.to_document(&Table::new());

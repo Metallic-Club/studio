@@ -84,6 +84,12 @@ pub trait Panel: Sync {
     }
     /// Draws it, filling `ui`.
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>);
+    /// Whether it has a menu (#387): three dots at the right of its tab bar while its tab is in front open it.
+    fn has_menu(&self) -> bool {
+        false
+    }
+    /// Draws its menu's items.
+    fn menu(&self, _ui: &mut Ui, _cx: &mut PanelContext<'_>) {}
 }
 
 /// A panel's id in the dock's tree, as saved.
@@ -610,6 +616,28 @@ fn tab_button(ui: &mut Ui, id: Id, title: &str, state: &TabState) -> (Response, 
     (response, close.clicked())
 }
 
+/// The three dots at the right of a tab bar whose front panel has a menu (#387), and the menu they open.
+fn panel_menu(ui: &mut Ui, panel: &dyn Panel, cx: &mut PanelContext<'_>) {
+    let p = current_colors(ui.ctx()).palette;
+    let side = ui.available_height();
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+    let label = format!("{} options", panel.title());
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), &label));
+    if response.hovered() {
+        ui.painter().rect_filled(
+            rect.shrink(space::S1),
+            CornerRadius::same(radius::ITEM / 2),
+            hovered_tab_fill(&p),
+        );
+    }
+    let ink = if response.hovered() { p.text } else { p.subtle };
+    for offset in [-5.0, 0.0, 5.0] {
+        ui.painter().circle_filled(rect.center() + vec2(offset, 0.0), 1.6, ink);
+    }
+    egui::Popup::menu(&response).show(|ui| panel.menu(ui, cx));
+    response.on_hover_text(label);
+}
+
 impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
     fn pane_ui(&mut self, ui: &mut Ui, _tile: TileId, pane: &mut PanelId) -> UiResponse {
         let p = current_colors(ui.ctx()).palette;
@@ -660,6 +688,23 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
             self.close.push(tile);
         }
         response
+    }
+
+    fn top_bar_right_ui(
+        &mut self,
+        tiles: &Tiles<PanelId>,
+        ui: &mut Ui,
+        _tile: TileId,
+        tabs: &egui_tiles::Tabs,
+        _scroll_offset: &mut f32,
+    ) {
+        let front = tabs.active.and_then(|tile| match tiles.get(tile) {
+            Some(Tile::Pane(pane)) => self.panel(pane),
+            _ => None,
+        });
+        if let Some(panel) = front.filter(|panel| panel.has_menu()) {
+            panel_menu(ui, panel, self.cx);
+        }
     }
 
     fn paint_drag_preview(

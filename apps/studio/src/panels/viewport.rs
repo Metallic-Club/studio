@@ -103,6 +103,15 @@ impl Panel for Viewport {
         Context::Viewport
     }
 
+    fn has_menu(&self) -> bool {
+        true
+    }
+
+    /// What the viewport shows (#387): for now, whether the axis gizmo does.
+    fn menu(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        crate::theme::checkbox(ui, &mut cx.settings.viewport.show_axes, "Axis gizmo");
+    }
+
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         let p = current_colors(ui.ctx()).palette;
         let pixels_per_point = ui.ctx().pixels_per_point();
@@ -187,9 +196,11 @@ impl Panel for Viewport {
             editor.viewport.gizmo = gizmo;
             speed_note(&painter, rect, &editor.viewport, &cx.settings.viewport);
         }
-        // Which way the axes point (#386).
-        let rotation = cx.editor.viewport.camera.rotation();
-        crate::viewport::axes::paint(&ui.painter().with_clip_rect(rect), rect, rotation);
+        // Which way the axes point (#386), unless the Viewport's menu turned it off (#387).
+        if cx.settings.viewport.show_axes {
+            let rotation = cx.editor.viewport.camera.rotation();
+            crate::viewport::axes::paint(&ui.painter().with_clip_rect(rect), rect, rotation);
+        }
         // Frame pacing: continuous while the viewport shows and the window has focus, at the frame cap if there is
         // one. Otherwise Studio waits for input or a change.
         if ui.input(|input| input.focused) {

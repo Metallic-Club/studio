@@ -4222,6 +4222,28 @@ mod tests {
     }
 
     #[test]
+    fn the_viewport_s_menu_turns_the_axis_gizmo_off_and_other_panels_have_none() {
+        let mut harness = editing(settings_file("viewport-menu", None), "Viewport Menu Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // Three dots at the right of the Viewport's tab bar (#387), on its row.
+        let dots = harness.get_by_role_and_label(Role::Button, "Viewport options").rect();
+        let tab = harness.get_by_role_and_label(Role::Tab, "Viewport").rect();
+        assert!(dots.left() > tab.right() && (dots.center().y - tab.center().y).abs() < 1.0);
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "Explorer options")
+                .is_none()
+        );
+        assert!(harness.state().studio.settings().viewport.show_axes);
+        harness.get_by_role_and_label(Role::Button, "Viewport options").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::CheckBox, "Axis gizmo").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.settings().viewport.show_axes);
+    }
+
+    #[test]
     fn the_tab_bars_sit_above_their_panels_with_no_setting_to_move_them() {
         // A file from #230's Studio, with the tab bars at the bottom: the key is kept, and nothing moves.
         let path = settings_file("editor-tabs", Some("[appearance]\ntab_position = \"bottom\"\n"));
