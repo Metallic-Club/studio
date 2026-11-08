@@ -110,7 +110,8 @@ impl Panel for Viewport {
             let view = View::new(&cx.editor.viewport.camera, rect);
             // The tool's gizmo first: a click on it is not a selection (#355).
             let mut gizmo = std::mem::take(&mut cx.editor.viewport.gizmo);
-            let on_gizmo = tools::interact(ui, &response, &view, &mut cx.editor.scene(), &mut gizmo);
+            let snap = tools::Snap::default();
+            let on_gizmo = tools::interact(ui, &response, &view, &mut cx.editor.scene(), &mut gizmo, snap);
             let editor = &mut *cx.editor;
             let under = |at| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray));
             let hovered = response.hover_pos().filter(|_| !on_gizmo).and_then(under);

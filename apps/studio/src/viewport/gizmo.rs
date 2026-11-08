@@ -8,6 +8,7 @@
 use egui::Pos2;
 use metallic_engine::metallic_core::glam::{Quat, Vec2, Vec3};
 
+use super::pick::Bounds;
 use super::view::{Ray, View};
 
 /// The world's axes.
@@ -158,6 +159,48 @@ pub fn hit_move(view: &View, pointer: Pos2, origin: Vec3, dirs: &[Vec3; 3]) -> O
     }
 }
 
+/// How big a Scale handle's sphere is at `point`: the same size on the screen whatever the distance.
+pub fn sphere_radius(camera: Vec3, point: Vec3) -> f32 {
+    ((point - camera).length() * 0.017).max(0.05)
+}
+
+/// Where the Scale handle of the face on the `sign` side of `axis` is: a little out from the face, so the handles do
+/// not sit on the object.
+pub fn scale_handle(bounds: &Bounds, camera: Vec3, axis: usize, sign: f32) -> Vec3 {
+    let face = bounds.face(axis, sign);
+    face + bounds.outward(axis, sign) * (sphere_radius(camera, face) * 2.6)
+}
+
+/// Where `ray` meets the sphere at `center`, if it does (0 from inside).
+fn ray_sphere((origin, dir): Ray, center: Vec3, radius: f32) -> Option<f32> {
+    let oc = origin - center;
+    let b = oc.dot(dir);
+    let disc = b * b - (oc.length_squared() - radius * radius);
+    if disc < 0.0 {
+        return None;
+    }
+    let t = -b - disc.sqrt();
+    (t > 0.0)
+        .then_some(t)
+        .or_else(|| (-b + disc.sqrt() > 0.0).then_some(0.0))
+}
+
+/// The Scale handle (axis, side) `ray` meets first, picked a little bigger than it is drawn.
+pub fn hit_scale(camera: Vec3, ray: Ray, bounds: &Bounds) -> Option<(usize, f32)> {
+    let mut best: Option<((usize, f32), f32)> = None;
+    for axis in 0..3 {
+        for sign in [1.0f32, -1.0] {
+            let at = scale_handle(bounds, camera, axis, sign);
+            if let Some(t) = ray_sphere(ray, at, sphere_radius(camera, at) * 1.6)
+                && best.is_none_or(|(_, nearest)| t < nearest)
+            {
+                best = Some(((axis, sign), t));
+            }
+        }
+    }
+    best.map(|(handle, _)| handle)
+}
+
 /// The closest points of a ray `(o, d)` and an infinite line through `q` along `e`: their parameters along each.
 pub fn ray_line((o, d): Ray, q: Vec3, e: Vec3) -> Option<(f32, f32)> {
     let w0 = o - q;
@@ -284,6 +327,31 @@ mod tests {
         let diagonal = Vec3::splat(25.0);
         assert_eq!(move_hit(diagonal, Vec3::ZERO, Vec3::ZERO), None, "the middle is empty");
         assert_eq!(plane_axes(1), (0, 2));
+    }
+
+    #[test]
+    fn scale_spheres_stand_off_the_faces_of_the_turned_box() {
+        let turned = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let bounds = Bounds {
+            center: Vec3::new(10.0, 2.0, 0.0),
+            half: Vec3::new(4.0, 1.0, 2.0),
+            rot: turned,
+        };
+        assert!(
+            bounds.face(0, 1.0).abs_diff_eq(Vec3::new(10.0, 2.0, -4.0), 1e-4),
+            "+X of a quarter turn faces -Z"
+        );
+        let camera = Vec3::new(10.0, 40.0, 0.0);
+        let top = scale_handle(&bounds, camera, 1, 1.0);
+        assert!(top.y > bounds.face(1, 1.0).y, "outside the face");
+        assert_eq!(
+            hit_scale(camera, (camera, (top - camera).normalize()), &bounds),
+            Some((1, 1.0))
+        );
+        assert_eq!(
+            hit_scale(camera, (camera, Vec3::new(1.0, -1.0, 0.0).normalize()), &bounds),
+            None
+        );
     }
 
     #[test]

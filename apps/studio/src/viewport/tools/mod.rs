@@ -1,0 +1,441 @@
+//! The transform tools in the viewport (#355), after Forge-Engine's `tools.rs`: **Select, Move, Scale, Rotate**, in
+//! world or local axes. The tool's gizmo sits on the selection: on the active instance's pivot for one, at the middle
+//! of everything selected for several. [`super::gizmo`] has the maths; each tool's handles, drag and drawing are in a
+//! module of their own ([`moving`], [`scale`]), and this module is what they share: which tool, what it acts on, the
+//! pointer, and the measurements' ruler and labels.
+//!
+//! **Drags are measured from where they began**: each frame places the instances from where they were when the drag
+//! started and from the pointer, never from the frame before, so nothing adds up rounding, and a key pressed half way
+//! only changes the formula. A drag is one undo step: the button is held throughout (see `editor::history`), and the
+//! engine code a drag runs writes the data model, so the scene notes the properties it changed
+//! ([`Scene::watching`]).
+
+mod moving;
+mod scale;
+
+use egui::{Color32, Painter, Pos2, Stroke};
+use metallic_engine::metallic_classes::base::world_object;
+use metallic_engine::metallic_core::glam::Vec3;
+use metallic_engine::metallic_core::{CFrame, DataModel, Id, PropId};
+
+use super::gizmo::{self, MoveHandle};
+use super::pick::{self, Bounds};
+use super::view::{Ray, View};
+use crate::editor::edit::is_movable;
+use crate::editor::{Scene, Selection};
+
+/// A transform tool.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Tool {
+    /// Select, and drag parts about (#358).
+    #[default]
+    Select,
+    /// Move along the axes.
+    Move,
+    /// Resize (#356).
+    Scale,
+    /// Turn (#357).
+    Rotate,
+}
+
+/// A handle of the active tool.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Handle {
+    /// One of the Move gizmo's.
+    Move(MoveHandle),
+    /// A Scale sphere: its axis (0..3) and side (+1 or -1).
+    Scale(usize, f32),
+}
+
+/// Where the tool's handles are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    /// The gizmo's centre.
+    pub origin: Vec3,
+    /// Its three axes.
+    pub dirs: [Vec3; 3],
+    /// How long its handles are.
+    pub len: f32,
+    /// The Scale tool's box: one part's own, or the world-aligned box round several.
+    pub bounds: Option<Bounds>,
+}
+
+/// The increments drags snap to (#359); 0 is free.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Snap {
+    /// Moves and sizes, in studs.
+    pub move_step: f32,
+    /// Turns, in degrees.
+    pub turn_step: f32,
+}
+
+/// The keys a drag reads as it goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Keys {
+    /// Shift: scale all three sizes by one factor.
+    pub shift: bool,
+    /// Ctrl (Cmd): scale both sides about the centre.
+    pub ctrl: bool,
+}
+
+/// An instance a drag moves, as it was when the drag began.
+#[derive(Clone, Copy, Debug)]
+struct Start {
+    id: Id,
+    pivot: CFrame,
+}
+
+/// What a drag of each kind keeps.
+#[derive(Clone, Debug)]
+enum Kind {
+    Move(moving::MoveDrag),
+    Scale(scale::ScaleDrag),
+}
+
+/// A drag in progress.
+#[derive(Clone, Debug)]
+pub struct Drag {
+    frame: Frame,
+    starts: Vec<Start>,
+    /// Every property the drag can change, which the scene notes for undo.
+    watched: Vec<(Id, PropId)>,
+    kind: Kind,
+}
+
+/// The tool, its axes and what the pointer does with the gizmo: the viewport's part of the editor.
+#[derive(Clone, Debug, Default)]
+pub struct Gizmo {
+    /// The active tool.
+    pub tool: Tool,
+    /// Whether the handles follow the active instance's axes rather than the world's.
+    pub local: bool,
+    /// The handle under the pointer.
+    hover: Option<Handle>,
+    /// The drag in progress.
+    drag: Option<Drag>,
+}
+
+impl Gizmo {
+    /// Whether a handle is being dragged.
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+}
+
+/// What the tools act on: the selection's instances that are not inside another selected one and have a pivot.
+pub fn targets(dm: &DataModel, selection: &Selection) -> Vec<Id> {
+    selection
+        .top_level(dm)
+        .into_iter()
+        .filter(|&id| is_movable(dm, id) && world_object::pivot(dm, id).is_ok())
+        .collect()
+}
+
+/// The world-aligned box round `targets`' outlines.
+fn span(dm: &DataModel, targets: &[Id]) -> Option<Bounds> {
+    let corners: Vec<Vec3> = targets
+        .iter()
+        .filter_map(|&id| pick::outline_box(dm, id))
+        .flat_map(|bounds| bounds.corners())
+        .collect();
+    let min = corners.iter().copied().reduce(Vec3::min)?;
+    let max = corners.iter().copied().reduce(Vec3::max)?;
+    Some(Bounds {
+        center: (min + max) * 0.5,
+        half: ((max - min) * 0.5).max(Vec3::splat(0.001)),
+        rot: Default::default(),
+    })
+}
+
+/// Where `tool`'s handles are for `targets` (the active one last), seen from `camera`. `None` for the Select tool and
+/// for nothing to act on.
+pub fn frame_for(dm: &DataModel, tool: Tool, local: bool, targets: &[Id], camera: Vec3) -> Option<Frame> {
+    let &active = targets.last()?;
+    if tool == Tool::Select {
+        return None;
+    }
+    let pivot = world_object::pivot(dm, active).ok()?;
+    let (origin, dirs, bounds) = match (tool, targets) {
+        // One part: its own box and axes (a size is along its own edges).
+        (Tool::Scale, [only]) if pick::part_box(dm, *only).is_some() => {
+            let own = pick::part_box(dm, *only)?;
+            (own.center, gizmo::axis_dirs(true, own.rot), Some(own))
+        }
+        (Tool::Scale, _) => {
+            let around = span(dm, targets)?;
+            (around.center, gizmo::AXES, Some(around))
+        }
+        (_, [_]) => (pivot.position(), gizmo::axis_dirs(local, pivot.rotation()), None),
+        (_, _) => (
+            span(dm, targets)?.center,
+            gizmo::axis_dirs(local, pivot.rotation()),
+            None,
+        ),
+    };
+    Some(Frame {
+        origin,
+        dirs,
+        len: gizmo::handle_len(camera, origin),
+        bounds,
+    })
+}
+
+/// The handle of `tool` under `pointer`.
+pub fn hit(tool: Tool, frame: &Frame, view: &View, pointer: Pos2) -> Option<Handle> {
+    match tool {
+        Tool::Move => gizmo::hit_move(view, pointer, frame.origin, &frame.dirs).map(Handle::Move),
+        Tool::Scale => {
+            let ray = view.ray(pointer)?;
+            gizmo::hit_scale(view.pos, ray, frame.bounds.as_ref()?).map(|(axis, sign)| Handle::Scale(axis, sign))
+        }
+        Tool::Select | Tool::Rotate => None,
+    }
+}
+
+/// `name` of every instance in and under `targets` that has it: what a drag can change.
+fn watch_list(dm: &DataModel, targets: &[Id], names: &[&str]) -> Vec<(Id, PropId)> {
+    let mut out = Vec::new();
+    for &target in targets {
+        let inside = dm.descendants(target).into_iter().flatten();
+        for id in std::iter::once(target).chain(inside) {
+            out.extend(
+                names
+                    .iter()
+                    .filter_map(|name| dm.prop_id(id, name).ok().map(|prop| (id, prop))),
+            );
+        }
+    }
+    out
+}
+
+/// Takes hold of `handle` with the pointer's `ray`.
+pub fn begin_drag(dm: &DataModel, handle: Handle, frame: Frame, ray: Ray, targets: &[Id]) -> Option<Drag> {
+    let starts = targets
+        .iter()
+        .filter_map(|&id| world_object::pivot(dm, id).ok().map(|pivot| Start { id, pivot }))
+        .collect();
+    let (kind, watched) = match handle {
+        Handle::Move(handle) => (
+            Kind::Move(moving::begin(handle, &frame, ray)?),
+            watch_list(dm, targets, &["CFrame"]),
+        ),
+        Handle::Scale(axis, sign) => (
+            Kind::Scale(scale::begin(dm, axis, sign, &frame, ray, targets)?),
+            watch_list(dm, targets, &["CFrame", "Size"]),
+        ),
+    };
+    Some(Drag {
+        frame,
+        starts,
+        watched,
+        kind,
+    })
+}
+
+/// Follows the pointer's `ray` with the `keys` held: places the instances from where they started, as part of the
+/// scene's action under way, snapped to `snap`.
+pub fn update_drag(scene: &mut Scene<'_>, drag: &mut Drag, ray: Ray, keys: Keys, snap: Snap) {
+    let watched = std::mem::take(&mut drag.watched);
+    scene.watching(&watched, |dm| match &mut drag.kind {
+        Kind::Move(state) => moving::update(dm, state, &drag.frame, &drag.starts, ray, snap.move_step),
+        Kind::Scale(state) => scale::update(dm, state, &drag.frame, ray, keys, snap.move_step),
+    });
+    drag.watched = watched;
+}
+
+/// The tools' part of a viewport frame: what is under the pointer, starting, running and ending a drag on the
+/// panel's `response`. Returns whether the pointer is on the gizmo, so a click there does not select.
+pub fn interact(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    view: &View,
+    scene: &mut Scene<'_>,
+    gizmo: &mut Gizmo,
+    snap: Snap,
+) -> bool {
+    if let Some(mut drag) = gizmo.drag.take() {
+        if ui.input(|input| input.pointer.primary_down()) {
+            let (at, modifiers) = ui.input(|input| (input.pointer.latest_pos(), input.modifiers));
+            let keys = Keys {
+                shift: modifiers.shift,
+                ctrl: modifiers.command,
+            };
+            if let Some(ray) = at.and_then(|at| view.ray(at)) {
+                update_drag(scene, &mut drag, ray, keys, snap);
+            }
+            gizmo.drag = Some(drag);
+        }
+        return true;
+    }
+    let targets = targets(scene.dm, scene.selection);
+    let frame = frame_for(scene.dm, gizmo.tool, gizmo.local, &targets, view.pos);
+    gizmo.hover = frame
+        .zip(response.hover_pos())
+        .and_then(|(frame, at)| hit(gizmo.tool, &frame, view, at));
+    let alt = ui.input(|input| input.modifiers.alt);
+    if response.drag_started_by(egui::PointerButton::Primary) && !alt {
+        let origin = ui.input(|input| input.pointer.press_origin());
+        gizmo.drag = frame.zip(origin).and_then(|(frame, at)| {
+            let handle = hit(gizmo.tool, &frame, view, at)?;
+            begin_drag(scene.dm, handle, frame, view.ray(at)?, &targets)
+        });
+    }
+    gizmo.hover.is_some() || gizmo.drag.is_some()
+}
+
+/// Draws the tool's gizmo for the selection, or while dragging the drag's measurement (the handles step aside).
+pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo) {
+    if let Some(drag) = &gizmo.drag {
+        match &drag.kind {
+            Kind::Move(state) => moving::paint_measurement(painter, view, &drag.frame, state),
+            Kind::Scale(state) => scale::paint_measurement(painter, view, &drag.frame, state),
+        }
+        return;
+    }
+    let targets = targets(scene.dm, scene.selection);
+    let Some(frame) = frame_for(scene.dm, gizmo.tool, gizmo.local, &targets, view.pos) else {
+        return;
+    };
+    match gizmo.tool {
+        Tool::Move => moving::paint(painter, view, &frame, gizmo.hover),
+        Tool::Scale => scale::paint(painter, view, &frame, gizmo.hover, targets.len() > 1),
+        Tool::Select | Tool::Rotate => {}
+    }
+}
+
+/// The X, Y and Z colours: muted, easy to tell apart, quiet against the scene (Forge's).
+const AXIS_RGB: [[u8; 3]; 3] = [[214, 96, 96], [118, 186, 118], [96, 140, 214]];
+/// The colour of the handle under the pointer, and of a drag's measurement.
+const HIGHLIGHT_RGB: [u8; 3] = [236, 214, 120];
+/// The axes' names, for the measurements.
+const AXIS_NAMES: [&str; 3] = ["X", "Y", "Z"];
+
+fn colour(rgb: [u8; 3], alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha)
+}
+
+fn axis_colour(axis: usize, lit: bool, alpha: u8) -> Color32 {
+    colour(if lit { HIGHLIGHT_RGB } else { AXIS_RGB[axis] }, alpha)
+}
+
+/// How far apart a ruler's marks are, in studs.
+const RULER_STEP: f32 = 5.0;
+
+/// A ruler from `origin` along `dir`: the stretch travelled (`moved`) bright, a faint guide past both ends, and marks
+/// across it every [`RULER_STEP`], longest at the start and where it ends now. `size` is the gizmo's length.
+fn ruler(painter: &Painter, view: &View, origin: Vec3, dir: Vec3, rgb: [u8; 3], size: f32, moved: f32) {
+    let at = |s: f32| origin + dir * s;
+    let (lo, hi) = (moved.min(0.0) - RULER_STEP, moved.max(0.0) + RULER_STEP);
+    for (from, to, stroke) in [
+        (lo, moved.min(0.0), Stroke::new(1.5, colour(rgb, 110))),
+        (moved.max(0.0), hi, Stroke::new(1.5, colour(rgb, 110))),
+        (0.0, moved, Stroke::new(2.5, colour(HIGHLIGHT_RGB, 255))),
+    ] {
+        if (to - from).abs() > 1e-4
+            && let Some(line) = view.segment(at(from), at(to))
+        {
+            painter.line_segment(line, stroke);
+        }
+    }
+    let across = dir.cross(view.pos - origin).normalize_or_zero();
+    let tick = |s: f32, half: f32, color: Color32| {
+        if let Some(line) = view.segment(at(s) - across * half, at(s) + across * half) {
+            painter.line_segment(line, Stroke::new(1.5, color));
+        }
+    };
+    let small = size * 0.06;
+    let first = (lo / RULER_STEP).ceil() as i32;
+    let last = (hi / RULER_STEP).floor() as i32;
+    // Never more than a couple of hundred marks, however far the drag went.
+    let stride = ((last - first).max(1) / 200).max(1);
+    for k in (first..=last).filter(|k| k % stride == 0) {
+        tick(k as f32 * RULER_STEP, small, colour(rgb, 230));
+    }
+    tick(0.0, small * 1.8, colour(HIGHLIGHT_RGB, 255));
+    tick(moved, small * 2.4, colour(HIGHLIGHT_RGB, 255));
+}
+
+/// Text on a dark plate beside `at`, readable on any background.
+fn label(painter: &Painter, at: Pos2, text: &str, rgb: [u8; 3]) {
+    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::monospace(13.0), colour(rgb, 255));
+    let rect = egui::Align2::LEFT_BOTTOM.anchor_size(at + egui::vec2(12.0, -10.0), galley.size());
+    painter.rect_filled(
+        rect.expand2(egui::vec2(5.0, 2.0)),
+        4.0,
+        Color32::from_rgba_unmultiplied(15, 15, 18, 215),
+    );
+    painter.galley(rect.min, galley, colour(rgb, 255));
+}
+
+#[cfg(test)]
+mod testing {
+    //! A scene to drag in, for the tools' tests.
+
+    use egui::Rect;
+    use metallic_engine::metallic_core::Value;
+
+    use super::*;
+    use crate::editor::{Clipboard, History};
+    use crate::panels::explorer::ExplorerState;
+    use crate::viewport::EditorCamera;
+
+    /// A game, what is selected in it, and what a [`Scene`] borrows.
+    pub(super) struct Bench {
+        pub(super) dm: DataModel,
+        pub(super) selection: Selection,
+        explorer: ExplorerState,
+        history: History,
+        clipboard: Clipboard,
+    }
+
+    impl Bench {
+        pub(super) fn new() -> Self {
+            let dm = metallic_engine::metallic_classes::new_game().unwrap();
+            Self {
+                explorer: ExplorerState::new(&dm),
+                dm,
+                selection: Selection::new(),
+                history: History::default(),
+                clipboard: Clipboard::default(),
+            }
+        }
+
+        /// A part in Workspace at `at`, `size` big.
+        pub(super) fn part(&mut self, at: Vec3, size: Vec3) -> Id {
+            let dm = &mut self.dm;
+            let id = dm.create(dm.registry().class_id("Part").unwrap()).unwrap();
+            dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at))).unwrap();
+            dm.set_by_name(id, "Size", Value::Vector3(size)).unwrap();
+            dm.set_parent(id, pick::workspace(dm)).unwrap();
+            id
+        }
+
+        /// Selects `ids`, as a step of the history already taken.
+        pub(super) fn select(&mut self, ids: &[Id]) {
+            self.selection = Selection::of(ids.iter().copied());
+            self.history = History::new(self.selection.clone());
+        }
+
+        pub(super) fn scene(&mut self) -> Scene<'_> {
+            Scene {
+                dm: &mut self.dm,
+                selection: &mut self.selection,
+                explorer: &mut self.explorer,
+                history: &mut self.history,
+                clipboard: &mut self.clipboard,
+                playing: false,
+            }
+        }
+    }
+
+    /// A view from `camera` looking at `target`, 1000 by 700 points.
+    pub(super) fn look(camera: Vec3, target: Vec3) -> View {
+        let camera = EditorCamera::looking_at(camera, target);
+        View::new(&camera, Rect::from_min_size(Pos2::ZERO, egui::vec2(1000.0, 700.0)))
+    }
+
+    /// The pivot's position of `id`.
+    pub(super) fn position(dm: &DataModel, id: Id) -> Vec3 {
+        world_object::pivot(dm, id).unwrap().position()
+    }
+}
