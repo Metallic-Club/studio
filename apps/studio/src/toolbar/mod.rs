@@ -41,6 +41,8 @@ const SPACER_WIDTH: f32 = 24.0;
 const SEPARATOR_WIDTH: f32 = 13.0;
 /// A tool's icon size.
 const TOOL_ICON: f32 = 20.0;
+/// What a tab being renamed has past its name: room for the text cursor (#326).
+const RENAME_SLACK: f32 = 2.0;
 
 /// What happened in the toolbar this frame, for Studio to act on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,16 +246,39 @@ impl Toolbar {
         for (index, tab) in self.config.tabs.iter().enumerate() {
             let id = ui.scope_id().with(("metallic.toolbar.tab", tab.id));
             if let Some((_, name)) = self.renaming.as_mut().filter(|(at, _)| *at == index) {
-                let field = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(120.0, rect.height() - 6.0));
+                // In place (#326): the tab as it is drawn, its name where it was, with only a text cursor added. No
+                // frame, no margin, and as wide as the name so far, so nothing moves while typing.
+                let galley = ui.painter().layout_no_wrap(name.clone(), font.clone(), p.text);
+                let tab_rect = Rect::from_min_size(
+                    pos2(x, rect.top()),
+                    vec2(galley.size().x + 2.0 * space::S5, rect.height()),
+                );
+                if index == self.config.active {
+                    ui.painter()
+                        .rect_filled(tab_rect, CornerRadius::ZERO, crate::dock::active_tab_fill(&p));
+                }
+                let field = Rect::from_min_size(
+                    pos2(tab_rect.left() + space::S5, tab_rect.center().y - galley.size().y / 2.0),
+                    // Room for the cursor after the last letter.
+                    vec2(galley.size().x + RENAME_SLACK, galley.size().y),
+                );
+                let field_id = id.with("rename");
                 let response = ui.put(
                     field,
                     egui::TextEdit::singleline(name)
-                        .id(id.with("rename"))
+                        .id(field_id)
                         .font(font.clone())
-                        .margin(vec2(space::S2, 0.0)),
+                        .text_color(p.text)
+                        .frame(egui::Frame::NONE)
+                        .desired_width(field.width()),
                 );
                 if !response.has_focus() && !response.lost_focus() {
                     response.request_focus();
+                    // The cursor after the name, nothing selected: typing goes on from where the name ends.
+                    let mut state = egui::text_edit::TextEditState::load(ui.ctx(), field_id).unwrap_or_default();
+                    let end = egui::text::CCursor::new(name.chars().count());
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+                    state.store(ui.ctx(), field_id);
                 }
                 if response.lost_focus() {
                     let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -263,8 +288,8 @@ impl Toolbar {
                         Change::FinishRename
                     });
                 }
-                rects.push(field);
-                x = field.right() + space::S1;
+                rects.push(tab_rect);
+                x = tab_rect.right() + space::S1;
                 continue;
             }
             let galley = ui.painter().layout_no_wrap(tab.name.clone(), font.clone(), p.text);
