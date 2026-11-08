@@ -1,8 +1,9 @@
 //! The Properties panel: the selected instance's properties as the class registry describes them (`PropMeta`), in
-//! their groups and order, **read-only** in this slice (editing comes with undo).
+//! their groups and order, **edited in place** (#349, see [`super::values`]): each change is written through the
+//! scene, so it is an undo step. A `CFrame` is two rows, its position and its orientation.
 //!
-//! Values are formatted for reading: vectors as their components, a colour as a swatch and its 0-255 channels, an
-//! enum as its item, a reference as the instance's name, a boolean as a check box.
+//! What cannot be edited is formatted for reading: references as the instance's name, read-only properties as their
+//! value (vectors as their components, a colour as a swatch and its 0-255 channels, a boolean as a check box).
 //!
 //! Each group's rows are striped (#230): alternately a little darker and a little brighter than the panel, with faint
 //! 1 px lines between the rows and between the name and value columns ([`crate::theme::tokens::RowShades`]). The line
@@ -12,8 +13,9 @@ use egui::{
     Align, Color32, CornerRadius, CursorIcon, Label, Layout, Rect, RichText, Role, ScrollArea, Sense, Stroke, Ui,
     UiBuilder, WidgetInfo, pos2, vec2,
 };
-use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, ResolvedProp, Value};
+use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, PropMeta, PropType, ResolvedProp, Value};
 
+use super::values::{self, Part};
 use super::{class_icon, empty_note, ids};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
@@ -52,19 +54,27 @@ fn split_x(left: f32, width: f32, share: f32) -> f32 {
 #[derive(Clone, Copy, Debug)]
 pub struct Properties;
 
-/// One property as the panel lists it.
-#[derive(Clone, Debug, PartialEq)]
+/// One property as the panel lists it (a `CFrame` is two: its position and its orientation).
+#[derive(Clone, Debug)]
 pub struct PropertyRow {
-    /// The name shown (`PropMeta::label`, or the name).
-    pub label: &'static str,
+    /// The name shown (`PropMeta::label`, or the name; a `CFrame`'s rows add Position and Orientation).
+    pub label: String,
     /// What it does.
     pub description: &'static str,
     /// Its value.
     pub value: Value,
+    /// The property.
+    pub prop: PropId,
+    /// Its declaration.
+    pub meta: &'static PropMeta,
+    /// Which part of the value the row shows.
+    pub part: Part,
+    /// Whether the panel edits it: not a read-only property, a computed one with no setter, or a reference.
+    pub editable: bool,
 }
 
 /// A group of properties, in the order the panel lists them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Group {
     /// Its name.
     pub name: &'static str,
@@ -94,14 +104,26 @@ pub fn groups(dm: &DataModel, id: Id) -> Vec<Group> {
         } else {
             meta.group
         };
-        let row = PropertyRow {
-            label: if meta.label.is_empty() { meta.name } else { meta.label },
-            description: meta.description,
-            value,
+        let label = if meta.label.is_empty() { meta.name } else { meta.label };
+        let parts: &[(Part, &str)] = if matches!(value, Value::CFrame(_)) {
+            &[(Part::Position, " Position"), (Part::Orientation, " Orientation")]
+        } else {
+            &[(Part::Whole, "")]
         };
-        match groups.iter_mut().find(|(group, _)| *group == name) {
-            Some((_, rows)) => rows.push((meta.order, index, row)),
-            None => groups.push((name, vec![(meta.order, index, row)])),
+        for &(part, suffix) in parts {
+            let row = PropertyRow {
+                label: format!("{label}{suffix}"),
+                description: meta.description,
+                value: value.clone(),
+                prop: PropId::new(index as u16),
+                meta,
+                part,
+                editable: editable(meta),
+            };
+            match groups.iter_mut().find(|(group, _)| *group == name) {
+                Some((_, rows)) => rows.push((meta.order, index, row)),
+                None => groups.push((name, vec![(meta.order, index, row)])),
+            }
         }
     }
     groups
@@ -118,6 +140,23 @@ pub fn groups(dm: &DataModel, id: Id) -> Vec<Group> {
 
 fn visible(prop: &ResolvedProp) -> bool {
     !prop.hidden && !prop.meta.flags.contains(PropFlags::HIDDEN)
+}
+
+/// Whether the panel edits a property: not when it is read-only, computed without a setter, or a reference (the
+/// Parent changes by dragging in the Explorer).
+fn editable(meta: &PropMeta) -> bool {
+    !meta.flags.contains(PropFlags::READ_ONLY)
+        && meta.computed.is_none_or(|computed| computed.set.is_some())
+        && !matches!(meta.ty, PropType::Ref(_))
+}
+
+/// The value a row shows: a `CFrame`'s position or orientation as a `Vector3`, anything else as it is.
+fn shown_value(row: &PropertyRow) -> Value {
+    match (&row.value, row.part) {
+        (Value::CFrame(frame), Part::Position) => Value::Vector3(frame.position()),
+        (Value::CFrame(frame), Part::Orientation) => Value::Vector3(frame.to_orientation_deg()),
+        (value, _) => value.clone(),
+    }
 }
 
 /// A number as people read it: at most three decimals, without trailing zeros.
@@ -194,12 +233,12 @@ impl Panel for Properties {
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         // The running game's values while one runs, live (ADR 0010 §5).
-        let scene = cx.editor.scene();
+        let mut scene = cx.editor.scene();
         if scene.playing {
             // The values change as the game runs. No banner says so (#309).
             ui.ctx().request_repaint();
         }
-        let dm: &_ = scene.dm;
+        let dm: &DataModel = scene.dm;
         // The active instance (#347); several at once is #350.
         let Some(id) = scene.selection.active().filter(|&id| dm.contains(id)) else {
             empty_note(ui, "Select something in the Explorer to see its properties.");
@@ -223,6 +262,7 @@ impl Panel for Properties {
             );
         });
         ui.add_space(space::S4);
+        let mut edits: Vec<(PropId, Value)> = Vec::new();
         ScrollArea::vertical()
             .id_salt("properties.rows")
             .auto_shrink([false, false])
@@ -237,7 +277,12 @@ impl Panel for Properties {
                         let shades = p.rows();
                         for (index, row) in group.rows.iter().enumerate() {
                             let last = index + 1 == group.rows.len();
-                            ui.push_id(row.label, |ui| row_ui(ui, dm, row, shades.fill(index), last, share));
+                            let edited = ui
+                                .push_id(&row.label, |ui| row_ui(ui, dm, row, shades.fill(index), last, share))
+                                .inner;
+                            if let Some(value) = edited {
+                                edits.push((row.prop, value));
+                            }
                         }
                     });
                     ui.add_space(space::S5);
@@ -245,19 +290,26 @@ impl Panel for Properties {
                 let rows = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
                 split_grip(ui, rows, share);
             });
+        // Through the scene, so each is an undo step (#348); a value the property refuses is logged.
+        for (prop, value) in edits {
+            if let Err(error) = scene.set(id, prop, value) {
+                log::warn!("properties: {error}");
+            }
+        }
     }
 }
 
-/// One property, a row of a fixed height striped with `fill`: its name on the left and its value on the right, each
-/// cut short with an ellipsis (and shown whole on hover) when it does not fit. A faint line sits above the row and
-/// between its columns, and under it when it is the group's `last`. The names take `share` of its width.
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool, share: f32) {
+/// One property, a row of a fixed height striped with `fill`: its name on the left, cut short with an ellipsis (and
+/// shown whole on hover) when it does not fit, and its editor (or, when it cannot be edited, its value) on the right.
+/// A faint line sits above the row and between its columns, and under it when it is the group's `last`. The names
+/// take `share` of its width. Returns the new value when the user changed it.
+fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool, share: f32) -> Option<Value> {
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, size::ROW), Sense::hover());
     if !ui.is_rect_visible(rect) {
-        return;
+        return None;
     }
     let split = split_x(rect.left(), width, share);
     // The stripe and the lines between rows reach the panel's sides (#301).
@@ -286,7 +338,7 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
     ui.scope_builder(in_cell(name_cell), |ui| {
         ui.set_clip_rect(name_cell.intersect(ui.clip_rect()));
         let name = ui.add(
-            Label::new(RichText::new(row.label).size(text::BODY).color(p.muted))
+            Label::new(RichText::new(&row.label).size(text::BODY).color(p.muted))
                 .truncate()
                 .selectable(false),
         );
@@ -296,8 +348,14 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
     });
     ui.scope_builder(in_cell(value_cell), |ui| {
         ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
-        value_ui(ui, dm, &row.value);
-    });
+        if row.editable {
+            values::edit(ui, dm, row.meta, &row.label, row.part, &row.value)
+        } else {
+            value_ui(ui, dm, &shown_value(row));
+            None
+        }
+    })
+    .inner
 }
 
 /// The strip over the line between the columns, down every row in `rows` (#324): dragging it moves the line, which
@@ -336,11 +394,7 @@ fn value_ui(ui: &mut Ui, dm: &DataModel, value: &Value) {
     match value {
         Value::Color3(color) => {
             let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-            let fill = Color32::from_rgb(
-                (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
-                (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
-                (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
-            );
+            let fill = values::swatch_fill(*color);
             ui.painter().rect(
                 rect,
                 CornerRadius::same(3),

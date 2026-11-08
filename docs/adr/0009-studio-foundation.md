@@ -102,7 +102,7 @@ One window, one state machine: **Splash → Sign in → Projects → Editor**. O
 - **Default layout:** Viewport in the centre with Output and Assets as tabs under it (Output first and in front,
   #323); on the right, the Explorer over the Properties, two fifths of the column to three (#256, #323).
 - **Panels in this slice:** Viewport; Explorer (the DataModel tree, selection of several (#347), search; since #274 its rows touch and are striped like Properties'); Properties (the selected
-  instance's properties from `PropMeta`, **read-only in this slice**, since editing comes with undo); Assets (the
+  instance's properties from `PropMeta`, read-only until undo came, edited in place since #349); Assets (the
   `.mtproj`'s asset index, #188); Output (engine and script log, with filter and clear).
 
 ### Toolbar (#232)
@@ -280,6 +280,13 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   no step can bring them back. 1000 steps are kept. The title's `*` follows the history's revision against the one
   saved. A running game has its own history, dropped at Stop. Edit, Undo (Primary+Z) and Redo (Primary+Y,
   Primary+Shift+Z), and Undo and Redo tools for the toolbar.
+- **Properties edits in place (#349)**, each change written through the scene (an undo step; a drag is one, a typed
+  value is one, written when its field is left): a check box for booleans; fields to drag or type in for numbers and
+  each component of a vector (within the property's range; a slider for `Widget::Slider`); a text field for strings
+  (Enter or leaving it writes, Escape drops); a `CFrame` as two rows, its position and its orientation in degrees; a
+  colour's swatch opens a picker beside its 0-255 channels; a drop-down of an enum's items. References (the Parent
+  changes by dragging in the Explorer), read-only properties and computed ones without a setter are shown, not
+  edited. Every control carries its property's label for screen readers (`Size X`).
 
 ## Not in this slice
 

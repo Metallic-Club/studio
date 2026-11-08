@@ -2403,9 +2403,10 @@ mod tests {
         assert_eq!(studio.dock().context(), Context::Explorer);
         harness.get_by_label("TRANSFORM");
         harness.get_by_label("Size");
-        harness.get_by_label("512, 16, 512");
-        harness.get_by_label("Concrete");
-        harness.get_by_label("99, 95, 98");
+        // Edited in place (#349): a field per component, the enum's drop-down, the colour's swatch.
+        harness.get_by_role_and_label(Role::SpinButton, "Size X");
+        harness.get_by_role_and_label(Role::ComboBox, "Material");
+        harness.get_by_role_and_label(Role::ColorWell, "Color");
 
         // The Assets tab beside Output (#256): the template's one asset is its scene, and Output goes behind it.
         harness.get_by_role_and_label(Role::Button, "Clear");
@@ -2588,6 +2589,116 @@ mod tests {
         assert_eq!(selected_names(&harness), ["Lighting"]);
     }
 
+    /// Types `text` into the field labelled `label` (a text field, or a number field, which a click opens for typing)
+    /// in place of what it holds, and presses Enter.
+    fn type_into(harness: &mut Harness<'_, Test>, label: &str, text: &str) {
+        let field = |harness: &Harness<'_, Test>| {
+            let found = harness.get_all_by_label(label).find(|node| {
+                let role = egui_kittest::kittest::NodeT::accesskit_node(node).role();
+                matches!(role, Role::TextInput | Role::SpinButton)
+            });
+            found.map(|node| node.rect()).expect("a field with that label")
+        };
+        let rect = field(harness);
+        left_click(harness, rect);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.key_press(Key::Backspace);
+        harness.event(egui::Event::Text(text.to_owned()));
+        harness.key_press(Key::Enter);
+        settle(harness);
+    }
+
+    #[test]
+    fn properties_edit_each_kind_of_value_and_undo_puts_it_back() {
+        let mut harness = editing(settings_file("editor-edit-props", None), "Edit Game");
+        harness.set_size(egui::vec2(1280.0, 1500.0));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        let baseplate = editor_baseplate(&harness);
+        let value = |harness: &Harness<'_, Test>, name: &str| {
+            harness
+                .state()
+                .studio
+                .editor()
+                .unwrap()
+                .dm
+                .get_by_name(baseplate, name)
+                .unwrap()
+        };
+        let undo = |harness: &mut Harness<'_, Test>| {
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+            settle(harness);
+        };
+
+        // A check box.
+        assert_eq!(value(&harness, "Anchored"), Value::Bool(true));
+        harness.get_by_role_and_label(Role::CheckBox, "Anchored").click();
+        settle(&mut harness);
+        assert_eq!(value(&harness, "Anchored"), Value::Bool(false));
+        undo(&mut harness);
+        assert_eq!(value(&harness, "Anchored"), Value::Bool(true));
+
+        // A string, written when the field is left: the Explorer follows.
+        type_into(&mut harness, "Name", "Floor");
+        assert_eq!(value(&harness, "Name"), Value::String("Floor".into()));
+        harness.get_by_role_and_label(Role::TreeItem, "Floor");
+        undo(&mut harness);
+        assert_eq!(value(&harness, "Name"), Value::String("Baseplate".into()));
+
+        // A vector's component, typed.
+        type_into(&mut harness, "Size X", "100");
+        let Value::Vector3(size) = value(&harness, "Size") else {
+            panic!("a vector");
+        };
+        assert_eq!((size.x, size.y, size.z), (100.0, 16.0, 512.0));
+        undo(&mut harness);
+        assert!(matches!(value(&harness, "Size"), Value::Vector3(size) if size.x == 512.0));
+
+        // A CFrame's position row moves the part; its orientation row turns it.
+        let placed = value(&harness, "CFrame");
+        type_into(&mut harness, "CFrame Position Y", "20");
+        let Value::CFrame(frame) = value(&harness, "CFrame") else {
+            panic!("a CFrame");
+        };
+        assert!((frame.position().y - 20.0).abs() < 1e-4);
+        type_into(&mut harness, "CFrame Orientation Y", "90");
+        let Value::Vector3(turned) = value(&harness, "Orientation") else {
+            panic!("a vector");
+        };
+        assert!((turned.y - 90.0).abs() < 1e-3, "{turned:?}");
+        // Two edits of one property this close together are one step (#348).
+        undo(&mut harness);
+        assert_eq!(value(&harness, "CFrame"), placed);
+
+        // A colour's channel.
+        type_into(&mut harness, "Color R", "255");
+        let Value::Color3(color) = value(&harness, "Color") else {
+            panic!("a colour");
+        };
+        assert_eq!(color.r, 1.0);
+        undo(&mut harness);
+
+        // An enum, from its drop-down.
+        harness.get_by_role_and_label(Role::ComboBox, "Material").click();
+        settle(&mut harness);
+        harness.get_by_label("Wood").click();
+        settle(&mut harness);
+        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Wood"));
+        undo(&mut harness);
+        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Concrete"));
+
+        // A number past its range is kept in it; a reference is not a field.
+        type_into(&mut harness, "Transparency", "4");
+        assert_eq!(value(&harness, "Transparency"), Value::Number(1.0));
+        assert!(harness.query_by_role_and_label(Role::TextInput, "Parent").is_none());
+        assert_eq!(
+            harness.query_all_by_label("Workspace").count(),
+            2,
+            "the Explorer's row and the Parent's name"
+        );
+    }
+
     #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
@@ -2602,7 +2713,7 @@ mod tests {
         // A match is selected like any row.
         harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
         settle(&mut harness);
-        harness.get_by_label("12, 1, 12");
+        harness.get_by_role_and_label(Role::SpinButton, "Size X");
 
         let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
         explorer.set_query("teleporter");
@@ -4375,8 +4486,9 @@ mod tests {
             }
         }
         assert!(runs >= 1, "more than one group");
-        // A long value is cut short, and a row keeps its height.
-        harness.get_by_label("512, 16, 512");
+        // A row of fields keeps the row's height (#349).
+        let size = harness.get_by_role_and_label(Role::SpinButton, "Size X").rect();
+        assert!(size.height() <= crate::theme::tokens::size::ROW, "{size:?}");
     }
 
     #[test]
