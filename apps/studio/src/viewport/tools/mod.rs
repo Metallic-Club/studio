@@ -1,7 +1,7 @@
 //! The transform tools in the viewport (#355), after Forge-Engine's `tools.rs`: **Select, Move, Scale, Rotate**, in
 //! world or local axes. The tool's gizmo sits on the selection: on the active instance's pivot for one, at the middle
 //! of everything selected for several. [`super::gizmo`] has the maths; each tool's handles, drag and drawing are in a
-//! module of their own ([`moving`], [`scale`], [`rotate`]), and this module is what they share: which tool, what it acts on, the
+//! module of their own ([`moving`], [`scale`], [`rotate`]; [`carry`] picks parts up), and this module is what they share: which tool, what it acts on, the
 //! pointer, and the measurements' ruler and labels.
 //!
 //! **Drags are measured from where they began**: each frame places the instances from where they were when the drag
@@ -10,6 +10,7 @@
 //! engine code a drag runs writes the data model, so the scene notes the properties it changed
 //! ([`Scene::watching`]).
 
+mod carry;
 mod moving;
 mod rotate;
 mod scale;
@@ -98,6 +99,7 @@ enum Kind {
     Move(moving::MoveDrag),
     Scale(scale::ScaleDrag),
     Rotate(rotate::RotateDrag),
+    Carry(carry::CarryDrag),
 }
 
 /// A drag in progress.
@@ -249,6 +251,31 @@ pub fn begin_drag(dm: &DataModel, handle: Handle, frame: Frame, ray: Ray, target
     })
 }
 
+/// Picks up the selection with `ray` (#358), when the part it meets is selected or inside something selected.
+pub fn carry(dm: &DataModel, selection: &Selection, ray: Ray) -> Option<Drag> {
+    let (part, t) = pick::nearest_part(dm, ray)?;
+    if !selection.contains(pick::selectable(dm, part)) {
+        return None;
+    }
+    let targets = targets(dm, selection);
+    let grab = ray.0 + ray.1 * t;
+    let kind = Kind::Carry(carry::begin(dm, &targets, grab, ray)?);
+    Some(Drag {
+        frame: Frame {
+            origin: grab,
+            dirs: gizmo::AXES,
+            len: 1.0,
+            bounds: None,
+        },
+        starts: targets
+            .iter()
+            .filter_map(|&id| world_object::pivot(dm, id).ok().map(|pivot| Start { id, pivot }))
+            .collect(),
+        watched: watch_list(dm, &targets, &["CFrame"]),
+        kind,
+    })
+}
+
 /// Follows the pointer's `ray` with the `keys` held: places the instances from where they started, as part of the
 /// scene's action under way, snapped to `snap`.
 pub fn update_drag(scene: &mut Scene<'_>, drag: &mut Drag, ray: Ray, keys: Keys, snap: Snap) {
@@ -257,6 +284,7 @@ pub fn update_drag(scene: &mut Scene<'_>, drag: &mut Drag, ray: Ray, keys: Keys,
         Kind::Move(state) => moving::update(dm, state, &drag.frame, &drag.starts, ray, snap.move_step),
         Kind::Scale(state) => scale::update(dm, state, &drag.frame, ray, keys, snap.move_step),
         Kind::Rotate(state) => rotate::update(dm, state, &drag.frame, &drag.starts, ray, snap.turn_step),
+        Kind::Carry(state) => carry::update(dm, state, &drag.starts, ray, snap.move_step),
     });
     drag.watched = watched;
 }
@@ -293,10 +321,21 @@ pub fn interact(
     let alt = ui.input(|input| input.modifiers.alt);
     if response.drag_started_by(egui::PointerButton::Primary) && !alt {
         let origin = ui.input(|input| input.pointer.press_origin());
-        gizmo.drag = frame.zip(origin).and_then(|(frame, at)| {
-            let handle = hit(gizmo.tool, &frame, view, at)?;
-            begin_drag(scene.dm, handle, frame, view.ray(at)?, &targets)
-        });
+        let ray = origin.and_then(|at| view.ray(at));
+        let handle = frame
+            .zip(origin)
+            .and_then(|(frame, at)| Some((frame, hit(gizmo.tool, &frame, view, at)?)));
+        gizmo.drag = match (handle, ray) {
+            (Some((frame, handle)), Some(ray)) => begin_drag(scene.dm, handle, frame, ray, &targets),
+            // Off the handles, a drag on a part carries it (#358), selected first if it was not.
+            (None, Some(ray)) => {
+                if let Some(picked) = pick::pick(scene.dm, ray).filter(|&id| !scene.selection.contains(id)) {
+                    scene.selection.set_only(Some(picked));
+                }
+                carry(scene.dm, scene.selection, ray)
+            }
+            _ => None,
+        };
     }
     gizmo.hover.is_some() || gizmo.drag.is_some()
 }
@@ -309,6 +348,8 @@ pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo, s
             Kind::Move(state) => moving::paint_measurement(painter, view, &drag.frame, state),
             Kind::Scale(state) => scale::paint_measurement(painter, view, &drag.frame, state),
             Kind::Rotate(state) => rotate::paint_measurement(painter, view, &drag.frame, state, snap.turn_step),
+            // What is carried shows itself.
+            Kind::Carry(_) => {}
         }
         return;
     }
