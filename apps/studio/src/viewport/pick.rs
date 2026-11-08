@@ -42,10 +42,16 @@ impl Bounds {
     }
 
     /// Where `ray` first meets it (the distance along it), if it does: 0 from inside.
-    pub fn hit(&self, (origin, dir): Ray) -> Option<f32> {
+    pub fn hit(&self, ray: Ray) -> Option<f32> {
+        self.hit_face(ray).map(|(t, _)| t)
+    }
+
+    /// Where `ray` first meets it, and the outward normal of the face it meets there (facing the ray from inside).
+    pub fn hit_face(&self, (origin, dir): Ray) -> Option<(f32, Vec3)> {
         let inverse = self.rot.inverse();
         let (o, d) = (inverse * (origin - self.center), inverse * dir);
         let (mut near, mut far) = (f32::NEG_INFINITY, f32::INFINITY);
+        let mut face = Vec3::ZERO;
         for axis in 0..3 {
             if d[axis].abs() < 1e-9 {
                 if o[axis].abs() > self.half[axis] {
@@ -55,10 +61,14 @@ impl Bounds {
             }
             let a = (-self.half[axis] - o[axis]) / d[axis];
             let b = (self.half[axis] - o[axis]) / d[axis];
-            near = near.max(a.min(b));
+            if a.min(b) > near {
+                near = a.min(b);
+                face = Vec3::ZERO;
+                face[axis] = -d[axis].signum();
+            }
             far = far.min(a.max(b));
         }
-        (near <= far && far >= 0.0).then_some(near.max(0.0))
+        (near <= far && far >= 0.0).then(|| (near.max(0.0), self.rot * face))
     }
 }
 

@@ -3060,6 +3060,37 @@ mod tests {
     }
 
     #[test]
+    fn dragging_a_part_in_the_viewport_carries_it_across_the_floor() {
+        let mut harness = editing(settings_file("editor-viewport-carry", None), "Carry Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let spawn = || {
+            let workspace = |editor: &EditorState| crate::viewport::pick::workspace(&editor.dm).unwrap();
+            move |harness: &Harness<'_, Test>| {
+                let editor = harness.state().studio.editor().unwrap();
+                let id = editor
+                    .dm
+                    .find_first_child(workspace(editor), "SpawnLocation", false)
+                    .unwrap()
+                    .unwrap();
+                crate::viewport::position_of(&editor.dm, id).unwrap()
+            }
+        };
+        let at = spawn();
+        let before = at(&harness);
+        // Not selected yet: the drag selects it, and carries it over the baseplate, still sitting on it.
+        let from = on_screen(&harness, "SpawnLocation");
+        drag(&mut harness, from, from + egui::vec2(120.0, 40.0));
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        let after = at(&harness);
+        assert!((after - before).length() > 1.0, "{before} to {after}");
+        assert!((after.y - before.y).abs() < 1e-3, "it stays on the floor");
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert!((at(&harness) - before).length() < 1e-4);
+    }
+
+    #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
         let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;

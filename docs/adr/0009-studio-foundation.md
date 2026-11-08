@@ -325,6 +325,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   round the ring (longest at the quarters, then the eighths), the angle turned filled in, and the angle; the
   trackball turns them as the pointer rolls it, adding up small arcs. Primary+R turns the selection a quarter about
   the up axis, Primary+T tilts it, as one group, one undo step each.
+- **Carrying parts (#358)**, as Forge's Select tool: a drag that starts on a part, not on a handle, with any tool,
+  picks the selection up (selecting that part first if it was not). Over another part the box round what is carried
+  sits on its surface, centred on the pointer (snapped to the move increment along a surface lined up with an axis);
+  over nothing it slides on a level plane through where it was grabbed (facing the camera when the view is level).
 
 ## Not in this slice
 
