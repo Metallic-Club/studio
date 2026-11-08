@@ -2976,6 +2976,54 @@ mod tests {
         assert!(children_of(&harness, "ReplicatedStorage").is_empty());
     }
 
+    /// Where `name` (in Workspace) shows in the viewport, on the screen.
+    fn on_screen(harness: &Harness<'_, Test>, name: &str) -> egui::Pos2 {
+        let editor = harness.state().studio.editor().unwrap();
+        let rect = editor.viewport.rect.expect("the viewport was drawn");
+        let view = crate::viewport::View::new(&editor.viewport.camera, rect);
+        let workspace = crate::viewport::pick::workspace(&editor.dm).unwrap();
+        let id = editor.dm.find_first_child(workspace, name, false).unwrap().unwrap();
+        view.project(crate::viewport::position_of(&editor.dm, id).unwrap())
+            .expect("in front of the camera")
+    }
+
+    #[test]
+    fn a_click_in_the_viewport_selects_the_part_under_the_pointer() {
+        let mut harness = editing(settings_file("editor-viewport-pick", None), "Pick Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let spawn = on_screen(&harness, "SpawnLocation");
+        left_click(&mut harness, egui::Rect::from_center_size(spawn, egui::Vec2::ZERO));
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        // Ctrl adds what is under the pointer: the baseplate, beside the spawn.
+        let floor = spawn + egui::vec2(0.0, 60.0);
+        harness.event(egui::Event::PointerMoved(floor));
+        for pressed in [true, false] {
+            let press = egui::Event::PointerButton {
+                pos: floor,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::COMMAND,
+            };
+            harness.event_modifiers(press, Modifiers::COMMAND);
+        }
+        settle(&mut harness);
+        assert_eq!(selected_names(&harness), ["SpawnLocation", "Baseplate"]);
+        // A click on the sky selects nothing.
+        let sky = harness
+            .state()
+            .studio
+            .editor()
+            .unwrap()
+            .viewport
+            .rect
+            .unwrap()
+            .center_top()
+            + egui::vec2(0.0, 10.0);
+        left_click(&mut harness, egui::Rect::from_center_size(sky, egui::Vec2::ZERO));
+        assert!(selected_names(&harness).is_empty());
+    }
+
     #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");

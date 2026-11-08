@@ -14,12 +14,15 @@
 //! - **No game scripts run.** The editor shows the scene as it is; Play mode is later work.
 
 pub mod camera;
+pub mod pick;
+pub mod view;
 
 use egui::{Rect, TextureId};
 use metallic_engine::metallic_core::glam::{Vec2, Vec3};
 use metallic_engine::metallic_core::{DataModel, Id, Value};
 
 pub use camera::EditorCamera;
+pub use view::View;
 
 use crate::keymap::{Activation, ActivationKind, Keymap, ids};
 

@@ -302,6 +302,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Dragging Explorer rows (#353)** moves the selection (a dragged row not selected becomes it): onto a row's middle
   inside it, onto its top or bottom quarter before or after it among its siblings (a service's row only inside). An
   accent outline or line shows where it lands; a drop inside what moves, or onto the root, is refused. One undo step.
+- **Selecting in the viewport (#354)**: `viewport::View` is the editor camera over the panel (Forge's `gizmo::View`:
+  screen rays, projection, lines cut at the near plane), which picking, outlines and the gizmos share. A left click
+  selects the nearest part the pointer's ray meets (each part as its box, every shape for now), or the outermost model
+  it is in under Workspace, as Roblox Studio does; Ctrl or Shift adds or removes; a click on nothing clears; Alt is the
+  orbit's. The selection is outlined in the accent colour, the part under the pointer faintly. Off while a game runs.
 
 ## Not in this slice
 
