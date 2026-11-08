@@ -2471,9 +2471,9 @@ mod tests {
         assert_eq!(studio.dock().focus().focused, Some(panels::ids::EXPLORER));
         assert_eq!(studio.dock().context(), Context::Explorer);
         harness.get_by_label("TRANSFORM");
-        harness.get_by_label("Size");
-        // Edited in place (#349): a field per component, the enum's drop-down, the colour's swatch.
-        harness.get_by_role_and_label(Role::SpinButton, "Size X");
+        harness.get_by_role_and_label(Role::Label, "Size");
+        // Edited in place (#349): a vector's text (#380), the enum's drop-down, the colour's swatch.
+        harness.get_by_role_and_label(Role::TextInput, "Size");
         harness.get_by_role_and_label(Role::ComboBox, "Material");
         harness.get_by_role_and_label(Role::ColorWell, "Color");
 
@@ -2513,7 +2513,7 @@ mod tests {
         // Dragged past the panel's side: it stops short of it, the names still there.
         drag(&mut harness, moved.center(), egui::pos2(0.0, moved.center().y));
         let stopped = harness.get_by_label("Name column width").rect();
-        let size = harness.get_by_label("Size").rect();
+        let size = harness.get_by_role_and_label(Role::Label, "Size").rect();
         assert!(
             stopped.center().x > size.left() + 40.0,
             "{stopped:?}, the name at {size:?}"
@@ -2554,7 +2554,7 @@ mod tests {
             let toggled = egui_kittest::kittest::NodeT::accesskit_node(&node).toggled();
             assert_eq!(toggled, Some(egui::accesskit::Toggled::True), "{row}");
         }
-        harness.get_by_label("Size");
+        harness.get_by_role_and_label(Role::Label, "Size");
         // Shift: the range from the anchor (the Ctrl-clicked row) up to Workspace.
         harness
             .get_by_role_and_label(Role::TreeItem, "Workspace")
@@ -2715,8 +2715,8 @@ mod tests {
         undo(&mut harness);
         assert_eq!(value(&harness, "Name"), Value::String("Baseplate".into()));
 
-        // A vector's component, typed.
-        type_into(&mut harness, "Size X", "100");
+        // A vector, typed as text (#380).
+        type_into(&mut harness, "Size", "100, 16, 512");
         let Value::Vector3(size) = value(&harness, "Size") else {
             panic!("a vector");
         };
@@ -2726,12 +2726,13 @@ mod tests {
 
         // A CFrame's position row moves the part; its orientation row turns it.
         let placed = value(&harness, "CFrame");
-        type_into(&mut harness, "CFrame Position Y", "20");
+        // A blank leaves that component.
+        type_into(&mut harness, "CFrame Position", ", 20, ");
         let Value::CFrame(frame) = value(&harness, "CFrame") else {
             panic!("a CFrame");
         };
         assert!((frame.position().y - 20.0).abs() < 1e-4);
-        type_into(&mut harness, "CFrame Orientation Y", "90");
+        type_into(&mut harness, "CFrame Orientation", "0, 90, 0");
         let Value::Vector3(turned) = value(&harness, "Orientation") else {
             panic!("a vector");
         };
@@ -2741,7 +2742,7 @@ mod tests {
         assert_eq!(value(&harness, "CFrame"), placed);
 
         // A colour's channel.
-        type_into(&mut harness, "Color R", "255");
+        type_into(&mut harness, "Color", "255, -, -");
         let Value::Color3(color) = value(&harness, "Color") else {
             panic!("a colour");
         };
@@ -2795,7 +2796,7 @@ mod tests {
         let before = sizes(&harness);
         assert_ne!(before[0], before[1], "the template's two parts differ in size");
         // One component typed reaches both, each keeping its own others; one undo step takes both back.
-        type_into(&mut harness, "Size Y", "5");
+        type_into(&mut harness, "Size", "-, 5, -");
         let after = sizes(&harness);
         assert_eq!(after[0], (before[0].0, 5.0, before[0].2));
         assert_eq!(after[1], (before[1].0, 5.0, before[1].2));
@@ -3113,7 +3114,7 @@ mod tests {
         // A match is selected like any row.
         harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
         settle(&mut harness);
-        harness.get_by_role_and_label(Role::SpinButton, "Size X");
+        harness.get_by_role_and_label(Role::TextInput, "Size");
 
         let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
         explorer.set_query("teleporter");
@@ -4921,7 +4922,7 @@ mod tests {
         }
         assert!(runs >= 1, "more than one group");
         // A row of fields keeps the row's height (#349).
-        let size = harness.get_by_role_and_label(Role::SpinButton, "Size X").rect();
+        let size = harness.get_by_role_and_label(Role::TextInput, "Size").rect();
         assert!(size.height() <= crate::theme::tokens::size::ROW, "{size:?}");
     }
 

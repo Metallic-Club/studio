@@ -384,7 +384,11 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
             pos2(right - space::S3, rect.bottom()),
         )
     };
-    let (name_cell, value_cell) = (cell(rect.left(), split), cell(split, rect.right()));
+    let (name_cell, mut value_cell) = (cell(rect.left(), split), cell(split, rect.right()));
+    // A colour's swatch is flush with the row's lines (#380): its cell starts at the column's line, under the row's.
+    if row.editable && matches!(values::shown(&row.value, row.part), Value::Color3(_)) {
+        value_cell.min = pos2(split, rect.top() + size::BORDER);
+    }
     let in_cell = |cell: Rect| {
         UiBuilder::new()
             .max_rect(cell)

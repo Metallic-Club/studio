@@ -351,6 +351,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Check boxes alone (#378)**: a boolean is its check box, without "true" or "false" beside it ("Mixed" stays for
   a selection that disagrees), editable or not.
 - **No sliders (#379)**: a `Widget::Slider` property gets a number field like any other, still kept in its range.
+- **Plain text fields (#380)**: strings, vectors (a `CFrame`'s position and orientation too) and colours are one text
+  field each with no box behind it, the row's stripe and lines framing it: a vector its numbers one after another
+  (`-20, 40, 33`), a colour its 0-255 channels, a dash for a component the selection disagrees on. A dash or a blank
+  typed leaves that component as each instance has it (`Edit::Components`). The colour's picker button is a square
+  as tall as the row, flush with its lines. An enum's drop-down loses its box too.
 
 ## Not in this slice
 

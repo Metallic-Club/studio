@@ -3,17 +3,19 @@
 //! writes it through the scene, so it is an undo step (a drag is one, as the button stays held; a typed value is one,
 //! written when the field is left).
 //!
-//! - booleans: a check box alone (#378); numbers (and each component of a vector, a colour's channels): a field to drag or type
-//!   in, within the property's range (a [`Widget::Slider`] property too: no sliders, #379);
-//! - strings: a text field, written on Enter or when it loses the focus (Escape leaves the value as it was);
+//! - booleans: a check box alone (#378); numbers: a field to drag or type in, within the property's range (a
+//!   [`Widget::Slider`] property too: no sliders, #379);
+//! - strings, vectors and colours: one plain text field each, without a box (#380), written on Enter or when it loses
+//!   the focus (Escape leaves the value as it was). A vector is its numbers one after another (`-20, 40, 33`), a
+//!   colour its 0-255 channels;
 //! - `CFrame`: two rows, its position and its orientation in degrees ([`Part`]);
-//! - `Color3`: the swatch opens a colour picker, and the 0-255 channels can be dragged or typed;
+//! - `Color3`: a square swatch flush with the row's lines opens a colour picker;
 //! - enums: a drop-down of the enum's items.
 //!
-//! With several instances selected (#350) a value they disagree on is **mixed** ([`Mixed`]): its field shows a dash
-//! (a drop-down "Mixed", a check box a bar), and an edit of one component of a vector changes that component alone
-//! on each, so they keep their own others. Every control carries the property's label for screen readers (a
-//! component's adds its axis: `Size X`).
+//! With several instances selected (#350) a value they disagree on is **mixed** ([`Mixed`]): a component shows a
+//! dash (a text field "Mixed" in grey, a drop-down "Mixed", a check box a bar), and an edit of some components of a
+//! vector changes those alone on each, so they keep their own others. Every control carries the property's label for
+//! screen readers.
 
 use egui::{
     Color32, ComboBox, CornerRadius, DragValue, Key, Response, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, vec2,
@@ -41,8 +43,9 @@ pub enum Part {
 pub enum Edit {
     /// The whole value: a boolean, a number, a string, an enum item, a colour from the picker.
     Whole(Value),
-    /// One component (0, 1, 2) of a vector, of a `CFrame`'s position or orientation, or a colour's 0-255 channel.
-    Component(usize, f64),
+    /// Components (0, 1, 2) of a vector, of a `CFrame`'s position or orientation, or a colour's 0-255 channels (#380):
+    /// each `Some` is set, each `None` left as each instance has it.
+    Components([Option<f64>; 3]),
 }
 
 /// Which parts of a row's value the selected instances disagree on (#350).
@@ -97,28 +100,43 @@ fn components(value: &Value, part: Part) -> Option<[f64; 3]> {
 /// `current` (one instance's value of the property) with `edit` made to it, as row `part` shows it. `None` when the
 /// edit does not fit the value.
 pub fn apply(edit: &Edit, part: Part, current: &Value) -> Option<Value> {
-    let set = |mut v: Vec3, index: usize, x: f64| {
+    match edit {
+        Edit::Whole(value) => Some(value.clone()),
+        Edit::Components(set) => {
+            let mut value = current.clone();
+            for (index, x) in set.iter().enumerate() {
+                if let Some(x) = *x {
+                    value = set_component(&value, part, index, x)?;
+                }
+            }
+            components(&value, part).map(|_| value)
+        }
+    }
+}
+
+/// `value` with its component `index` set to `x`, as row `part` shows it (a colour's channel in 0-255).
+fn set_component(value: &Value, part: Part, index: usize, x: f64) -> Option<Value> {
+    let set = |mut v: Vec3| {
         v[index] = x as f32;
         v
     };
-    match (edit, current, part) {
-        (Edit::Whole(value), _, _) => Some(value.clone()),
-        (&Edit::Component(index, x), Value::Vector3(v), _) if index < 3 => Some(Value::Vector3(set(*v, index, x))),
-        (&Edit::Component(index, x), Value::Vector2(v), _) if index < 2 => {
+    match (value, part) {
+        (Value::Vector3(v), _) if index < 3 => Some(Value::Vector3(set(*v))),
+        (Value::Vector2(v), _) if index < 2 => {
             let mut v = *v;
             v[index] = x as f32;
             Some(Value::Vector2(v))
         }
-        (&Edit::Component(index, x), Value::CFrame(frame), Part::Orientation) if index < 3 => {
-            let turned = set(frame.to_orientation_deg(), index, x);
+        (Value::CFrame(frame), Part::Orientation) if index < 3 => {
+            let turned = set(frame.to_orientation_deg());
             let rotation = CFrame::from_orientation_deg(turned.x, turned.y, turned.z).rotation();
             Some(Value::CFrame(CFrame::from_parts(frame.position(), rotation)))
         }
-        (&Edit::Component(index, x), Value::CFrame(frame), _) if index < 3 => Some(Value::CFrame(CFrame::from_parts(
-            set(frame.position(), index, x),
+        (Value::CFrame(frame), _) if index < 3 => Some(Value::CFrame(CFrame::from_parts(
+            set(frame.position()),
             frame.rotation(),
         ))),
-        (&Edit::Component(index, x), Value::Color3(color), _) if index < 3 => {
+        (Value::Color3(color), _) if index < 3 => {
             let mut channels = [color.r, color.g, color.b];
             channels[index] = (x / 255.0).clamp(0.0, 1.0) as f32;
             Some(Value::Color3(Color3::new(channels[0], channels[1], channels[2])))
@@ -127,10 +145,26 @@ pub fn apply(edit: &Edit, part: Part, current: &Value) -> Option<Value> {
     }
 }
 
-/// The size of the check box and the colour swatch.
+/// The components typed in `text` for a value of `count` of them, each kept in `range` (#380): numbers one after
+/// another, a comma between, and a dash or nothing for one to leave as it is. `None` when it is not that.
+pub fn parse_components(text: &str, count: usize, range: Option<(f64, f64)>) -> Option<[Option<f64>; 3]> {
+    let parts: Vec<&str> = text.split(',').map(str::trim).collect();
+    if parts.len() != count {
+        return None;
+    }
+    let mut out = [None; 3];
+    for (slot, part) in out.iter_mut().zip(&parts) {
+        if part.is_empty() || *part == "-" || *part == MIXED {
+            continue;
+        }
+        let x = part.parse::<f64>().ok().filter(|x| x.is_finite())?;
+        *slot = Some(range.map_or(x, |(min, max)| x.clamp(min, max)));
+    }
+    Some(out)
+}
+
+/// The size of the check box.
 const SWATCH: f32 = 14.0;
-/// The space between the fields of a vector.
-const GAP: f32 = 2.0;
 /// What a mixed field shows.
 const MIXED: &str = "\u{2013}";
 
@@ -167,8 +201,8 @@ pub fn edit(
         }
         Value::Number(n) => number(ui, n, meta, label, width, mixed.whole).map(|n| Edit::Whole(Value::Number(n))),
         Value::String(s) => text_field(ui, label, &s, width, mixed.whole).map(|s| Edit::Whole(Value::String(s.into()))),
-        Value::Vector2(v) => fields(ui, &[v.x, v.y], &mixed.parts, meta, label, &["X", "Y"], width),
-        Value::Vector3(v) => fields(ui, &[v.x, v.y, v.z], &mixed.parts, meta, label, &["X", "Y", "Z"], width),
+        Value::Vector2(v) => components_field(ui, &[v.x, v.y], &mixed.parts, meta.range, label, width),
+        Value::Vector3(v) => components_field(ui, &[v.x, v.y, v.z], &mixed.parts, meta.range, label, width),
         Value::Color3(color) => colour(ui, color, &mixed.parts, label, width),
         Value::Enum(item) => {
             let PropType::Enum(enum_type) = meta.ty else {
@@ -177,18 +211,21 @@ pub fn edit(
             let desc = dm.registry().enum_desc(enum_type)?;
             let mut chosen = None;
             let shown = if mixed.whole { "Mixed" } else { item.name() };
-            let combo = ComboBox::from_id_salt(label)
-                .selected_text(shown)
-                .width(width)
-                .show_ui(ui, |ui| {
-                    for &name in desc.items {
-                        let current = !mixed.whole && name == item.name();
-                        if ui.selectable_label(current, name).clicked() && !current {
-                            chosen = Some(name);
+            let combo = ui.scope(|ui| {
+                plain(ui);
+                ComboBox::from_id_salt(label)
+                    .selected_text(shown)
+                    .width(width)
+                    .show_ui(ui, |ui| {
+                        for &name in desc.items {
+                            let current = !mixed.whole && name == item.name();
+                            if ui.selectable_label(current, name).clicked() && !current {
+                                chosen = Some(name);
+                            }
                         }
-                    }
-                });
-            labelled(&combo.response, Role::ComboBox, label);
+                    })
+            });
+            labelled(&combo.inner.response, Role::ComboBox, label);
             chosen
                 .and_then(|name| dm.registry().enum_item(enum_type, name))
                 .map(|item| Edit::Whole(Value::Enum(item)))
@@ -196,6 +233,23 @@ pub fn edit(
         // References are read-only (the Parent changes by dragging in the Explorer); the panel draws them.
         Value::Ref(_) | Value::CFrame(_) => None,
     }
+}
+
+/// Takes the boxes off the controls `ui` draws next (#380): the row's stripe and lines frame them, and the text starts
+/// where the other rows' does.
+fn plain(ui: &mut Ui) {
+    let widgets = &mut ui.visuals_mut().widgets;
+    for state in [
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        state.weak_bg_fill = Color32::TRANSPARENT;
+        state.bg_fill = Color32::TRANSPARENT;
+        state.bg_stroke = Stroke::NONE;
+    }
+    ui.spacing_mut().button_padding.x = 0.0;
 }
 
 /// A row's field height: the row's, less a little air.
@@ -283,62 +337,50 @@ fn number(ui: &mut Ui, n: f64, meta: &PropMeta, label: &str, width: f32, mixed: 
     (response.changed() && v != n).then_some(v)
 }
 
-/// A field per component of `values`, side by side in `width`, each labelled with its axis and a dash where
-/// `mixed`. Returns the component changed.
-fn fields(
+/// A vector's or a colour's `values` as one plain text field `width` wide (#380): its numbers one after another
+/// (`-20, 40, 33`), a dash for one the selection disagrees on (`mixed`). Returns the components typed, each kept in
+/// `range`; a dash or nothing leaves that component as each instance has it.
+fn components_field(
     ui: &mut Ui,
     values: &[f32],
     mixed: &[bool; 3],
-    meta: &PropMeta,
+    range: Option<(f64, f64)>,
     label: &str,
-    axes: &[&str],
     width: f32,
 ) -> Option<Edit> {
-    let count = values.len() as f32;
-    let each = ((width - GAP * (count - 1.0)) / count).max(16.0);
-    let mut edit = None;
-    ui.spacing_mut().item_spacing.x = GAP;
-    for (index, (value, axis)) in values.iter().zip(axes).enumerate() {
-        let mut v = f64::from(*value);
-        let mixed = mixed[index];
-        let mut drag = DragValue::new(&mut v)
-            .speed(drag_speed(meta, 0.1))
-            .custom_formatter(move |v, _| formatted(v, mixed));
-        if let Some((min, max)) = meta.range {
-            drag = drag.range(min..=max);
-        }
-        let response = ui.add_sized([each, field_height(ui)], drag);
-        labelled(&response, Role::SpinButton, &format!("{label} {axis}"));
-        if response.changed() && v as f32 != *value {
-            edit = Some(Edit::Component(index, v));
-        }
-    }
-    edit
+    let shown: Vec<String> = values
+        .iter()
+        .zip(mixed)
+        .map(|(&v, &mixed)| formatted(f64::from(v), mixed))
+        .collect();
+    let typed = text_field(ui, label, &shown.join(", "), width, false)?;
+    parse_components(&typed, values.len(), range).map(Edit::Components)
 }
 
-/// What a colour's channel fields are: whole numbers from 0 to 255.
-static CHANNEL: PropMeta = PropMeta::number("Channel", 0.0)
-    .range(0.0, 255.0)
-    .widget(Widget::Drag { speed: 1.0 });
-
-/// A colour: its swatch opens a picker (a whole colour), and its 0-255 channels are fields (a channel each).
+/// A colour (#380): a square swatch filling the row's height, flush with its lines, which opens a picker (a whole
+/// colour), then its 0-255 channels as a text field.
 fn colour(ui: &mut Ui, color: Color3, mixed: &[bool; 3], label: &str, width: f32) -> Option<Edit> {
-    let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let mut rgb = [channel(color.r), channel(color.g), channel(color.b)];
-    let before = rgb;
-    ui.spacing_mut().interact_size = vec2(SWATCH + 6.0, SWATCH);
-    let swatch = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
+    let side = ui.max_rect().height();
+    let (rect, swatch) = ui.allocate_exact_size(vec2(side, side), Sense::click());
     labelled(&swatch, Role::ColorWell, label);
-    let picked = (rgb != before).then(|| {
-        let unit = |c: u8| f32::from(c) / 255.0;
-        Edit::Whole(Value::Color3(Color3::new(unit(rgb[0]), unit(rgb[1]), unit(rgb[2]))))
-    });
-    ui.add_space(space::S2);
-    let rest = width - SWATCH - 6.0 - space::S2 - GAP;
-    let values = before.map(f32::from);
-    let channels = ui
-        .scope(|ui| fields(ui, &values, mixed, &CHANNEL, label, &["R", "G", "B"], rest))
-        .inner;
+    ui.painter().rect_filled(rect, CornerRadius::ZERO, swatch_fill(color));
+    let mut picked = None;
+    egui::Popup::menu(&swatch)
+        .id(ui.make_persistent_id(("metallic.properties.picker", label)))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            let mut chosen = swatch_fill(color);
+            if egui::color_picker::color_picker_color32(ui, &mut chosen, egui::color_picker::Alpha::Opaque) {
+                let unit = |c: u8| f32::from(c) / 255.0;
+                let [r, g, b, _] = chosen.to_array();
+                picked = Some(Edit::Whole(Value::Color3(Color3::new(unit(r), unit(g), unit(b)))));
+            }
+        });
+    ui.add_space(space::S3);
+    let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round();
+    let values = [channel(color.r), channel(color.g), channel(color.b)];
+    let rest = (width - side - space::S3).max(16.0);
+    let channels = components_field(ui, &values, mixed, Some((0.0, 255.0)), label, rest);
     picked.or(channels)
 }
 
@@ -350,12 +392,14 @@ fn text_field(ui: &mut Ui, label: &str, current: &str, width: f32, mixed: bool) 
     let mut typed = ui
         .data_mut(|data| data.get_temp::<String>(id))
         .unwrap_or_else(|| shown.to_owned());
+    // Plain text, no box (#380): the row's stripe and lines frame it.
     let response = ui.add_sized(
         [width, field_height(ui)],
         TextEdit::singleline(&mut typed)
             .id(id.with("field"))
             .hint_text("Mixed")
-            .margin(vec2(space::S2, 2.0))
+            .frame(egui::Frame::NONE)
+            .margin(vec2(0.0, 2.0))
             .text_color(current_colors(ui.ctx()).palette.text),
     );
     labelled(&response, Role::TextInput, label);
@@ -441,11 +485,74 @@ mod tests {
         editor(&ANCHORED, Value::Bool(true), mixed).get_by_label("Mixed");
     }
 
+    /// Component `index` set to `x`, the others left.
+    fn one(index: usize, x: f64) -> Edit {
+        let mut set = [None; 3];
+        set[index] = Some(x);
+        Edit::Components(set)
+    }
+
+    #[test]
+    fn typed_components_parse_with_dashes_and_blanks_left_as_they_are() {
+        assert_eq!(
+            parse_components("-20, 40, 33", 3, None),
+            Some([Some(-20.0), Some(40.0), Some(33.0)])
+        );
+        assert_eq!(
+            parse_components(" 1 ,\u{2013}, ", 3, None),
+            Some([Some(1.0), None, None])
+        );
+        assert_eq!(parse_components("-, 5, -", 3, None), Some([None, Some(5.0), None]));
+        assert_eq!(
+            parse_components("300, 0, 0", 3, Some((0.0, 255.0))),
+            Some([Some(255.0), Some(0.0), Some(0.0)])
+        );
+        assert_eq!(parse_components("1, 2", 2, None), Some([Some(1.0), Some(2.0), None]));
+        for bad in ["1, 2", "1, 2, 3, 4", "a, b, c", "1, inf, 2"] {
+            assert_eq!(parse_components(bad, 3, None), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_vector_is_one_plain_text_field_of_its_numbers() {
+        static SIZE: PropMeta = PropMeta::vector3("Size", 4.0, 1.0, 2.0);
+        let mut harness = editor(&SIZE, Value::Vector3(Vec3::new(-20.0, 40.0, 33.5)), Mixed::default());
+        let field = harness.get_by_role_and_label(Role::TextInput, "Value");
+        assert_eq!(field.value().as_deref(), Some("-20, 40, 33.5"));
+        field.click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get_by_role_and_label(Role::TextInput, "Value")
+            .type_text("1, -, 3");
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(*harness.state(), Some(Edit::Components([Some(1.0), None, Some(3.0)])));
+        // A component the selection disagrees on is a dash.
+        let mixed = Mixed {
+            whole: true,
+            parts: [false, true, false],
+        };
+        let harness = editor(&SIZE, Value::Vector3(Vec3::new(1.0, 2.0, 3.0)), mixed);
+        let field = harness.get_by_role_and_label(Role::TextInput, "Value");
+        assert_eq!(field.value().as_deref(), Some("1, \u{2013}, 3"));
+    }
+
+    #[test]
+    fn a_colour_is_a_square_swatch_and_its_channels_as_text() {
+        static COLOR: PropMeta = PropMeta::color3("Color", 1.0, 0.0, 0.0);
+        let harness = editor(&COLOR, Value::Color3(Color3::new(1.0, 0.5, 0.0)), Mixed::default());
+        let swatch = harness.get_by_role_and_label(Role::ColorWell, "Value").rect();
+        assert_eq!(swatch.width(), swatch.height(), "square");
+        let field = harness.get_by_role_and_label(Role::TextInput, "Value");
+        assert_eq!(field.value().as_deref(), Some("255, 128, 0"));
+    }
+
     #[test]
     fn a_component_edit_keeps_each_instance_s_other_components() {
         let a = Value::Vector3(Vec3::new(1.0, 2.0, 3.0));
         let b = Value::Vector3(Vec3::new(4.0, 5.0, 6.0));
-        let edit = Edit::Component(1, 9.0);
+        let edit = one(1, 9.0);
         assert_eq!(
             apply(&edit, Part::Whole, &a),
             Some(Value::Vector3(Vec3::new(1.0, 9.0, 3.0)))
@@ -455,11 +562,7 @@ mod tests {
             Some(Value::Vector3(Vec3::new(4.0, 9.0, 6.0)))
         );
         assert_eq!(
-            apply(
-                &Edit::Component(0, 7.0),
-                Part::Whole,
-                &Value::Vector2(Vec2::new(1.0, 2.0))
-            ),
+            apply(&one(0, 7.0), Part::Whole, &Value::Vector2(Vec2::new(1.0, 2.0))),
             Some(Value::Vector2(Vec2::new(7.0, 2.0)))
         );
         // A CFrame's position keeps its rotation; its orientation keeps its position.
@@ -470,8 +573,7 @@ mod tests {
         };
         assert_eq!(moved.position(), Vec3::new(1.0, 9.0, 3.0));
         assert!(moved.rotation().abs_diff_eq(turned.rotation(), 1e-6));
-        let Some(Value::CFrame(spun)) = apply(&Edit::Component(1, 90.0), Part::Orientation, &Value::CFrame(turned))
-        else {
+        let Some(Value::CFrame(spun)) = apply(&one(1, 90.0), Part::Orientation, &Value::CFrame(turned)) else {
             panic!("a CFrame");
         };
         assert_eq!(spun.position(), turned.position());
@@ -479,7 +581,7 @@ mod tests {
         // A colour's channel is in 0-255.
         let grey = Value::Color3(Color3::new(0.5, 0.5, 0.5));
         assert_eq!(
-            apply(&Edit::Component(0, 255.0), Part::Whole, &grey),
+            apply(&one(0, 255.0), Part::Whole, &grey),
             Some(Value::Color3(Color3::new(1.0, 0.5, 0.5)))
         );
         // A whole value replaces; an edit that does not fit does nothing.
