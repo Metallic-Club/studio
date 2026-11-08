@@ -30,6 +30,21 @@ pub mod ids {
     pub const PANEL: &str = "studio.panel.";
 }
 
+/// The groups the Add window lists Studio's tools in (#327). A plugin's tools are listed under the plugin's own
+/// group, its name unless it gives another ([`Tool::in_group`]).
+pub mod groups {
+    /// Saving and closing the project.
+    pub const PROJECT: &str = "Project";
+    /// Running the game.
+    pub const GAME: &str = "Game";
+    /// Studio itself: its layout and Settings.
+    pub const STUDIO: &str = "Studio";
+    /// Opening and closing panels.
+    pub const PANELS: &str = "Panels";
+    /// What is not a tool: the spacer and the separator.
+    pub const LAYOUT: &str = "Layout";
+}
+
 /// Something Studio itself does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StudioCommand {
@@ -75,8 +90,10 @@ pub struct Tool {
     pub id: String,
     /// The label under its icon.
     pub label: String,
-    /// What it does, in a line (its tooltip).
+    /// What it does, in a line (its tooltip, and its line in the Add window).
     pub description: String,
+    /// The group the Add window lists it in (#327): one of [`groups`] for Studio's, the plugin's for a plugin's.
+    pub group: String,
     /// Its icon.
     pub icon: Icon,
     /// What a click does.
@@ -84,24 +101,32 @@ pub struct Tool {
 }
 
 impl Tool {
-    /// One of Studio's own tools.
-    fn studio(id: &str, label: &str, description: &str, icon: Icon, command: StudioCommand) -> Self {
+    /// One of Studio's own tools, in `group`.
+    fn studio(id: &str, label: &str, description: &str, icon: Icon, group: &str, command: StudioCommand) -> Self {
         Self {
             id: id.to_owned(),
             label: label.to_owned(),
             description: description.to_owned(),
+            group: group.to_owned(),
             icon,
             action: ToolAction::Studio(command),
         }
     }
 
-    /// A plugin's tool: `name` in plugin `plugin`, with id `plugin.<plugin>.<name>`. A plugin without an icon of its
-    /// own gets the puzzle piece.
+    /// The same tool, listed in the Add window under `group` instead.
+    pub fn in_group(mut self, group: &str) -> Self {
+        group.clone_into(&mut self.group);
+        self
+    }
+
+    /// A plugin's tool: `name` in plugin `plugin`, with id `plugin.<plugin>.<name>`, listed under the plugin's name.
+    /// A plugin without an icon of its own gets the puzzle piece.
     pub fn plugin(plugin: &str, name: &str, label: &str, description: &str, icon: Option<Icon>) -> Self {
         Self {
             id: format!("plugin.{plugin}.{name}"),
             label: label.to_owned(),
             description: description.to_owned(),
+            group: plugin.to_owned(),
             icon: icon.unwrap_or(Icon::ToolbarPlugin),
             action: ToolAction::Plugin {
                 plugin: plugin.to_owned(),
@@ -143,6 +168,7 @@ impl ToolRegistry {
                 "Save",
                 "Saves the project.",
                 Icon::ToolbarSave,
+                groups::PROJECT,
                 StudioCommand::Save,
             ),
             Tool::studio(
@@ -150,6 +176,7 @@ impl ToolRegistry {
                 "Close",
                 "Closes the project and goes back to your projects.",
                 Icon::ToolbarClose,
+                groups::PROJECT,
                 StudioCommand::Close,
             ),
             Tool::studio(
@@ -157,6 +184,7 @@ impl ToolRegistry {
                 "Play",
                 "Runs the game.",
                 Icon::ToolbarPlay,
+                groups::GAME,
                 StudioCommand::Play,
             ),
             Tool::studio(
@@ -164,6 +192,7 @@ impl ToolRegistry {
                 "Pause",
                 "Pauses or resumes the running game.",
                 Icon::ToolbarPause,
+                groups::GAME,
                 StudioCommand::Pause,
             ),
             Tool::studio(
@@ -171,6 +200,7 @@ impl ToolRegistry {
                 "Step",
                 "Runs one frame of the paused game.",
                 Icon::ToolbarStep,
+                groups::GAME,
                 StudioCommand::Step,
             ),
             Tool::studio(
@@ -178,6 +208,7 @@ impl ToolRegistry {
                 "Stop",
                 "Ends the game and puts the scene back.",
                 Icon::ToolbarStop,
+                groups::GAME,
                 StudioCommand::Stop,
             ),
             Tool::studio(
@@ -185,6 +216,7 @@ impl ToolRegistry {
                 "Reset layout",
                 "Puts the panels back where they were when Studio was new.",
                 Icon::ToolbarResetLayout,
+                groups::STUDIO,
                 StudioCommand::ResetLayout,
             ),
             Tool::studio(
@@ -192,6 +224,7 @@ impl ToolRegistry {
                 "Settings",
                 "Opens or closes the Settings window.",
                 Icon::ToolbarSettings,
+                groups::STUDIO,
                 StudioCommand::Settings,
             ),
         ];
@@ -201,6 +234,7 @@ impl ToolRegistry {
                 panel.title(),
                 &format!("Opens or closes the {} panel.", panel.title()),
                 panel.icon(),
+                groups::PANELS,
                 StudioCommand::TogglePanel(panel.id()),
             ));
         }
@@ -273,6 +307,8 @@ mod tests {
         let tool = Tool::plugin("terrain", "paint", "Paint", "Paints terrain.", None);
         assert_eq!(tool.id, "plugin.terrain.paint");
         assert_eq!(tool.icon, Icon::ToolbarPlugin);
+        assert_eq!(tool.group, "terrain", "listed under its plugin");
+        assert_eq!(tool.clone().in_group("Terrain tools").group, "Terrain tools");
         registry.register(tool.clone()).unwrap();
         assert!(registry.get("plugin.terrain.paint").is_some_and(Tool::is_plugin));
         assert_eq!(
