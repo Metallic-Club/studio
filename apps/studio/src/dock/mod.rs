@@ -772,10 +772,10 @@ mod tests {
         let dock = Dock::in_memory(PANELS);
         assert_eq!(
             dock.open_panels(),
-            [ids::VIEWPORT, ids::EXPLORER, ids::ASSETS, ids::PROPERTIES, ids::OUTPUT]
+            [ids::VIEWPORT, ids::EXPLORER, ids::PROPERTIES, ids::OUTPUT, ids::ASSETS]
         );
-        // #256: (Viewport over [Assets, Output]) | (Explorer over Properties); Output in front.
-        assert_eq!(tab_bar(&dock, ids::OUTPUT), [ids::ASSETS, ids::OUTPUT]);
+        // #256: (Viewport over [Output, Assets]) | (Explorer over Properties); Output first and in front (#323).
+        assert_eq!(tab_bar(&dock, ids::OUTPUT), [ids::OUTPUT, ids::ASSETS]);
         assert_eq!(tab_bar(&dock, ids::EXPLORER), [ids::EXPLORER]);
         assert_eq!(tab_bar(&dock, ids::PROPERTIES), [ids::PROPERTIES]);
         let tiles = &dock.tree().tiles;
@@ -802,6 +802,13 @@ mod tests {
             split(columns.children[1]),
             (LinearDir::Vertical, vec![bar(ids::EXPLORER), bar(ids::PROPERTIES)])
         );
+        // The Explorer takes less of the right column than the Properties (#323).
+        let Some(Tile::Container(Container::Linear(right))) = tiles.get(columns.children[1]) else {
+            panic!("the right column is not a split");
+        };
+        let (explorer, properties) = (right.shares[bar(ids::EXPLORER)], right.shares[bar(ids::PROPERTIES)]);
+        assert!(explorer < properties, "{explorer} and {properties}");
+        assert!((explorer / (explorer + properties) - 0.4).abs() < 1e-3);
     }
 
     /// The split directly holding the tab bar of panel `id`: its direction and children.
