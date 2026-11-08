@@ -189,7 +189,7 @@ impl Startup {
 pub fn studio_steps(context: RenderContext) -> Vec<Step> {
     vec![
         Step::new("Preparing folders", |_| {
-            crate::folders::prepare(crate::theme::icons::builtin::shipped_folder());
+            crate::folders::prepare();
         }),
         settings_step(studio_settings_path()),
         Step::new("Starting the renderer", move |loaded| {

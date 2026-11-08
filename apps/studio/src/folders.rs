@@ -2,9 +2,9 @@
 //! with the icons in it, and the games folder in the user's documents (`Documents\Metallic`).
 //!
 //! On start ([`prepare`]), Studio renames a folder an older Studio made in lower case (`metallic`) to `Metallic`,
-//! copies the icons it ships beside its executable into its own folder (only the files missing there, so the user's
-//! edits are kept; a folder in the older flat layout is first moved to the new one, #322), and makes the games
-//! folder, whose games the projects page lists.
+//! copies the icons built into it (#402) into its own folder (only the files missing there, so the user's edits are
+//! kept; a folder in the older flat layout is first moved to the new one, #322), and makes the games folder, whose
+//! games the projects page lists.
 
 use std::collections::HashMap;
 
@@ -43,7 +43,7 @@ pub fn games_folder() -> PathBuf {
 
 /// Gets Studio's folders ready, once at start: the organization's folder named `Metallic`, the icons copied into
 /// Studio's own folder, and the games folder made. Each step that fails is logged and the rest go on.
-pub fn prepare(shipped_icons: Option<&Path>) {
+pub fn prepare() {
     if let Some(paths) = user_paths() {
         if cfg!(windows) {
             // The roaming and the local folders: `<root>\Metallic\Studio\config` and `<root>\Metallic\Studio\data`.
@@ -53,13 +53,11 @@ pub fn prepare(shipped_icons: Option<&Path>) {
                 }
             }
         }
-        if let Some(from) = shipped_icons {
-            let to = paths.app_dir().join(ICONS);
-            match install_icons(from, &to) {
-                Ok(0) => {}
-                Ok(count) => log::info!("icons: copied {count} files to {}", to.display()),
-                Err(error) => log::warn!("icons: could not copy them to {}: {error}", to.display()),
-            }
+        let to = paths.app_dir().join(ICONS);
+        match install_icons(builtin::SHIPPED, &to) {
+            Ok(0) => {}
+            Ok(count) => log::info!("icons: copied {count} files to {}", to.display()),
+            Err(error) => log::warn!("icons: could not copy them to {}: {error}", to.display()),
         }
     }
     let games = games_folder();
@@ -92,12 +90,15 @@ pub fn capitalise(wanted: &Path) {
     }
 }
 
-/// Installs the icons shipped in `from` into `to`: moves a folder in the older flat layout to the new one first
-/// ([`migrate_flat_icons`]), then copies every file `to` does not have yet. Files already there are the user's and are
-/// left as they are. Returns how many were copied.
-pub fn install_icons(from: &Path, to: &Path) -> std::io::Result<usize> {
-    let migrated = migrate_flat_icons(from, to)?;
-    let copied = copy_missing(from, to)?;
+/// The shipped icons' files: each one's path in the icons folder (`/` between folders) and its bytes.
+pub type Shipped = [(&'static str, &'static [u8])];
+
+/// Installs the `shipped` icons into `to`: moves a folder in the older flat layout to the new one first
+/// ([`migrate_flat_icons`]), then writes every file `to` does not have yet. Files already there are the user's and are
+/// left as they are. Returns how many were written.
+pub fn install_icons(shipped: &Shipped, to: &Path) -> std::io::Result<usize> {
+    let migrated = migrate_flat_icons(shipped, to)?;
+    let copied = write_missing(shipped, to)?;
     if let Some(manifest) = migrated {
         crate::settings::store::write_atomically(&to.join(builtin::MANIFEST), &manifest)?;
         log::info!("icons: moved {} to the new layout", to.display());
@@ -109,7 +110,7 @@ pub fn install_icons(from: &Path, to: &Path) -> std::io::Result<usize> {
 /// (#322): its SVGs and licence go, and the `icons.json` to write once the new files are in is returned. What the user
 /// changed is kept: an icon pointed at a file of their own keeps it, and an SVG they edited in place stays where it
 /// is, its icon pointed at it. `None`, touching nothing, when `to` is not such a folder.
-pub fn migrate_flat_icons(from: &Path, to: &Path) -> std::io::Result<Option<String>> {
+pub fn migrate_flat_icons(shipped: &Shipped, to: &Path) -> std::io::Result<Option<String>> {
     let Ok(old) = builtin::read_manifest(to) else {
         return Ok(None);
     };
@@ -127,11 +128,13 @@ pub fn migrate_flat_icons(from: &Path, to: &Path) -> std::io::Result<Option<Stri
             kept.insert(icon, entry.file.clone());
             continue;
         }
-        let edited = match (
-            std::fs::read(to.join(&flat)),
-            std::fs::read(from.join(icon.default_file())),
-        ) {
-            (Ok(theirs), Ok(shipped)) => theirs != shipped,
+        let default = icon.default_file();
+        let original = shipped
+            .iter()
+            .find(|(path, _)| *path == default)
+            .map(|(_, bytes)| *bytes);
+        let edited = match (std::fs::read(to.join(&flat)), original) {
+            (Ok(theirs), Some(shipped)) => theirs != shipped,
             _ => false,
         };
         if edited {
@@ -159,21 +162,21 @@ fn remove_if_there(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Copies every file in `from` (sub-folders too) that `to` does not have yet. Returns how many were copied.
-fn copy_missing(from: &Path, to: &Path) -> std::io::Result<usize> {
-    std::fs::create_dir_all(to)?;
-    let mut copied = 0;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copied += copy_missing(&entry.path(), &target)?;
-        } else if !target.exists() {
-            std::fs::copy(entry.path(), &target)?;
-            copied += 1;
+/// Writes every `shipped` file (sub-folders too) that `to` does not have yet. Returns how many were written.
+fn write_missing(shipped: &Shipped, to: &Path) -> std::io::Result<usize> {
+    let mut written = 0;
+    for (path, bytes) in shipped {
+        let target = to.join(path);
+        if target.exists() {
+            continue;
         }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, bytes)?;
+        written += 1;
     }
-    Ok(copied)
+    Ok(written)
 }
 
 /// The games in `folder`: every `.mtproj` in it or in a folder directly inside it, by path.
@@ -222,21 +225,26 @@ mod tests {
     #[test]
     fn icons_are_copied_without_touching_the_user_s() {
         let dir = temp("icons");
-        let (from, to) = (dir.join("shipped"), dir.join("installed"));
-        std::fs::create_dir_all(from.join("extra")).unwrap();
-        std::fs::write(from.join("icons.json"), "{ shipped }").unwrap();
-        std::fs::write(from.join("box.svg"), "<svg/>").unwrap();
-        std::fs::write(from.join("extra").join("note.txt"), "x").unwrap();
+        let to = dir.join("installed");
+        let from: &Shipped = &[
+            ("icons.json", b"{ shipped }"),
+            ("box.svg", b"<svg/>"),
+            ("extra/note.txt", b"x"),
+        ];
         std::fs::create_dir_all(&to).unwrap();
         std::fs::write(to.join("icons.json"), "{ the user's }").unwrap();
-        assert_eq!(install_icons(&from, &to).unwrap(), 2, "box.svg and extra/note.txt");
+        assert_eq!(install_icons(from, &to).unwrap(), 2, "box.svg and extra/note.txt");
         assert_eq!(
             std::fs::read_to_string(to.join("icons.json")).unwrap(),
             "{ the user's }"
         );
         assert!(to.join("box.svg").is_file() && to.join("extra").join("note.txt").is_file());
         // Again: nothing left to copy.
-        assert_eq!(install_icons(&from, &to).unwrap(), 0);
+        assert_eq!(install_icons(from, &to).unwrap(), 0);
+        // Into a folder that is not there yet: all of it, Studio's own icons too (#402).
+        let fresh = dir.join("fresh");
+        assert_eq!(install_icons(builtin::SHIPPED, &fresh).unwrap(), builtin::SHIPPED.len());
+        assert!(fresh.join(Icon::ExplorerPart.default_file()).is_file());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -245,8 +253,8 @@ mod tests {
         let dir = temp("flat");
         let to = dir.join("installed");
         std::fs::create_dir_all(&to).unwrap();
-        let shipped = builtin::shipped_folder().expect("the shipped icons");
-        let svg = |icon: Icon| std::fs::read(shipped.join(icon.default_file())).unwrap();
+        let shipped = builtin::SHIPPED;
+        let svg = |icon: Icon| builtin::shipped(&icon.default_file()).unwrap().to_vec();
         // What a format 1 Studio installed: every SVG at the top, as shipped...
         for icon in Icon::ALL {
             std::fs::write(to.join(format!("{}.svg", icon.lucide())), svg(*icon)).unwrap();

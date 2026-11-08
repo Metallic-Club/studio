@@ -1,4 +1,5 @@
-//! Studio's built-in icons (#291, #312): Lucide SVGs in Studio's icons folder, not compiled into the executable.
+//! Studio's built-in icons (#291, #312): Lucide SVGs in the user's icons folder, which Studio fills from the icons
+//! built into it.
 //!
 //! The folder (#322) holds `icons.json` and a folder per part of Studio that draws icons (`explorer`, `assets`,
 //! `panels`, `toolbar`, `interface`), each with the Lucide SVGs it uses (`explorer/box.svg`), and Lucide's licence in
@@ -6,8 +7,11 @@
 //! (`"explorer.part": { "file": "explorer/box.svg", "color": "object" }`), with a line on what the icon marks, and
 //! each colour group's colour on the dark and the light mode. Pointing an entry at another SVG or group changes that
 //! icon, and changing a group's colours changes every icon in it; a file that is missing or cannot be read falls back
-//! to the icon's default file, with one warning. The build copies the folder from `apps/studio/icons` to beside the
-//! executable.
+//! to the icon's default file, with one warning.
+//!
+//! **The shipped icons are built into the executable** (#402, [`SHIPPED`]: the build lists `apps/studio/icons`), so a
+//! Studio given to someone without any folder beside it still has them: startup copies them into the user's folder
+//! ([`crate::folders::prepare`]), and whatever is missing there is read from them.
 //!
 //! An icon is read on first use and drawn at exactly the pixel size it is shown at, so it stays sharp at every
 //! interface scale; each size is cached as a texture in the egui context. The custom icon folder setting
@@ -22,8 +26,17 @@ use serde::{Deserialize, Serialize};
 
 use super::{Group, Icon};
 
-/// The folder's name, beside the executable.
+/// The folder's name.
 pub const FOLDER: &str = "icons";
+
+/// The icons Studio ships, built into it (#402): every file of `apps/studio/icons` by its path in the folder
+/// (`explorer/box.svg`, `icons.json`), with its bytes.
+pub static SHIPPED: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/shipped_icons.rs"));
+
+/// The shipped file at `path` in the icons folder (`/` between folders).
+pub fn shipped(path: &str) -> Option<&'static [u8]> {
+    SHIPPED.iter().find(|(name, _)| *name == path).map(|(_, bytes)| *bytes)
+}
 /// The manifest's name, in the folder.
 pub const MANIFEST: &str = "icons.json";
 /// The manifest's format version: 2 has the colours and the sub-folders (#322), 1 was a flat folder.
@@ -134,46 +147,23 @@ pub(crate) fn manifest_json_with(files: &HashMap<Icon, String>) -> String {
 }
 
 /// The folder Studio reads its icons from (#312): `icons` in its own folder (`%APPDATA%\Metallic\Studio\icons`),
-/// which startup fills from the icons shipped beside the executable ([`crate::folders::prepare`]) and the user may
-/// edit; the shipped folder itself if that one is not there. Tests always read the shipped one.
+/// which startup fills from the shipped icons ([`crate::folders::prepare`]) and the user may edit. `None` when it is
+/// not there (nor in tests): the shipped icons are read instead ([`SHIPPED`]).
 pub fn folder() -> Option<&'static Path> {
     static FOLDER_USED: OnceLock<Option<PathBuf>> = OnceLock::new();
     FOLDER_USED
         .get_or_init(|| {
-            let installed = if cfg!(test) {
-                None
-            } else {
-                crate::folders::icons_folder()
-            };
-            installed
-                .filter(|dir| dir.join(MANIFEST).is_file())
-                .or_else(|| shipped_folder().map(Path::to_path_buf))
+            if cfg!(test) {
+                return None;
+            }
+            crate::folders::icons_folder().filter(|dir| dir.join(MANIFEST).is_file())
         })
         .as_deref()
 }
 
-/// The icons folder shipped beside the executable, or beside the folder it is in (where tests and examples run
-/// from), if there is one.
-pub fn shipped_folder() -> Option<&'static Path> {
-    static FOLDER_FOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
-    FOLDER_FOUND
-        .get_or_init(|| {
-            let exe = std::env::current_exe().ok()?;
-            let dir = exe.parent()?;
-            let found = [Some(dir), dir.parent()]
-                .into_iter()
-                .flatten()
-                .map(|dir| dir.join(FOLDER))
-                .find(|dir| dir.is_dir());
-            if found.is_none() {
-                log::warn!(
-                    "icons: no {FOLDER} folder beside {}; Studio draws no icons",
-                    exe.display()
-                );
-            }
-            found
-        })
-        .as_deref()
+/// The shipped `icons.json`.
+fn shipped_manifest() -> Option<Manifest> {
+    shipped(MANIFEST).and_then(|bytes| serde_json::from_slice(bytes).ok())
 }
 
 /// `dir`'s `icons.json`, or why it could not be read.
@@ -245,11 +235,12 @@ pub fn colour_group(icon: Icon) -> Group {
     colour_table().icons.get(&icon).copied().unwrap_or(icon.group())
 }
 
-/// The built-in icons as read so far: from which folder, each icon's file, its SVG and its textures by size.
+/// The built-in icons as read so far: from which folder (none: the shipped ones), each icon's file, its SVG and its
+/// textures by size.
 struct Loaded {
     dir: Option<PathBuf>,
-    /// Each icon's file, from `icons.json`; an icon missing there uses its default.
-    files: HashMap<Icon, PathBuf>,
+    /// Each icon's file in the folder, from `icons.json`; an icon missing there uses its default.
+    files: HashMap<Icon, String>,
     /// Each icon's SVG once read; `None` when it could not be.
     svgs: HashMap<Icon, Option<Arc<[u8]>>>,
     /// Each icon drawn so far, by its side in pixels and whether it is filled.
@@ -257,25 +248,27 @@ struct Loaded {
 }
 
 impl Loaded {
-    /// Reads `icons.json` in `dir`: each icon's file, or its default where the manifest has none or a bad one.
+    /// Reads `icons.json` in `dir` (the shipped one without a folder): each icon's file, or its default where the
+    /// manifest has none or a bad one.
     fn new(dir: Option<PathBuf>) -> Self {
         let mut files = HashMap::new();
-        if let Some(dir) = &dir {
-            match read_manifest(dir) {
-                Ok(manifest) => {
-                    for (id, entry) in manifest.icons {
-                        match Icon::from_id(&id) {
-                            Some(icon) => {
-                                files.insert(icon, dir.join(entry.file));
-                            }
-                            None => log::warn!("icons: {MANIFEST} names `{id}`, which is not an icon id"),
-                        }
-                    }
+        let manifest = match &dir {
+            Some(dir) => read_manifest(dir)
+                .map_err(|error| {
+                    log::warn!(
+                        "icons: {}: {error}; using the default files",
+                        dir.join(MANIFEST).display()
+                    )
+                })
+                .ok(),
+            None => shipped_manifest(),
+        };
+        for (id, entry) in manifest.map(|manifest| manifest.icons).unwrap_or_default() {
+            match Icon::from_id(&id) {
+                Some(icon) => {
+                    files.insert(icon, entry.file);
                 }
-                Err(error) => log::warn!(
-                    "icons: {}: {error}; using the default files",
-                    dir.join(MANIFEST).display()
-                ),
+                None => log::warn!("icons: {MANIFEST} names `{id}`, which is not an icon id"),
             }
         }
         Self {
@@ -286,22 +279,33 @@ impl Loaded {
         }
     }
 
+    /// The file at `path` in the folder, else the shipped one.
+    fn read(&self, path: &str) -> Result<Vec<u8>, String> {
+        let from_disk = self.dir.as_ref().map(|dir| std::fs::read(dir.join(path)));
+        match from_disk {
+            Some(Ok(bytes)) => Ok(bytes),
+            Some(Err(error)) => shipped(path).map(<[u8]>::to_vec).ok_or_else(|| error.to_string()),
+            None => shipped(path)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "not one of Studio's icons".to_owned()),
+        }
+    }
+
     /// `icon`'s SVG: its file from the manifest, else its default file; read once.
     fn svg(&mut self, icon: Icon) -> Option<Arc<[u8]>> {
         if let Some(svg) = self.svgs.get(&icon) {
             return svg.clone();
         }
-        let dir = self.dir.as_ref()?;
-        let default = dir.join(icon.default_file());
+        let default = icon.default_file();
         let chosen = self.files.get(&icon).cloned().unwrap_or_else(|| default.clone());
-        let svg = match std::fs::read(&chosen) {
+        let svg = match self.read(&chosen) {
             Ok(bytes) => Some(bytes),
             Err(error) if chosen != default => {
-                log::warn!("icons: {}: {error}; using {}", chosen.display(), icon.default_file());
-                std::fs::read(&default).ok()
+                log::warn!("icons: {chosen}: {error}; using {default}");
+                self.read(&default).ok()
             }
             Err(error) => {
-                log::warn!("icons: {}: {error}", chosen.display());
+                log::warn!("icons: {chosen}: {error}");
                 None
             }
         }
@@ -357,7 +361,7 @@ fn shared_id() -> Id {
     Id::unique("metallic.icons.builtin")
 }
 
-/// The built-in icons of `ctx`, reading the folder beside the executable the first time.
+/// The built-in icons of `ctx`, reading the user's icons folder (or the shipped icons) the first time.
 fn shared(ctx: &Context) -> Shared {
     if let Some(shared) = ctx.data(|data| data.get_temp::<Shared>(shared_id())) {
         return shared;
@@ -367,7 +371,7 @@ fn shared(ctx: &Context) -> Shared {
     shared
 }
 
-/// Reads the built-in icons from `dir` in `ctx` from now on, in place of the folder beside the executable (tests).
+/// Reads the built-in icons from `dir` in `ctx` from now on, in place of the user's folder (tests).
 #[cfg(test)]
 pub fn use_folder(ctx: &Context, dir: &Path) {
     let shared = Shared(Arc::new(Mutex::new(Loaded::new(Some(dir.to_path_buf())))));
@@ -415,7 +419,7 @@ pub fn textures_of(ctx: &Context, icon: Icon) -> Vec<TextureId> {
 mod tests {
     use super::*;
 
-    /// The repository's icons folder, which the build copies beside the executable.
+    /// The repository's icons folder, which the build builds into the executable.
     fn repo_folder() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(FOLDER)
     }
@@ -442,6 +446,17 @@ mod tests {
         );
         // Lucide's licence ships with them.
         assert!(dir.join("licenses/LICENSE-Lucide.txt").is_file());
+        // Built in as they are (#402): every file, byte for byte, every icon's among them.
+        for (path, bytes) in SHIPPED {
+            assert_eq!(std::fs::read(dir.join(path)).unwrap(), *bytes, "{path}");
+        }
+        for path in Icon::ALL
+            .iter()
+            .map(|icon| icon.default_file())
+            .chain([MANIFEST.to_owned(), "licenses/LICENSE-Lucide.txt".to_owned()])
+        {
+            assert!(shipped(&path).is_some(), "{path} is not built in");
+        }
         // Nothing else: icons.json alone at the top, each SVG in its part's folder and used (#322).
         let mut top: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
@@ -477,9 +492,13 @@ mod tests {
     }
 
     #[test]
-    fn the_build_puts_the_folder_beside_the_executable() {
-        let found = folder().expect("an icons folder beside the test executable");
-        assert!(found.join(MANIFEST).is_file(), "{}", found.display());
+    fn with_no_folder_at_all_the_icons_come_from_the_executable() {
+        // Tests read no folder (#402): what someone given Studio alone gets.
+        assert!(folder().is_none());
+        let ctx = Context::default();
+        assert!(texture(&ctx, Icon::ExplorerPart, 16, false).is_some());
+        assert!(texture(&ctx, Icon::ToolbarPlay, 24, true).is_some());
+        assert!(shipped_manifest().is_some_and(|manifest| manifest.format == FORMAT));
     }
 
     /// A folder of its own under the system's temporary folder, holding `files`.
@@ -523,8 +542,11 @@ mod tests {
         assert_eq!(loaded.svg(Icon::ExplorerModel).as_deref(), Some(DOT.as_bytes()));
         // Not in the manifest: its default.
         assert_eq!(loaded.svg(Icon::ExplorerFolder).as_deref(), Some(DOT.as_bytes()));
-        // No file at all: nothing, and no panic.
-        assert!(loaded.svg(Icon::ExplorerCamera).is_none());
+        // Not in the folder at all: the one built into Studio (#402).
+        assert_eq!(
+            loaded.svg(Icon::ExplorerCamera).as_deref(),
+            shipped(&Icon::ExplorerCamera.default_file())
+        );
 
         // Drawn at the size asked, white for tinting, and cached.
         let ctx = Context::default();
@@ -535,7 +557,7 @@ mod tests {
             Some(a),
             "another size, another texture"
         );
-        assert!(loaded.texture(&ctx, Icon::ExplorerCamera, 20, false).is_none());
+        assert!(loaded.texture(&ctx, Icon::ExplorerCamera, 20, false).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -578,9 +600,12 @@ mod tests {
         );
         let mut loaded = Loaded::new(Some(dir.clone()));
         assert_eq!(loaded.svg(Icon::ExplorerPart).as_deref(), Some(SQUARE.as_bytes()));
-        // No folder: nothing, quietly.
+        // No folder: the shipped icons.
         let mut none = Loaded::new(None);
-        assert!(none.svg(Icon::ExplorerPart).is_none());
+        assert_eq!(
+            none.svg(Icon::ExplorerPart).as_deref(),
+            shipped(&Icon::ExplorerPart.default_file())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
