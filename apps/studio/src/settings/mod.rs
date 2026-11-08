@@ -1,4 +1,4 @@
-//! Studio's settings (ADR 0009, Settings): one typed [`StudioSettings`] in categories (General, Appearance,
+//! Studio's settings (ADR 0009, Settings): one typed [`StudioSettings`] in categories (General, Editing, Appearance,
 //! Rendering, Keybinds), stored as `settings.toml` in Studio's config folder ([`store`]) and edited in the Settings
 //! window ([`window`], with the Keybinds page in [`keybinds`]).
 //!
@@ -29,6 +29,8 @@ pub const FORMAT_VERSION: i64 = 1;
 pub struct StudioSettings {
     /// Studio as a whole.
     pub general: General,
+    /// How the viewport's tools edit (#359).
+    pub editing: Editing,
     /// The look of the interface.
     pub appearance: Appearance,
     /// The viewport's graphics: the engine's own settings type (#84), so the viewport applies them as the player
@@ -44,6 +46,35 @@ pub struct General {
     /// Skip the sign-in screen and go straight to the projects (the sign-in screen's "Don't ask again").
     pub skip_sign_in: bool,
 }
+
+/// The Editing category (#359): the increments the gizmos' drags snap to, and whether they do.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Editing {
+    /// Whether moves and sizes snap to [`Editing::move_step`].
+    pub snap_moves: bool,
+    /// The move increment, in studs.
+    pub move_step: f32,
+    /// Whether turns snap to [`Editing::turn_step`].
+    pub snap_turns: bool,
+    /// The rotate increment, in degrees.
+    pub turn_step: f32,
+}
+
+impl Default for Editing {
+    fn default() -> Self {
+        Self {
+            snap_moves: true,
+            move_step: 1.0,
+            snap_turns: true,
+            turn_step: 15.0,
+        }
+    }
+}
+
+/// The move increment's range, in studs.
+pub const MOVE_STEP: (f32, f32) = (0.01, 1000.0);
+/// The rotate increment's range, in degrees.
+pub const TURN_STEP: (f32, f32) = (0.1, 180.0);
 
 /// The Appearance category: what [`Look`] the interface has, and how large it is drawn.
 #[derive(Clone, Debug, PartialEq)]
@@ -209,6 +240,13 @@ impl StudioSettings {
                 &mut settings.general.skip_sign_in,
             );
         }
+        if let Some(editing) = section("editing") {
+            let e = &mut settings.editing;
+            read(editing, "snap_moves", Value::as_bool, &mut e.snap_moves);
+            read(editing, "move_step", number, &mut e.move_step);
+            read(editing, "snap_turns", Value::as_bool, &mut e.snap_turns);
+            read(editing, "turn_step", number, &mut e.turn_step);
+        }
         if let Some(appearance) = section("appearance") {
             let a = &mut settings.appearance;
             read(
@@ -256,6 +294,15 @@ impl StudioSettings {
         with_section(&mut document, "general", |general| {
             general.insert("skip_sign_in".into(), Value::Boolean(self.general.skip_sign_in));
         });
+        let e = &self.editing;
+        with_section(&mut document, "editing", |editing| {
+            // In thousandths, so 0.2 is written as 0.2 and not as the f32's 0.20000000298023224.
+            let round = |step: f32| Value::Float((f64::from(step) * 1000.0).round() / 1000.0);
+            editing.insert("snap_moves".into(), Value::Boolean(e.snap_moves));
+            editing.insert("move_step".into(), round(e.move_step));
+            editing.insert("snap_turns".into(), Value::Boolean(e.snap_turns));
+            editing.insert("turn_step".into(), round(e.turn_step));
+        });
         let a = &self.appearance;
         with_section(&mut document, "appearance", |appearance| {
             appearance.insert("mode".into(), Value::String(a.mode.as_str().into()));
@@ -282,6 +329,16 @@ impl StudioSettings {
 
     /// Brings every value into its range.
     pub fn clamp(&mut self) {
+        let e = &mut self.editing;
+        let within = |value: f32, (min, max): (f32, f32), default: f32| {
+            if value.is_finite() {
+                value.clamp(min, max)
+            } else {
+                default
+            }
+        };
+        e.move_step = within(e.move_step, MOVE_STEP, 1.0);
+        e.turn_step = within(e.turn_step, TURN_STEP, 15.0);
         let a = &mut self.appearance;
         a.ui_scale = if a.ui_scale.is_finite() {
             a.ui_scale.clamp(ui_scale::MIN, ui_scale::MAX)
@@ -508,6 +565,31 @@ mod tests {
             "an override cleared is removed"
         );
         assert_eq!(out["keybinds"]["file.save"][0].as_str(), Some("Primary+S"));
+    }
+
+    #[test]
+    fn the_editing_increments_round_trip_and_stay_in_range() {
+        let document: Table = toml::from_str(
+            "[editing]
+move_step = 0.5
+snap_turns = false
+turn_step = 999
+",
+        )
+        .unwrap();
+        let settings = StudioSettings::from_document(&document);
+        assert_eq!(
+            settings.editing,
+            Editing {
+                snap_moves: true,
+                move_step: 0.5,
+                snap_turns: false,
+                turn_step: TURN_STEP.1,
+            }
+        );
+        let written = settings.to_document(&Table::new());
+        assert_eq!(StudioSettings::from_document(&written).editing, settings.editing);
+        assert_eq!(StudioSettings::default().editing.move_step, 1.0);
     }
 
     #[test]

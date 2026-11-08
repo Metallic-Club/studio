@@ -88,6 +88,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `toolbar.scale` | The Scale tool. | Panels: scene | [`toolbar/scale-3d.svg`](https://lucide.dev/icons/scale-3d) | `toolbar.scale.svg`, `toolbar.scale.png` |
 | `toolbar.rotate` | The Rotate tool. | Panels: scene | [`toolbar/rotate-3d.svg`](https://lucide.dev/icons/rotate-3d) | `toolbar.rotate.svg`, `toolbar.rotate.png` |
 | `toolbar.local_space` | Local or world axes for the gizmos. | Panels: scene | [`toolbar/axis-3d.svg`](https://lucide.dev/icons/axis-3d) | `toolbar.local_space.svg`, `toolbar.local_space.png` |
+| `toolbar.snap` | Snapping on or off (#359). | Panels: scene | [`toolbar/magnet.svg`](https://lucide.dev/icons/magnet) | `toolbar.snap.svg`, `toolbar.snap.png` |
 | `toolbar.reset_layout` | The toolbar's Reset layout tool. | Panels: scene | [`toolbar/rotate-ccw.svg`](https://lucide.dev/icons/rotate-ccw) | `toolbar.reset_layout.svg`, `toolbar.reset_layout.png` |
 | `toolbar.plugin` | A plugin's tool that brings no icon of its own. | Studio | [`toolbar/puzzle.svg`](https://lucide.dev/icons/puzzle) | `toolbar.plugin.svg`, `toolbar.plugin.png` |
 | `toolbar.spacer` | A spacer, in the toolbar's Add window. | Interface | [`toolbar/space.svg`](https://lucide.dev/icons/space) | `toolbar.spacer.svg`, `toolbar.spacer.png` |

@@ -325,6 +325,8 @@ icons! {
     ToolbarRotate = "toolbar.rotate", Scene, "rotate-3d";
     /// Local or world axes for the gizmos.
     ToolbarLocalSpace = "toolbar.local_space", Scene, "axis-3d";
+    /// Snapping on or off (#359).
+    ToolbarSnap = "toolbar.snap", Scene, "magnet";
     /// The toolbar's Reset layout tool.
     ToolbarResetLayout = "toolbar.reset_layout", Scene, "rotate-ccw";
     /// A plugin's tool that brings no icon of its own.

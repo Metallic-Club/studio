@@ -41,6 +41,8 @@ pub mod ids {
     pub const ROTATE: &str = "studio.tool.rotate";
     /// World or local axes for the gizmos.
     pub const LOCAL_SPACE: &str = "studio.tool.local_space";
+    /// Snapping on or off (#359).
+    pub const SNAP: &str = "studio.tool.snap";
     /// The prefix of a panel's toggle: `studio.panel.<panel id>`.
     pub const PANEL: &str = "studio.panel.";
 }
@@ -93,6 +95,8 @@ pub enum StudioCommand {
     Transform(TransformTool),
     /// Switch the gizmos between world and local axes.
     LocalSpace,
+    /// Turn snapping on or off.
+    Snap,
 }
 
 /// What a tool does when its button is clicked.
@@ -293,6 +297,14 @@ impl ToolRegistry {
                 Icon::ToolbarLocalSpace,
                 groups::TRANSFORM,
                 StudioCommand::LocalSpace,
+            ),
+            Tool::studio(
+                ids::SNAP,
+                "Snap",
+                "Turns snapping to the move and rotate increments (Settings, Editing) on or off.",
+                Icon::ToolbarSnap,
+                groups::TRANSFORM,
+                StudioCommand::Snap,
             ),
             Tool::studio(
                 ids::RESET_LAYOUT,

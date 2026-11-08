@@ -110,7 +110,12 @@ impl Panel for Viewport {
             let view = View::new(&cx.editor.viewport.camera, rect);
             // The tool's gizmo first: a click on it is not a selection (#355).
             let mut gizmo = std::mem::take(&mut cx.editor.viewport.gizmo);
-            let snap = tools::Snap::default();
+            // The increments, where they are on (#359).
+            let editing = cx.settings.editing;
+            let snap = tools::Snap {
+                move_step: if editing.snap_moves { editing.move_step } else { 0.0 },
+                turn_step: if editing.snap_turns { editing.turn_step } else { 0.0 },
+            };
             let on_gizmo = tools::interact(ui, &response, &view, &mut cx.editor.scene(), &mut gizmo, snap);
             let editor = &mut *cx.editor;
             let under = |at| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray));

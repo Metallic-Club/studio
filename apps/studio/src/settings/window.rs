@@ -34,6 +34,8 @@ pub enum Category {
     /// Studio as a whole.
     #[default]
     General,
+    /// How the viewport's tools edit (#359).
+    Editing,
     /// The look of the interface.
     Appearance,
     /// The viewport's graphics.
@@ -44,8 +46,9 @@ pub enum Category {
 
 impl Category {
     /// Every category, in the order the window lists them.
-    pub const ALL: [Category; 4] = [
+    pub const ALL: [Category; 5] = [
         Category::General,
+        Category::Editing,
         Category::Appearance,
         Category::Rendering,
         Category::Keybinds,
@@ -55,6 +58,7 @@ impl Category {
     pub fn label(self) -> &'static str {
         match self {
             Category::General => "General",
+            Category::Editing => "Editing",
             Category::Appearance => "Appearance",
             Category::Rendering => "Rendering",
             Category::Keybinds => "Keybinds",
@@ -65,6 +69,7 @@ impl Category {
     fn lead(self) -> &'static str {
         match self {
             Category::General => "How Studio starts and behaves.",
+            Category::Editing => "How the viewport's tools move, resize and turn things.",
             Category::Appearance => "Changes apply at once.",
             Category::Rendering => "How the editor's viewport draws your scenes. The game's own look is never changed.",
             Category::Keybinds => "Click a shortcut to change it, or + to add another. Right-click one to remove it.",
@@ -125,6 +130,38 @@ pub static ENTRIES: &[Entry] = &[
         description: "Go straight to your projects when Studio starts, without the sign-in screen.",
         control: |ui, s| {
             toggle(ui, &mut s.general.skip_sign_in, "Skip sign-in");
+        },
+    },
+    Entry {
+        category: Category::Editing,
+        name: "Move increment",
+        description: "Moves, resizes and carried parts go in steps of this many studs when on.",
+        control: |ui, s| {
+            let e = &mut s.editing;
+            toggle(ui, &mut e.snap_moves, "Snap moves");
+            ui.add_enabled(
+                e.snap_moves,
+                egui::DragValue::new(&mut e.move_step)
+                    .range(super::MOVE_STEP.0..=super::MOVE_STEP.1)
+                    .speed(0.05)
+                    .suffix(" studs"),
+            );
+        },
+    },
+    Entry {
+        category: Category::Editing,
+        name: "Rotate increment",
+        description: "Turns go in steps of this many degrees when on.",
+        control: |ui, s| {
+            let e = &mut s.editing;
+            toggle(ui, &mut e.snap_turns, "Snap turns");
+            ui.add_enabled(
+                e.snap_turns,
+                egui::DragValue::new(&mut e.turn_step)
+                    .range(super::TURN_STEP.0..=super::TURN_STEP.1)
+                    .speed(0.5)
+                    .suffix("\u{B0}"),
+            );
         },
     },
     Entry {
