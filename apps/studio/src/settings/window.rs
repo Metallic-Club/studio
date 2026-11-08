@@ -165,6 +165,28 @@ pub static ENTRIES: &[Entry] = &[
         },
     },
     Entry {
+        category: Category::Editing,
+        name: "Camera speed",
+        description: "How fast the viewport's camera flies, and what holding Shift multiplies it by (below one for \
+                      slow, careful moves). Alt and the wheel change the first in the viewport, Shift and the wheel \
+                      the second.",
+        control: |ui, s| {
+            let v = &mut s.viewport;
+            ui.add(
+                egui::DragValue::new(&mut v.fly_speed)
+                    .range(super::FLY_SPEED.0..=super::FLY_SPEED.1)
+                    .speed(0.5)
+                    .suffix(" studs/s"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut v.secondary_speed)
+                    .range(super::SECONDARY_SPEED.0..=super::SECONDARY_SPEED.1)
+                    .speed(0.05)
+                    .prefix("Shift \u{D7}"),
+            );
+        },
+    },
+    Entry {
         category: Category::Appearance,
         name: "Theme",
         description: "Dark, light, or whichever the system uses.",

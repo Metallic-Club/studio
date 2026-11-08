@@ -307,7 +307,8 @@ impl Panel for Explorer {
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         // Where an inserted part goes (#352): in front of the editor camera.
         let camera = cx.editor.viewport.camera;
-        let place = camera.position + camera.forward() * camera.focus().clamp(4.0, 40.0);
+        let place =
+            camera.position + camera.forward() * camera.focus().map_or(20.0, |focus| focus.distance).clamp(4.0, 40.0);
         // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
         let editor = cx.editor.scene();
         search_box(ui, &mut editor.explorer.query, "Search the game");

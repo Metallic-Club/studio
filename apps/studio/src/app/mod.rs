@@ -784,6 +784,15 @@ impl Studio {
             && ctx.input(|input| input.focused)
     }
 
+    /// Where the editor camera holds the pointer while it looks or orbits (#385), in points: the shell keeps it there,
+    /// shown.
+    pub fn held_pointer(&self) -> Option<egui::Pos2> {
+        match &self.editor {
+            Some(EditorScreen::Open(editor)) if !self.game_had_input => editor.viewport.hold,
+            _ => None,
+        }
+    }
+
     /// What the running game asks of the cursor while it has the input, and the Game tab's area (points): what the
     /// shell holds or hides its cursor for. `None` while the game does not have the input.
     pub fn game_cursor(&self) -> Option<(CursorState, Rect)> {
@@ -1018,12 +1027,26 @@ impl Studio {
         };
         let activations = self.keymap.dispatch(ctx, focus);
         if let Some(EditorScreen::Open(editor)) = &mut self.editor {
-            let (pointer, dt) = ctx.input(|input| (input.pointer.delta(), input.stable_dt));
-            let pivot = editor
-                .selection
-                .active()
-                .and_then(|id| crate::viewport::position_of(&editor.dm, id));
-            if editor.viewport.navigate(&self.keymap, &activations, pointer, dt, pivot) {
+            let (motion, pointer, dt, fast) = ctx.input(|input| {
+                // The mouse's own movement while the pointer is held (#385): the pointer itself does not move.
+                let motion = input.pointer.motion().unwrap_or(input.pointer.delta());
+                (
+                    motion,
+                    input.pointer.latest_pos(),
+                    input.stable_dt,
+                    input.modifiers.shift,
+                )
+            });
+            let input = crate::viewport::NavInput {
+                motion,
+                pointer,
+                dt,
+                fast,
+                dm: &editor.dm,
+                selection: editor.selection.ids(),
+            };
+            let speeds = &mut self.settings.settings_mut().viewport;
+            if editor.viewport.navigate(&self.keymap, &activations, input, speeds) {
                 ctx.request_repaint();
             }
         }
@@ -5824,7 +5847,7 @@ skip_sign_in = true
         assert_eq!(camera(&harness), before, "the Explorer has focus");
 
         // The mouse starts over the viewport without focus: right-drag looks, the wheel zooms, Shift+wheel sets the
-        // speed, Alt+left-drag orbits.
+        // secondary speed (#385), Alt+left-drag orbits.
         right_drag(&mut harness, explorer, egui::vec2(40.0, 0.0));
         assert_eq!(camera(&harness), before, "a drag over the Explorer");
         right_drag(&mut harness, inside, egui::vec2(40.0, 0.0));
@@ -5841,10 +5864,9 @@ skip_sign_in = true
             "zoomed in"
         );
         wheel(&mut harness, inside, Modifiers::SHIFT);
-        assert!(camera(&harness).speed() > zoomed.speed());
+        assert!(harness.state().studio.settings().viewport.secondary_speed > 3.0);
 
         let orbiting = camera(&harness);
-        let pivot = orbiting.position + orbiting.forward() * orbiting.focus();
         pointer(&mut harness, inside, egui::PointerButton::Primary, true, Modifiers::ALT);
         harness.event(egui::Event::PointerMoved(inside + egui::vec2(60.0, 0.0)));
         harness.step();
@@ -5857,7 +5879,7 @@ skip_sign_in = true
         );
         let orbited = camera(&harness);
         assert!(orbited.position.distance(orbiting.position) > 0.1, "it moved around");
-        assert!((orbited.position.distance(pivot) - orbiting.focus()).abs() < 1e-2);
+        assert!(orbited.yaw() != orbiting.yaw(), "turning to keep the pivot in view");
 
         // The game's own camera never moved.
         let editor = harness.state().studio.editor().unwrap();

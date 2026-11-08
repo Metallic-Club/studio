@@ -7,8 +7,9 @@
 //!   registers the texture with egui-wgpu (again when a resize replaced it), before the frame is painted. While a
 //!   resize is under way the old texture is stretched over the new size, so there is never a black frame.
 //! - **The camera** ([`EditorCamera`]) is Studio's, not the game's `Workspace.CurrentCamera`: the game is shown, never
-//!   changed. It moves only through the keymap's viewport commands ([`ViewportState::navigate`]): keys need the
-//!   viewport's focus, the mouse and wheel start over it.
+//!   changed. It moves only through the keymap's viewport commands ([`ViewportState::navigate`], after Forge-Engine's
+//!   controls, #385): keys need the viewport's focus, the mouse and wheel start over it. While a look or an orbit goes
+//!   on, the shell holds the pointer where the drag began ([`ViewportState::hold`]).
 //! - **Frame pacing.** While the panel is shown and the window has focus it asks for frames continuously (at the
 //!   Rendering settings' frame cap, if any); otherwise Studio draws only on input or change.
 //! - **No game scripts run.** The editor shows the scene as it is; Play mode is later work.
@@ -19,7 +20,9 @@ pub mod pick;
 pub mod tools;
 pub mod view;
 
-use egui::{Rect, TextureId};
+use std::time::Instant;
+
+use egui::{Pos2, Rect, TextureId};
 use metallic_engine::metallic_core::glam::{Vec2, Vec3};
 use metallic_engine::metallic_core::{DataModel, Id, Value};
 
@@ -27,6 +30,36 @@ pub use camera::EditorCamera;
 pub use view::View;
 
 use crate::keymap::{Activation, ActivationKind, Keymap, ids};
+use crate::settings::{FLY_SPEED, SECONDARY_SPEED};
+
+/// How far ahead the camera takes there to be something when nothing is in front (open space), in studs.
+const OPEN_REACH: f32 = 20.0;
+
+/// Which camera speed the wheel last changed, for the viewport's readout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeedChange {
+    /// The fly speed.
+    Fly,
+    /// The secondary speed.
+    Secondary,
+}
+
+/// What a frame gives the camera besides the keymap.
+#[derive(Clone, Copy, Debug)]
+pub struct NavInput<'a> {
+    /// The mouse's movement this frame: its own (raw) movement while the pointer is held, else the pointer's.
+    pub motion: egui::Vec2,
+    /// Where the pointer is, if anywhere.
+    pub pointer: Option<Pos2>,
+    /// The frame's length, in seconds.
+    pub dt: f32,
+    /// Shift is held: fly at the secondary speed.
+    pub fast: bool,
+    /// The scene, to aim at.
+    pub dm: &'a DataModel,
+    /// What is selected, the active instance last: what Focus frames.
+    pub selection: &'a [Id],
+}
 
 /// The viewport's state: its camera, and what the panel and the shell tell each other.
 #[derive(Clone, Debug)]
@@ -51,6 +84,10 @@ pub struct ViewportState {
     pub error: Option<String>,
     /// The transform tool and its gizmo (#355).
     pub gizmo: tools::Gizmo,
+    /// Where the pointer is held, in points, while a look or an orbit goes on (#385).
+    pub hold: Option<Pos2>,
+    /// The speed the wheel last changed, and when: the viewport shows it for a moment.
+    pub speed_note: Option<(SpeedChange, Instant)>,
 }
 
 impl ViewportState {
@@ -66,46 +103,116 @@ impl ViewportState {
             texture_limit: u32::MAX,
             error: None,
             gizmo: tools::Gizmo::default(),
+            hold: None,
+            speed_note: None,
         }
     }
 
-    /// Moves the camera by this frame's viewport commands: `activations` the keymap fired, the commands it holds,
-    /// the pointer's movement `pointer` (points) and the frame's `dt` (seconds). `pivot` is what an orbit circles:
-    /// the selection's position, if any. Returns whether the camera moved.
+    /// Moves the camera by this frame's viewport commands (#385): `activations` the keymap fired and the commands it
+    /// holds, with `input`. The wheel's speed commands change `speeds`. Returns whether the camera moved.
     pub fn navigate(
         &mut self,
         keymap: &Keymap,
         activations: &[Activation],
-        pointer: egui::Vec2,
-        dt: f32,
-        pivot: Option<Vec3>,
+        input: NavInput<'_>,
+        speeds: &mut crate::settings::Viewport,
     ) -> bool {
         let before = self.camera;
+        let active = input.selection.last().copied();
+        self.camera.keep_focus_on(active);
+        let view = self.rect.map(|rect| View::new(&self.camera, rect));
         for activation in activations {
             match (activation.command, activation.kind) {
-                (ids::ORBIT, ActivationKind::Press) => self.camera.begin_orbit(pivot),
-                (ids::ZOOM, ActivationKind::Wheel(lines)) => self.camera.zoom(lines),
-                (ids::SPEED, ActivationKind::Wheel(lines)) => self.camera.change_speed(lines),
+                (ids::LOOK, ActivationKind::Press) => {
+                    self.camera.begin_look(None);
+                    self.hold = input.pointer;
+                }
+                (ids::ORBIT, ActivationKind::Press) => {
+                    // Round what is under the pointer: the first part its ray meets, else the ground, else a point
+                    // ahead.
+                    let ray = input
+                        .pointer
+                        .zip(view)
+                        .and_then(|(at, view)| view.ray(at))
+                        .unwrap_or((self.camera.position, self.camera.forward()));
+                    let (reach, _) = reach_along(input.dm, ray);
+                    self.camera
+                        .begin_look(Some(ray.0 + ray.1 * reach.max(camera::ORBIT_MIN_DISTANCE)));
+                    self.hold = input.pointer;
+                }
+                (ids::FOCUS, ActivationKind::Press) => {
+                    if let Some((centre, radius)) = bounds_of(input.dm, input.selection) {
+                        let aspect = self.rect.map_or(1.5, |rect| rect.aspect_ratio());
+                        self.camera.focus_on(centre, radius, aspect, active);
+                    }
+                }
+                (ids::ZOOM, ActivationKind::Wheel(lines)) => {
+                    let ahead = reach_along(input.dm, (self.camera.position, self.camera.forward()));
+                    self.camera.zoom(lines, ahead);
+                }
+                (ids::SPEED, ActivationKind::Wheel(lines)) => {
+                    speeds.fly_speed = (speeds.fly_speed * 1.1f32.powf(lines)).clamp(FLY_SPEED.0, FLY_SPEED.1);
+                    self.speed_note = Some((SpeedChange::Fly, Instant::now()));
+                }
+                (ids::SECONDARY_SPEED, ActivationKind::Wheel(lines)) => {
+                    speeds.secondary_speed =
+                        (speeds.secondary_speed * 1.1f32.powf(lines)).clamp(SECONDARY_SPEED.0, SECONDARY_SPEED.1);
+                    self.speed_note = Some((SpeedChange::Secondary, Instant::now()));
+                }
                 _ => {}
             }
         }
-        let delta = Vec2::new(pointer.x, pointer.y);
-        if keymap.is_held(ids::ORBIT) {
-            self.camera.orbit(delta);
+        if keymap.is_held(ids::LOOK) || keymap.is_held(ids::ORBIT) {
+            self.camera.turn(Vec2::new(input.motion.x, input.motion.y));
         } else {
-            self.camera.end_orbit();
-            if keymap.is_held(ids::LOOK) {
-                self.camera.look(delta);
-            }
+            self.camera.end_look();
+            self.hold = None;
         }
         let axis = |plus: &str, minus: &str| f32::from(keymap.is_held(plus)) - f32::from(keymap.is_held(minus));
         let forward = axis(ids::FLY_FORWARD, ids::FLY_BACK);
         let right = axis(ids::FLY_RIGHT, ids::FLY_LEFT);
         let up = axis(ids::FLY_UP, ids::FLY_DOWN);
         if forward != 0.0 || right != 0.0 || up != 0.0 {
-            self.camera.fly(forward, right, up, dt);
+            let speed = speeds.fly_speed * if input.fast { speeds.secondary_speed } else { 1.0 };
+            self.camera.fly(forward, right, up, speed, input.dt);
         }
+        self.camera.step(input.dt);
         self.camera != before
+    }
+}
+
+/// How far along `ray` what is in front is: the first part it meets, or the ground (`true`, a surface not to pass);
+/// else (`false`) a distance that suits how high it starts, so zooming and orbiting still go somewhere in open space.
+fn reach_along(dm: &DataModel, ray: view::Ray) -> (f32, bool) {
+    if let Some((_, t)) = pick::nearest_part(dm, ray) {
+        return (t, true);
+    }
+    let (origin, dir) = ray;
+    if dir.y < -1e-3 {
+        let t = -origin.y / dir.y;
+        if t > 0.0 && t < 2000.0 {
+            return (t, true);
+        }
+    }
+    (OPEN_REACH.max(origin.y.abs() * 0.5), false)
+}
+
+/// The middle of the box round `ids`' outlines and the radius of the sphere round it: what Focus frames.
+fn bounds_of(dm: &DataModel, ids: &[Id]) -> Option<(Vec3, f32)> {
+    let corners: Vec<Vec3> = ids
+        .iter()
+        .filter_map(|&id| pick::outline_box(dm, id))
+        .flat_map(|bounds| bounds.corners())
+        .collect();
+    let min = corners.iter().copied().reduce(Vec3::min);
+    let max = corners.iter().copied().reduce(Vec3::max);
+    match min.zip(max) {
+        Some((min, max)) => Some(((min + max) * 0.5, ((max - min) * 0.5).length().max(0.5))),
+        // Nothing with a box: where they are.
+        None => {
+            let places: Vec<Vec3> = ids.iter().filter_map(|&id| position_of(dm, id)).collect();
+            (!places.is_empty()).then(|| (places.iter().sum::<Vec3>() / places.len() as f32, 2.0))
+        }
     }
 }
 
@@ -124,13 +231,13 @@ mod tests {
     use super::*;
     use crate::keymap::{Context, Focus, Overrides};
 
-    fn key(key: Key, pressed: bool) -> Event {
+    fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
             physical_key: Some(key),
             pressed,
             repeat: false,
-            modifiers: Modifiers::NONE,
+            modifiers,
         }
     }
 
@@ -145,45 +252,100 @@ mod tests {
 
     #[test]
     fn the_keymaps_commands_drive_the_camera() {
-        let dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let workspace = pick::workspace(&dm).unwrap();
+        let part = dm.create(dm.registry().class_id("Part").unwrap()).unwrap();
+        let at = metallic_engine::metallic_core::CFrame::new(Vec3::new(30.0, 2.0, 0.0));
+        dm.set_by_name(part, "CFrame", Value::CFrame(at)).unwrap();
+        dm.set_parent(part, Some(workspace)).unwrap();
         let mut viewport = ViewportState::new(&dm);
+        viewport.rect = Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
+        let mut speeds = crate::settings::Viewport::default();
         let mut keymap = Keymap::studio(&Overrides::new());
         let focused = Focus {
             hovered: Some(Context::Viewport),
             ..Focus::new(Context::Viewport)
         };
         let start = viewport.camera;
+        let input = |motion: egui::Vec2, fast: bool, selection: &'static [Id]| NavInput {
+            motion,
+            pointer: Some(egui::pos2(400.0, 300.0)),
+            dt: 0.05,
+            fast,
+            dm: &dm,
+            selection,
+        };
+        let mut nav = |viewport: &mut ViewportState, fired: &[Activation], keymap: &Keymap, input: NavInput<'_>| {
+            viewport.navigate(keymap, fired, input, &mut speeds)
+        };
 
-        // W held flies forward.
-        let fired = keymap.process(&[key(Key::W, true)], focused).activations;
-        assert!(viewport.navigate(&keymap, &fired, egui::Vec2::ZERO, 0.05, None));
-        assert!((viewport.camera.position - start.position).dot(start.forward()) > 0.0);
-        keymap.process(&[key(Key::W, false)], focused);
+        // W held flies forward at the fly speed; with Shift it still flies, at the secondary speed.
+        let fired = keymap
+            .process(&[key(Key::W, true, Modifiers::NONE)], focused)
+            .activations;
+        assert!(nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, &[])));
+        let moved = (viewport.camera.position - start.position).length();
+        assert!((moved - 2.0).abs() < 1e-3, "40 studs a second for 0.05 s: {moved}");
+        keymap.process(&[key(Key::W, false, Modifiers::NONE)], focused);
         assert!(
-            !viewport.navigate(&keymap, &[], egui::Vec2::ZERO, 0.05, None),
+            !nav(&mut viewport, &[], &keymap, input(egui::Vec2::ZERO, false, &[])),
             "released"
         );
+        let fired = keymap
+            .process(&[key(Key::W, true, Modifiers::SHIFT)], focused)
+            .activations;
+        let before = viewport.camera.position;
+        nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, true, &[]));
+        assert!(
+            (viewport.camera.position.distance(before) - 6.0).abs() < 1e-3,
+            "three times as fast"
+        );
+        keymap.process(&[key(Key::W, false, Modifiers::SHIFT)], focused);
 
-        // Right-drag looks.
+        // A right drag looks, holding the pointer where it began.
         let fired = keymap
             .process(&[button(PointerButton::Secondary, true, Modifiers::NONE)], focused)
             .activations;
-        assert!(viewport.navigate(&keymap, &fired, egui::vec2(30.0, 0.0), 0.016, None));
-        assert!(viewport.camera.yaw() < start.yaw());
+        let yaw = viewport.camera.yaw();
+        assert!(nav(
+            &mut viewport,
+            &fired,
+            &keymap,
+            input(egui::vec2(30.0, 0.0), false, &[])
+        ));
+        assert!(viewport.camera.yaw() < yaw);
+        assert_eq!(viewport.hold, Some(egui::pos2(400.0, 300.0)));
         keymap.process(&[button(PointerButton::Secondary, false, Modifiers::NONE)], focused);
+        nav(&mut viewport, &[], &keymap, input(egui::Vec2::ZERO, false, &[]));
+        assert_eq!(viewport.hold, None, "let go when the drag ends");
 
-        // Alt+left-drag orbits the selection.
-        let pivot = Vec3::new(3.0, 0.0, 0.0);
+        // Alt and a right drag orbit the point under the pointer: the ground ahead, which keeps its distance.
         let fired = keymap
-            .process(&[button(PointerButton::Primary, true, Modifiers::ALT)], focused)
+            .process(&[button(PointerButton::Secondary, true, Modifiers::ALT)], focused)
             .activations;
-        viewport.navigate(&keymap, &fired, egui::vec2(50.0, 0.0), 0.016, Some(pivot));
-        let distance = viewport.camera.position.distance(pivot);
-        viewport.navigate(&keymap, &[], egui::vec2(50.0, 10.0), 0.016, Some(pivot));
-        assert!((viewport.camera.position.distance(pivot) - distance).abs() < 1e-3);
-        keymap.process(&[button(PointerButton::Primary, false, Modifiers::ALT)], focused);
+        nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, &[]));
+        let view = View::new(&viewport.camera, viewport.rect.unwrap());
+        let ray = view.ray(egui::pos2(400.0, 300.0)).unwrap();
+        let ground = ray.0 + ray.1 * (-ray.0.y / ray.1.y);
+        let distance = viewport.camera.position.distance(ground);
+        nav(&mut viewport, &[], &keymap, input(egui::vec2(50.0, 10.0), false, &[]));
+        assert!((viewport.camera.position.distance(ground) - distance).abs() < 1e-2);
+        keymap.process(&[button(PointerButton::Secondary, false, Modifiers::ALT)], focused);
 
-        // The wheel zooms; with Shift it changes the speed.
+        // F frames the selection.
+        let selected: &'static [Id] = Box::leak(Box::new([part]));
+        let fired = keymap
+            .process(&[key(Key::F, true, Modifiers::NONE)], focused)
+            .activations;
+        nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, selected));
+        for _ in 0..10 {
+            nav(&mut viewport, &[], &keymap, input(egui::Vec2::ZERO, false, selected));
+        }
+        let focus = viewport.camera.focus().expect("focused");
+        assert!(focus.pivot.distance(Vec3::new(30.0, 2.0, 0.0)) < 1e-3);
+        assert!(viewport.camera.position.distance(focus.pivot) < 20.0);
+
+        // The wheel zooms; with Alt it changes the fly speed, with Shift the secondary one.
         let wheel = |modifiers| Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1.0),
@@ -193,11 +355,14 @@ mod tests {
         };
         let at = viewport.camera.position;
         let fired = keymap.process(&[wheel(Modifiers::NONE)], focused).activations;
-        viewport.navigate(&keymap, &fired, egui::Vec2::ZERO, 0.016, None);
+        nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, selected));
         assert!(viewport.camera.position != at);
+        let fired = keymap.process(&[wheel(Modifiers::ALT)], focused).activations;
+        nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, selected));
         let fired = keymap.process(&[wheel(Modifiers::SHIFT)], focused).activations;
-        viewport.navigate(&keymap, &fired, egui::Vec2::ZERO, 0.016, None);
-        assert!(viewport.camera.speed() > EditorCamera::DEFAULT_SPEED);
+        nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, selected));
+        assert!((speeds.fly_speed - 44.0).abs() < 1e-3 && (speeds.secondary_speed - 3.3).abs() < 1e-3);
+        assert_eq!(viewport.speed_note.map(|note| note.0), Some(SpeedChange::Secondary));
     }
 
     #[test]
