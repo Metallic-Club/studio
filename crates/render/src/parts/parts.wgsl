@@ -1,6 +1,6 @@
 // Parts: instanced meshes (the primitives and mesh assets), shaded PBR-lite (Lambert diffuse, GGX specular) under one directional light
-// (the sun, or the moon at night) and a sky/ground hemisphere ambient, all from `Lighting`, plus the extra suns
-// (`DirectionalLight`s, `extra_suns` below) and the local point and spot lights (lights.wgsl). One shading model;
+// (the sun, or the moon at night) and a sky/ground hemisphere ambient, all from `Lighting`, plus the local point and
+// spot lights (lights.wgsl). One shading model;
 // the material row picks the parameters. frame.wgsl comes before this
 // file, lights.wgsl after it, and the vertex entry point last, from instance_storage.wgsl or instance_vertex.wgsl
 // (scene/gpu.rs explains the two paths).
@@ -176,50 +176,11 @@ fn unit_or_zero(v: vec3<f32>) -> vec3<f32> {
     return v * inverseSqrt(max(dot(v, v), 1e-30));
 }
 
-// A constant per pipeline (parts/mod.rs makes the variants and picks one per frame): whether it shades the extra suns
-// (`DirectionalLight`s). Frames without any use pipelines made without them: a loop over the frame's count, even of
-// no iteration, cost the opaque pass of `parts_100k` 8% (the registers it holds), and 1.5% with local lights.
-override EXTRA_SUNS: bool = false;
-
 struct Shaded {
     // Diffuse, ambient and emitted light: what transparency fades.
     body: vec3<f32>,
     // Specular reflection (direct and ambient).
     specular: vec3<f32>,
-}
-
-// The light the extra suns (`DirectionalLight`s, lights/directional.rs) reflect at a point with unit normal `n`,
-// towards the camera `v`; `diffuse`, `f0` and `a2` (roughness⁴) are the surface's, as in `shade`. Each adds Lambert
-// diffuse and GGX specular of its radiance, like the sun, unshadowed (only the sun casts directional shadows). The
-// count is the frame's, the same for every pixel. Only pipelines made with `EXTRA_SUNS` call it.
-fn extra_suns(n: vec3<f32>, v: vec3<f32>, n_dot_v: f32, diffuse: vec3<f32>, f0: vec3<f32>, a2: f32) -> Shaded {
-    var out: Shaded;
-    out.body = vec3<f32>(0.0);
-    out.specular = vec3<f32>(0.0);
-    let count = min(u32(max(frame.extra_suns.x, 0.0)), 4u);
-    for (var i = 0u; i < count; i += 1u) {
-        let l = frame.extra_sun_directions[i].xyz;
-        let n_dot_l = min(dot(n, l), 1.0);
-        if n_dot_l <= 0.0 {
-            continue;
-        }
-        // As in `shade`: l + v is 0 when the view ray points straight at the light, and the cosines stay within 0..1
-        // for pow.
-        let h = unit_or_zero(l + v);
-        let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
-        let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
-        let d_denominator = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-        let distribution = a2 / (PI * d_denominator * d_denominator);
-        let visibility = 0.5 / max(
-            n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - a2) + a2) + n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - a2) + a2),
-            1e-5,
-        );
-        let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
-        let radiance = frame.extra_sun_colors[i].rgb * n_dot_l;
-        out.body += diffuse / PI * radiance;
-        out.specular += distribution * visibility * fresnel * radiance;
-    }
-    return out;
 }
 
 fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
@@ -265,11 +226,6 @@ fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);
     out.body += local.body;
     out.specular += local.specular;
-    if EXTRA_SUNS {
-        let suns = extra_suns(n, v, n_dot_v, diffuse, f0, a2);
-        out.body += suns.body;
-        out.specular += suns.specular;
-    }
     return out;
 }
 

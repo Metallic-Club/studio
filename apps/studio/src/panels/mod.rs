@@ -60,7 +60,6 @@ pub fn class_icon(registry: &Registry, class: ClassId) -> Icon {
         let icon = match name {
             "Workspace" => Icon::ExplorerWorkspace,
             "Lighting" => Icon::ExplorerLighting,
-            "DirectionalLight" => Icon::ExplorerDirectionalLight,
             "ReplicatedStorage" => Icon::ExplorerReplicatedStorage,
             "ServerScriptService" => Icon::ExplorerScriptService,
             "ModuleScript" => Icon::ExplorerModuleScript,
@@ -202,7 +201,6 @@ mod tests {
             ("Lighting", Group::Light),
             ("PointLight", Group::Light),
             ("SpotLight", Group::Light),
-            ("DirectionalLight", Group::Light),
             ("ReplicatedStorage", Group::Storage),
             // As the server script service (#321).
             ("ServerStorage", Group::ServerScript),

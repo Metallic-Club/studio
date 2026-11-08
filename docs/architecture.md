@@ -119,9 +119,9 @@ pub static CLASS: ClassDesc = ClassDesc::new("SpotLight", Some("Light"))
   Defaults are in metres (ADR 0005).
 - **Inheritance** gives it the rest. `Light` ([`light.rs`](../crates/classes/src/world/lights/light.rs)) declares
   `Enabled`, `Brightness`, `Color`, `Range`, `Shadows` and `CFrame` once; the registry copies them into every
-  subclass first, so they keep the same `PropId` in `SpotLight`, `PointLight` and `DirectionalLight`, and a script
-  sees all of them plus `Angle`. A subclass can change an inherited default (`defaults`) or hide a member
-  (`DirectionalLight` hides `Range`; the slot stays, only the name disappears). Shared constants for the family
+  subclass first, so they keep the same `PropId` in `SpotLight` and `PointLight`, and a script sees all of them plus
+  `Angle`. A subclass can change an inherited default (`defaults`) or hide a member (the slot stays, only the name
+  disappears). Shared constants for the family
   (`CATEGORY`, `EMITTER_REQUIRES`) and helpers (`world_cframe`) live in the parent's file.
 - **The component** is only a name and a description here. The renderer (M3) will register "how to draw a
   `SpotLightEmitter`" under the same name and read `Angle`, `Range` and the rest from the data model. A headless

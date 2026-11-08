@@ -1629,6 +1629,8 @@ frame (`mobile` on Vulkan within 0.13 ms).
 
 ### Directional lights as extra suns (#123)
 
+*`DirectionalLight` was removed in #407; this records what it measured then.*
+
 `DirectionalLight`s are drawn beside the sun from `Lighting` as **extra suns**
 ([`metallic_render::lights`](../crates/render/src/lights/mod.rs), "Directional lights: extra suns"): each adds
 Lambert diffuse and GGX specular from its forward direction, unshadowed.

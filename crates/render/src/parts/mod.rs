@@ -61,8 +61,6 @@
 //! Point and spot lights ([`crate::lights`]) add their light through the same BRDF: each fragment loops over the
 //! lights its cluster lists, read from a uniform array and a cluster texture in the frame group, with the shadow
 //! atlas beside the sun's maps. [`PartRenderer`] owns them too and draws the atlas's tiles after the cascades.
-//! `DirectionalLight`s add theirs as extra suns, unshadowed, from arrays in the frame uniform, in the pipelines made
-//! with them (`EXTRA_SUNS`, see `Variant`); a frame without any draws with the pipelines made without.
 //!
 //! # Sky
 //!
@@ -84,7 +82,7 @@
 //! Every pipeline (shadow casters, depth prepass, opaque, opaque after a prepass, sky, transparent) is compiled off
 //! the frame (ADR 0008 §9, [`crate::pipelines`]): the shadow casters with the renderer, the rest on compile workers,
 //! for every colour format and MSAA count the renderer can switch to. A scene's first frame waits for the lit ones
-//! when it has local lights or extra suns; a light made later, while they still compile, is drawn once they are (a
+//! when it has local lights; a light made later, while they still compile, is drawn once they are (a
 //! local light fades in).
 
 mod assets;
@@ -108,8 +106,7 @@ use crate::cull::CullSettings;
 use crate::depth::{DEPTH_COMPARE, DEPTH_COMPARE_FAR_PLANE, DEPTH_FORMAT, depth_stencil_state};
 use crate::lighting::{ResolvedLighting, SceneLighting};
 use crate::lights::{
-    FrameLights, FrameSuns, LightBindings, LightSettings, LightStats, LocalLights, MAX_EXTRA_SUNS, MAX_GPU_LIGHTS,
-    MAX_SHADOW_TILES,
+    FrameLights, LightBindings, LightSettings, LightStats, LocalLights, MAX_GPU_LIGHTS, MAX_SHADOW_TILES,
 };
 use crate::lod::{LodView, MAX_LOD_LEVELS};
 use crate::pipelines::{Compiler, PartPipeline, PipelineKey, Recipe};
@@ -232,9 +229,6 @@ struct FrameUniforms {
     lights_clusters: [f32; 4],
     lights_local: [f32; 4],
     lights_atlas: [f32; 4],
-    extra_suns: [f32; 4],
-    extra_sun_directions: [[f32; 4]; MAX_EXTRA_SUNS],
-    extra_sun_colors: [[f32; 4]; MAX_EXTRA_SUNS],
 }
 
 /// The frame group's entries a frame without local lights binds: the frame uniform, the materials, the sun's shadow
@@ -247,7 +241,6 @@ const LIGHTS_SIZE: u64 = 64 * MAX_GPU_LIGHTS as u64;
 const TILES_SIZE: u64 = 96 * MAX_SHADOW_TILES as u64;
 
 const _: () = assert!(MAX_CASCADES == 4, "frame.wgsl holds four cascades");
-const _: () = assert!(MAX_EXTRA_SUNS == 4, "frame.wgsl holds four extra suns");
 const _: () = assert!(
     MAX_GPU_LIGHTS == 256 && MAX_SHADOW_TILES == 64,
     "lights.wgsl holds 256 lights and 64 tiles"
@@ -277,15 +270,15 @@ impl Output {
 
 impl FrameUniforms {
     /// The uniform for `camera` on a target `aspect` (width / height) wide, `offset` (camera − scene origin) from
-    /// the scene origin, lit by `light` with `shadow`'s cascades, the local lights `local` and the extra suns `suns`,
-    /// written as `output` says.
+    /// the scene origin, lit by `light` with `shadow`'s cascades and the local lights `local`, written as `output`
+    /// says.
     fn new(
         camera: &Camera,
         aspect: f32,
         offset: Vec3,
         light: &ResolvedLighting,
         shadow: &FrameShadow,
-        (local, suns): (&FrameLights, &FrameSuns),
+        local: &FrameLights,
         output: Output,
     ) -> Self {
         let aspect = if aspect.is_finite() && aspect > 0.0 {
@@ -322,9 +315,6 @@ impl FrameUniforms {
             lights_clusters: local.clusters,
             lights_local: local.local,
             lights_atlas: local.atlas,
-            extra_suns: suns.count,
-            extra_sun_directions: suns.directions,
-            extra_sun_colors: suns.colors,
         }
     }
 }
@@ -346,8 +336,7 @@ struct KindDraw {
 /// The variant without local lights (lights_off.wgsl, the frame group without the lights' entries) is for frames that
 /// draw none: the light loop would cost every pixel even when it runs no iteration, and such a frame binds exactly
 /// what it did before local lights existed. The one with local lights but without their shadows (`LOCAL_SHADOWS`
-/// off) is for frames whose drawn lights have none. Each of the three is made without and with the extra suns
-/// (`EXTRA_SUNS`), for the same reason: frames without a `DirectionalLight` draw what they did before them.
+/// off) is for frames whose drawn lights have none.
 #[derive(Debug)]
 struct Target {
     format: wgpu::TextureFormat,
@@ -393,67 +382,52 @@ enum Lights {
     Shadowed = 2,
 }
 
-/// Which variant of the part pipelines a frame uses: its local lights ([`Lights`]) and whether it shades the extra
-/// suns (`EXTRA_SUNS` in parts.wgsl). Its number in [`PartPipeline`] is the lights' plus 3 with the suns.
+/// Which variant of the part pipelines a frame uses: its local lights ([`Lights`]). Its number in [`PartPipeline`] is
+/// the lights'.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Variant {
     lights: Lights,
-    suns: bool,
 }
 
-/// `LOCAL_SHADOWS` (lights.wgsl) off and on, and `EXTRA_SUNS` (parts.wgsl) on with each.
-const SUNS: [(&str, f64); 1] = [("EXTRA_SUNS", 1.0)];
+/// `LOCAL_SHADOWS` (lights.wgsl) off and on.
 const UNSHADOWED: [(&str, f64); 1] = [("LOCAL_SHADOWS", 0.0)];
-const UNSHADOWED_SUNS: [(&str, f64); 2] = [("LOCAL_SHADOWS", 0.0), ("EXTRA_SUNS", 1.0)];
 const SHADOWED: [(&str, f64); 1] = [("LOCAL_SHADOWS", 1.0)];
-const SHADOWED_SUNS: [(&str, f64); 2] = [("LOCAL_SHADOWS", 1.0), ("EXTRA_SUNS", 1.0)];
 
 impl Variant {
-    /// What a frame without local lights or extra suns draws with: what it did before either existed.
-    const BASE: Self = Self {
-        lights: Lights::None,
-        suns: false,
-    };
+    /// What a frame without local lights draws with: what it did before they existed.
+    const BASE: Self = Self { lights: Lights::None };
 
     /// The variant's number in [`PartPipeline`].
     fn number(self) -> u8 {
-        self.lights as u8 + if self.suns { 3 } else { 0 }
+        self.lights as u8
     }
 
     /// The variant numbered `n` in [`PartPipeline`].
     fn from_number(n: u8) -> Self {
         Self {
-            lights: match n % 3 {
+            lights: match n {
                 0 => Lights::None,
                 1 => Lights::Unshadowed,
                 _ => Lights::Shadowed,
             },
-            suns: n >= 3,
         }
     }
 
-    /// The variant's pipeline constants: none for the module without local lights (lights_off.wgsl) and without
-    /// extra suns.
+    /// The variant's pipeline constants: none for the module without local lights (lights_off.wgsl).
     fn constants(self) -> &'static [(&'static str, f64)] {
-        match (self.lights, self.suns) {
-            (Lights::None, false) => &[],
-            (Lights::None, true) => &SUNS,
-            (Lights::Unshadowed, false) => &UNSHADOWED,
-            (Lights::Unshadowed, true) => &UNSHADOWED_SUNS,
-            (Lights::Shadowed, false) => &SHADOWED,
-            (Lights::Shadowed, true) => &SHADOWED_SUNS,
+        match self.lights {
+            Lights::None => &[],
+            Lights::Unshadowed => &UNSHADOWED,
+            Lights::Shadowed => &SHADOWED,
         }
     }
 
     /// The variant's name in pipeline labels.
     fn name(self) -> &'static str {
-        match (self.lights, self.suns) {
-            (Lights::None, false) => "no local lights",
-            (Lights::None, true) => "extra suns",
-            (Lights::Unshadowed, false) => "local lights",
-            (Lights::Unshadowed, true) => "local lights and extra suns",
-            (Lights::Shadowed, false) => "local lights and shadows",
-            (Lights::Shadowed, true) => "local lights, shadows and extra suns",
+        match self.lights {
+            Lights::None => "no local lights",
+            Lights::Unshadowed => "local lights",
+            Lights::Shadowed => "local lights and shadows",
         }
     }
 }
@@ -542,8 +516,6 @@ pub struct PartRenderer {
     lod_tint: bool,
     /// A frame had local lights to draw while their pipelines were compiling: they fade in once they exist.
     lights_held: bool,
-    /// A frame had extra suns to draw while their pipelines were compiling: they are drawn once they exist.
-    suns_held: bool,
     stats: DrawStats,
 }
 
@@ -842,7 +814,6 @@ impl PartRenderer {
             visible: false,
             lod_tint: false,
             lights_held: false,
-            suns_held: false,
             stats: DrawStats::default(),
         }
     }
@@ -1078,7 +1049,7 @@ impl PartRenderer {
         // in rather than pop on (#86).
         let lit_ready = {
             let target = &self.targets[self.current];
-            let lit = |lights| Variant { lights, suns: false };
+            let lit = |lights| Variant { lights };
             target.has_variant(lit(Lights::Unshadowed)) && target.has_variant(lit(Lights::Shadowed))
         };
         if self.lights_held && lit_ready {
@@ -1091,18 +1062,12 @@ impl PartRenderer {
         if !lit_ready && wanted.lights != Lights::None {
             self.lights_held = true;
         }
-        self.suns_held = wanted.suns && !self.targets[self.current].has_variant(wanted);
     }
 
-    /// Whether this frame draws extra suns (`DirectionalLight`s), compiled or not.
-    pub(crate) fn wants_suns(&self) -> bool {
-        self.lights.suns().len() > 0
-    }
-
-    /// Whether this frame has local lights or extra suns to draw whose pipelines are still compiling (so it draws
-    /// without them: local lights fade in once the pipelines exist, extra suns are drawn at once).
+    /// Whether this frame has local lights to draw whose pipelines are still compiling (so it draws without them; they
+    /// fade in once the pipelines exist).
     pub(crate) fn lights_held(&self) -> bool {
-        self.lights_held || self.suns_held
+        self.lights_held
     }
 
     /// Makes the frame group with the local lights' resources when they first exist, or again when one of them was
@@ -1230,7 +1195,7 @@ impl PartRenderer {
             offset,
             &self.resolved,
             self.shadows.frame(),
-            (self.lights.frame(), self.lights.suns()),
+            self.lights.frame(),
             Output::new(srgb, self.lod_tint.then(|| self.meshes.level_starts())),
         );
         self.stats.lights = self.lights.stats();
@@ -1419,23 +1384,15 @@ impl PartRenderer {
     }
 
     /// Which variant of the pipelines this frame draws with: without local lights when none is drawn, without their
-    /// shadows when no drawn light has one, and with the extra suns when it draws any. Until the variant's pipelines
-    /// are compiled (in the background, after the first frame's), the frame draws without the extra suns, then
-    /// without the local lights, as it did before they appeared.
+    /// shadows when no drawn light has one. Until the variant's pipelines are compiled (in the background, after the
+    /// first frame's), the frame draws without the local lights, as it did before they appeared.
     fn variant(&self) -> Variant {
         let wanted = self.wanted_variant();
         let target = &self.targets[self.current];
-        [
-            wanted,
-            Variant { suns: false, ..wanted },
-            Variant {
-                lights: Lights::None,
-                ..wanted
-            },
-        ]
-        .into_iter()
-        .find(|&variant| target.has_variant(variant))
-        .unwrap_or(Variant::BASE)
+        [wanted, Variant::BASE]
+            .into_iter()
+            .find(|&variant| target.has_variant(variant))
+            .unwrap_or(Variant::BASE)
     }
 
     /// Which variant of the pipelines this frame's lights call for, compiled or not.
@@ -1448,10 +1405,7 @@ impl PartRenderer {
         } else {
             Lights::Unshadowed
         };
-        Variant {
-            lights,
-            suns: self.lights.suns().len() > 0,
-        }
+        Variant { lights }
     }
 
     /// The frame group of the pipeline `variant`: without the lights' entries for frames without local lights.

@@ -7,10 +7,10 @@
 //! |--------------------|-----------------------------|---------------------------|
 //! | `PointLight`       | nothing                     | `PointLightEmitter`       |
 //! | `SpotLight`        | `Angle`                     | `SpotLightEmitter`        |
-//! | `DirectionalLight` | nothing, and hides `Range`  | `DirectionalLightEmitter` |
 //!
 //! Inherited properties keep the [`PropId`](metallic_core::PropId) they have in `Light`, so code that reads
-//! `Brightness` by id works for every light. Hiding `Range` in `DirectionalLight` keeps its slot, too.
+//! `Brightness` by id works for every light. (`DirectionalLight` was removed in #407: `Lighting`'s sun is the one
+//! directional light.)
 //!
 //! # Where a light is
 //!
@@ -107,7 +107,7 @@ pub fn set_world_cframe(dm: &mut DataModel, light: Id, world: CFrame) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use metallic_core::{CFrame, Color3, PropId, Value, Vector3};
+    use metallic_core::{CFrame, Color3, Value, Vector3};
 
     use crate::shared_registry;
     use crate::testing::{game, new_in, workspace};
@@ -119,12 +119,7 @@ mod tests {
     fn spot_light_inherits_lights_members_and_adds_angle() {
         let registry = shared_registry().unwrap();
         let class = |name| registry.class_id(name).unwrap();
-        let (light, spot, point, directional) = (
-            class("Light"),
-            class("SpotLight"),
-            class("PointLight"),
-            class("DirectionalLight"),
-        );
+        let (light, spot, point) = (class("Light"), class("SpotLight"), class("PointLight"));
 
         for member in ["Enabled", "Brightness", "Color", "Range", "Angle"] {
             assert!(registry.prop_id(spot, member).is_some(), "SpotLight.{member}");
@@ -136,31 +131,15 @@ mod tests {
             let id = registry.prop_id(light, member).unwrap();
             assert_eq!(registry.prop_id(spot, member), Some(id), "SpotLight.{member}");
             assert_eq!(registry.prop_id(point, member), Some(id), "PointLight.{member}");
-            let in_directional = registry.prop(directional, id).unwrap();
-            assert_eq!(in_directional.meta.name, member, "DirectionalLight keeps the slot of {member}");
-            assert_eq!(in_directional.hidden, member == "Range");
         }
-    }
-
-    #[test]
-    fn directional_light_hides_range_but_keeps_its_slot() {
-        let mut dm = game();
-        let ws = workspace(&dm);
-        let sun = new_in(&mut dm, "DirectionalLight", ws, "Sun");
-        assert!(dm.prop_id(sun, "Range").is_err());
-        assert!(dm.get_by_name(sun, "Range").is_err());
-
-        let registry = shared_registry().unwrap();
-        let light = registry.class_id("Light").unwrap();
-        let range: PropId = registry.prop_id(light, "Range").unwrap();
-        assert_eq!(dm.get(sun, range), Ok(Value::Number(16.0)));
+        assert!(registry.class_id("DirectionalLight").is_none(), "removed in #407");
     }
 
     #[test]
     fn lights_start_with_their_defaults() {
         let mut dm = game();
         let ws = workspace(&dm);
-        for class in ["PointLight", "SpotLight", "DirectionalLight"] {
+        for class in ["PointLight", "SpotLight"] {
             let light = new_in(&mut dm, class, ws, class);
             assert_eq!(dm.get_by_name(light, "Enabled"), Ok(Value::Bool(true)), "{class}");
             assert_eq!(dm.get_by_name(light, "Brightness"), Ok(Value::Number(1.0)), "{class}");
@@ -198,7 +177,6 @@ mod tests {
         for (class, emitter) in [
             ("PointLight", "PointLightEmitter"),
             ("SpotLight", "SpotLightEmitter"),
-            ("DirectionalLight", "DirectionalLightEmitter"),
         ] {
             let info = registry.class(registry.class_id(class).unwrap()).unwrap();
             assert!(info.creatable(), "{class}");

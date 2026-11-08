@@ -299,14 +299,13 @@ mod tests {
                 .iter()
                 .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 36);
+        assert_eq!(input().classes.len(), 35);
         let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
         components.sort_unstable();
         assert_eq!(
             components,
             [
                 "AssetMesh",
-                "DirectionalLightEmitter",
                 "PointLightEmitter",
                 "PrimitiveMesh",
                 "SpotLightEmitter",

@@ -891,11 +891,6 @@ declare extern type StringValue extends ValueBase with
     Changed: ScriptSignal<string>
 end
 
---- Parallel light from one direction over the whole world, like the sun. It points along its CFrame's forward direction and has no range. It adds to Lighting's sun; only that sun casts shadows for now, so Shadows is ignored here.
-declare extern type DirectionalLight extends Light with
-    -- `Range` is hidden on DirectionalLight (luau-lsp cannot remove an inherited member).
-end
-
 --- A script that runs on each player's client, for input, the camera and the user interface. What it changes is seen only by that player.
 declare extern type LocalScript extends BaseScript with
 end
@@ -941,7 +936,6 @@ declare Instance: {
         & ((className: "NumberValue", parent: Instance?) -> NumberValue)
         & ((className: "ObjectValue", parent: Instance?) -> ObjectValue)
         & ((className: "StringValue", parent: Instance?) -> StringValue)
-        & ((className: "DirectionalLight", parent: Instance?) -> DirectionalLight)
         & ((className: "LocalScript", parent: Instance?) -> LocalScript)
         & ((className: "MeshPart", parent: Instance?) -> MeshPart)
         & ((className: "Part", parent: Instance?) -> Part)

@@ -92,8 +92,6 @@ pub(crate) fn tile_views(light: &SceneLight, origin: Vec3, resolution: u32, out:
             }
             6
         }
-        // Never shadowed here: only the sun casts directional shadows.
-        LightKind::Directional => 0,
         LightKind::Spot => {
             let half = (light.angle * 0.5).min(MAX_SPOT_SHADOW_HALF_DEGREES).to_radians();
             let forward = light.direction.normalize_or(Vec3::NEG_Z);

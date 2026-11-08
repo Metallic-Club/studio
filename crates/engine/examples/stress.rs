@@ -17,8 +17,6 @@
 //! `--shadow-distance <m>` and `--dynamic-cascades <n>` (the sun's shadows; 3, 2048, 256 and 2 by default),
 //! `--lights <low|medium|high|off>` (the point and spot lights' settings as the presets will set them; medium by
 //! default), `--light-budget <n>`, `--lights-per-cluster <n>`, `--shadowed-lights <n>` and `--no-light-shadows`,
-//! `--directional-lights <n>` (add that many `DirectionalLight`s, extra suns, #123) and `--directional-budget <n>`
-//! (how many of them are drawn, the preset's by default),
 //! `--lod <low|medium|high|off>` (the levels of detail's preset, high by default; off draws every part at full
 //! detail), `--lod-bias <x>` and `--lod-tint` (colour the parts by level of detail).
 //! `WGPU_BACKEND=dx12` (or `vulkan`, `gl`) picks the backend.
@@ -68,7 +66,6 @@ fn usage() -> String {
          \x20             [--no-shadows] [--shadow-cascades N] [--shadow-resolution N] [--shadow-distance M]\n\
          \x20             [--dynamic-cascades N] [--lights low|medium|high|off] [--light-budget N]\n\
          \x20             [--lights-per-cluster N] [--shadowed-lights N] [--no-light-shadows]\n\
-         \x20             [--directional-lights N] [--directional-budget N]\n\
          \x20             [--lod low|medium|high|off] [--lod-bias X] [--lod-tint]\n\
          \x20             [--preset low|medium|high|ultra|auto] [--render-scale X] [--dynamic-resolution MS]\n\
          \x20             [--min-scale X] [--max-scale X] [--switch-presets N]\n\
@@ -192,16 +189,8 @@ fn parse(args: &[String]) -> Result<Option<(Option<StressKind>, BenchOptions)>, 
                     u32::try_from(number(it.next(), "--shadowed-lights")?).map_err(|e| e.to_string())?;
             }
             "--no-light-shadows" => options.lights.shadows = false,
-            "--directional-lights" => {
-                options.directional_lights =
-                    usize::try_from(number(it.next(), "--directional-lights")?).map_err(|e| e.to_string())?;
-            }
             "--moving" => {
                 options.moving = Some(usize::try_from(number(it.next(), "--moving")?).map_err(|e| e.to_string())?);
-            }
-            "--directional-budget" => {
-                options.lights.directional_lights =
-                    u32::try_from(number(it.next(), "--directional-budget")?).map_err(|e| e.to_string())?;
             }
             "--lights-per-cluster" => {
                 options.lights.per_cluster =
@@ -293,7 +282,6 @@ const PER_SYSTEM_FLAGS: &[&str] = &[
     "--shadowed-lights",
     "--no-light-shadows",
     "--lights-per-cluster",
-    "--directional-budget",
     "--lod",
     "--lod-bias",
     "--split-scene",

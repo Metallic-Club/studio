@@ -155,7 +155,7 @@ impl Switch {
 /// three and MLAA's, or the upscale pass.
 const MAX_NEEDED: usize = 10;
 
-/// The most pipelines a scene's first frame waits for: its settings' and the lit ones (local lights, extra suns).
+/// The most pipelines a scene's first frame waits for: its settings' and the lit ones (local lights).
 const FIRST_FRAME_KEYS: usize = MAX_NEEDED + PartPipeline::ALL_LIT.len();
 
 /// Draws frames: the passes of a [`FramePlan`] into a target view, with per-pass GPU timing.
@@ -167,7 +167,7 @@ const FIRST_FRAME_KEYS: usize = MAX_NEEDED + PartPipeline::ALL_LIT.len();
 ///
 /// Every pipeline is compiled off the frame ([`crate::pipelines`]): [`Renderer::new`] returns once the ones its
 /// settings draw with are compiled (on worker threads, all at once), and the rest (local lights, the overlay, the post
-/// effects not in use, the scene at every other MSAA count, and extra suns once a scene has one) follow in the
+/// effects not in use, the scene at every other MSAA count) follow in the
 /// background. A settings change whose pipelines are still compiling ([`Renderer::set_anti_aliasing`],
 /// [`Renderer::set_passes`], [`Renderer::set_post`], [`Renderer::set_msaa_samples`], [`Renderer::set_resolution`])
 /// waits for them while frames keep drawing with the settings before it: [`Renderer::settings`] and the stats say what
@@ -175,8 +175,8 @@ const FIRST_FRAME_KEYS: usize = MAX_NEEDED + PartPipeline::ALL_LIT.len();
 ///
 /// A scene's first frame never shows a setting or a light short: the first [`Renderer::render_scene`] after
 /// [`Renderer::new`] (or [`Renderer::begin_scene`], for a newly loaded place) waits for the pipelines it draws with,
-/// those of the settings asked for (a change still compiling included) and, when the scene has local lights or
-/// `DirectionalLight`s, the lit ones, prioritized ahead of the rest. Later frames never wait: a light made while the
+/// those of the settings asked for (a change still compiling included) and, when the scene has local lights, the
+/// lit ones, prioritized ahead of the rest. Later frames never wait: a light made while the
 /// lit pipelines still compile (only possible in the first second or so) hurries them to the front of the queue, is
 /// drawn once they exist, and (a local light) fades in over [`crate::LightSettings::fade_time`] rather than popping
 /// on.
@@ -249,9 +249,6 @@ pub struct Renderer {
     immediate: bool,
     /// The attachments of the waiting settings change, being made.
     pending_attachments: Option<PendingAttachments>,
-    /// The scene format whose extra suns' pipelines are queued, at every MSAA count: none until a frame first draws
-    /// a `DirectionalLight` ([`Renderer::prewarm_suns`]).
-    suns_prewarmed: Option<wgpu::TextureFormat>,
     /// A viewport target's new size, while its textures are made ([`Renderer::resize_viewport`]).
     pending_resize: Option<PendingResize>,
     /// The viewport target's texture at the size just switched to, handed to the target in the same frame.
@@ -344,7 +341,6 @@ impl Renderer {
             maker,
             immediate: true,
             pending_attachments: None,
-            suns_prewarmed: None,
             pending_resize: None,
             new_output: None,
         };
@@ -361,7 +357,7 @@ impl Renderer {
                 pipeline,
             });
         }
-        let (keys, count) = renderer.needed_keys(&switch, false, false);
+        let (keys, count) = renderer.needed_keys(&switch, false);
         renderer.wait_for_keys(&keys[..count]);
         renderer.compiler.first_frame_ready();
         renderer.rebuild();
@@ -385,10 +381,6 @@ impl Renderer {
                 pipeline,
             });
         }
-        if self.compiler.is_inline() {
-            // Inline compiles would stall the frame that first draws an extra sun: here everything is compiled up front.
-            self.prewarm_suns();
-        }
         self.queue(PipelineKey::Overlay);
         for key in Post::KEYS {
             if self.post.prewarms(key) {
@@ -404,41 +396,6 @@ impl Renderer {
                     pipeline,
                 };
                 // After the same pipeline at the first count, whose shader stages it reuses.
-                let after = PipelineKey::Part {
-                    format,
-                    samples,
-                    pipeline,
-                };
-                self.queue_after(key, Some(after));
-            }
-        }
-    }
-
-    /// Queues, in the background, the extra suns' variants of the scene's pipelines at the format drawn into: first at
-    /// the MSAA count in use, then at every other one. Once per format, when a frame first wants extra suns: a game
-    /// without a `DirectionalLight` never compiles them (on DX12 they would triple the background compiles' CPU time
-    /// after the first frame, `docs/perf.md`). Where compiles run inline (OpenGL) they are compiled up front with the
-    /// rest instead ([`Renderer::prewarm`]), so no frame stalls on them.
-    fn prewarm_suns(&mut self) {
-        let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
-        if self.suns_prewarmed == Some(format) {
-            return;
-        }
-        self.suns_prewarmed = Some(format);
-        for pipeline in PartPipeline::SUNS.into_iter().chain(PartPipeline::LIT_SUNS) {
-            self.queue(PipelineKey::Part {
-                format,
-                samples,
-                pipeline,
-            });
-        }
-        for other in self.msaa_counts.iter().filter(|&n| n <= 8 && n != samples) {
-            for pipeline in PartPipeline::SUNS.into_iter().chain(PartPipeline::LIT_SUNS) {
-                let key = PipelineKey::Part {
-                    format,
-                    samples: other,
-                    pipeline,
-                };
                 let after = PipelineKey::Part {
                     format,
                     samples,
@@ -668,7 +625,7 @@ impl Renderer {
 
     /// Makes the next [`Renderer::render_scene`] a scene's first frame, as the first one after [`Renderer::new`] is:
     /// it waits for exactly the pipelines it draws with (those of the settings asked for, a change still compiling
-    /// included, and the local lights' and extra suns' when the scene has any), so the first frame of a game or a
+    /// included, and the local lights' when the scene has any), so the first frame of a game or a
     /// newly loaded place already looks as it should. Textures are made at once again until it is drawn. Call it when a new scene is
     /// attached; later frames never wait.
     pub fn begin_scene(&mut self) {
@@ -689,15 +646,13 @@ impl Renderer {
     fn wait_for_scene(&mut self, scene: &GpuScene) {
         self.maker.finish();
         let lit = self.settings.lights.enabled && scene.scene().light_count() > 0;
-        let suns = self.settings.lights.directional_budget() > 0
-            && scene.scene().directional_lights().iter().any(|light| light.shines());
-        let (keys, count) = self.needed_keys(&self.wanted(), lit, suns);
+        let (keys, count) = self.needed_keys(&self.wanted(), lit);
         self.wait_for_keys(&keys[..count]);
     }
 
-    /// The pipelines a frame drawn with `switch` needs, with the lit ones when `lit` (local lights) and the extra
-    /// suns' when `suns`: an array and how much of it holds them.
-    fn needed_keys(&self, switch: &Switch, lit: bool, suns: bool) -> ([PipelineKey; FIRST_FRAME_KEYS], usize) {
+    /// The pipelines a frame drawn with `switch` needs, with the lit ones when `lit` (local lights): an array and how
+    /// much of it holds them.
+    fn needed_keys(&self, switch: &Switch, lit: bool) -> ([PipelineKey; FIRST_FRAME_KEYS], usize) {
         let mut keys = [PipelineKey::Overlay; FIRST_FRAME_KEYS];
         let mut count = 0;
         let mut push = |key| {
@@ -714,12 +669,7 @@ impl Renderer {
             self.settings.color_format
         };
         let lit_keys: &[PartPipeline] = if lit { &PartPipeline::LIT } else { &[] };
-        let sun_keys: &[PartPipeline] = match (lit, suns) {
-            (_, false) => &[],
-            (false, true) => &PartPipeline::SUNS,
-            (true, true) => &PartPipeline::LIT_SUNS,
-        };
-        for &pipeline in lit_keys.iter().chain(sun_keys) {
+        for &pipeline in lit_keys {
             push(PipelineKey::Part {
                 format,
                 samples: plan.msaa_samples(),
@@ -750,7 +700,7 @@ impl Renderer {
     }
 
     /// Moves the lit pipelines of the target drawn into to the front of the compile queue: a frame has local lights
-    /// or extra suns to draw and draws without them until they exist (a light made while they still compile, #86).
+    /// to draw and draws without them until they exist (a light made while they still compile, #86).
     fn hurry_lights(&mut self) {
         let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
         let keys = PartPipeline::ALL_LIT.map(|pipeline| PipelineKey::Part {
@@ -758,7 +708,6 @@ impl Renderer {
             samples,
             pipeline,
         });
-        // The lit ones are queued from the start; the extra suns' may not be yet at this format.
         for &key in &keys {
             self.queue(key);
         }
@@ -1313,9 +1262,6 @@ impl Renderer {
         // render scale changes none of them; only the light clusters' pixels follow the size drawn.
         self.parts
             .prepare_lights(scene, camera, size, self.render_size, &self.settings.cull, &lod);
-        if self.parts.wants_suns() {
-            self.prewarm_suns();
-        }
         if self.parts.lights_held() {
             self.hurry_lights();
         }

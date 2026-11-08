@@ -239,8 +239,6 @@ icons! {
     ExplorerMeshPart = "explorer.mesh_part", Object, "cuboid";
     /// A model.
     ExplorerModel = "explorer.model", Object, "shapes";
-    /// A directional light.
-    ExplorerDirectionalLight = "explorer.directional_light", Light, "sun";
     /// A spotlight.
     ExplorerSpotLight = "explorer.spot_light", Light, "spotlight";
     /// Any other light.
