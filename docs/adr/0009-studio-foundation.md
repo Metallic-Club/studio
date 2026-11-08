@@ -395,6 +395,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   keeps a narrow cone's edge from flickering; `SpotLight.Angle` goes to 180; `Light.Brightness` has no upper limit
   (the API dump writes the open end as `null`); and `DirectionalLight` is gone, renderer variants and all:
   `Lighting`'s sun is the one directional light.
+- **Settings (#408, #409)**: Keybinds draws lines between rows only, so a lone command shows no stray line. A window
+  of its own opens hidden and shows once its first frame is drawn, and its first, unseen pass runs at the main
+  window's scale: at egui's default one it laid text out at another size and rebuilt the font atlas every window
+  shares, so Studio flickered and its text garbled as Settings opened.
 
 ## Not in this slice
 
