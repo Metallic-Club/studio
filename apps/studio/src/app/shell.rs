@@ -686,7 +686,7 @@ impl StudioWindow {
     /// Holds, frees, shows or hides the cursor as the game asks while it has the input; frees and shows it otherwise.
     /// `LockCenter` holds it at the Game tab's centre, `LockCurrentPosition` where it was. The window is asked to lock
     /// the cursor, or else to confine it, and the cursor is put back on the point every frame, so a click never lands
-    /// outside the tab.
+    /// outside the tab. The editor camera's look and orbit hold it too, where the drag began, but shown (#385).
     fn apply_game_cursor(&mut self) {
         let wanted = self.studio.game_cursor();
         let scale = self.window.scale_factor();
@@ -699,6 +699,8 @@ impl StudioWindow {
                 physical(at.filter(|at| tab.contains(*at)).unwrap_or(tab.center()))
             })),
         });
+        let game_holds = held.is_some();
+        let held = held.or_else(|| self.studio.held_pointer().map(physical));
         if held.is_some() != self.cursor.held.is_some() {
             let grabbed = if held.is_some() {
                 self.window
@@ -708,16 +710,16 @@ impl StudioWindow {
                 self.window.set_cursor_grab(CursorGrabMode::None)
             };
             if let Err(error) = grabbed {
-                log::warn!("play: the cursor could not be held for MouseBehavior: {error}");
+                log::warn!("the cursor could not be held: {error}");
             }
         }
         if let Some(at) = held
             && let Err(error) = self.window.set_cursor_position(at)
         {
-            log::debug!("play: the cursor could not be put back: {error}");
+            log::debug!("the cursor could not be put back: {error}");
         }
         self.cursor.held = held;
-        let hidden = held.is_some() || wanted.is_some_and(|(state, _)| !state.icon_visible);
+        let hidden = game_holds || wanted.is_some_and(|(state, _)| !state.icon_visible);
         if hidden != self.cursor.hidden {
             self.window.set_cursor_visible(!hidden);
             self.cursor.hidden = hidden;

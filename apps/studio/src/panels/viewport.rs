@@ -19,12 +19,14 @@ use crate::keymap::Context;
 use crate::theme::icons::Icon;
 use crate::theme::tokens::text;
 use crate::theme::{current_colors, fonts};
-use crate::viewport::View;
 use crate::viewport::pick::{self, EDGES};
 use crate::viewport::tools;
+use crate::viewport::{SpeedChange, View, ViewportState};
 
 /// How thick the selection's outline is, in points.
 const OUTLINE: f32 = 1.5;
+/// How long the speed readout stays after the wheel last changed a speed (#385).
+const SPEED_NOTE: Duration = Duration::from_millis(900);
 
 /// The Viewport panel.
 #[derive(Clone, Copy, Debug)]
@@ -41,6 +43,43 @@ fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Strok
             painter.line_segment(line, stroke);
         }
     }
+}
+
+/// The camera speed the wheel just changed (#385), in small plain text in the bottom-left corner for a moment, with a
+/// faint shadow to read on a bright sky, as Forge's.
+fn speed_note(painter: &Painter, rect: egui::Rect, viewport: &ViewportState, speeds: &crate::settings::Viewport) {
+    let Some((change, when)) = viewport.speed_note else {
+        return;
+    };
+    if when.elapsed() >= SPEED_NOTE {
+        return;
+    }
+    let fly = crate::panels::properties::number(f64::from(speeds.fly_speed));
+    let text = match change {
+        SpeedChange::Fly => format!("Fly speed  {fly} studs/s"),
+        SpeedChange::Secondary => {
+            let fast = crate::panels::properties::number(f64::from(speeds.fly_speed * speeds.secondary_speed));
+            let times = crate::panels::properties::number(f64::from(speeds.secondary_speed));
+            format!("Secondary speed  \u{D7}{times}  ({fast} studs/s)")
+        }
+    };
+    let at = rect.left_bottom() + egui::vec2(14.0, -12.0);
+    let font = FontId::proportional(text::BODY);
+    painter.text(
+        at + egui::vec2(1.0, 1.0),
+        Align2::LEFT_BOTTOM,
+        &text,
+        font.clone(),
+        egui::Color32::from_black_alpha(140),
+    );
+    painter.text(
+        at,
+        Align2::LEFT_BOTTOM,
+        text,
+        font,
+        egui::Color32::from_white_alpha(235),
+    );
+    painter.ctx().request_repaint_after(SPEED_NOTE);
 }
 
 impl Panel for Viewport {
@@ -146,6 +185,7 @@ impl Panel for Viewport {
             }
             tools::paint(&painter, &view, &editor.scene(), &gizmo, snap);
             editor.viewport.gizmo = gizmo;
+            speed_note(&painter, rect, &editor.viewport, &cx.settings.viewport);
         }
         // Frame pacing: continuous while the viewport shows and the window has focus, at the frame cap if there is
         // one. Otherwise Studio waits for input or a change.

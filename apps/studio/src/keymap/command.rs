@@ -124,6 +124,9 @@ pub struct Command {
     /// Whether it still fires while a running game has the keyboard and mouse (Play in Studio): Stop, Pause, Step and
     /// Settings. Every other key goes to the game.
     pub during_play: bool,
+    /// Whether its keys still fire with Shift held as well (#385): the fly keys, which Shift makes go at the secondary
+    /// speed.
+    pub with_shift: bool,
 }
 
 impl Command {
@@ -140,6 +143,7 @@ impl Command {
             while_typing: false,
             on_hover: false,
             during_play: false,
+            with_shift: false,
         }
     }
 }
@@ -188,6 +192,10 @@ pub mod ids {
     pub const ZOOM: &str = "viewport.zoom";
     /// Changes how fast the editor camera flies.
     pub const SPEED: &str = "viewport.speed";
+    /// Changes what Shift multiplies the fly speed by (#385).
+    pub const SECONDARY_SPEED: &str = "viewport.secondary_speed";
+    /// Frames the selection, then orbits it (#385).
+    pub const FOCUS: &str = "viewport.focus";
     /// Select every instance the Explorer shows (#347).
     pub const EDIT_SELECT_ALL: &str = "edit.select_all";
     /// Undo the last step (#348).
@@ -228,7 +236,7 @@ pub mod ids {
 const FLY: &str = "Viewport/Fly camera";
 const MOUSE: &str = "Viewport/Mouse";
 
-/// A fly command: a physical key, held, repeating, in the viewport.
+/// A fly command: a physical key, held, repeating, in the viewport; Shift held as well flies at the secondary speed.
 const fn fly(
     id: &'static str,
     title: &'static str,
@@ -239,6 +247,7 @@ const fn fly(
         contexts: &[Context::Viewport],
         defaults: key,
         repeat: Repeat::Allow,
+        with_shift: true,
         ..Command::new(id, title, FLY, description)
     }
 }
@@ -517,21 +526,37 @@ pub const STUDIO_COMMANDS: &[Command] = &[
     pointer(
         ids::ORBIT,
         "Orbit",
-        "Circles the camera around what it looks at while the button is held.",
-        &["Alt+DragLeft"],
+        "Circles the camera around the point under the pointer while the button is held.",
+        &["Alt+DragRight", "Alt+DragLeft"],
     ),
     pointer(
         ids::ZOOM,
         "Zoom",
-        "Moves the camera in and out with the wheel.",
+        "Moves the camera toward what is ahead, or back, with the wheel.",
         &["Wheel"],
     ),
     pointer(
         ids::SPEED,
         "Fly speed",
         "Makes the camera fly faster or slower with the wheel.",
+        &["Alt+Wheel"],
+    ),
+    pointer(
+        ids::SECONDARY_SPEED,
+        "Secondary speed",
+        "Changes what holding Shift multiplies the fly speed by, with the wheel.",
         &["Shift+Wheel"],
     ),
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["F"],
+        ..Command::new(
+            ids::FOCUS,
+            "Focus selection",
+            MOUSE,
+            "Frames the selection; until the camera is flown or the selection changes, right drags orbit it.",
+        )
+    },
 ];
 
 /// The registered commands, with their parsed defaults and an index by id. Built once.

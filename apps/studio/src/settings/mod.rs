@@ -31,6 +31,8 @@ pub struct StudioSettings {
     pub general: General,
     /// How the viewport's tools edit (#359).
     pub editing: Editing,
+    /// The viewport's camera (#385).
+    pub viewport: Viewport,
     /// The look of the interface.
     pub appearance: Appearance,
     /// The viewport's graphics: the engine's own settings type (#84), so the viewport applies them as the player
@@ -75,6 +77,30 @@ impl Default for Editing {
 pub const MOVE_STEP: (f32, f32) = (0.01, 1000.0);
 /// The rotate increment's range, in degrees.
 pub const TURN_STEP: (f32, f32) = (0.1, 180.0);
+
+/// The viewport's settings (#385): how fast its camera flies. Saved in the `[viewport]` section; the speeds are on
+/// Settings, Editing, and the wheel changes them in the viewport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    /// How fast the camera flies, in studs a second.
+    pub fly_speed: f32,
+    /// What Shift multiplies the fly speed by: above one faster, below it slower and more careful.
+    pub secondary_speed: f32,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Self {
+            fly_speed: 40.0,
+            secondary_speed: 3.0,
+        }
+    }
+}
+
+/// The fly speed's range, in studs a second.
+pub const FLY_SPEED: (f32, f32) = (0.1, 1000.0);
+/// The secondary speed's range, a multiple of the fly speed.
+pub const SECONDARY_SPEED: (f32, f32) = (0.05, 50.0);
 
 /// The Appearance category: what [`Look`] the interface has, and how large it is drawn.
 #[derive(Clone, Debug, PartialEq)]
@@ -247,6 +273,11 @@ impl StudioSettings {
             read(editing, "snap_turns", Value::as_bool, &mut e.snap_turns);
             read(editing, "turn_step", number, &mut e.turn_step);
         }
+        if let Some(viewport) = section("viewport") {
+            let v = &mut settings.viewport;
+            read(viewport, "fly_speed", number, &mut v.fly_speed);
+            read(viewport, "secondary_speed", number, &mut v.secondary_speed);
+        }
         if let Some(appearance) = section("appearance") {
             let a = &mut settings.appearance;
             read(
@@ -303,6 +334,12 @@ impl StudioSettings {
             editing.insert("snap_turns".into(), Value::Boolean(e.snap_turns));
             editing.insert("turn_step".into(), round(e.turn_step));
         });
+        let v = &self.viewport;
+        with_section(&mut document, "viewport", |viewport| {
+            let round = |speed: f32| Value::Float((f64::from(speed) * 100.0).round() / 100.0);
+            viewport.insert("fly_speed".into(), round(v.fly_speed));
+            viewport.insert("secondary_speed".into(), round(v.secondary_speed));
+        });
         let a = &self.appearance;
         with_section(&mut document, "appearance", |appearance| {
             appearance.insert("mode".into(), Value::String(a.mode.as_str().into()));
@@ -339,6 +376,9 @@ impl StudioSettings {
         };
         e.move_step = within(e.move_step, MOVE_STEP, 1.0);
         e.turn_step = within(e.turn_step, TURN_STEP, 15.0);
+        let v = &mut self.viewport;
+        v.fly_speed = within(v.fly_speed, FLY_SPEED, 40.0);
+        v.secondary_speed = within(v.secondary_speed, SECONDARY_SPEED, 3.0);
         let a = &mut self.appearance;
         a.ui_scale = if a.ui_scale.is_finite() {
             a.ui_scale.clamp(ui_scale::MIN, ui_scale::MAX)
@@ -590,6 +630,22 @@ turn_step = 999
         let written = settings.to_document(&Table::new());
         assert_eq!(StudioSettings::from_document(&written).editing, settings.editing);
         assert_eq!(StudioSettings::default().editing.move_step, 1.0);
+    }
+
+    #[test]
+    fn the_camera_speeds_round_trip_and_stay_in_range() {
+        let document: Table = toml::from_str("[viewport]\nfly_speed = 12.5\nsecondary_speed = 0.01\n").unwrap();
+        let settings = StudioSettings::from_document(&document);
+        assert_eq!(
+            settings.viewport,
+            Viewport {
+                fly_speed: 12.5,
+                secondary_speed: SECONDARY_SPEED.0,
+            }
+        );
+        let written = settings.to_document(&Table::new());
+        assert_eq!(StudioSettings::from_document(&written).viewport, settings.viewport);
+        assert_eq!(StudioSettings::default().viewport.fly_speed, 40.0);
     }
 
     #[test]

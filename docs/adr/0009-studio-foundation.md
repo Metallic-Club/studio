@@ -366,6 +366,15 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Shapes stretch (#384)**: the renderer stretches a Ball and a Cylinder to the part's whole `Size` (an ellipsoid; a
   cylinder with elliptic ends) instead of keeping them round at the smallest side, as Block and Wedge already were;
   the shader turns normals by the inverse transpose, so they are lit right. `Part.Shape`'s description says so.
+- **Camera controls from Forge (#385)**: a right drag looks; Alt with a right or left drag orbits the point under the
+  pointer (the first part its ray meets, else the ground, else a point ahead), which stays put on the screen. During
+  either, the shell holds the pointer where the drag began, shown, and the camera turns by the mouse's raw movement
+  (`ViewportState::hold`, alongside a running game's `MouseBehavior`). Focus (F) glides to frame the selection, after
+  which right drags orbit it and the wheel goes toward it, until the camera is flown or the selection changes. The
+  fly keys go at the fly speed (40 studs/s), at the secondary speed (Shift, x3) with Shift held (`Command::with_shift`
+  keeps them firing); Alt+wheel and Shift+wheel change the two, kept in the `[viewport]` settings (Settings, Editing)
+  and shown for a moment in the viewport's corner. The wheel zooms toward what is ahead, a tenth of the way per notch,
+  never through it, eased over a few frames.
 
 ## Not in this slice
 

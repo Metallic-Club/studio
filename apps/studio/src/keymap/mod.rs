@@ -538,7 +538,16 @@ impl Keymap {
             }
             return true;
         }
-        if let Some(slot) = self.best(&chords, focus, false) {
+        let mut found = self.best(&chords, focus, false);
+        if found.is_none() && mods.shift {
+            // A fly key still flies with Shift held: Shift is its secondary speed (#385).
+            let plain = Mods { shift: false, ..mods };
+            let loose: Vec<Chord> = chords.iter().map(|chord| Chord::new(plain, chord.trigger)).collect();
+            found = self
+                .best(&loose, focus, false)
+                .filter(|slot| self.registry.commands()[slot.command].with_shift);
+        }
+        if let Some(slot) = found {
             let command = &self.registry.commands()[slot.command];
             match (repeat, command.repeat) {
                 (false, _) => {
@@ -1090,7 +1099,8 @@ mod tests {
             "a plain click is not bound"
         );
 
-        let processed = keymap.process(&[wheel(2.0, Modifiers::NONE), wheel(-1.0, Modifiers::SHIFT)], over);
+        // Alt and the wheel set the fly speed (#385).
+        let processed = keymap.process(&[wheel(2.0, Modifiers::NONE), wheel(-1.0, Modifiers::ALT)], over);
         assert_eq!(
             processed.activations,
             [
