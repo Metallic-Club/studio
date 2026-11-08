@@ -13,9 +13,9 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | Group | Colour |
 |---|---|
 | Explorer: the workspace | green |
-| Explorer: storage services | orange |
+| Explorer: replicated storage | orange |
 | Explorer: input and settings services | cyan |
-| Explorer and Assets: server scripts | green |
+| Explorer and Assets: server scripts and server storage | green |
 | Explorer: local scripts | blue |
 | Explorer: module scripts | purple |
 | Explorer: bindable events and functions | pink |
@@ -37,9 +37,9 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `explorer.game` | The game (the data model). | Explorer and Assets: parts, models, folders, cameras | [`gamepad-2.svg`](https://lucide.dev/icons/gamepad-2) | `explorer.game.svg`, `explorer.game.png` |
 | `explorer.workspace` | The workspace. | Explorer: the workspace | [`earth.svg`](https://lucide.dev/icons/earth) | `explorer.workspace.svg`, `explorer.workspace.png` |
 | `explorer.lighting` | The lighting service. | Explorer: lighting and lights | [`sun.svg`](https://lucide.dev/icons/sun) | `explorer.lighting.svg`, `explorer.lighting.png` |
-| `explorer.replicated_storage` | Replicated storage. | Explorer: storage services | [`package.svg`](https://lucide.dev/icons/package) | `explorer.replicated_storage.svg`, `explorer.replicated_storage.png` |
-| `explorer.script_service` | The server script service. | Explorer and Assets: server scripts | [`scroll.svg`](https://lucide.dev/icons/scroll) | `explorer.script_service.svg`, `explorer.script_service.png` |
-| `explorer.server_storage` | Server storage. | Explorer: storage services | [`hard-drive.svg`](https://lucide.dev/icons/hard-drive) | `explorer.server_storage.svg`, `explorer.server_storage.png` |
+| `explorer.replicated_storage` | Replicated storage. | Explorer: replicated storage | [`package.svg`](https://lucide.dev/icons/package) | `explorer.replicated_storage.svg`, `explorer.replicated_storage.png` |
+| `explorer.script_service` | The server script service. | Explorer and Assets: server scripts and server storage | [`scroll.svg`](https://lucide.dev/icons/scroll) | `explorer.script_service.svg`, `explorer.script_service.png` |
+| `explorer.server_storage` | Server storage. | Explorer and Assets: server scripts and server storage | [`hard-drive.svg`](https://lucide.dev/icons/hard-drive) | `explorer.server_storage.svg`, `explorer.server_storage.png` |
 | `explorer.settings_service` | A settings or input service (user settings, input, run service). | Explorer: input and settings services | [`sliders-horizontal.svg`](https://lucide.dev/icons/sliders-horizontal) | `explorer.settings_service.svg`, `explorer.settings_service.png` |
 | `explorer.camera` | A camera. | Explorer and Assets: parts, models, folders, cameras | [`camera.svg`](https://lucide.dev/icons/camera) | `explorer.camera.svg`, `explorer.camera.png` |
 | `explorer.part` | A part. | Explorer and Assets: parts, models, folders, cameras | [`box.svg`](https://lucide.dev/icons/box) | `explorer.part.svg`, `explorer.part.png` |
@@ -48,7 +48,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `explorer.directional_light` | A directional light. | Explorer: lighting and lights | [`sun.svg`](https://lucide.dev/icons/sun) | `explorer.directional_light.svg`, `explorer.directional_light.png` |
 | `explorer.spot_light` | A spotlight. | Explorer: lighting and lights | [`spotlight.svg`](https://lucide.dev/icons/spotlight) | `explorer.spot_light.svg`, `explorer.spot_light.png` |
 | `explorer.light` | Any other light. | Explorer: lighting and lights | [`lightbulb.svg`](https://lucide.dev/icons/lightbulb) | `explorer.light.svg`, `explorer.light.png` |
-| `explorer.script` | A script. | Explorer and Assets: server scripts | [`scroll.svg`](https://lucide.dev/icons/scroll) | `explorer.script.svg`, `explorer.script.png` |
+| `explorer.script` | A script. | Explorer and Assets: server scripts and server storage | [`scroll.svg`](https://lucide.dev/icons/scroll) | `explorer.script.svg`, `explorer.script.png` |
 | `explorer.local_script` | A local script, which runs on the player's machine: a script's scroll (#289), in its own colour. | Explorer: local scripts | [`scroll.svg`](https://lucide.dev/icons/scroll) | `explorer.local_script.svg`, `explorer.local_script.png` |
 | `explorer.module_script` | A module script. | Explorer: module scripts | [`scroll-text.svg`](https://lucide.dev/icons/scroll-text) | `explorer.module_script.svg`, `explorer.module_script.png` |
 | `explorer.event` | A bindable event. | Explorer: bindable events and functions | [`radio.svg`](https://lucide.dev/icons/radio) | `explorer.event.svg`, `explorer.event.png` |
@@ -72,7 +72,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `asset.image` | An image in the Assets panel. | Panels and Assets: content | [`image.svg`](https://lucide.dev/icons/image) | `asset.image.svg`, `asset.image.png` |
 | `asset.audio` | A sound in the Assets panel. | Panels and Assets: content | [`music.svg`](https://lucide.dev/icons/music) | `asset.audio.svg`, `asset.audio.png` |
 | `asset.scene` | A scene in the Assets panel. | Explorer and Assets: parts, models, folders, cameras | [`list-tree.svg`](https://lucide.dev/icons/list-tree) | `asset.scene.svg`, `asset.scene.png` |
-| `asset.script` | A script in the Assets panel. | Explorer and Assets: server scripts | [`scroll.svg`](https://lucide.dev/icons/scroll) | `asset.script.svg`, `asset.script.png` |
+| `asset.script` | A script in the Assets panel. | Explorer and Assets: server scripts and server storage | [`scroll.svg`](https://lucide.dev/icons/scroll) | `asset.script.svg`, `asset.script.png` |
 | `asset.file` | Any other file in the Assets panel. | Explorer and Assets: other | [`file.svg`](https://lucide.dev/icons/file) | `asset.file.svg`, `asset.file.png` |
 | `toolbar.play` | Play, and Resume while paused. | Running the game | [`play.svg`](https://lucide.dev/icons/play) | `toolbar.play.svg`, `toolbar.play.png` |
 | `toolbar.pause` | Pause. | Running the game | [`pause.svg`](https://lucide.dev/icons/pause) | `toolbar.pause.svg`, `toolbar.pause.png` |

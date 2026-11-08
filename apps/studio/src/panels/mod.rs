@@ -199,7 +199,8 @@ mod tests {
             ("SpotLight", Group::Light),
             ("DirectionalLight", Group::Light),
             ("ReplicatedStorage", Group::Storage),
-            ("ServerStorage", Group::Storage),
+            // As the server script service (#321).
+            ("ServerStorage", Group::ServerScript),
             ("UserInputService", Group::SettingsService),
             ("Camera", Group::Object),
             ("Folder", Group::Object),
