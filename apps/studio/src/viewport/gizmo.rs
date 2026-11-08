@@ -201,6 +201,116 @@ pub fn hit_scale(camera: Vec3, ray: Ray, bounds: &Bounds) -> Option<(usize, f32)
     best.map(|(handle, _)| handle)
 }
 
+/// The radius of the Rotate gizmo's rings.
+pub fn ring_radius(camera: Vec3, origin: Vec3) -> f32 {
+    handle_len(camera, origin) * 0.9
+}
+
+/// The ring under `ray` (the axis it turns about), if any: the nearest whose circle the ray passes close to.
+pub fn hit_ring(camera: Vec3, ray: Ray, origin: Vec3, dirs: &[Vec3; 3]) -> Option<usize> {
+    let radius = ring_radius(camera, origin);
+    let tolerance = ((origin - camera).length() * 0.025).max(0.15) * 1.5;
+    let mut best: Option<(usize, f32)> = None;
+    for (axis, dir) in dirs.iter().enumerate() {
+        let Some(at) = ray_plane(ray, origin, *dir, 1e-5) else {
+            continue;
+        };
+        let off = ((at - origin).length() - radius).abs();
+        let along = (at - ray.0).length();
+        if off < tolerance && best.is_none_or(|(_, nearest)| along < nearest) {
+            best = Some((axis, along));
+        }
+    }
+    best.map(|(axis, _)| axis)
+}
+
+/// Whether `ray` passes through the trackball, the disc inside the rings, in front of it.
+pub fn inside_trackball(ray: Ray, origin: Vec3, radius: f32) -> bool {
+    let ahead = (origin - ray.0).dot(ray.1);
+    ahead > 0.0 && (ray.0 + ray.1 * ahead - origin).length() < radius
+}
+
+/// The point of the trackball's sphere `ray` points at, from its centre: where the ray meets it, or the nearest point
+/// of its outline when it misses (so a drag past the edge keeps turning smoothly).
+pub fn trackball_point(ray: Ray, origin: Vec3, radius: f32) -> Vec3 {
+    if let Some(t) = ray_sphere(ray, origin, radius) {
+        return ray.0 + ray.1 * t - origin;
+    }
+    let off = ray.0 + ray.1 * (origin - ray.0).dot(ray.1) - origin;
+    if off.length_squared() < 1e-12 {
+        return -ray.1 * radius;
+    }
+    off.normalize() * radius
+}
+
+/// The turn that carries trackball point `from` onto `to`, the short way. A drag adds these up frame to frame, as a
+/// turn cannot be read off where the pointer is.
+pub fn trackball_rotation(from: Vec3, to: Vec3) -> Quat {
+    if from.length_squared() < 1e-12 || to.length_squared() < 1e-12 {
+        return Quat::IDENTITY;
+    }
+    Quat::from_rotation_arc(from.normalize(), to.normalize())
+}
+
+/// The signed angle (radians, right-handed about `axis`) that turns `from` into `to`.
+pub fn signed_angle(axis: Vec3, from: Vec3, to: Vec3) -> f32 {
+    axis.dot(from.cross(to)).atan2(from.dot(to))
+}
+
+/// Counts the turns of an angle known only up to a whole turn: the total turned so far, from the total before, the
+/// raw angle before and the raw angle now, each step the short way round. So a ring's angle passes 180 and 360
+/// degrees without jumping.
+pub fn unwrap_angle(total: f32, previous_raw: f32, raw: f32) -> f32 {
+    let step = (raw - previous_raw).rem_euclid(std::f32::consts::TAU);
+    total
+        + if step > std::f32::consts::PI {
+            step - std::f32::consts::TAU
+        } else {
+            step
+        }
+}
+
+/// How long a ring's mark is, as a share of its radius: longest at the quarter turns, then the eighths.
+pub fn tick_length(degrees: f32) -> f32 {
+    if degrees % 90.0 == 0.0 {
+        0.17
+    } else if degrees % 45.0 == 0.0 {
+        0.115
+    } else {
+        0.07
+    }
+}
+
+/// The marks of a ring `on_screen` points round, in degrees from where the drag took hold: every `increment` (15
+/// with none), never closer than a few points (the spacing then grows through values that divide 90), and every 45
+/// degrees whatever the increment.
+pub fn tick_marks(increment: f32, on_screen: f32) -> Vec<f32> {
+    const MIN_GAP: f32 = 7.0;
+    let mut step = if increment >= 1.0 {
+        increment
+    } else if increment > 0.0 {
+        1.0
+    } else {
+        15.0
+    };
+    let densest = (360.0 * MIN_GAP / (std::f32::consts::TAU * on_screen.max(1.0))).max(1.0);
+    if step < densest {
+        step = [1.0, 3.0, 5.0, 9.0, 15.0, 45.0, 90.0]
+            .into_iter()
+            .find(|s| *s >= densest)
+            .unwrap_or(90.0);
+    }
+    let mut angles: Vec<f32> = (0..(360.0 / step + 1e-3) as i32).map(|i| i as f32 * step).collect();
+    for k in 0..8 {
+        let landmark = k as f32 * 45.0;
+        if !angles.iter().any(|a| (a - landmark).abs() < 1e-3) {
+            angles.push(landmark);
+        }
+    }
+    angles.sort_by(f32::total_cmp);
+    angles
+}
+
 /// The closest points of a ray `(o, d)` and an infinite line through `q` along `e`: their parameters along each.
 pub fn ray_line((o, d): Ray, q: Vec3, e: Vec3) -> Option<(f32, f32)> {
     let w0 = o - q;
@@ -352,6 +462,48 @@ mod tests {
             hit_scale(camera, (camera, Vec3::new(1.0, -1.0, 0.0).normalize()), &bounds),
             None
         );
+    }
+
+    #[test]
+    fn rings_trackball_and_their_angles() {
+        let camera = Vec3::new(0.0, 0.0, 30.0);
+        let r = ring_radius(camera, Vec3::ZERO);
+        let toward = |p: Vec3| (camera, (p - camera).normalize());
+        // The Z ring is a circle in the XY plane: through (r, 0, 0) as the camera sees it.
+        assert_eq!(
+            hit_ring(camera, toward(Vec3::new(r, 0.0, 0.0)), Vec3::ZERO, &AXES),
+            Some(2)
+        );
+        assert_eq!(
+            hit_ring(camera, toward(Vec3::new(r * 0.2, 0.0, 0.0)), Vec3::ZERO, &AXES),
+            None
+        );
+        assert!(inside_trackball(toward(Vec3::new(1.0, 1.0, 0.0)), Vec3::ZERO, 3.0));
+        assert!(!inside_trackball(toward(Vec3::new(5.0, 0.0, 0.0)), Vec3::ZERO, 3.0));
+        let front = trackball_point(toward(Vec3::new(0.0, 0.0, 3.0)), Vec3::ZERO, 3.0);
+        let right = trackball_point(toward(Vec3::new(2.0, 0.0, 0.0)), Vec3::ZERO, 3.0);
+        assert!(
+            (trackball_rotation(front, right) * Vec3::Z).x > 0.5,
+            "dragging right turns the front right"
+        );
+        assert!((signed_angle(Vec3::Z, Vec3::X, Vec3::Y) - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        // Counting past a half turn and a whole one.
+        let (mut total, mut raw) = (0.0f32, 0.0f32);
+        for k in 1..=40 {
+            let real = (k as f32 * 20.0).to_radians();
+            let now = (real + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            total = unwrap_angle(total, raw, now);
+            raw = now;
+        }
+        assert!((total.to_degrees() - 800.0).abs() < 1e-2);
+        // Marks every 15 degrees by default, every 45 always, longest at the quarters.
+        assert_eq!(tick_marks(0.0, 400.0).len(), 24);
+        assert_eq!(
+            tick_marks(90.0, 400.0),
+            [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
+        );
+        assert!(tick_marks(1.0, 20.0).len() < 360, "a small ring is never a solid band");
+        assert!(tick_length(90.0) > tick_length(45.0) && tick_length(45.0) > tick_length(15.0));
     }
 
     #[test]

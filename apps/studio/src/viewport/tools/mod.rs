@@ -1,7 +1,7 @@
 //! The transform tools in the viewport (#355), after Forge-Engine's `tools.rs`: **Select, Move, Scale, Rotate**, in
 //! world or local axes. The tool's gizmo sits on the selection: on the active instance's pivot for one, at the middle
 //! of everything selected for several. [`super::gizmo`] has the maths; each tool's handles, drag and drawing are in a
-//! module of their own ([`moving`], [`scale`]), and this module is what they share: which tool, what it acts on, the
+//! module of their own ([`moving`], [`scale`], [`rotate`]), and this module is what they share: which tool, what it acts on, the
 //! pointer, and the measurements' ruler and labels.
 //!
 //! **Drags are measured from where they began**: each frame places the instances from where they were when the drag
@@ -11,7 +11,10 @@
 //! ([`Scene::watching`]).
 
 mod moving;
+mod rotate;
 mod scale;
+
+pub use rotate::quarter_turn;
 
 use egui::{Color32, Painter, Pos2, Stroke};
 use metallic_engine::metallic_classes::base::world_object;
@@ -45,6 +48,10 @@ pub enum Handle {
     Move(MoveHandle),
     /// A Scale sphere: its axis (0..3) and side (+1 or -1).
     Scale(usize, f32),
+    /// A Rotate ring, by the axis it turns about.
+    Ring(usize),
+    /// The trackball inside the rings.
+    Trackball,
 }
 
 /// Where the tool's handles are.
@@ -90,6 +97,7 @@ struct Start {
 enum Kind {
     Move(moving::MoveDrag),
     Scale(scale::ScaleDrag),
+    Rotate(rotate::RotateDrag),
 }
 
 /// A drag in progress.
@@ -188,7 +196,8 @@ pub fn hit(tool: Tool, frame: &Frame, view: &View, pointer: Pos2) -> Option<Hand
             let ray = view.ray(pointer)?;
             gizmo::hit_scale(view.pos, ray, frame.bounds.as_ref()?).map(|(axis, sign)| Handle::Scale(axis, sign))
         }
-        Tool::Select | Tool::Rotate => None,
+        Tool::Rotate => rotate::hit(frame, view.pos, view.ray(pointer)?),
+        Tool::Select => None,
     }
 }
 
@@ -223,6 +232,14 @@ pub fn begin_drag(dm: &DataModel, handle: Handle, frame: Frame, ray: Ray, target
             Kind::Scale(scale::begin(dm, axis, sign, &frame, ray, targets)?),
             watch_list(dm, targets, &["CFrame", "Size"]),
         ),
+        Handle::Ring(axis) => (
+            Kind::Rotate(rotate::begin(Some(axis), &frame, ray)?),
+            watch_list(dm, targets, &["CFrame"]),
+        ),
+        Handle::Trackball => (
+            Kind::Rotate(rotate::begin(None, &frame, ray)?),
+            watch_list(dm, targets, &["CFrame"]),
+        ),
     };
     Some(Drag {
         frame,
@@ -239,6 +256,7 @@ pub fn update_drag(scene: &mut Scene<'_>, drag: &mut Drag, ray: Ray, keys: Keys,
     scene.watching(&watched, |dm| match &mut drag.kind {
         Kind::Move(state) => moving::update(dm, state, &drag.frame, &drag.starts, ray, snap.move_step),
         Kind::Scale(state) => scale::update(dm, state, &drag.frame, ray, keys, snap.move_step),
+        Kind::Rotate(state) => rotate::update(dm, state, &drag.frame, &drag.starts, ray, snap.turn_step),
     });
     drag.watched = watched;
 }
@@ -283,12 +301,14 @@ pub fn interact(
     gizmo.hover.is_some() || gizmo.drag.is_some()
 }
 
-/// Draws the tool's gizmo for the selection, or while dragging the drag's measurement (the handles step aside).
-pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo) {
+/// Draws the tool's gizmo for the selection, or while dragging the drag's measurement (the handles step aside),
+/// a ring's marked every `snap.turn_step`.
+pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo, snap: Snap) {
     if let Some(drag) = &gizmo.drag {
         match &drag.kind {
             Kind::Move(state) => moving::paint_measurement(painter, view, &drag.frame, state),
             Kind::Scale(state) => scale::paint_measurement(painter, view, &drag.frame, state),
+            Kind::Rotate(state) => rotate::paint_measurement(painter, view, &drag.frame, state, snap.turn_step),
         }
         return;
     }
@@ -299,7 +319,8 @@ pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo) {
     match gizmo.tool {
         Tool::Move => moving::paint(painter, view, &frame, gizmo.hover),
         Tool::Scale => scale::paint(painter, view, &frame, gizmo.hover, targets.len() > 1),
-        Tool::Select | Tool::Rotate => {}
+        Tool::Rotate => rotate::paint(painter, view, &frame, gizmo.hover),
+        Tool::Select => {}
     }
 }
 

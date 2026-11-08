@@ -639,6 +639,15 @@ impl Studio {
                     editor.viewport.gizmo.local = !editor.viewport.gizmo.local;
                 }
             }
+            MenuAction::QuarterTurn { tilt } => {
+                if let Some(editor) = self.editor_mut()
+                    && !editor.is_playing()
+                    && !editor.viewport.gizmo.is_dragging()
+                {
+                    let local = editor.viewport.gizmo.local;
+                    crate::viewport::tools::quarter_turn(&mut editor.scene(), local, tilt);
+                }
+            }
             MenuAction::Tree(edit) => {
                 if let Some(editor) = self.editor_mut() {
                     editor.scene().tree_edit(edit);
@@ -1030,6 +1039,8 @@ impl Studio {
                 ids::TOOL_SCALE if editing => self.menu_action(MenuAction::Transform(Tool::Scale)),
                 ids::TOOL_ROTATE if editing => self.menu_action(MenuAction::Transform(Tool::Rotate)),
                 ids::TOOL_LOCAL_SPACE if editing => self.menu_action(MenuAction::LocalSpace),
+                ids::TOOL_TURN if editing => self.menu_action(MenuAction::QuarterTurn { tilt: false }),
+                ids::TOOL_TILT if editing => self.menu_action(MenuAction::QuarterTurn { tilt: true }),
                 id @ (ids::EDIT_CUT
                 | ids::EDIT_COPY
                 | ids::EDIT_PASTE
