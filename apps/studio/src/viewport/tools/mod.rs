@@ -170,9 +170,9 @@ pub fn frame_for(dm: &DataModel, tool: Tool, local: bool, targets: &[Id], camera
     }
     let pivot = world_object::pivot(dm, active).ok()?;
     let (origin, dirs, bounds) = match (tool, targets) {
-        // One part: its own box and axes (a size is along its own edges).
-        (Tool::Scale, [only]) if pick::part_box(dm, *only).is_some() => {
-            let own = pick::part_box(dm, *only)?;
+        // One part or model: its own box and axes (a size is along its own edges; a model's turn with it, #413).
+        (Tool::Scale, [only]) if pick::outline_box(dm, *only).is_some() => {
+            let own = pick::outline_box(dm, *only)?;
             (own.center, gizmo::axis_dirs(true, own.rot), Some(own))
         }
         (Tool::Scale, _) => {
@@ -207,6 +207,9 @@ pub fn hit(tool: Tool, frame: &Frame, view: &View, pointer: Pos2) -> Option<Hand
     }
 }
 
+/// What moving or turning instances changes: their `CFrame`s, and a model's kept pivot (#413).
+pub(super) const MOVED: &[&str] = &["CFrame", "WorldPivotData", "WorldPivotSet"];
+
 /// `name` of every instance in and under `targets` that has it: what a drag can change.
 fn watch_list(dm: &DataModel, targets: &[Id], names: &[&str]) -> Vec<(Id, PropId)> {
     let mut out = Vec::new();
@@ -232,19 +235,19 @@ pub fn begin_drag(dm: &DataModel, handle: Handle, frame: Frame, ray: Ray, target
     let (kind, watched) = match handle {
         Handle::Move(handle) => (
             Kind::Move(moving::begin(handle, &frame, ray)?),
-            watch_list(dm, targets, &["CFrame"]),
+            watch_list(dm, targets, MOVED),
         ),
         Handle::Scale(axis, sign) => (
             Kind::Scale(scale::begin(dm, axis, sign, &frame, ray, targets)?),
-            watch_list(dm, targets, &["CFrame", "Size"]),
+            watch_list(dm, targets, &["CFrame", "Size", "WorldPivotData", "WorldPivotSet"]),
         ),
         Handle::Ring(axis) => (
             Kind::Rotate(rotate::begin(Some(axis), &frame, ray)?),
-            watch_list(dm, targets, &["CFrame"]),
+            watch_list(dm, targets, MOVED),
         ),
         Handle::Trackball => (
             Kind::Rotate(rotate::begin(None, &frame, ray)?),
-            watch_list(dm, targets, &["CFrame"]),
+            watch_list(dm, targets, MOVED),
         ),
     };
     Some(Drag {
@@ -270,7 +273,7 @@ pub fn carry(dm: &DataModel, selection: &Selection, ray: Ray) -> Option<Drag> {
     let targets = targets(dm, selection);
     let grab = ray.0 + ray.1 * t;
     let kind = Kind::Carry(carry::begin(dm, &targets, grab, ray)?);
-    let watched = watch_list(dm, &targets, &["CFrame"]);
+    let watched = watch_list(dm, &targets, MOVED);
     Some(Drag {
         frame: Frame {
             origin: grab,

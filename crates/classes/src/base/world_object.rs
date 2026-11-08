@@ -7,15 +7,14 @@
 //!
 //! - a `BasePart`, `Camera` or `Light`: its world `CFrame` (a light inside a part goes through the part, see
 //!   [`light::world_cframe`]);
-//! - a `Model`: its `PrimaryPart`'s pivot, when that is set and still inside the model; otherwise the centre of the
-//!   axis-aligned box around every part in it, with no rotation;
+//! - a `Model`: its `PrimaryPart`'s pivot, when that is set and still inside the model; otherwise its `WorldPivot`
+//!   (#413): the centre of the axis-aligned box around every part in it, with no rotation, until it is first set;
 //! - anything else: there is none, and `GetPivot` / `PivotTo` fail with a message saying so.
 //!
 //! `PivotTo(target)` moves the object so that its pivot lands on `target`. A model moves rigidly: every object in it
 //! with its own world transform (parts, cameras, and lights that are not inside a part) gets the same move, so the
-//! distances and angles between them do not change. A model without a `PrimaryPart` has no stored rotation, so its
-//! pivot is recomputed from its parts afterwards: a pure move lands exactly, but after a rotation the box around the
-//! turned parts is generally different. Set `PrimaryPart` when a model's pivot must be exact.
+//! distances and angles between them do not change. A model without a `PrimaryPart` keeps the pivot it was moved to as
+//! its `WorldPivot` (#413), as Roblox does, so it is exact after a turn too, and turns with the model.
 
 use metallic_core::{
     CFrame, ClassDesc, DataModel, DmError, Id, MethodCall, MethodDesc, Param, PropMeta, ScriptError, ScriptValue, Ty,
@@ -96,18 +95,39 @@ fn parts_centre(dm: &DataModel, model: Id) -> Result<Option<Vector3>, DmError> {
     Ok(bounds.map(|(min, max)| (min + max) * 0.5))
 }
 
+/// The model's `PrimaryPart`, when it is set and still inside the model.
+fn primary_part(dm: &DataModel, model: Id) -> Result<Option<Id>, DmError> {
+    let primary = dm.reference(model, dm.prop_id(model, "PrimaryPart")?)?;
+    match primary {
+        Some(part) if dm.is_descendant_of(part, model)? => Ok(Some(part)),
+        _ => Ok(None),
+    }
+}
+
 /// The base frame of a model, before its `PivotOffset`.
 fn model_frame(dm: &DataModel, model: Id) -> Result<CFrame, ScriptError> {
-    let primary = dm.reference(model, dm.prop_id(model, "PrimaryPart")?)?;
-    if let Some(part) = primary
-        && dm.is_descendant_of(part, model)?
-    {
-        return pivot(dm, part);
+    match primary_part(dm, model)? {
+        Some(part) => pivot(dm, part),
+        None => world_pivot(dm, model),
+    }
+}
+
+/// A model's `WorldPivot` (#413): where it pivots without a `PrimaryPart`. Once set (by `PivotTo`, a tool or a script)
+/// it is kept (`WorldPivotData`); until then it is the centre of the model's parts, unturned, as before it existed.
+pub fn world_pivot(dm: &DataModel, model: Id) -> Result<CFrame, ScriptError> {
+    if dm.get_by_name(model, "WorldPivotSet") == Ok(Value::Bool(true)) {
+        return Ok(cframe_prop(dm, model, "WorldPivotData")?);
     }
     match parts_centre(dm, model)? {
         Some(centre) => Ok(CFrame::new(centre)),
         None => Err(no_pivot(dm, model, "it holds no parts; add a part or set PrimaryPart")),
     }
+}
+
+/// Sets a model's `WorldPivot` to `base`, from then on kept as it is (#413).
+pub fn set_world_pivot(dm: &mut DataModel, model: Id, base: CFrame) -> Result<(), DmError> {
+    dm.set_by_name(model, "WorldPivotData", Value::CFrame(base))?;
+    dm.set_by_name(model, "WorldPivotSet", Value::Bool(true))
 }
 
 /// The world-space pivot of a world object: its base frame times its `PivotOffset` (see the module docs).
@@ -155,6 +175,11 @@ pub fn pivot_to(dm: &mut DataModel, id: Id, target: CFrame) -> Result<(), Script
             }
             for (object, frame, kind) in moved {
                 set_own_world_frame(dm, object, &kind, delta * frame)?;
+            }
+            // Without a PrimaryPart the model keeps where it was moved to, turn and all (#413).
+            if primary_part(dm, id)?.is_none() {
+                let offset = cframe_prop(dm, id, "PivotOffset")?;
+                set_world_pivot(dm, id, target * offset.inverse())?;
             }
             Ok(())
         }
@@ -264,6 +289,35 @@ mod tests {
         assert!(pivot(&dm, model).unwrap().approx_eq(at(0.0, 10.0, 0.0), EPS));
         assert!(cframe(&dm, a).approx_eq(at(-5.0, 8.0, 0.0), EPS));
         assert!(cframe(&dm, b).approx_eq(at(5.0, 12.0, 0.0), EPS));
+    }
+
+    #[test]
+    fn a_model_keeps_the_pivot_it_was_turned_to() {
+        let mut dm = game();
+        let ws = workspace(&dm);
+        let model = new_in(&mut dm, "Model", ws, "Model");
+        let a = new_in(&mut dm, "Part", model, "A");
+        let b = new_in(&mut dm, "Part", model, "B");
+        place(&mut dm, a, at(-3.0, 0.0, 0.0));
+        place(&mut dm, b, at(7.0, 0.0, 0.0));
+        // Unset, WorldPivot is the middle of the parts, unturned, and reads as such (#413).
+        assert_eq!(dm.get_by_name(model, "WorldPivot"), Ok(Value::CFrame(at(2.0, 0.0, 0.0))));
+        // Turned a quarter about its pivot: it keeps the turn, and turning again goes on from there.
+        let quarter = CFrame::from_orientation_deg(0.0, 90.0, 0.0);
+        let turned = at(2.0, 0.0, 0.0) * quarter;
+        pivot_to(&mut dm, model, turned).unwrap();
+        assert!(pivot(&dm, model).unwrap().approx_eq(turned, EPS));
+        assert!(cframe(&dm, a).position().abs_diff_eq(Vector3::new(2.0, 0.0, 5.0), EPS));
+        pivot_to(&mut dm, model, turned).unwrap();
+        assert!(
+            cframe(&dm, a).position().abs_diff_eq(Vector3::new(2.0, 0.0, 5.0), EPS),
+            "the same pivot again moves nothing"
+        );
+        // Written by a script, it moves the pivot alone.
+        dm.set_by_name(model, "WorldPivot", Value::CFrame(at(0.0, 9.0, 0.0)))
+            .unwrap();
+        assert!(pivot(&dm, model).unwrap().approx_eq(at(0.0, 9.0, 0.0), EPS));
+        assert!(cframe(&dm, a).position().abs_diff_eq(Vector3::new(2.0, 0.0, 5.0), EPS));
     }
 
     #[test]

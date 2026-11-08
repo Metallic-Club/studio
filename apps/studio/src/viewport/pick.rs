@@ -2,6 +2,7 @@
 //! (every shape, for now), and of that part what is selectable: the outermost model it is in under Workspace, as in
 //! Roblox Studio, or the part. The outlines are these boxes too: a part's own, a model's around its parts.
 
+use metallic_engine::metallic_classes::base::world_object;
 use metallic_engine::metallic_core::glam::{Quat, Vec3};
 use metallic_engine::metallic_core::{DataModel, Id, Value};
 
@@ -112,22 +113,25 @@ pub fn part_box(dm: &DataModel, id: Id) -> Option<Bounds> {
     })
 }
 
-/// The box an instance's outline is: a part's own, else the world-aligned box round the parts inside it.
+/// The box an instance's outline is: a part's own, else the box round the parts inside it, along the axes of its
+/// pivot (#413: a model's turns with it), or the world's when it has none.
 pub fn outline_box(dm: &DataModel, id: Id) -> Option<Bounds> {
     if let Some(own) = part_box(dm, id) {
         return Some(own);
     }
+    let rot = world_object::pivot(dm, id).map_or(Quat::IDENTITY, |pivot| pivot.rotation());
+    let back = rot.inverse();
     let mut span: Option<(Vec3, Vec3)> = None;
     for part in dm.descendants(id).ok()?.filter_map(|inside| part_box(dm, inside)) {
-        for corner in part.corners() {
+        for corner in part.corners().map(|corner| back * corner) {
             span = Some(span.map_or((corner, corner), |(min, max)| (min.min(corner), max.max(corner))));
         }
     }
     let (min, max) = span?;
     Some(Bounds {
-        center: (min + max) * 0.5,
+        center: rot * ((min + max) * 0.5),
         half: (max - min) * 0.5,
-        rot: Quat::IDENTITY,
+        rot,
     })
 }
 

@@ -106,7 +106,7 @@ pub fn quarter_turn(scene: &mut Scene<'_>, local: bool, tilt: bool) -> bool {
         .collect();
     let axis = frame.dirs[if tilt { 0 } else { 1 }];
     let turn = Quat::from_axis_angle(axis, std::f32::consts::FRAC_PI_2);
-    let watched = super::watch_list(scene.dm, &targets, &["CFrame"]);
+    let watched = super::watch_list(scene.dm, &targets, super::MOVED);
     scene.watching(&watched, |dm| turn_all(dm, frame.origin, &starts, turn));
     true
 }
@@ -310,6 +310,20 @@ mod tests {
             );
             assert!(turned(scene.dm, part).angle_between(expected) < 1e-2);
         }
+        // The model keeps its turn (#413): its pivot and its outline turned with it, and one undo puts all back.
+        assert!(turned(scene.dm, model).angle_between(expected) < 1e-2);
+        let outline = crate::viewport::pick::outline_box(scene.dm, model).unwrap();
+        assert!(outline.rot.angle_between(expected) < 1e-2);
+        assert!(
+            outline.half.abs_diff_eq(Vec3::new(3.5, 0.5, 0.5), 1e-2),
+            "{:?}",
+            outline.half
+        );
+        let now = std::time::Instant::now();
+        scene.commit(now, false);
+        assert!(scene.undo(now));
+        assert!(turned(scene.dm, model).angle_between(Quat::IDENTITY) < 1e-4);
+        assert!(position(scene.dm, a).abs_diff_eq(Vec3::new(-2.0, 0.0, 0.0), 1e-4));
     }
 
     #[test]

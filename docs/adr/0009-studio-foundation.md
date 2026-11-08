@@ -408,6 +408,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   where the camera looks (`viewport::aim`: the surface of the first part the middle of the view meets, a part resting
   on it; else the ground; else a point ahead), not the origin; inserted into something with a pivot, it goes at that
   pivot (a light in a part at its middle).
+- **A model keeps its pivot (#413)**: `Model.WorldPivot` as in Roblox, where a model without a `PrimaryPart` pivots.
+  Until first set (by `PivotTo`, a tool or a script) it is the centre of the model's parts, unturned, so older scenes
+  pivot as before; `PivotTo` keeps where it moved the model to. It is kept in two hidden saved properties
+  (`WorldPivotData`, `WorldPivotSet`), which the tools' drags watch for undo. So a turned model keeps its turn, and its
+  outline and Scale box are the box round its parts along its pivot's axes, turning with it.
 
 ## Not in this slice
 
