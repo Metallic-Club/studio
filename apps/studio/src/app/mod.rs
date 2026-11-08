@@ -2930,6 +2930,53 @@ mod tests {
     }
 
     #[test]
+    fn dragging_explorer_rows_moves_them_inside_or_between_rows_and_undoes() {
+        let mut harness = editing(settings_file("editor-drag-rows", None), "Drag Rows Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let row = |harness: &Harness<'_, Test>, name: &str| harness.get_by_role_and_label(Role::TreeItem, name).rect();
+        // Onto the middle of a row: inside it.
+        let (from, to) = (
+            row(&harness, "SpawnLocation").center(),
+            row(&harness, "ReplicatedStorage").center(),
+        );
+        drag(&mut harness, from, to);
+        assert_eq!(children_of(&harness, "ReplicatedStorage"), ["SpawnLocation"]);
+        assert_eq!(
+            selected_names(&harness),
+            ["SpawnLocation"],
+            "the dragged row is selected"
+        );
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(
+            children_of(&harness, "Workspace"),
+            ["Camera", "Baseplate", "SpawnLocation"]
+        );
+        // Near the top of a row: before it, among its siblings.
+        let camera = row(&harness, "Camera");
+        let from = row(&harness, "SpawnLocation").center();
+        drag(&mut harness, from, egui::pos2(camera.center().x, camera.top() + 2.0));
+        assert_eq!(
+            children_of(&harness, "Workspace"),
+            ["SpawnLocation", "Camera", "Baseplate"]
+        );
+        // A row onto itself, or a service, does nothing.
+        let from = row(&harness, "SpawnLocation").center();
+        drag(&mut harness, from, from + egui::vec2(30.0, 0.0));
+        let (from, to) = (
+            row(&harness, "Lighting").center(),
+            row(&harness, "ReplicatedStorage").center(),
+        );
+        drag(&mut harness, from, to);
+        assert_eq!(
+            children_of(&harness, "Workspace"),
+            ["SpawnLocation", "Camera", "Baseplate"]
+        );
+        assert!(children_of(&harness, "ReplicatedStorage").is_empty());
+    }
+
+    #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
         let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;

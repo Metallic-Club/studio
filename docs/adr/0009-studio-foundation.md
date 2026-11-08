@@ -299,6 +299,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Insert Object (#352)**: a searchable window of every class the registry can create (not services, not classes
   hidden from the Explorer), with icons and descriptions, opened from a row's `+` (shown on hover) or its menu; the
   class chosen is created inside that row, selected, as one undo step, a part in front of the editor camera.
+- **Dragging Explorer rows (#353)** moves the selection (a dragged row not selected becomes it): onto a row's middle
+  inside it, onto its top or bottom quarter before or after it among its siblings (a service's row only inside). An
+  accent outline or line shows where it lands; a drop inside what moves, or onto the root, is refused. One undo step.
 
 ## Not in this slice
 
