@@ -14,6 +14,7 @@
 //!   Rendering settings' frame cap, if any); otherwise Studio draws only on input or change.
 //! - **No game scripts run.** The editor shows the scene as it is; Play mode is later work.
 
+pub mod axes;
 pub mod camera;
 pub mod gizmo;
 pub mod pick;

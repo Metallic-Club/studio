@@ -391,13 +391,13 @@ const AXIS_RGB: [[u8; 3]; 3] = [[214, 96, 96], [118, 186, 118], [96, 140, 214]];
 /// The colour of the handle under the pointer, and of a drag's measurement.
 const HIGHLIGHT_RGB: [u8; 3] = [236, 214, 120];
 /// The axes' names, for the measurements.
-const AXIS_NAMES: [&str; 3] = ["X", "Y", "Z"];
+pub(crate) const AXIS_NAMES: [&str; 3] = ["X", "Y", "Z"];
 
 fn colour(rgb: [u8; 3], alpha: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha)
 }
 
-fn axis_colour(axis: usize, lit: bool, alpha: u8) -> Color32 {
+pub(crate) fn axis_colour(axis: usize, lit: bool, alpha: u8) -> Color32 {
     colour(if lit { HIGHLIGHT_RGB } else { AXIS_RGB[axis] }, alpha)
 }
 
