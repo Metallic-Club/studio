@@ -377,6 +377,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   never through it, eased over a few frames.
 - **Axis gizmo (#386)**: the viewport's top right corner shows which way the world's X, Y and Z point from the
   camera (`viewport::axes`), drawn as the Move gizmo's arrows in its colours, with their letters, the farthest first.
+- **Panel menus (#387)**: a panel can have a menu (`Panel::has_menu`, `Panel::menu`): three dots at the right of its
+  tab bar while its tab is in front open it (egui_tiles' `top_bar_right_ui`). The Viewport's holds its settings, for
+  now whether the axis gizmo shows (`[viewport] show_axes`).
 
 ## Not in this slice
 
