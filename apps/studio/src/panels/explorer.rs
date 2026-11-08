@@ -16,7 +16,8 @@ use metallic_engine::metallic_core::{DataModel, Id};
 
 use super::{class_icon, empty_note, ids, matches_words, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
-use crate::editor::Selection;
+use crate::editor::edit::is_movable;
+use crate::editor::{Selection, TreeEdit};
 use crate::keymap::Context;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
@@ -42,6 +43,8 @@ pub struct ExplorerState {
     scroll_to: Option<Id>,
     /// Where a Shift-click's range starts: the last row clicked without Shift (#347).
     anchor: Option<Id>,
+    /// The row being renamed in place (#351).
+    renaming: Option<Id>,
 }
 
 impl ExplorerState {
@@ -115,6 +118,17 @@ impl ExplorerState {
             all.add(active);
         }
         *selection = all;
+    }
+
+    /// Starts renaming `id` in its row (#351): its name becomes a text field, Enter keeps what is typed and Escape
+    /// drops it.
+    pub fn start_rename(&mut self, id: Id) {
+        self.renaming = Some(id);
+    }
+
+    /// The row being renamed, if any.
+    pub fn renaming(&self) -> Option<Id> {
+        self.renaming
     }
 
     /// Opens every ancestor of `id` and scrolls it into view.
@@ -266,6 +280,12 @@ impl Panel for Explorer {
         }
         let mut clicked = None;
         let mut toggled = None;
+        let mut menu = None;
+        let mut renamed = None;
+        let renaming = editor
+            .explorer
+            .renaming
+            .filter(|&id| rows.iter().any(|row| row.id == id));
         let shades = current_colors(ui.ctx()).palette.rows();
         let holders = editor.selection.holders(editor.dm);
         // The rows touch (#274), so the stripes are continuous, as the Properties panel's are.
@@ -274,10 +294,20 @@ impl Panel for Explorer {
             for (index, row) in range.clone().zip(&rows[range]) {
                 let selected = editor.selection.contains(row.id);
                 let marked = !row.expanded && holders.contains(&row.id);
-                match row_ui(ui, editor.dm, *row, selected, marked, searching, shades.fill(index)) {
+                let look = Look {
+                    selected,
+                    marked,
+                    searching,
+                    renaming: renaming == Some(row.id),
+                    stripe: shades.fill(index),
+                };
+                match row_ui(ui, editor.dm, *row, look) {
                     RowAction::None => {}
                     RowAction::Select => clicked = Some(row.id),
                     RowAction::Toggle => toggled = Some(*row),
+                    RowAction::Menu(edit) => menu = Some((row.id, edit)),
+                    RowAction::Renamed(name) => renamed = Some((row.id, Some(name))),
+                    RowAction::KeepName => renamed = Some((row.id, None)),
                 }
             }
         });
@@ -290,27 +320,75 @@ impl Panel for Explorer {
                 .explorer
                 .click(&rows, editor.selection, id, modifiers.command, modifiers.shift);
         }
+        let mut editor = editor;
+        if let Some((id, name)) = renamed {
+            editor.explorer.renaming = None;
+            if let Some(name) = name
+                && let Err(error) = editor.rename(id, &name)
+            {
+                log::warn!("explorer: could not rename: {error}");
+            }
+        }
+        if let Some((id, edit)) = menu {
+            // A row's menu acts on the selection, which holds the row (a right-click on another selects it).
+            if !editor.selection.contains(id) {
+                editor.selection.set_only(Some(id));
+            }
+            editor.tree_edit(edit);
+        }
     }
 }
+
+/// How a row is drawn.
+#[derive(Clone, Copy, Debug)]
+struct Look {
+    /// It is selected.
+    selected: bool,
+    /// It is closed and holds something selected.
+    marked: bool,
+    /// A search is shown (no carets).
+    searching: bool,
+    /// Its name is being edited.
+    renaming: bool,
+    /// Its stripe.
+    stripe: Color32,
+}
+
+/// The items of a row's menu, in order, with whether each needs something to move (not a service) or the clipboard.
+const ROW_MENU: [(&str, TreeEdit); 7] = [
+    ("Cut", TreeEdit::Cut),
+    ("Copy", TreeEdit::Copy),
+    ("Paste", TreeEdit::Paste),
+    ("Paste into", TreeEdit::PasteInto),
+    ("Duplicate", TreeEdit::Duplicate),
+    ("Rename", TreeEdit::Rename),
+    ("Delete", TreeEdit::Delete),
+];
 
 /// What a click on a row asked for.
 enum RowAction {
     None,
     Select,
     Toggle,
+    /// An item of its right-click menu (#351).
+    Menu(TreeEdit),
+    /// Its new name, typed in place.
+    Renamed(String),
+    /// Renaming it ended without a new name.
+    KeepName,
 }
 
-/// One row on its `stripe` (#274): the caret, the class icon and the name; a selected row on a square raised fill
-/// (#300), and a closed row that holds something selected (`marked`) with a dot at its end (#347).
-fn row_ui(
-    ui: &mut Ui,
-    dm: &DataModel,
-    row: Row,
-    selected: bool,
-    marked: bool,
-    searching: bool,
-    stripe: Color32,
-) -> RowAction {
+/// One row on its stripe (#274): the caret, the class icon and the name (a text field while it is renamed, #351); a
+/// selected row on a square raised fill (#300), and a closed row that holds something selected with a dot at its end
+/// (#347). A right-click opens its menu of tree edits (#351).
+fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
+    let Look {
+        selected,
+        marked,
+        searching,
+        renaming,
+        stripe,
+    } = look;
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let name = dm.name(row.id).unwrap_or("?").to_owned();
@@ -368,8 +446,12 @@ fn row_ui(
         } else {
             FontId::proportional(text::BODY)
         };
+        let at = pos2(x + text::BODY + space::S3, rect.center().y);
+        if renaming {
+            return rename_field(ui, rect, at, &name);
+        }
         let label = ui.painter().text(
-            pos2(x + text::BODY + space::S3, rect.center().y),
+            at,
             Align2::LEFT_CENTER,
             &name,
             font,
@@ -384,13 +466,74 @@ fn row_ui(
             );
         }
     }
-    if caret_response.is_some_and(|response| response.clicked()) || (row.has_children && response.double_clicked()) {
+    let mut chosen = None;
+    response.context_menu(|ui| {
+        let movable = is_movable(dm, row.id);
+        for (label, edit) in ROW_MENU {
+            let enabled = edit.pastes() || movable;
+            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                chosen = Some(edit);
+                ui.close();
+            }
+        }
+    });
+    if let Some(edit) = chosen {
+        RowAction::Menu(edit)
+    } else if response.secondary_clicked() && !selected {
+        RowAction::Select
+    } else if caret_response.is_some_and(|response| response.clicked())
+        || (row.has_children && response.double_clicked())
+    {
         RowAction::Toggle
     } else if response.clicked() {
         RowAction::Select
     } else {
         RowAction::None
     }
+}
+
+/// The name of a row being renamed (#351): a text field where the name is, focused, all of it selected at first.
+/// Enter, or a click elsewhere, keeps what is typed; Escape keeps the old name.
+fn rename_field(ui: &mut Ui, rect: Rect, at: egui::Pos2, name: &str) -> RowAction {
+    let id = ui.make_persistent_id("metallic.explorer.rename");
+    let field_id = id.with("field");
+    let first = ui.data_mut(|data| data.get_temp::<String>(id)).is_none();
+    let mut typed = ui
+        .data_mut(|data| data.get_temp::<String>(id))
+        .unwrap_or_else(|| name.to_owned());
+    let field = Rect::from_min_max(
+        pos2(at.x - space::S1, rect.top() + 2.0),
+        pos2(rect.right() - space::S3, rect.bottom() - 2.0),
+    );
+    let response = ui.put(
+        field,
+        egui::TextEdit::singleline(&mut typed)
+            .id(field_id)
+            .margin(vec2(space::S1, 0.0))
+            .font(FontId::proportional(text::BODY)),
+    );
+    response.widget_info(|| WidgetInfo::labeled(Role::TextInput, true, format!("Name of {name}")));
+    if first {
+        response.request_focus();
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), field_id) {
+            let all = egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(typed.chars().count()),
+            );
+            state.cursor.set_char_range(Some(all));
+            state.store(ui.ctx(), field_id);
+        }
+    } else if response.lost_focus() || !response.has_focus() {
+        ui.data_mut(|data| data.remove::<String>(id));
+        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        return if escape || typed == name {
+            RowAction::KeepName
+        } else {
+            RowAction::Renamed(typed)
+        };
+    }
+    ui.data_mut(|data| data.insert_temp(id, typed));
+    RowAction::None
 }
 
 #[cfg(test)]
