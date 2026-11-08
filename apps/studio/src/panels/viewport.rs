@@ -187,6 +187,9 @@ impl Panel for Viewport {
             editor.viewport.gizmo = gizmo;
             speed_note(&painter, rect, &editor.viewport, &cx.settings.viewport);
         }
+        // Which way the axes point (#386).
+        let rotation = cx.editor.viewport.camera.rotation();
+        crate::viewport::axes::paint(&ui.painter().with_clip_rect(rect), rect, rotation);
         // Frame pacing: continuous while the viewport shows and the window has focus, at the frame cap if there is
         // one. Otherwise Studio waits for input or a change.
         if ui.input(|input| input.focused) {

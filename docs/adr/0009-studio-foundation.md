@@ -375,6 +375,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   keeps them firing); Alt+wheel and Shift+wheel change the two, kept in the `[viewport]` settings (Settings, Editing)
   and shown for a moment in the viewport's corner. The wheel zooms toward what is ahead, a tenth of the way per notch,
   never through it, eased over a few frames.
+- **Axis gizmo (#386)**: the viewport's top right corner shows which way the world's X, Y and Z point from the
+  camera (`viewport::axes`), drawn as the Move gizmo's arrows in its colours, with their letters, the farthest first.
 
 ## Not in this slice
 
