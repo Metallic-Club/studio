@@ -117,8 +117,8 @@ pub struct ToolbarConfig {
 }
 
 impl Default for ToolbarConfig {
-    /// Home, Model, UI (with a layout of its own), Scripts and Plugins. Home holds Studio's tools; the others start
-    /// empty, for the user (and later plugins) to fill.
+    /// Home, Model, UI (with a layout of its own), Scripts and Plugins. Home holds Studio's tools, Model the
+    /// transform tools (#355); the others start empty, for the user (and later plugins) to fill.
     fn default() -> Self {
         let home = [
             Element::tool(super::tools::ids::SAVE),
@@ -140,7 +140,17 @@ impl Default for ToolbarConfig {
             version: TOOLBAR_VERSION,
             tabs: vec![
                 TabConfig::new("Home", home.into()),
-                TabConfig::new("Model", Vec::new()),
+                TabConfig::new(
+                    "Model",
+                    vec![
+                        Element::tool(super::tools::ids::SELECT),
+                        Element::tool(super::tools::ids::MOVE),
+                        Element::tool(super::tools::ids::SCALE),
+                        Element::tool(super::tools::ids::ROTATE),
+                        Element::Separator,
+                        Element::tool(super::tools::ids::LOCAL_SPACE),
+                    ],
+                ),
                 ui,
                 TabConfig::new("Scripts", Vec::new()),
                 TabConfig::new("Plugins", Vec::new()),

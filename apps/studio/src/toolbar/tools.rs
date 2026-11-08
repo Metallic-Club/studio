@@ -7,6 +7,7 @@
 
 use crate::dock::Panel;
 use crate::theme::icons::Icon;
+use crate::viewport::tools::Tool as TransformTool;
 
 /// Studio's own tools' ids.
 pub mod ids {
@@ -30,6 +31,16 @@ pub mod ids {
     pub const RESET_LAYOUT: &str = "studio.reset_layout";
     /// Open or close Settings.
     pub const SETTINGS: &str = "studio.settings";
+    /// The Select tool (#355).
+    pub const SELECT: &str = "studio.tool.select";
+    /// The Move tool.
+    pub const MOVE: &str = "studio.tool.move";
+    /// The Scale tool.
+    pub const SCALE: &str = "studio.tool.scale";
+    /// The Rotate tool.
+    pub const ROTATE: &str = "studio.tool.rotate";
+    /// World or local axes for the gizmos.
+    pub const LOCAL_SPACE: &str = "studio.tool.local_space";
     /// The prefix of a panel's toggle: `studio.panel.<panel id>`.
     pub const PANEL: &str = "studio.panel.";
 }
@@ -43,6 +54,8 @@ pub mod groups {
     pub const EDIT: &str = "Edit";
     /// Running the game.
     pub const GAME: &str = "Game";
+    /// The transform tools (#355).
+    pub const TRANSFORM: &str = "Transform";
     /// Studio itself: its layout and Settings.
     pub const STUDIO: &str = "Studio";
     /// Opening and closing panels.
@@ -76,6 +89,10 @@ pub enum StudioCommand {
     Settings,
     /// Open or close a panel, by its id.
     TogglePanel(&'static str),
+    /// Pick a transform tool (#355).
+    Transform(TransformTool),
+    /// Switch the gizmos between world and local axes.
+    LocalSpace,
 }
 
 /// What a tool does when its button is clicked.
@@ -236,6 +253,46 @@ impl ToolRegistry {
                 Icon::ToolbarStop,
                 groups::GAME,
                 StudioCommand::Stop,
+            ),
+            Tool::studio(
+                ids::SELECT,
+                "Select",
+                "Selects with a click and drags parts onto surfaces.",
+                Icon::ToolbarSelect,
+                groups::TRANSFORM,
+                StudioCommand::Transform(TransformTool::Select),
+            ),
+            Tool::studio(
+                ids::MOVE,
+                "Move",
+                "Moves the selection along its axes with handles.",
+                Icon::ToolbarMove,
+                groups::TRANSFORM,
+                StudioCommand::Transform(TransformTool::Move),
+            ),
+            Tool::studio(
+                ids::SCALE,
+                "Scale",
+                "Resizes the selection with handles on its sides.",
+                Icon::ToolbarScale,
+                groups::TRANSFORM,
+                StudioCommand::Transform(TransformTool::Scale),
+            ),
+            Tool::studio(
+                ids::ROTATE,
+                "Rotate",
+                "Turns the selection with rings about its axes.",
+                Icon::ToolbarRotate,
+                groups::TRANSFORM,
+                StudioCommand::Transform(TransformTool::Rotate),
+            ),
+            Tool::studio(
+                ids::LOCAL_SPACE,
+                "Local",
+                "Puts the handles along the selection's own axes instead of the world's.",
+                Icon::ToolbarLocalSpace,
+                groups::TRANSFORM,
+                StudioCommand::LocalSpace,
             ),
             Tool::studio(
                 ids::RESET_LAYOUT,

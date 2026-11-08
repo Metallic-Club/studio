@@ -18,6 +18,7 @@ use crate::keymap::{Keymap, ids};
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
+use crate::viewport::tools::Tool;
 
 /// The top bar's height.
 pub(crate) const BAR_HEIGHT: f32 = 40.0;
@@ -67,6 +68,10 @@ pub(crate) enum MenuAction {
     Redo,
     /// Edit, Cut, Copy, Paste, Paste into, Duplicate, Rename and Delete (#351).
     Tree(TreeEdit),
+    /// Pick a transform tool (#355).
+    Transform(Tool),
+    /// Switch the gizmos between world and local axes.
+    LocalSpace,
 }
 
 /// Where a game session is and what the history holds, for what the menus, the play buttons and the tools allow.

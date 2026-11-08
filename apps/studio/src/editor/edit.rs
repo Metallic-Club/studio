@@ -44,6 +44,20 @@ impl Scene<'_> {
         Ok(())
     }
 
+    /// Runs `change`, which writes the data model itself (moving a pivot, #355), as part of the action under way:
+    /// whichever of the `watched` properties it changed is noted.
+    pub fn watching(&mut self, watched: &[(Id, PropId)], change: impl FnOnce(&mut DataModel)) {
+        let before: Vec<Option<Value>> = watched.iter().map(|&(id, prop)| self.dm.get(id, prop).ok()).collect();
+        change(self.dm);
+        for (&(id, prop), old) in watched.iter().zip(before) {
+            if let (Some(old), Ok(new)) = (old, self.dm.get(id, prop))
+                && old != new
+            {
+                self.history.note(Change::Prop { id, prop, old, new });
+            }
+        }
+    }
+
     /// Ends the action under way as one undo step, unless `holding` (a mouse button is down: a drag goes on).
     pub fn commit(&mut self, now: Instant, holding: bool) {
         self.history.commit(self.dm, self.selection, now, holding);

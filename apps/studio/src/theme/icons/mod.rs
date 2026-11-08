@@ -315,6 +315,16 @@ icons! {
     ToolbarUndo = "toolbar.undo", Studio, "undo-2";
     /// The toolbar's Redo tool.
     ToolbarRedo = "toolbar.redo", Studio, "redo-2";
+    /// The Select tool (#355).
+    ToolbarSelect = "toolbar.select", Scene, "mouse-pointer-2";
+    /// The Move tool.
+    ToolbarMove = "toolbar.move", Scene, "move";
+    /// The Scale tool.
+    ToolbarScale = "toolbar.scale", Scene, "scale-3d";
+    /// The Rotate tool.
+    ToolbarRotate = "toolbar.rotate", Scene, "rotate-3d";
+    /// Local or world axes for the gizmos.
+    ToolbarLocalSpace = "toolbar.local_space", Scene, "axis-3d";
     /// The toolbar's Reset layout tool.
     ToolbarResetLayout = "toolbar.reset_layout", Scene, "rotate-ccw";
     /// A plugin's tool that brings no icon of its own.

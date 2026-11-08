@@ -21,6 +21,7 @@ use crate::theme::tokens::text;
 use crate::theme::{current_colors, fonts};
 use crate::viewport::View;
 use crate::viewport::pick::{self, EDGES};
+use crate::viewport::tools;
 
 /// How thick the selection's outline is, in points.
 const OUTLINE: f32 = 1.5;
@@ -104,14 +105,17 @@ impl Panel for Viewport {
                 );
             }
         }
-        let response = ui.allocate_rect(rect, Sense::click());
+        let response = ui.allocate_rect(rect, Sense::click_and_drag());
         if !cx.editor.is_playing() {
             let view = View::new(&cx.editor.viewport.camera, rect);
+            // The tool's gizmo first: a click on it is not a selection (#355).
+            let mut gizmo = std::mem::take(&mut cx.editor.viewport.gizmo);
+            let on_gizmo = tools::interact(ui, &response, &view, &mut cx.editor.scene(), &mut gizmo);
             let editor = &mut *cx.editor;
             let under = |at| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray));
-            let hovered = response.hover_pos().and_then(under);
+            let hovered = response.hover_pos().filter(|_| !on_gizmo).and_then(under);
             let modifiers = ui.input(|input| input.modifiers);
-            if response.clicked() && !modifiers.alt {
+            if response.clicked() && !modifiers.alt && !on_gizmo {
                 let picked = response.interact_pointer_pos().and_then(under);
                 match picked {
                     Some(id) if modifiers.command || modifiers.shift => editor.selection.toggle(id),
@@ -134,6 +138,8 @@ impl Panel for Viewport {
             for &id in editor.selection.ids() {
                 outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent));
             }
+            tools::paint(&painter, &view, &editor.scene(), &gizmo);
+            editor.viewport.gizmo = gizmo;
         }
         // Frame pacing: continuous while the viewport shows and the window has focus, at the frame cap if there is
         // one. Otherwise Studio waits for input or a change.

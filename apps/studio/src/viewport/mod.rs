@@ -14,7 +14,9 @@
 //! - **No game scripts run.** The editor shows the scene as it is; Play mode is later work.
 
 pub mod camera;
+pub mod gizmo;
 pub mod pick;
+pub mod tools;
 pub mod view;
 
 use egui::{Rect, TextureId};
@@ -47,6 +49,8 @@ pub struct ViewportState {
     pub texture_limit: u32,
     /// Why the engine cannot draw the viewport, when it cannot (no renderer could be made).
     pub error: Option<String>,
+    /// The transform tool and its gizmo (#355).
+    pub gizmo: tools::Gizmo,
 }
 
 impl ViewportState {
@@ -61,6 +65,7 @@ impl ViewportState {
             texture_pixels: None,
             texture_limit: u32::MAX,
             error: None,
+            gizmo: tools::Gizmo::default(),
         }
     }
 
