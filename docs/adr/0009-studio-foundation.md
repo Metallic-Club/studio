@@ -287,6 +287,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   colour's swatch opens a picker beside its 0-255 channels; a drop-down of an enum's items. References (the Parent
   changes by dragging in the Explorer), read-only properties and computed ones without a setter are shown, not
   edited. Every control carries its property's label for screen readers (`Size X`).
+- **Several instances in Properties (#350)**, as Forge's inspector: the properties they all have (same name and
+  type), a value they disagree on shown mixed (a dash, "Mixed"); an edit reaches each of them as one undo step, a
+  vector's component alone on each so they keep their others. The header names the count ("3 Parts", "4 objects").
 
 ## Not in this slice
 

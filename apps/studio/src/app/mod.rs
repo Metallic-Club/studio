@@ -2700,6 +2700,51 @@ mod tests {
     }
 
     #[test]
+    fn properties_of_several_instances_show_mixed_values_and_edit_them_all_in_one_step() {
+        let mut harness = editing(settings_file("editor-multi-props", None), "Multi Props Game");
+        harness.set_size(egui::vec2(1280.0, 1500.0));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::TreeItem, "SpawnLocation")
+            .click_modifiers(Modifiers::COMMAND);
+        settle(&mut harness);
+        harness.get_by_label("2 Parts");
+        let sizes = |harness: &Harness<'_, Test>| {
+            let editor = harness.state().studio.editor().unwrap();
+            editor
+                .selection
+                .ids()
+                .iter()
+                .map(|&id| match editor.dm.get_by_name(id, "Size").unwrap() {
+                    Value::Vector3(v) => (v.x, v.y, v.z),
+                    other => panic!("{other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = sizes(&harness);
+        assert_ne!(before[0], before[1], "the template's two parts differ in size");
+        // One component typed reaches both, each keeping its own others; one undo step takes both back.
+        type_into(&mut harness, "Size Y", "5");
+        let after = sizes(&harness);
+        assert_eq!(after[0], (before[0].0, 5.0, before[0].2));
+        assert_eq!(after[1], (before[1].0, 5.0, before[1].2));
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(sizes(&harness), before);
+        assert_eq!(
+            selected_names(&harness),
+            ["Baseplate", "SpawnLocation"],
+            "the selection stays"
+        );
+        // A name they disagree on is mixed; typing one names both.
+        harness.get_by_role_and_label(Role::TextInput, "Name");
+        type_into(&mut harness, "Name", "Pad");
+        assert_eq!(selected_names(&harness), ["Pad", "Pad"]);
+    }
+
+    #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
         let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;

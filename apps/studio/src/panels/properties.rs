@@ -5,6 +5,10 @@
 //! What cannot be edited is formatted for reading: references as the instance's name, read-only properties as their
 //! value (vectors as their components, a colour as a swatch and its 0-255 channels, a boolean as a check box).
 //!
+//! With several instances selected (#350) it lists the properties they all have (the same name and type), as Forge's
+//! inspector does: a value they disagree on is mixed, and an edit is made to each of them (a vector's component alone
+//! on each, so they keep their others), as one undo step. The header names the count ("3 Parts", "4 objects").
+//!
 //! Each group's rows are striped (#230): alternately a little darker and a little brighter than the panel, with faint
 //! 1 px lines between the rows and between the name and value columns ([`crate::theme::tokens::RowShades`]). The line
 //! between the columns can be dragged left and right (#324), and stays where it was left.
@@ -15,7 +19,7 @@ use egui::{
 };
 use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, PropMeta, PropType, ResolvedProp, Value};
 
-use super::values::{self, Part};
+use super::values::{self, Edit, Mixed, Part};
 use super::{class_icon, empty_note, ids};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
@@ -61,15 +65,18 @@ pub struct PropertyRow {
     pub label: String,
     /// What it does.
     pub description: &'static str,
-    /// Its value.
+    /// Its value: the active instance's.
     pub value: Value,
-    /// The property.
+    /// What the selected instances disagree on.
+    pub mixed: Mixed,
+    /// The property, as the active instance's class numbers it.
     pub prop: PropId,
     /// Its declaration.
     pub meta: &'static PropMeta,
     /// Which part of the value the row shows.
     pub part: Part,
-    /// Whether the panel edits it: not a read-only property, a computed one with no setter, or a reference.
+    /// Whether the panel edits it: not a read-only property, a computed one with no setter, or a reference (in any
+    /// of the selected instances' classes).
     pub editable: bool,
 }
 
@@ -82,9 +89,21 @@ pub struct Group {
     pub rows: Vec<PropertyRow>,
 }
 
-/// `id`'s visible properties by group: groups in the order the class's properties first name them (inherited ones
-/// first), properties by their order in the group. Hidden properties are left out.
-pub fn groups(dm: &DataModel, id: Id) -> Vec<Group> {
+/// The resolved property `name` of `id`'s class, if it has one Studio shows.
+fn shown_prop(dm: &DataModel, id: Id, name: &str) -> Option<&'static PropMeta> {
+    let class = dm.class_of(id).ok()?;
+    let info = dm.registry().class(class)?;
+    let prop = info.prop(info.prop_id(name)?)?;
+    visible(prop).then_some(prop.meta)
+}
+
+/// The visible properties of `ids` (the selection, the active instance last) by group: the active instance's that
+/// every other has too, with the same type (#350). Groups come in the order the class's properties first name them
+/// (inherited ones first), properties by their order in the group. Hidden properties are left out.
+pub fn groups(dm: &DataModel, ids: &[Id]) -> Vec<Group> {
+    let Some((&id, others)) = ids.split_last() else {
+        return Vec::new();
+    };
     let Ok(class) = dm.class_of(id) else {
         return Vec::new();
     };
@@ -99,6 +118,19 @@ pub fn groups(dm: &DataModel, id: Id) -> Vec<Group> {
             continue;
         };
         let meta = prop.meta;
+        // The others' values, the active one's first; a property one of them lacks is not shared.
+        let mut all = vec![value.clone()];
+        let mut shared_editable = editable(meta);
+        let shared = others.iter().all(|&other| {
+            let Some(theirs) = shown_prop(dm, other, meta.name).filter(|theirs| theirs.ty == meta.ty) else {
+                return false;
+            };
+            shared_editable &= editable(theirs);
+            dm.get_by_name(other, meta.name).map(|value| all.push(value)).is_ok()
+        });
+        if !shared {
+            continue;
+        }
         let name = if meta.group.is_empty() {
             DEFAULT_GROUP
         } else {
@@ -115,10 +147,11 @@ pub fn groups(dm: &DataModel, id: Id) -> Vec<Group> {
                 label: format!("{label}{suffix}"),
                 description: meta.description,
                 value: value.clone(),
+                mixed: Mixed::of(&all, part),
                 prop: PropId::new(index as u16),
                 meta,
                 part,
-                editable: editable(meta),
+                editable: shared_editable,
             };
             match groups.iter_mut().find(|(group, _)| *group == name) {
                 Some((_, rows)) => rows.push((meta.order, index, row)),
@@ -150,12 +183,12 @@ fn editable(meta: &PropMeta) -> bool {
         && !matches!(meta.ty, PropType::Ref(_))
 }
 
-/// The value a row shows: a `CFrame`'s position or orientation as a `Vector3`, anything else as it is.
-fn shown_value(row: &PropertyRow) -> Value {
-    match (&row.value, row.part) {
-        (Value::CFrame(frame), Part::Position) => Value::Vector3(frame.position()),
-        (Value::CFrame(frame), Part::Orientation) => Value::Vector3(frame.to_orientation_deg()),
-        (value, _) => value.clone(),
+/// What the header calls several selected instances: "3 Parts" when they share a class, else "4 objects".
+pub fn count_title(dm: &DataModel, ids: &[Id]) -> String {
+    let classes: Vec<&str> = ids.iter().filter_map(|&id| dm.class_name(id).ok()).collect();
+    match classes.split_first() {
+        Some((first, rest)) if rest.iter().all(|class| class == first) => format!("{} {first}s", ids.len()),
+        _ => format!("{} objects", ids.len()),
     }
 }
 
@@ -239,8 +272,15 @@ impl Panel for Properties {
             ui.ctx().request_repaint();
         }
         let dm: &DataModel = scene.dm;
-        // The active instance (#347); several at once is #350.
-        let Some(id) = scene.selection.active().filter(|&id| dm.contains(id)) else {
+        // Every selected instance, the active one last (#350).
+        let ids: Vec<Id> = scene
+            .selection
+            .ids()
+            .iter()
+            .copied()
+            .filter(|&id| dm.contains(id))
+            .collect();
+        let Some(&id) = ids.last() else {
             empty_note(ui, "Select something in the Explorer to see its properties.");
             return;
         };
@@ -250,26 +290,32 @@ impl Panel for Properties {
                 .class_of(id)
                 .map_or(Icon::ExplorerInstance, |class| class_icon(dm.registry(), class));
             icons::show(ui, icon, text::BODY_LG, icon.color(&current_colors(ui.ctx())));
+            let title = match ids.len() {
+                1 => dm.name(id).unwrap_or_default().to_owned(),
+                _ => count_title(dm, &ids),
+            };
             ui.label(
-                RichText::new(dm.name(id).unwrap_or_default())
+                RichText::new(title)
                     .font(fonts::named(fonts::HEADING, text::BODY_LG))
                     .color(p.text),
             );
-            ui.label(
-                RichText::new(dm.class_name(id).unwrap_or_default())
-                    .size(text::SMALL)
-                    .color(p.subtle),
-            );
+            if ids.len() == 1 {
+                ui.label(
+                    RichText::new(dm.class_name(id).unwrap_or_default())
+                        .size(text::SMALL)
+                        .color(p.subtle),
+                );
+            }
         });
         ui.add_space(space::S4);
-        let mut edits: Vec<(PropId, Value)> = Vec::new();
+        let mut edits: Vec<(&'static str, Part, Edit)> = Vec::new();
         ScrollArea::vertical()
             .id_salt("properties.rows")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let share = name_share(ui.ctx());
                 let top = ui.cursor().top();
-                for group in groups(dm, id) {
+                for group in groups(dm, &ids) {
                     section_label(ui, group.name);
                     // The rows touch, so the stripes and the lines between them are continuous.
                     ui.scope(|ui| {
@@ -280,8 +326,8 @@ impl Panel for Properties {
                             let edited = ui
                                 .push_id(&row.label, |ui| row_ui(ui, dm, row, shades.fill(index), last, share))
                                 .inner;
-                            if let Some(value) = edited {
-                                edits.push((row.prop, value));
+                            if let Some(edit) = edited {
+                                edits.push((row.meta.name, row.part, edit));
                             }
                         }
                     });
@@ -290,10 +336,19 @@ impl Panel for Properties {
                 let rows = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
                 split_grip(ui, rows, share);
             });
-        // Through the scene, so each is an undo step (#348); a value the property refuses is logged.
-        for (prop, value) in edits {
-            if let Err(error) = scene.set(id, prop, value) {
-                log::warn!("properties: {error}");
+        // To each selected instance's own value, through the scene, so the frame's edits are one undo step (#348); a
+        // value a property refuses is logged.
+        for (name, part, edit) in edits {
+            for &target in &ids {
+                let Ok(current) = scene.dm.get_by_name(target, name) else {
+                    continue;
+                };
+                let Some(value) = values::apply(&edit, part, &current) else {
+                    continue;
+                };
+                if let Err(error) = scene.set_by_name(target, name, value) {
+                    log::warn!("properties: {error}");
+                }
             }
         }
     }
@@ -302,8 +357,8 @@ impl Panel for Properties {
 /// One property, a row of a fixed height striped with `fill`: its name on the left, cut short with an ellipsis (and
 /// shown whole on hover) when it does not fit, and its editor (or, when it cannot be edited, its value) on the right.
 /// A faint line sits above the row and between its columns, and under it when it is the group's `last`. The names
-/// take `share` of its width. Returns the new value when the user changed it.
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool, share: f32) -> Option<Value> {
+/// take `share` of its width. Returns what the user changed.
+fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool, share: f32) -> Option<Edit> {
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
     let width = ui.available_width();
@@ -349,9 +404,12 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
     ui.scope_builder(in_cell(value_cell), |ui| {
         ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
         if row.editable {
-            values::edit(ui, dm, row.meta, &row.label, row.part, &row.value)
+            values::edit(ui, dm, row.meta, &row.label, row.part, &row.value, row.mixed)
+        } else if row.mixed.whole {
+            ui.label(RichText::new("Mixed").size(text::BODY).color(p.subtle));
+            None
         } else {
-            value_ui(ui, dm, &shown_value(row));
+            value_ui(ui, dm, &values::shown(&row.value, row.part));
             None
         }
     })
@@ -459,7 +517,7 @@ mod tests {
         let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
         let baseplate = dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap();
 
-        let groups = groups(&dm, baseplate);
+        let groups = groups(&dm, &[baseplate]);
         let names: Vec<&str> = groups.iter().map(|group| group.name).collect();
         assert!(names.contains(&"Data") && names.contains(&"Transform"), "{names:?}");
         let mut seen = std::collections::HashSet::new();
@@ -482,8 +540,29 @@ mod tests {
         assert_eq!(value("Color"), "99, 95, 98");
         assert_eq!(value("Parent"), "Workspace");
 
+        // With another part: only what both have, marked where they disagree; with a folder, only what every
+        // instance has.
+        let spawn = dm.find_first_child(workspace, "SpawnLocation", false).unwrap().unwrap();
+        let both = super::groups(&dm, &[spawn, baseplate]);
+        let row = |groups: &[Group], label: &str| {
+            groups
+                .iter()
+                .flat_map(|group| &group.rows)
+                .find(|row| row.label == label)
+                .cloned()
+        };
+        assert!(row(&both, "Size").unwrap().mixed.whole);
+        assert!(!row(&both, "Anchored").unwrap().mixed.whole);
+        assert_eq!(count_title(&dm, &[spawn, baseplate]), "2 Parts");
+        let folder = dm.registry().class_id("Folder").unwrap();
+        let folder = dm.create(folder).unwrap();
+        let mixed = super::groups(&dm, &[folder, baseplate]);
+        assert!(row(&mixed, "Name").is_some_and(|row| row.mixed.whole));
+        assert!(row(&mixed, "Size").is_none(), "a folder has no size");
+        assert_eq!(count_title(&dm, &[folder, baseplate]), "2 objects");
+
         // The workspace's camera is a reference, shown by name.
-        let workspace_groups = super::groups(&dm, workspace);
+        let workspace_groups = super::groups(&dm, &[workspace]);
         let camera = workspace_groups
             .iter()
             .flat_map(|group| &group.rows)
