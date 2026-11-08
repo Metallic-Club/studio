@@ -8,6 +8,7 @@ pub mod explorer;
 pub mod game;
 pub mod output;
 pub mod properties;
+pub mod values;
 pub mod viewport;
 
 use egui::{Align, Label, Layout, RichText, TextEdit, Ui, vec2};
