@@ -60,33 +60,45 @@ pub(crate) enum MenuAction {
     Stop,
     /// Edit, Select all: every instance the Explorer shows (#347).
     SelectAll,
+    /// Edit, Undo (#348).
+    Undo,
+    /// Edit, Redo (#348).
+    Redo,
 }
 
-/// Where a game session is, for what the menus and the play buttons allow.
+/// Where a game session is and what the history holds, for what the menus, the play buttons and the tools allow.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PlayState {
+pub(crate) struct MenuState {
     /// A session runs (paused or not).
     pub playing: bool,
     /// The session's game is paused.
     pub paused: bool,
+    /// There is a step to undo (#348).
+    pub can_undo: bool,
+    /// There is a step to redo.
+    pub can_redo: bool,
 }
 
-impl PlayState {
+impl MenuState {
     /// The state of `editor`'s session.
     pub(crate) fn of(editor: &EditorState) -> Self {
         Self {
             playing: editor.is_playing(),
             paused: editor.is_paused(),
+            can_undo: editor.history().can_undo(),
+            can_redo: editor.history().can_redo(),
         }
     }
 
     /// Whether `action` can run now: Play without a session; Pause and Stop with one; Step while paused; Save only
-    /// without one (ADR 0010 §3). Everything else always.
+    /// without one (ADR 0010 §3); Undo and Redo with a step to undo or redo. Everything else always.
     pub(crate) fn allows(self, action: MenuAction) -> bool {
         match action {
             MenuAction::Play | MenuAction::Save => !self.playing,
             MenuAction::Pause | MenuAction::Stop => self.playing,
             MenuAction::Step => self.paused,
+            MenuAction::Undo => self.can_undo,
+            MenuAction::Redo => self.can_redo,
             _ => true,
         }
     }
@@ -145,8 +157,8 @@ pub(crate) static MENUS: &[Menu] = &[
     Menu {
         title: "Edit",
         entries: &[
-            Entry::Planned("Undo"),
-            Entry::Planned("Redo"),
+            item("Undo", MenuAction::Undo, Some(ids::EDIT_UNDO)),
+            item("Redo", MenuAction::Redo, Some(ids::EDIT_REDO)),
             Entry::Separator,
             Entry::Planned("Cut"),
             Entry::Planned("Copy"),
@@ -281,7 +293,7 @@ pub(crate) fn top_bar(
         Stroke::new(size::BORDER, p.border),
     );
     let mut action = None;
-    let play = PlayState::of(editor);
+    let play = MenuState::of(editor);
     let inner = rect.shrink2(vec2(space::S5, 0.0));
     ui.scope_builder(
         UiBuilder::new()
@@ -435,7 +447,7 @@ fn menu_entries(
     menu: &Menu,
     dock: &Dock,
     keymap: &Keymap,
-    play: PlayState,
+    play: MenuState,
     width: f32,
 ) -> Option<MenuAction> {
     let mut chosen = None;

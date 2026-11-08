@@ -81,6 +81,8 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `toolbar.settings` | The gear that opens Settings. | Studio | [`toolbar/settings.svg`](https://lucide.dev/icons/settings) | `toolbar.settings.svg`, `toolbar.settings.png` |
 | `toolbar.save` | The toolbar's Save tool. | Studio | [`toolbar/save.svg`](https://lucide.dev/icons/save) | `toolbar.save.svg`, `toolbar.save.png` |
 | `toolbar.close` | The toolbar's Close project tool. | Studio | [`toolbar/folder-x.svg`](https://lucide.dev/icons/folder-x) | `toolbar.close.svg`, `toolbar.close.png` |
+| `toolbar.undo` | The toolbar's Undo tool. | Studio | [`toolbar/undo-2.svg`](https://lucide.dev/icons/undo-2) | `toolbar.undo.svg`, `toolbar.undo.png` |
+| `toolbar.redo` | The toolbar's Redo tool. | Studio | [`toolbar/redo-2.svg`](https://lucide.dev/icons/redo-2) | `toolbar.redo.svg`, `toolbar.redo.png` |
 | `toolbar.reset_layout` | The toolbar's Reset layout tool. | Panels: scene | [`toolbar/rotate-ccw.svg`](https://lucide.dev/icons/rotate-ccw) | `toolbar.reset_layout.svg`, `toolbar.reset_layout.png` |
 | `toolbar.plugin` | A plugin's tool that brings no icon of its own. | Studio | [`toolbar/puzzle.svg`](https://lucide.dev/icons/puzzle) | `toolbar.plugin.svg`, `toolbar.plugin.png` |
 | `toolbar.spacer` | A spacer, in the toolbar's Add window. | Interface | [`toolbar/space.svg`](https://lucide.dev/icons/space) | `toolbar.spacer.svg`, `toolbar.spacer.png` |

@@ -4,6 +4,8 @@
 //! dock's panels read and change through [`crate::dock::PanelContext`]. The layout itself is the dock's, not the
 //! editor's, so it outlives the project.
 
+pub mod edit;
+pub mod history;
 pub mod open;
 pub mod play;
 pub mod selection;
@@ -19,6 +21,7 @@ use crate::logging::LogBuffer;
 use crate::panels::explorer::ExplorerState;
 use crate::panels::output::OutputState;
 use crate::viewport::ViewportState;
+pub use history::History;
 pub use open::{AssetRow, Opened, Opening, STEPS};
 pub use play::{GameView, PlaySession, Scene};
 pub use selection::Selection;
@@ -37,6 +40,8 @@ pub struct EditorState {
     pub mesh_assets: Option<MeshAssets>,
     /// What is selected (#347).
     pub selection: Selection,
+    /// The editor's undo history (#348); a running game has its own.
+    pub history: History,
     /// The Explorer's expanded instances and search.
     pub explorer: ExplorerState,
     /// The Output panel's lines, filter and search.
@@ -75,6 +80,7 @@ impl EditorState {
             assets,
             mesh_assets: Some(mesh_assets),
             selection: Selection::new(),
+            history: History::new(Selection::new()),
             explorer,
             output: OutputState::new(log),
             viewport,
@@ -90,6 +96,16 @@ impl EditorState {
     /// The project's name.
     pub fn name(&self) -> &str {
         &self.project.manifest().name
+    }
+
+    /// The history the Edit menu undoes: the running game's while one runs (live editing), else the editor's.
+    pub fn history(&self) -> &History {
+        self.play.as_ref().map_or(&self.history, |session| &session.history)
+    }
+
+    /// Whether the project has changes not saved: in its files, or to its scene since it was saved or opened (#348).
+    pub fn is_modified(&self) -> bool {
+        self.project.is_modified() || !self.history.is_saved()
     }
 
     /// Selects `id` alone (or nothing), and shows it in the Explorer.
@@ -111,6 +127,7 @@ impl EditorState {
             .write(&scene, saved.text.into_bytes())
             .map_err(|error| error.to_string())?;
         self.project.save().map_err(|error| error.to_string())?;
+        self.history.mark_saved();
         log::info!("projects: saved {}", self.project.path().display());
         Ok(())
     }

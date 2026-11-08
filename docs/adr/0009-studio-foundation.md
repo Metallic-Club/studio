@@ -270,6 +270,16 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   selects from the anchor (the last row clicked without Shift), Ctrl+Shift adds that range; Edit, Select all
   (Primary+A) takes every row shown. A closed row holding something selected has a dot. The editor and a running game
   each have their own; what leaves the game drops out of it before each frame's panels.
+- **Undo and redo (#348)** are Forge's command history, kept by Studio and not by the data model: in the editor only
+  Studio changes the scene (no script runs there), so every change goes through the scene's edits (`Scene::set`,
+  `Scene::move_to`), which note it with what it was before. The app ends the action under way once a frame, except
+  while a mouse button is held, so a drag is one step; edits of the same properties under 0.6 s apart join one step,
+  and a step holds the selection before and after when it changed (a click that only selects is a step, as in
+  Forge). A delete only takes the instance out of the tree (the renderer draws Workspace's descendants only), so undo
+  brings back the same instance where it was among its siblings (#346); instances out of the tree are destroyed once
+  no step can bring them back. 1000 steps are kept. The title's `*` follows the history's revision against the one
+  saved. A running game has its own history, dropped at Stop. Edit, Undo (Primary+Z) and Redo (Primary+Y,
+  Primary+Shift+Z), and Undo and Redo tools for the toolbar.
 
 ## Not in this slice
 

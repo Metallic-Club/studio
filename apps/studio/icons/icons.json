@@ -304,6 +304,11 @@
       "color": "studio",
       "for": "A plugin's tool that brings no icon of its own."
     },
+    "toolbar.redo": {
+      "file": "toolbar/redo-2.svg",
+      "color": "studio",
+      "for": "The toolbar's Redo tool."
+    },
     "toolbar.reset_layout": {
       "file": "toolbar/rotate-ccw.svg",
       "color": "scene",
@@ -336,6 +341,11 @@
       "file": "toolbar/square.svg",
       "color": "run",
       "for": "Stop."
+    },
+    "toolbar.undo": {
+      "file": "toolbar/undo-2.svg",
+      "color": "studio",
+      "for": "The toolbar's Undo tool."
     },
     "ui.add": {
       "file": "interface/plus.svg",

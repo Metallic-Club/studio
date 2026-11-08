@@ -190,6 +190,10 @@ pub mod ids {
     pub const SPEED: &str = "viewport.speed";
     /// Select every instance the Explorer shows (#347).
     pub const EDIT_SELECT_ALL: &str = "edit.select_all";
+    /// Undo the last step (#348).
+    pub const EDIT_UNDO: &str = "edit.undo";
+    /// Redo the last step undone.
+    pub const EDIT_REDO: &str = "edit.redo";
 }
 
 /// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
@@ -300,6 +304,23 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Stop",
             "Test",
             "Ends the game and puts the scene back as it was before Play.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+Z"],
+        repeat: Repeat::Allow,
+        ..Command::new(ids::EDIT_UNDO, "Undo", "Edit", "Takes back the last change.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+Y", "Primary+Shift+Z"],
+        repeat: Repeat::Allow,
+        ..Command::new(
+            ids::EDIT_REDO,
+            "Redo",
+            "Edit",
+            "Makes the last change you took back again.",
         )
     },
     Command {

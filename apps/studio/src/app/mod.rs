@@ -83,12 +83,14 @@ pub const APP_TITLE: &str = "Metallic Studio";
 
 /// Whether a toolbar tool can be used now (#232): the game's controls as the menus allow them; a plugin's tool only
 /// once the plugin API exists.
-fn tool_enabled(action: &ToolAction, play: editor::PlayState) -> bool {
+fn tool_enabled(action: &ToolAction, play: editor::MenuState) -> bool {
     match action {
         ToolAction::Studio(StudioCommand::Play) => play.allows(MenuAction::Play),
         ToolAction::Studio(StudioCommand::Pause) => play.allows(MenuAction::Pause),
         ToolAction::Studio(StudioCommand::Step) => play.allows(MenuAction::Step),
         ToolAction::Studio(StudioCommand::Stop) => play.allows(MenuAction::Stop),
+        ToolAction::Studio(StudioCommand::Undo) => play.allows(MenuAction::Undo),
+        ToolAction::Studio(StudioCommand::Redo) => play.allows(MenuAction::Redo),
         ToolAction::Studio(_) => true,
         ToolAction::Plugin { .. } => false,
     }
@@ -500,7 +502,7 @@ impl Studio {
             pos2(full.left(), bar.bottom()),
             vec2(full.width(), toolbar::TOOLBAR_HEIGHT),
         );
-        let play = editor::PlayState::of(editor);
+        let play = editor::MenuState::of(editor);
         let dock = &self.dock;
         let ran = ui
             .scope_builder(UiBuilder::new().max_rect(strip), |ui| {
@@ -527,6 +529,11 @@ impl Studio {
         for event in ran {
             let toolbar::ToolbarEvent::Run(action) = event;
             self.run_tool(action);
+        }
+        // What the frame changed is one undo step, unless a button is held: a drag goes on (#348).
+        if let Some(editor) = self.editor_mut() {
+            let holding = ctx.input(|input| input.pointer.any_down());
+            editor.scene().commit(Instant::now(), holding);
         }
         self.show_toolbar_layout();
         // After the menus' action, so it opens in the frame it was chosen in, as the Settings window does.
@@ -605,6 +612,16 @@ impl Studio {
                 }
             }
             MenuAction::Stop => self.stop(),
+            MenuAction::Undo => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.scene().undo(Instant::now());
+                }
+            }
+            MenuAction::Redo => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.scene().redo(Instant::now());
+                }
+            }
             MenuAction::SelectAll => {
                 if let Some(editor) = self.editor_mut() {
                     let scene = editor.scene();
@@ -625,6 +642,8 @@ impl Studio {
                 StudioCommand::Pause => MenuAction::Pause,
                 StudioCommand::Step => MenuAction::Step,
                 StudioCommand::Stop => MenuAction::Stop,
+                StudioCommand::Undo => MenuAction::Undo,
+                StudioCommand::Redo => MenuAction::Redo,
                 StudioCommand::ResetLayout => MenuAction::ResetLayout,
                 StudioCommand::Settings => MenuAction::Settings,
                 StudioCommand::TogglePanel(id) => MenuAction::Toggle(id),
@@ -699,7 +718,7 @@ impl Studio {
         }
         match (self.editor(), self.open_project.as_deref()) {
             (Some(editor), _) => {
-                let unsaved = if editor.project.is_modified() { "*" } else { "" };
+                let unsaved = if editor.is_modified() { "*" } else { "" };
                 format!("{}{unsaved} - {APP_TITLE}", editor.name())
             }
             // Opening: the name the projects list knows it by.
@@ -980,6 +999,8 @@ impl Studio {
                 ids::TEST_STEP if editing => self.menu_action(MenuAction::Step),
                 ids::TEST_STOP if editing => self.menu_action(MenuAction::Stop),
                 ids::EDIT_SELECT_ALL if editing => self.menu_action(MenuAction::SelectAll),
+                ids::EDIT_UNDO if editing => self.menu_action(MenuAction::Undo),
+                ids::EDIT_REDO if editing => self.menu_action(MenuAction::Redo),
                 id @ (ids::PROJECTS_OPEN | ids::PROJECTS_NEW | ids::PROJECTS_ADD) if context == Context::Projects => {
                     if let Some(path) = self.projects.run(id) {
                         self.open(path);
@@ -2488,6 +2509,85 @@ mod tests {
         harness.get_by_role_and_label(Role::TreeItem, "Workspace");
     }
 
+    /// The editor's Baseplate.
+    fn editor_baseplate(harness: &Harness<'_, Test>) -> metallic_engine::metallic_core::Id {
+        let dm = &harness.state().studio.editor().unwrap().dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap()
+    }
+
+    #[test]
+    fn edits_undo_and_redo_from_the_keys_and_the_edit_menu_and_mark_the_title() {
+        let mut harness = editing(settings_file("editor-undo", None), "Undo Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let baseplate = editor_baseplate(&harness);
+        let transparency = |harness: &Harness<'_, Test>| {
+            harness
+                .state()
+                .studio
+                .editor()
+                .unwrap()
+                .dm
+                .get_by_name(baseplate, "Transparency")
+        };
+        // A new project counts as unsaved until its first save (#228): save, so the mark is the history's.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::S);
+        settle(&mut harness);
+        assert!(!harness.state().studio.window_title().contains('*'));
+        click_label(&mut harness, "Edit");
+        assert!(!menu_item_enabled(&harness, "Undo") && !menu_item_enabled(&harness, "Redo"));
+        harness.key_press(Key::Escape);
+        // An edit through the scene is a step at the end of the frame, and marks the title.
+        harness
+            .state_mut()
+            .studio
+            .editor_mut()
+            .unwrap()
+            .scene()
+            .set_by_name(baseplate, "Transparency", Value::Number(0.5))
+            .unwrap();
+        settle(&mut harness);
+        assert!(harness.state().studio.window_title().starts_with("Undo Game*"));
+        click_label(&mut harness, "Edit");
+        assert!(menu_item_enabled(&harness, "Undo") && !menu_item_enabled(&harness, "Redo"));
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+
+        // Primary+Z takes it back, and the title is clean again; Primary+Y and Primary+Shift+Z redo it.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(transparency(&harness), Ok(Value::Number(0.0)));
+        assert!(!harness.state().studio.window_title().contains('*'));
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+        settle(&mut harness);
+        assert_eq!(transparency(&harness), Ok(Value::Number(0.5)));
+        click_label(&mut harness, "Edit");
+        harness.get_by_role_and_label(Role::MenuItem, "Undo").click();
+        settle(&mut harness);
+        assert_eq!(transparency(&harness), Ok(Value::Number(0.0)));
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        settle(&mut harness);
+        assert_eq!(transparency(&harness), Ok(Value::Number(0.5)));
+
+        // Saving clears the mark; undoing past the save marks it again.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::S);
+        settle(&mut harness);
+        assert!(!harness.state().studio.window_title().contains('*'));
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert!(harness.state().studio.window_title().contains('*'));
+
+        // A click that selects is a step: undo puts back what was selected before.
+        harness.get_by_role_and_label(Role::TreeItem, "Lighting").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
+        settle(&mut harness);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(selected_names(&harness), ["Lighting"]);
+    }
+
     #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
@@ -2600,7 +2700,7 @@ mod tests {
                 match *entry {
                     editor::Entry::Item { label, action, .. } => {
                         // Without a game, Pause, Step and Stop are off (#246).
-                        let expected = editor::PlayState::default().allows(action);
+                        let expected = editor::MenuState::default().allows(action);
                         assert_eq!(menu_item_enabled(&harness, label), expected, "{}: {label}", menu.title);
                     }
                     editor::Entry::Planned(label) => {
@@ -2634,7 +2734,7 @@ mod tests {
 
         // A planned item does nothing when clicked.
         click_label(&mut harness, "Edit");
-        harness.get_by_role_and_label(Role::MenuItem, "Undo").click();
+        harness.get_by_role_and_label(Role::MenuItem, "Cut").click();
         settle(&mut harness);
         assert_eq!(harness.state().studio.screen(), Screen::Editor);
 
