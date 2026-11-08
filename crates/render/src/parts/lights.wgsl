@@ -26,9 +26,9 @@ struct LocalLight {
     position: vec4<f32>,
     // rgb: intensity (colour × Brightness × LIGHT_INTENSITY × fade).
     color: vec4<f32>,
-    // xyz: where a spot points; w: the cosine of its half-angle, −2 for a point light.
+    // xyz: where a spot points; w: one minus the cosine of its half-angle, −2 for a point light.
     direction: vec4<f32>,
-    // x, y: the cone's falloff scale and offset; z: the first shadow tile (−1: none); w: how much shadow.
+    // x: the cone's falloff scale; z: the first shadow tile (−1: none); w: how much shadow.
     params: vec4<f32>,
 }
 
@@ -146,7 +146,11 @@ fn local_lighting(
         let window = clamp(1.0 - ratio * ratio, 0.0, 1.0);
         var attenuation = window * window / max(d2, MIN_DISTANCE_SQUARED);
         if light.direction.w > -1.5 {
-            let cone = clamp(dot(-l, light.direction.xyz) * light.params.x + light.params.y, 0.0, 1.0);
+            // 1 − cos of the angle from the cone's axis, from the distance between the two unit vectors: precise
+            // however narrow the cone (#404), where comparing cosines a hair below 1 flickered.
+            let apart = -l - light.direction.xyz;
+            let off_axis = 0.5 * dot(apart, apart);
+            let cone = clamp((light.direction.w - off_axis) * light.params.x, 0.0, 1.0);
             attenuation *= cone * cone;
         }
         if attenuation <= 0.0 {
