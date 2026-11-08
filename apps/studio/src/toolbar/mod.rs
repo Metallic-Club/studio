@@ -455,13 +455,47 @@ impl Toolbar {
             }
         });
         if elements.is_empty() {
-            ui.painter().text(
-                pos2(rect.left() + space::S5, rect.center().y),
-                Align2::LEFT_CENTER,
-                "Right-click to add tools.",
-                FontId::proportional(text::SMALL),
-                p.subtle,
+            // An empty tab offers its first tool (#328): a button shaped as a tool's, opening the Add window.
+            let label = "Add tool";
+            let galley = ui
+                .painter()
+                .layout_no_wrap(label.to_owned(), FontId::proportional(text::SMALL), p.text);
+            let at = Rect::from_min_size(
+                pos2(rect.left() + space::S3, rect.top() + space::S1),
+                vec2(
+                    (galley.size().x + 2.0 * space::S3).max(TOOL_WIDTH),
+                    rect.height() - 2.0 * space::S1,
+                ),
             );
+            let response = ui.interact(at, ui.scope_id().with("metallic.toolbar.add_tool"), Sense::click());
+            response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+            if ui.is_rect_visible(at) {
+                if response.hovered() {
+                    ui.painter().rect_filled(at, CornerRadius::same(4), p.surface);
+                }
+                let ink = if response.hovered() { p.text } else { p.muted };
+                icons::paint_at(
+                    ui.painter(),
+                    pos2(at.center().x, at.top() + space::S2),
+                    Align2::CENTER_TOP,
+                    Icon::UiAdd,
+                    TOOL_ICON,
+                    ink,
+                );
+                ui.painter().text(
+                    pos2(at.center().x, at.bottom() - space::S2),
+                    Align2::CENTER_BOTTOM,
+                    label,
+                    FontId::proportional(text::SMALL),
+                    ink,
+                );
+            }
+            if response
+                .on_hover_text("Choose tools for this tab. Right-click the toolbar to add more later.")
+                .clicked()
+            {
+                changes.push(Change::OpenAdd(0));
+            }
         }
         let mut x = rect.left() + space::S3;
         let mut rects = Vec::new();
