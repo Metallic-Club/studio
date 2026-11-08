@@ -254,7 +254,7 @@ pub fn settings_step(path: Option<PathBuf>) -> Step {
 }
 
 /// Where Studio's settings file is, if the user has a config folder.
-fn studio_settings_path() -> Option<PathBuf> {
+pub(super) fn studio_settings_path() -> Option<PathBuf> {
     match AppId::parse(STUDIO_APP_ID).and_then(|app| settings_path(&app)) {
         Ok(path) => Some(path),
         Err(error) => {

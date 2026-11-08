@@ -87,6 +87,17 @@ impl SettingsStore {
         store
     }
 
+    /// The settings saved at `path`, read without changing anything: the defaults when there is no file or it cannot
+    /// be read. For what shows before startup reads them properly, such as the splash's accent (#319).
+    pub fn peek(path: &Path) -> StudioSettings {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.parse::<Table>().ok())
+            .map_or_else(StudioSettings::default, |document| {
+                StudioSettings::from_document(&document)
+            })
+    }
+
     /// Moves a damaged file aside, so writing the settings never overwrites it.
     fn set_aside(&mut self, path: &Path, reason: &str) {
         let Some(backup) = backup_path(path) else {
@@ -332,5 +343,31 @@ mod tests {
             assert_eq!(path.file_name().unwrap(), SETTINGS_FILE);
             assert!(path.to_string_lossy().to_lowercase().contains("studio"));
         }
+    }
+
+    #[test]
+    fn peeking_reads_the_file_without_touching_it() {
+        let dir = std::env::temp_dir().join(format!("metallic-peek-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(SETTINGS_FILE);
+        assert_eq!(
+            SettingsStore::peek(&path),
+            StudioSettings::default(),
+            "no file: the defaults"
+        );
+        std::fs::write(
+            &path,
+            "[appearance]
+accent = \"rose\"
+",
+        )
+        .unwrap();
+        assert_eq!(SettingsStore::peek(&path).appearance.accent, Accent::Rose);
+        // A damaged file gives the defaults and stays where it is, for startup to deal with.
+        std::fs::write(&path, "not = [toml").unwrap();
+        assert_eq!(SettingsStore::peek(&path), StudioSettings::default());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not = [toml");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
