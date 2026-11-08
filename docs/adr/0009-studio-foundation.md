@@ -416,6 +416,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Resizing the toolbar (#414)**: the line under the toolbar drags, as the lines between panels do, from 30 to 96
   points (54 to start), kept as `tool_row` in `toolbar.json`. Icons grow a little with the row; under 44 points the
   tools show icons alone, and under 40 the two increments sit side by side.
+- **Colours (#415, #416)**: a colour row's swatch is a small square inside the row's lines at the right of the name
+  column, the value's text where every other value's is. It opens Studio's own colour picker
+  (`panels::color_picker`): a square of the colour's saturation and value (white at the top left, the hue at the top
+  right, black along the bottom), a vertical hue slider beside it, and a hex field that a button switches to R, G and B
+  fields; all in sRGB, the hue kept for greys while it is open.
 
 ## Not in this slice
 

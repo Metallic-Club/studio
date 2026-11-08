@@ -4,6 +4,7 @@
 //! of [`crate::editor::EditorState`].
 
 pub mod assets;
+pub mod color_picker;
 pub mod explorer;
 pub mod game;
 pub mod insert;

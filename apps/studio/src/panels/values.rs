@@ -10,8 +10,8 @@
 //!   the focus (Escape leaves the value as it was). A vector is its numbers one after another (`-20, 40, 33`), a
 //!   colour its 0-255 channels;
 //! - `CFrame`: two rows, its position and its orientation in degrees ([`Part`]);
-//! - `Color3`: its channels as text; a small square swatch at the right of the name column ([`swatch`], #415) opens a
-//!   colour picker;
+//! - `Color3`: its channels as text; a small square swatch at the right of the name column ([`swatch`], #415) opens
+//!   Studio's colour picker ([`super::color_picker`], #416);
 //! - enums: a drop-down of the enum's items.
 //!
 //! With several instances selected (#350) a value they disagree on is **mixed** ([`Mixed`]): a component shows a
@@ -465,15 +465,20 @@ pub fn swatch(ui: &mut Ui, rect: egui::Rect, color: Color3, label: &str, editabl
         return None;
     }
     let mut picked = None;
+    let id = ui.make_persistent_id(("metallic.properties.picker", label));
     egui::Popup::menu(&response)
-        .id(ui.make_persistent_id(("metallic.properties.picker", label)))
+        .id(id)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            let mut chosen = swatch_fill(color);
-            if egui::color_picker::color_picker_color32(ui, &mut chosen, egui::color_picker::Alpha::Opaque) {
+            let [r, g, b, _] = swatch_fill(color).to_array();
+            let mut rgb = [r, g, b];
+            if super::color_picker::picker(ui, id.with("picker"), &mut rgb) {
                 let unit = |c: u8| f32::from(c) / 255.0;
-                let [r, g, b, _] = chosen.to_array();
-                picked = Some(Edit::Whole(Value::Color3(Color3::new(unit(r), unit(g), unit(b)))));
+                picked = Some(Edit::Whole(Value::Color3(Color3::new(
+                    unit(rgb[0]),
+                    unit(rgb[1]),
+                    unit(rgb[2]),
+                ))));
             }
         });
     picked
