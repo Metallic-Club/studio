@@ -19,9 +19,10 @@
 //! A level is chosen by the part's **projected size**, the same measure screen-size culling uses ([`crate::cull`]):
 //! the projected diameter in pixels of its bounding sphere. A level with `n` segments around a circle of radius `R`
 //! pixels strays at most `R (1 − cos(π / n))` pixels from it (the sagitta of one segment), so each level is used while
-//! that error stays under [`PIXEL_ERROR`] pixels, divided by the [`LodSettings::bias`]. The bounding sphere of a Ball
-//! is √3 times its radius and that of a Cylinder at least √2 times (its box's diagonal), so the thresholds hold for
-//! the roundest case of each.
+//! that error stays under [`PIXEL_ERROR`] pixels, divided by the [`LodSettings::bias`]. The bounding sphere of a round
+//! Ball is √3 times its radius and that of a Cylinder at least √2 times (its box's diagonal), so the thresholds hold
+//! for the roundest case of each. A Ball or Cylinder stretched along one side (#384) is rounder across its long
+//! side than that, so its outline there may stray a little more before it goes finer.
 //!
 //! **Hysteresis**: a part goes to a coarser level only once its size is [`HYSTERESIS`] (10%) below the threshold,
 //! and back only once it is 10% above it, so a part hovering at a threshold, or a camera stepping back and forth,

@@ -123,8 +123,12 @@ fn created_changed_and_destroyed_parts_reach_the_buffer() {
     assert_eq!(
         on_gpu[2],
         GpuInstance {
-            // A ball's diameter is the smallest side of the default 4 × 1 × 2.
-            rows: affine_rows(CFrame::new(Vec3::new(1.0, 2.0, 3.0)), Vec3::ONE, Vec3::ZERO),
+            // A ball stretches to the default 4 × 1 × 2 (#384).
+            rows: affine_rows(
+                CFrame::new(Vec3::new(1.0, 2.0, 3.0)),
+                Vec3::new(4.0, 1.0, 2.0),
+                Vec3::ZERO
+            ),
             color: u32::from_le_bytes([255, 128, 0, 0]),
             transparency: 1.0,
             mesh_material: (u32::from(MeshKind::BALL.0) << 16) | 5,

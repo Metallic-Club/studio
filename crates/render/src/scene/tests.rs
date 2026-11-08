@@ -87,8 +87,8 @@ fn a_part_is_packed_from_its_properties() {
     assert_eq!(stats.added, 1);
     let got = instance(&scene, id);
     let expected = GpuInstance {
-        // A cylinder's diameter is the smaller of Y and Z.
-        rows: affine_rows(turned, Vec3::new(2.0, 4.0, 4.0), Vec3::ZERO),
+        // A cylinder stretches to the whole size (#384).
+        rows: affine_rows(turned, Vec3::new(2.0, 4.0, 6.0), Vec3::ZERO),
         color: u32::from_le_bytes([10, 20, 30, 0]),
         transparency: 0.25,
         // Metal is the third `Material` item.
@@ -96,6 +96,26 @@ fn a_part_is_packed_from_its_properties() {
         flags: GpuInstance::LIVE | GpuInstance::TRANSLUCENT,
     };
     assert_eq!(got, expected);
+}
+
+#[test]
+fn a_ball_stretches_to_its_size() {
+    let mut game = Game::new();
+    let id = game.part();
+    let dm = &mut game.dm;
+    dm.set_by_name(id, "Size", Value::Vector3(Vec3::new(2.0, 4.0, 6.0)))
+        .unwrap();
+    dm.set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
+        .unwrap();
+    let mut scene = game.scene();
+    frame(&mut scene, &mut game.dm);
+    let got = instance(&scene, id);
+    assert_eq!(got.mesh(), MeshKind::BALL);
+    // An ellipsoid as big as the part, not a sphere of its smallest side (#384).
+    assert_eq!(
+        got.rows,
+        affine_rows(CFrame::IDENTITY, Vec3::new(2.0, 4.0, 6.0), Vec3::ZERO)
+    );
 }
 
 #[test]
@@ -762,6 +782,8 @@ fn a_moved_part_keeps_its_level() {
     game.dm
         .set_by_name(ball, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
         .unwrap();
+    // A ball one stud across (a part's default size would stretch it, #384).
+    game.dm.set_by_name(ball, "Size", Value::Vector3(Vec3::ONE)).unwrap();
     frame(&mut scene, &mut game.dm);
     let mut set = crate::cull::VisibleSet::new();
     let level_of = |scene: &mut InstanceScene, set: &mut crate::cull::VisibleSet, id: Id, (x, d): (f32, f32)| {
@@ -799,6 +821,7 @@ fn a_moved_part_keeps_its_level() {
     game.dm
         .set_by_name(other, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
         .unwrap();
+    game.dm.set_by_name(other, "Size", Value::Vector3(Vec3::ONE)).unwrap();
     game.move_to(other, -40.0);
     frame(&mut scene, &mut game.dm);
     assert_eq!(level_of(&mut scene, &mut set, other, (-40.0, back)), Some(1));

@@ -107,9 +107,9 @@ pub struct MeshKind(pub u16);
 impl MeshKind {
     /// A unit cube, stretched to the part's size.
     pub const BLOCK: Self = Self(0);
-    /// A unit sphere; its diameter is the part's smallest side.
+    /// A unit sphere, stretched to the part's size.
     pub const BALL: Self = Self(1);
-    /// A unit cylinder along X; its length is the part's X size and its diameter the smaller of Y and Z.
+    /// A unit cylinder along X, stretched to the part's size: its ends are the ellipse of its Y and Z sizes.
     pub const CYLINDER: Self = Self(2);
     /// A unit ramp that slopes down towards -Z, stretched to the part's size.
     pub const WEDGE: Self = Self(3);

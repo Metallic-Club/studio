@@ -363,6 +363,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   then Enter is `255, 255, 255`).
 - **Play clears the Output (#383)**: starting a session empties the Output panel first, so it shows that session's
   lines alone.
+- **Shapes stretch (#384)**: the renderer stretches a Ball and a Cylinder to the part's whole `Size` (an ellipsoid; a
+  cylinder with elliptic ends) instead of keeping them round at the smallest side, as Block and Wedge already were;
+  the shader turns normals by the inverse transpose, so they are lit right. `Part.Shape`'s description says so.
 
 ## Not in this slice
 
