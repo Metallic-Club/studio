@@ -1,8 +1,9 @@
 //! The Settings window (ADR 0009, Settings): a category list on the left, a search box over every setting, and each
 //! setting as a row with its name, a line saying what it does, and its control.
 //!
-//! A floating window over every screen, the editor's included (#238): moved, resized and closed like any window,
-//! and never docked. Every setting is one [`Entry`] in [`ENTRIES`], so the pages and the search read the same list,
+//! A window of its own beside Studio's, as Roblox Studio's Settings are (#331): moved, resized and closed like any
+//! window, on every screen. Where Studio cannot open one (the tests draw Studio without a windowing system), it floats
+//! over Studio's window instead (#238), and is never docked. Every setting is one [`Entry`] in [`ENTRIES`], so the pages and the search read the same list,
 //! and adding a setting is one line there plus its control.
 
 use std::ops::RangeInclusive;
@@ -378,6 +379,25 @@ pub static ENTRIES: &[Entry] = &[
     },
 ];
 
+/// The Settings window's viewport (#331).
+fn viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("metallic.settings")
+}
+
+/// The Metallic mark, as the window's icon.
+fn window_icon() -> std::sync::Arc<egui::IconData> {
+    static ICON: std::sync::OnceLock<std::sync::Arc<egui::IconData>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        let mark = crate::emblem::render(64);
+        std::sync::Arc::new(egui::IconData {
+            rgba: mark.rgba,
+            width: mark.width,
+            height: mark.height,
+        })
+    })
+    .clone()
+}
+
 /// The width of a setting's control column.
 pub(super) const CONTROL_WIDTH: f32 = 260.0;
 /// The width of a drop-down in it.
@@ -396,6 +416,8 @@ pub struct SettingsWindow {
     rect: Option<egui::Rect>,
     /// Whether the last click went into the window (and not to what is under it).
     focused: bool,
+    /// Whether it is shown in a window of its own (#331), which has its own input: Studio's then never reads it.
+    own_window: bool,
 }
 
 impl SettingsWindow {
@@ -455,14 +477,23 @@ impl SettingsWindow {
     }
 
     /// Reads the frame's input for a keybind being recorded (#266). Studio calls it every frame before anything is
-    /// drawn, in place of the keymap, so the keys reach nothing else.
+    /// drawn, in place of the keymap, so the keys reach nothing else. In a window of its own (#331) the keys arrive
+    /// there, and the window reads them itself.
     pub fn listen(&mut self, ctx: &egui::Context, keymap: &mut Keymap) {
-        self.keybinds.listen(ctx, keymap);
+        if !self.own_window {
+            self.keybinds.listen(ctx, keymap);
+        }
     }
 
-    /// Draws the window, if open, over `ctx`, changing `settings` and the `keymap` as the user does.
+    /// Draws the window, if open, changing `settings` and the `keymap` as the user does: in a window of its own where
+    /// Studio can open one (#331), else floating over `ctx`.
     pub fn show(&mut self, ctx: &egui::Context, settings: &mut StudioSettings, keymap: &mut Keymap) {
+        self.own_window = self.open && !ctx.embed_viewports();
         if !self.open {
+            return;
+        }
+        if self.own_window {
+            self.show_own_window(ctx, settings, keymap);
             return;
         }
         let mut open = true;
@@ -494,6 +525,40 @@ impl SettingsWindow {
             self.focused = self.rect.is_some_and(|rect| rect.contains(at));
         }
         if !open {
+            self.set_open(false);
+        }
+    }
+
+    /// The window of its own (#331): its title bar the system's, centred over Studio's window when it opens, and closed
+    /// by its close button. A keybind being recorded reads its keys here, before the page is drawn.
+    fn show_own_window(&mut self, ctx: &egui::Context, settings: &mut StudioSettings, keymap: &mut Keymap) {
+        // What is under the pointer in Studio's window is never this window.
+        self.rect = None;
+        self.focused = false;
+        let size = egui::vec2(780.0, 640.0);
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title("Settings")
+            .with_inner_size(size)
+            .with_min_inner_size([680.0, 360.0])
+            .with_icon(window_icon());
+        if let Some(main) = ctx.input(|input| input.viewport().outer_rect) {
+            builder = builder.with_position(main.center() - size / 2.0);
+        }
+        let mut close = false;
+        ctx.show_viewport_immediate(viewport_id(), builder, |ui, _| {
+            if self.keybinds.is_capturing() {
+                self.keybinds.listen(ui.ctx(), keymap);
+            }
+            let fill = ui.visuals().window_fill;
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, fill);
+            let inner = rect.shrink(space::S6);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                self.contents(ui, settings, keymap);
+            });
+            close = ui.input(|input| input.viewport().close_requested());
+        });
+        if close {
             self.set_open(false);
         }
     }

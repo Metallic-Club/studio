@@ -3201,6 +3201,75 @@ mod tests {
     // Settings as a floating window in the editor (#238).
 
     #[test]
+    fn settings_opens_in_a_window_of_its_own_where_one_can_open() {
+        use std::cell::RefCell;
+
+        thread_local! {
+            /// What the stand-in for the shell was asked to draw: each viewport's id and title.
+            static DRAWN: RefCell<Vec<(egui::ViewportId, Option<String>)>> = const { RefCell::new(Vec::new()) };
+            /// Whether its window's close button is pressed.
+            static CLOSING: RefCell<bool> = const { RefCell::new(false) };
+            /// The labels its contents gave screen readers.
+            static LABELS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        }
+        let path = settings_file("own-window", None);
+        let mut harness = editing(path, "Own Window Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        // The shell's part (#331), as `app::shell` does it with a real window: each immediate viewport drawn in a pass
+        // of its own, with its own input.
+        egui::Context::set_immediate_viewport_renderer(|ctx, viewport| {
+            let egui::ImmediateViewport {
+                ids,
+                builder,
+                mut viewport_ui_cb,
+            } = viewport;
+            DRAWN.with(|drawn| drawn.borrow_mut().push((ids.this, builder.title.clone())));
+            let mut input = egui::RawInput {
+                viewport_id: ids.this,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(780.0, 640.0))),
+                ..Default::default()
+            };
+            let info = input.viewports.entry(ids.this).or_default();
+            if CLOSING.with(|closing| *closing.borrow()) {
+                info.events.push(egui::ViewportEvent::Close);
+            }
+            ctx.enable_accesskit();
+            let mut output = ctx.run_ui(input, |ui| viewport_ui_cb(ui));
+            output.textures_delta.clear();
+            let labels = output
+                .platform_output
+                .accesskit_update
+                .map(|update| {
+                    update
+                        .nodes
+                        .iter()
+                        .filter_map(|(_, node)| node.label().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            LABELS.with(|seen| *seen.borrow_mut() = labels);
+        });
+        harness.ctx.set_embed_viewports(false);
+        harness.get_by_role_and_label(Role::Button, "Settings").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.is_settings_open());
+        // Drawn in a window of its own called Settings, with its pages there and not in Studio's window.
+        let drawn = DRAWN.with(|drawn| drawn.borrow().clone());
+        assert!(
+            drawn.iter().any(|(_, title)| title.as_deref() == Some("Settings")),
+            "{drawn:?}"
+        );
+        assert!(drawn.iter().all(|(viewport, _)| *viewport != egui::ViewportId::ROOT));
+        let labels = LABELS.with(|labels| labels.borrow().clone());
+        assert!(labels.iter().any(|label| label == "Appearance"), "{labels:?}");
+        assert!(harness.query_by_role_and_label(Role::Tab, "Appearance").is_none());
+        // Its window's close button closes Settings.
+        CLOSING.with(|closing| *closing.borrow_mut() = true);
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_settings_open());
+    }
+
+    #[test]
     fn in_the_editor_settings_is_a_floating_window_that_applies_and_saves() {
         let path = settings_file("editor-settings-window", None);
         let mut harness = editing(path.clone(), "Settings Game");
