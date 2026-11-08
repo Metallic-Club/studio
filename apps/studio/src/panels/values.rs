@@ -248,8 +248,16 @@ pub fn edit(
                 .and_then(|name| dm.registry().enum_item(enum_type, name))
                 .map(|item| Edit::Whole(Value::Enum(item)))
         }
+        // A `CFrame` shows whole, its position and orientation (#417): its rows' parts edit it.
+        Value::CFrame(frame) => {
+            let text = super::properties::format_value(dm, &Value::CFrame(frame));
+            let p = current_colors(ui.ctx()).palette;
+            let shown = if mixed.whole { MIXED.to_owned() } else { text };
+            ui.add(egui::Label::new(egui::RichText::new(shown).size(text::BODY).color(p.text)).truncate());
+            None
+        }
         // References are read-only (the Parent changes by dragging in the Explorer); the panel draws them.
-        Value::Ref(_) | Value::CFrame(_) => None,
+        Value::Ref(_) => None,
     }
 }
 
@@ -338,6 +346,41 @@ fn formatted(v: f64, mixed: bool) -> String {
     } else {
         super::properties::number(v)
     }
+}
+
+/// The editor of component `index` of `value` as row `part` shows it (#417: a vector's X, Y or Z, a colour's R, G or
+/// B, on a row of its own): a number field like a single number's, `mixed` a dash. Returns the component edited.
+pub fn edit_component(
+    ui: &mut Ui,
+    meta: &PropMeta,
+    label: &str,
+    part: Part,
+    value: &Value,
+    index: usize,
+    mixed: bool,
+) -> Option<Edit> {
+    let width = ui.available_width();
+    let all = components(value, part)?;
+    let colour = matches!(value, Value::Color3(_));
+    let field = Number {
+        range: if colour { Some((0.0, 255.0)) } else { meta.range },
+        speed: match (colour, part) {
+            (true, _) | (false, Part::Orientation) => 1.0,
+            _ => drag_speed(meta, 0.1),
+        },
+        whole: colour,
+    };
+    let x = number(ui, *all.get(index)?, field, label, width, mixed)?;
+    let mut set = [None; 3];
+    set[index] = Some(x);
+    Some(Edit::Components(set))
+}
+
+/// A component's value as text, as row `part` shows it (a colour's in 0-255).
+pub fn component_text(value: &Value, part: Part, index: usize) -> Option<String> {
+    components(value, part)
+        .and_then(|all| all.get(index).copied())
+        .map(super::properties::number)
 }
 
 /// How a number field keeps its value.
