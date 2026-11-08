@@ -3,7 +3,7 @@
 //! writes it through the scene, so it is an undo step (a drag is one, as the button stays held; a typed value is one,
 //! written when the field is left).
 //!
-//! - booleans: a check box; numbers (and each component of a vector, a colour's channels): a field to drag or type
+//! - booleans: a check box alone (#378); numbers (and each component of a vector, a colour's channels): a field to drag or type
 //!   in, within the property's range, or a slider for a [`Widget::Slider`] property;
 //! - strings: a text field, written on Enter or when it loses the focus (Escape leaves the value as it was);
 //! - `CFrame`: two rows, its position and its orientation in degrees ([`Part`]);
@@ -252,13 +252,11 @@ fn checkbox(ui: &mut Ui, on: bool, mixed: bool, label: &str) -> Option<bool> {
             p.action_text,
         );
     }
-    ui.add_space(space::S2);
-    let word = match (mixed, on) {
-        (true, _) => "Mixed",
-        (false, true) => "true",
-        (false, false) => "false",
-    };
-    ui.label(egui::RichText::new(word).size(text::BODY).color(p.text));
+    // The box says it all (#378); a selection that disagrees says so.
+    if mixed {
+        ui.add_space(space::S2);
+        ui.label(egui::RichText::new("Mixed").size(text::BODY).color(p.subtle));
+    }
     response.clicked().then_some(mixed || !on)
 }
 
@@ -394,9 +392,46 @@ pub fn swatch_fill(color: Color3) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
     use metallic_engine::metallic_core::glam::Vec2;
 
     use super::*;
+
+    /// A row's editor of `value` (property `meta`, labelled "Value"), keeping the last edit it reported.
+    pub(super) fn editor(meta: &'static PropMeta, value: Value, mixed: Mixed) -> Harness<'static, Option<Edit>> {
+        let dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(300.0, 24.0))
+            .with_context_setup(crate::theme::fonts::install)
+            .build_ui_state(
+                move |ui, edit: &mut Option<Edit>| {
+                    if let Some(made) = super::edit(ui, &dm, meta, "Value", Part::Whole, &value, mixed) {
+                        *edit = Some(made);
+                    }
+                },
+                None,
+            );
+        harness.run();
+        harness
+    }
+
+    #[test]
+    fn a_check_box_stands_alone() {
+        static ANCHORED: PropMeta = PropMeta::boolean("Anchored", false);
+        for on in [true, false] {
+            let mut harness = editor(&ANCHORED, Value::Bool(on), Mixed::default());
+            assert!(harness.query_by_label("true").is_none() && harness.query_by_label("false").is_none());
+            harness.get_by_role_and_label(Role::CheckBox, "Value").click();
+            harness.run();
+            assert_eq!(*harness.state(), Some(Edit::Whole(Value::Bool(!on))));
+        }
+        let mixed = Mixed {
+            whole: true,
+            ..Mixed::default()
+        };
+        editor(&ANCHORED, Value::Bool(true), mixed).get_by_label("Mixed");
+    }
 
     #[test]
     fn a_component_edit_keeps_each_instance_s_other_components() {
