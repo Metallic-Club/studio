@@ -257,6 +257,7 @@ mod tests {
             titles,
             [
                 (groups::PROJECT, false),
+                (groups::EDIT, false),
                 (groups::GAME, false),
                 (groups::STUDIO, false),
                 (groups::PANELS, false),
@@ -268,9 +269,9 @@ mod tests {
         let listed: Vec<&Choice> = sections.iter().flat_map(|section| &section.choices).collect();
         assert_eq!(listed.len(), registry.tools().len() + 2);
         assert!(listed.iter().all(|choice| !choice.description.is_empty()));
-        let game: Vec<&str> = sections[1].choices.iter().map(|choice| choice.label.as_str()).collect();
+        let game: Vec<&str> = sections[2].choices.iter().map(|choice| choice.label.as_str()).collect();
         assert_eq!(game, ["Play", "Pause", "Step", "Stop"]);
-        let layout: Vec<&Element> = sections[4].choices.iter().map(|choice| &choice.element).collect();
+        let layout: Vec<&Element> = sections[5].choices.iter().map(|choice| &choice.element).collect();
         assert_eq!(layout, [&Element::Spacer, &Element::Separator]);
 
         // The search keeps what matches by name or description, and drops empty groups.

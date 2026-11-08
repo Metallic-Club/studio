@@ -14,6 +14,10 @@ pub mod ids {
     pub const SAVE: &str = "studio.save";
     /// Close the project.
     pub const CLOSE: &str = "studio.close";
+    /// Undo the last change (#348).
+    pub const UNDO: &str = "studio.undo";
+    /// Redo the last change undone.
+    pub const REDO: &str = "studio.redo";
     /// Play.
     pub const PLAY: &str = "studio.play";
     /// Pause or resume.
@@ -35,6 +39,8 @@ pub mod ids {
 pub mod groups {
     /// Saving and closing the project.
     pub const PROJECT: &str = "Project";
+    /// Changing the scene: undo and redo (#348).
+    pub const EDIT: &str = "Edit";
     /// Running the game.
     pub const GAME: &str = "Game";
     /// Studio itself: its layout and Settings.
@@ -52,6 +58,10 @@ pub enum StudioCommand {
     Save,
     /// Close the project.
     Close,
+    /// Undo the last change.
+    Undo,
+    /// Redo the last change undone.
+    Redo,
     /// Play.
     Play,
     /// Pause or resume.
@@ -178,6 +188,22 @@ impl ToolRegistry {
                 Icon::ToolbarClose,
                 groups::PROJECT,
                 StudioCommand::Close,
+            ),
+            Tool::studio(
+                ids::UNDO,
+                "Undo",
+                "Takes back the last change.",
+                Icon::ToolbarUndo,
+                groups::EDIT,
+                StudioCommand::Undo,
+            ),
+            Tool::studio(
+                ids::REDO,
+                "Redo",
+                "Makes the last change you took back again.",
+                Icon::ToolbarRedo,
+                groups::EDIT,
+                StudioCommand::Redo,
             ),
             Tool::studio(
                 ids::PLAY,

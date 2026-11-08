@@ -311,6 +311,10 @@ icons! {
     ToolbarSave = "toolbar.save", Studio, "save";
     /// The toolbar's Close project tool.
     ToolbarClose = "toolbar.close", Studio, "folder-x";
+    /// The toolbar's Undo tool.
+    ToolbarUndo = "toolbar.undo", Studio, "undo-2";
+    /// The toolbar's Redo tool.
+    ToolbarRedo = "toolbar.redo", Studio, "redo-2";
     /// The toolbar's Reset layout tool.
     ToolbarResetLayout = "toolbar.reset_layout", Scene, "rotate-ccw";
     /// A plugin's tool that brings no icon of its own.

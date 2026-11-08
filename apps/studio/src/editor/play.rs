@@ -19,7 +19,7 @@ use metallic_engine::metallic_render::settings::GraphicsSettings;
 use metallic_engine::{RunState, project_sources};
 use metallic_player::Player;
 
-use super::{EditorState, Selection};
+use super::{EditorState, History, Selection};
 use crate::logging::{LogBuffer, ScriptOutput};
 use crate::panels::explorer::ExplorerState;
 
@@ -38,6 +38,8 @@ pub struct PlaySession {
     pub selection: Selection,
     /// The Explorer's state over the running game.
     pub explorer: ExplorerState,
+    /// The undo history of the panels' edits of the running game (#348), dropped at Stop.
+    pub history: History,
 }
 
 /// The scene the Explorer and Properties show and edit: the editor's, or the running game's while a session runs
@@ -49,6 +51,8 @@ pub struct Scene<'a> {
     pub selection: &'a mut Selection,
     /// The Explorer's expanded instances and search over it.
     pub explorer: &'a mut ExplorerState,
+    /// Its undo history (#348).
+    pub history: &'a mut History,
     /// Whether it is the running game's.
     pub playing: bool,
 }
@@ -128,6 +132,7 @@ impl EditorState {
             ids: loaded.ids,
             view: GameView::default(),
             number,
+            history: History::new(selection.clone()),
             selection,
             explorer,
         });
@@ -142,12 +147,14 @@ impl EditorState {
                 dm: session.player.engine_mut().data_model_mut(),
                 selection: &mut session.selection,
                 explorer: &mut session.explorer,
+                history: &mut session.history,
                 playing: true,
             },
             None => Scene {
                 dm: &mut self.dm,
                 selection: &mut self.selection,
                 explorer: &mut self.explorer,
+                history: &mut self.history,
                 playing: false,
             },
         }
