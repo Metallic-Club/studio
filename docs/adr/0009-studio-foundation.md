@@ -361,6 +361,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   so), and a click makes it a text field with the value selected. Kept in its range, whole for an `Int`.
 - **One number fills all (#382)**: a single number typed into a vector or colour sets every component to it (`255`
   then Enter is `255, 255, 255`).
+- **Play clears the Output (#383)**: starting a session empties the Output panel first, so it shows that session's
+  lines alone.
 
 ## Not in this slice
 

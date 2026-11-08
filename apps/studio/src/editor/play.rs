@@ -103,12 +103,16 @@ impl EditorState {
     }
 
     /// Starts a session: copies the scene as it is now (unsaved edits included) into a new game and starts a Player
-    /// on it, its scripts from the project and their output into `log`, drawn with `graphics`. Does nothing when a
-    /// session runs already. Returns why it could not start.
+    /// on it, its scripts from the project and their output into `log`, drawn with `graphics`. The Output is cleared
+    /// first, so it shows the new session's lines (#383). Does nothing when a session runs already. Returns why it
+    /// could not start.
     pub fn play(&mut self, graphics: GraphicsSettings, log: Arc<LogBuffer>, number: u64) -> Result<(), String> {
         if self.play.is_some() {
             return Ok(());
         }
+        // What was logged before Play, copied or not, stays out.
+        self.output.update();
+        self.output.clear();
         let saved = save_scene(&self.dm, &mut self.scene_ids).map_err(|error| format!("the scene: {error}"))?;
         let mut game = metallic_classes::new_game().map_err(|error| error.to_string())?;
         let loaded = load_scene(&mut game, &saved.text).map_err(|error| format!("the scene: {error}"))?;
