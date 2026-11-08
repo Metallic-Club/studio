@@ -41,7 +41,7 @@ pub mod ids {
     pub const ROTATE: &str = "studio.tool.rotate";
     /// World or local axes for the gizmos.
     pub const LOCAL_SPACE: &str = "studio.tool.local_space";
-    /// Snapping on or off (#359).
+    /// The move and rotate increments (#359, #375).
     pub const SNAP: &str = "studio.tool.snap";
     /// The prefix of a panel's toggle: `studio.panel.<panel id>`.
     pub const PANEL: &str = "studio.panel.";
@@ -301,7 +301,7 @@ impl ToolRegistry {
             Tool::studio(
                 ids::SNAP,
                 "Snap",
-                "Turns snapping to the move and rotate increments (Settings, Editing) on or off.",
+                "The move and rotate increments drags snap to, each with its switch (Settings, Editing).",
                 Icon::ToolbarSnap,
                 groups::TRANSFORM,
                 StudioCommand::Snap,
