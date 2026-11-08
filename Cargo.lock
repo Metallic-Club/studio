@@ -1744,6 +1744,7 @@ dependencies = [
  "metallic_classes",
  "metallic_core",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

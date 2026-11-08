@@ -22,6 +22,8 @@ thiserror.workspace = true
 # Host tests run scripts against the real class set. Dev-dependencies are exempt from the layout rules (ADR 0001).
 metallic_classes.workspace = true
 criterion.workspace = true
+# The API dump's JSON form, read back in its tests (#406).
+serde_json.workspace = true
 
 [[bench]]
 name = "scheduler"
