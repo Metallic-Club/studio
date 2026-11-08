@@ -9,6 +9,27 @@ use metallic_engine::metallic_core::{CFrame, ClassId, DataModel, DmError, Id, Pr
 
 use super::history::{Change, Place};
 use super::{Scene, Selection};
+use crate::viewport::Aim;
+use crate::viewport::pick::is_a;
+use metallic_engine::metallic_classes::base::world_object;
+
+/// The `CFrame` of `id`, about to go inside `parent` (#412): at `parent`'s pivot when it has one (a light inside a part
+/// at the part's middle, its `CFrame` being the part's then); else where the camera looks, `aim`, a part resting on the
+/// surface there. `None` without either.
+fn placement(dm: &DataModel, id: Id, parent: Id, aim: Option<Aim>) -> Option<CFrame> {
+    if let Ok(pivot) = world_object::pivot(dm, parent) {
+        if is_a(dm, id, "Light") && is_a(dm, parent, "BasePart") {
+            return Some(CFrame::IDENTITY);
+        }
+        return Some(CFrame::new(pivot.position()));
+    }
+    let aim = aim?;
+    let lift = match (aim.normal, dm.get_by_name(id, "Size")) {
+        (Some(normal), Ok(Value::Vector3(size))) => normal * normal.abs().dot(size * 0.5),
+        _ => Vec3::ZERO,
+    };
+    Some(CFrame::new(aim.point + lift))
+}
 
 impl Scene<'_> {
     /// Writes `prop` of `id`, as part of the action under way. The value noted is the one stored (clamped to the
@@ -240,15 +261,15 @@ impl Scene<'_> {
     }
 
     /// Insert Object (#352): a new `class` inside `parent`, selected and shown in the Explorer, as part of the action
-    /// under way. A part is placed with its centre at `place`.
-    pub fn insert(&mut self, class: ClassId, parent: Id, place: Option<Vec3>) -> Result<Id, DmError> {
+    /// under way. Something with a place in the world (a part, a light, a camera) goes where the camera looks, `aim`,
+    /// a part resting on the surface there; inside something with a pivot, at that pivot (#412).
+    pub fn insert(&mut self, class: ClassId, parent: Id, aim: Option<Aim>) -> Result<Id, DmError> {
         let id = self.dm.create(class)?;
-        let part = self.dm.registry().class_id("BasePart");
-        if let (Some(at), Some(part)) = (place, part)
-            && self.dm.is_a(id, part)?
+        if self.dm.prop_id(id, "CFrame").is_ok()
+            && let Some(frame) = placement(self.dm, id, parent, aim)
         {
             // Before it joins the tree: the undo step only has to take it out again.
-            self.dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at)))?;
+            self.dm.set_by_name(id, "CFrame", Value::CFrame(frame))?;
         }
         if let Err(error) = self.move_to(id, Some(parent), None) {
             let _ = self.dm.destroy(id);

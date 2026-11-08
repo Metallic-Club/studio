@@ -1,8 +1,9 @@
 //! Insert Object (#352): a small window listing every class the registry can create, with its icon and what it is,
 //! and a search, as Roblox Studio's. It opens from an Explorer row's `+` or its right-click menu, for that row, or
 //! with its keybind (Shift+Space, #411) for the selected instance: choosing a class creates one inside it, selected
-//! (one undo step), and closes the window. A part is placed in front of the editor camera. Studio draws it over the
-//! editor ([`frame`]), so it shows whichever panels are open.
+//! (one undo step), and closes the window. Something with a place in the world goes where the editor camera looks,
+//! or at the pivot of what it goes in (#412). Studio draws it over the editor ([`frame`]), so it shows whichever panels
+//! are open.
 
 use egui::{Align2, CornerRadius, Id, Rect, Response, Role, ScrollArea, Sense, TextEdit, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{ClassId, Registry};
@@ -58,10 +59,8 @@ pub fn choices(registry: &Registry, query: &str) -> Vec<ClassChoice> {
 /// Draws the Insert Object window over `ctx` while `editor` has it open (#411: from the editor's frame, whichever
 /// panels are open), and inserts the class chosen.
 pub fn frame(ctx: &egui::Context, editor: &mut crate::editor::EditorState) {
-    // Where an inserted part goes (#352): in front of the editor camera.
-    let camera = editor.viewport.camera;
-    let place =
-        camera.position + camera.forward() * camera.focus().map_or(20.0, |focus| focus.distance).clamp(4.0, 40.0);
+    // Where it goes (#412): where the editor camera looks.
+    let aim = crate::viewport::aim(&editor.dm, &editor.viewport.camera);
     let mut scene = editor.scene();
     let Some(mut inserting) = scene.explorer.take_inserting() else {
         return;
@@ -69,7 +68,7 @@ pub fn frame(ctx: &egui::Context, editor: &mut crate::editor::EditorState) {
     let registry = std::sync::Arc::clone(scene.dm.registry());
     let (chosen, open) = show(ctx, &registry, &mut inserting);
     if let Some(class) = chosen
-        && let Err(error) = scene.insert(class, inserting.parent, Some(place))
+        && let Err(error) = scene.insert(class, inserting.parent, Some(aim))
     {
         log::warn!("insert: could not insert: {error}");
     }
