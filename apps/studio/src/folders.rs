@@ -102,8 +102,26 @@ pub fn install_icons(shipped: &Shipped, to: &Path) -> std::io::Result<usize> {
     if let Some(manifest) = migrated {
         crate::settings::store::write_atomically(&to.join(builtin::MANIFEST), &manifest)?;
         log::info!("icons: moved {} to the new layout", to.display());
+    } else {
+        update_manifest(to)?;
     }
     Ok(copied)
+}
+
+/// Brings the user's `icons.json` in `to` up to date (#403): every icon and colour group Studio has now listed, in the
+/// current layout, keeping what the user chose. Written only when that changes it; a file that cannot be read is
+/// left alone (Studio uses its defaults, and says so).
+pub fn update_manifest(to: &Path) -> std::io::Result<()> {
+    let path = to.join(builtin::MANIFEST);
+    let (Ok(text), Ok(theirs)) = (std::fs::read_to_string(&path), builtin::read_manifest(to)) else {
+        return Ok(());
+    };
+    let current = builtin::manifest_json_keeping(Some(&theirs), &HashMap::new());
+    if text.replace("\r\n", "\n") != current {
+        crate::settings::store::write_atomically(&path, &current)?;
+        log::info!("icons: brought {} up to date", path.display());
+    }
+    Ok(())
 }
 
 /// Clears an icons folder an older Studio made (`icons.json` format 1: every SVG at the top, #291) for the new layout
@@ -151,7 +169,7 @@ pub fn migrate_flat_icons(shipped: &Shipped, to: &Path) -> std::io::Result<Optio
     for file in ["LICENSE-Lucide.txt", "NOTICE.txt", builtin::MANIFEST] {
         remove_if_there(&to.join(file))?;
     }
-    Ok(Some(builtin::manifest_json_with(&kept)))
+    Ok(Some(builtin::manifest_json_keeping(None, &kept)))
 }
 
 /// Deletes the file at `path`, if there is one.
@@ -239,8 +257,12 @@ mod tests {
             "{ the user's }"
         );
         assert!(to.join("box.svg").is_file() && to.join("extra").join("note.txt").is_file());
-        // Again: nothing left to copy.
+        // Again: nothing left to copy, and a file that is not a manifest is left as it is.
         assert_eq!(install_icons(from, &to).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(to.join("icons.json")).unwrap(),
+            "{ the user's }"
+        );
         // Into a folder that is not there yet: all of it, Studio's own icons too (#402).
         let fresh = dir.join("fresh");
         assert_eq!(install_icons(builtin::SHIPPED, &fresh).unwrap(), builtin::SHIPPED.len());

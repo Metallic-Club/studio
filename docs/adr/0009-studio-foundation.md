@@ -176,6 +176,10 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   **Since #402 the shipped icons are built into the executable** (the build lists `apps/studio/icons` with
   `include_bytes!`), because a Studio given to someone without the folder beside it drew none: startup writes them
   into the user's folder, and anything missing or unreadable there is read from them.
+  **Since #403 edits to `icons.json` show at once**: Studio looks at the file's time about once a second and reads
+  it again when it changed (colours at once, files on the next draw). On start the user's file is brought up to date
+  (format 3): every icon and colour group Studio has is listed, the user's choices kept, and each icon's description
+  line is gone (the ids say what they are; `docs/studio-icons.md` lists them).
   Since #278 egui's own glyphs are gone too: drop-downs draw Lucide's chevron, Studio's windows (Settings, About) have
   their own header with Lucide's close button, and checkboxes draw Lucide's check. Look-alike classes have their own
   icons (LocalScript, each value type, BindableFunction), still in their section's colour.

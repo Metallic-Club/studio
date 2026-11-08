@@ -7,7 +7,8 @@
 //! (`"explorer.part": { "file": "explorer/box.svg", "color": "object" }`), with a line on what the icon marks, and
 //! each colour group's colour on the dark and the light mode. Pointing an entry at another SVG or group changes that
 //! icon, and changing a group's colours changes every icon in it; a file that is missing or cannot be read falls back
-//! to the icon's default file, with one warning.
+//! to the icon's default file, with one warning. **Edits show at once** (#403): Studio looks at the file's time about
+//! once a second ([`refresh`]) and reads it again when it changed, colours and files both.
 //!
 //! **The shipped icons are built into the executable** (#402, [`SHIPPED`]: the build lists `apps/studio/icons`), so a
 //! Studio given to someone without any folder beside it still has them: startup copies them into the user's folder
@@ -19,7 +20,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use egui::{Color32, Context, Id, TextureHandle, TextureId, TextureOptions};
 use serde::{Deserialize, Serialize};
@@ -39,8 +42,9 @@ pub fn shipped(path: &str) -> Option<&'static [u8]> {
 }
 /// The manifest's name, in the folder.
 pub const MANIFEST: &str = "icons.json";
-/// The manifest's format version: 2 has the colours and the sub-folders (#322), 1 was a flat folder.
-pub const FORMAT: u32 = 2;
+/// The manifest's format version: 3 drops each icon's description (#403), 2 has the colours and the sub-folders
+/// (#322), 1 was a flat folder.
+pub const FORMAT: u32 = 3;
 
 /// `icons.json`: which SVG each icon id uses and in which colour, and the colour groups' colours.
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,9 +66,6 @@ pub(crate) struct Entry {
     /// The colour group it is drawn in, by its id; none for the interface's icons, which take their text's colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) color: Option<String>,
-    /// What the icon marks, for people editing the file.
-    #[serde(rename = "for", default)]
-    used_for: String,
 }
 
 /// A colour group in `icons.json`: its colour on the dark and the light mode, as `#rrggbb`.
@@ -82,7 +83,7 @@ const ABOUT: &str = "Which SVG file each of Metallic Studio's icons uses (relati
                      it is drawn in. To change an icon, put an SVG here and point its entry's file at it. To change \
                      a colour, edit its group's dark and light colours under colors, or point an icon's color at \
                      another group. Icons without a color take the colour of the text beside them. The ids never \
-                     change. Studio reads this file when it starts.";
+                     change; docs/studio-icons.md lists what each marks. Studio shows your edits as soon as you save.";
 
 /// `#rrggbb` for `color`.
 fn hex(color: Color32) -> String {
@@ -102,12 +103,14 @@ pub(crate) fn parse_hex(text: &str) -> Option<Color32> {
 /// `icons.json` as shipped: every colour group with its colours, and every icon with its default file and group, in
 /// the table's order of ids.
 pub fn manifest_json() -> String {
-    manifest_json_with(&HashMap::new())
+    manifest_json_keeping(None, &HashMap::new())
 }
 
-/// `icons.json` as shipped, but with the icons in `files` pointed at the files given there (relative to the folder):
-/// an older folder's own changes, carried into the new layout (#322).
-pub(crate) fn manifest_json_with(files: &HashMap<Icon, String>) -> String {
+/// `icons.json` as shipped, keeping what the user chose in `theirs` (an older `icons.json` of theirs, #403: each
+/// group's colours, each icon's file and colour) and pointing the icons in `files` at the files given there (an older
+/// folder's own changes, carried into the new layout, #322). It lists every icon and group Studio has now, so new
+/// ones appear in the user's file, and drops what Studio no longer has.
+pub(crate) fn manifest_json_keeping(theirs: Option<&Manifest>, files: &HashMap<Icon, String>) -> String {
     let manifest = Manifest {
         format: FORMAT,
         about: ABOUT.to_owned(),
@@ -116,11 +119,12 @@ pub(crate) fn manifest_json_with(files: &HashMap<Icon, String>) -> String {
             .filter(|group| group.is_coloured())
             .map(|group| {
                 let (dark, light) = group.default_colours();
+                let kept = theirs.and_then(|theirs| theirs.colors.get(group.id()));
                 (
                     group.id().to_owned(),
                     Colours {
-                        dark: hex(dark),
-                        light: hex(light),
+                        dark: kept.map_or_else(|| hex(dark), |kept| kept.dark.clone()),
+                        light: kept.map_or_else(|| hex(light), |kept| kept.light.clone()),
                         used_for: group.label().to_owned(),
                     },
                 )
@@ -129,14 +133,17 @@ pub(crate) fn manifest_json_with(files: &HashMap<Icon, String>) -> String {
         icons: Icon::ALL
             .iter()
             .map(|icon| {
-                (
-                    icon.id().to_owned(),
-                    Entry {
-                        file: files.get(icon).cloned().unwrap_or_else(|| icon.default_file()),
-                        color: icon.group().is_coloured().then(|| icon.group().id().to_owned()),
-                        used_for: icon.description().to_owned(),
-                    },
-                )
+                let kept = theirs.and_then(|theirs| theirs.icons.get(icon.id()));
+                let file = files
+                    .get(icon)
+                    .cloned()
+                    .or_else(|| kept.map(|kept| kept.file.clone()))
+                    .unwrap_or_else(|| icon.default_file());
+                let color = match kept {
+                    Some(kept) => kept.color.clone(),
+                    None => icon.group().is_coloured().then(|| icon.group().id().to_owned()),
+                };
+                (icon.id().to_owned(), Entry { file, color })
             })
             .collect(),
     };
@@ -214,31 +221,89 @@ impl ColourTable {
     }
 }
 
-/// The colours of the icons folder's `icons.json`, read once.
-fn colour_table() -> &'static ColourTable {
-    static TABLE: OnceLock<ColourTable> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        folder()
-            .and_then(|dir| read_manifest(dir).ok())
-            .map(|manifest| ColourTable::of(&manifest))
-            .unwrap_or_default()
-    })
+/// The colours of the icons folder's `icons.json`, as last read.
+fn colour_table() -> &'static RwLock<ColourTable> {
+    static TABLE: OnceLock<RwLock<ColourTable>> = OnceLock::new();
+    TABLE.get_or_init(|| RwLock::new(read_colours(folder())))
+}
+
+/// The colours `dir`'s `icons.json` gives; none (Studio's own) without a folder or a readable file.
+fn read_colours(dir: Option<&Path>) -> ColourTable {
+    dir.and_then(|dir| read_manifest(dir).ok())
+        .map(|manifest| ColourTable::of(&manifest))
+        .unwrap_or_default()
 }
 
 /// `group`'s colours on the dark and the light mode as `icons.json` changes them, or `None` where it keeps Studio's.
 pub fn group_colours(group: Group) -> Option<(Color32, Color32)> {
-    colour_table().groups.get(&group).copied()
+    colour_table()
+        .read()
+        .ok()
+        .and_then(|table| table.groups.get(&group).copied())
 }
 
 /// The colour group `icon` is drawn in: the one `icons.json` names for it, else its own.
 pub fn colour_group(icon: Icon) -> Group {
-    colour_table().icons.get(&icon).copied().unwrap_or(icon.group())
+    colour_table()
+        .read()
+        .ok()
+        .and_then(|table| table.icons.get(&icon).copied())
+        .unwrap_or(icon.group())
+}
+
+/// How often [`refresh`] looks at `icons.json`.
+const LOOK_EVERY: Duration = Duration::from_secs(1);
+
+/// How many times `icons.json` has been read again (#403): a context's icons read since an older one are read again.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Watches a file's modification time.
+#[derive(Debug, Default)]
+struct Watch {
+    /// The time seen last, and when it was looked at.
+    seen: Option<(Option<SystemTime>, Instant)>,
+}
+
+impl Watch {
+    /// Whether `path` changed since it was last looked at, looking at most once every `every`. The first look only
+    /// notes its time.
+    fn changed(&mut self, path: &Path, every: Duration, now: Instant) -> bool {
+        if self.seen.is_some_and(|(_, at)| now.duration_since(at) < every) {
+            return false;
+        }
+        let time = std::fs::metadata(path).and_then(|meta| meta.modified()).ok();
+        let changed = self.seen.is_some_and(|(before, _)| before != time);
+        self.seen = Some((time, now));
+        changed
+    }
+}
+
+/// Reads the folder's `icons.json` again when it changed (#403), at most once a second: its colours at once, its files
+/// the next time an icon is drawn. Studio calls it every frame; returns whether it was read again.
+pub fn refresh() -> bool {
+    static WATCH: Mutex<Watch> = Mutex::new(Watch { seen: None });
+    let Some(dir) = folder() else {
+        return false;
+    };
+    let changed = WATCH
+        .lock()
+        .is_ok_and(|mut watch| watch.changed(&dir.join(MANIFEST), LOOK_EVERY, Instant::now()));
+    if changed {
+        log::info!("icons: {} changed; reading it again", dir.join(MANIFEST).display());
+        if let Ok(mut table) = colour_table().write() {
+            *table = read_colours(Some(dir));
+        }
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+    changed
 }
 
 /// The built-in icons as read so far: from which folder (none: the shipped ones), each icon's file, its SVG and its
 /// textures by size.
 struct Loaded {
     dir: Option<PathBuf>,
+    /// The [`GENERATION`] it was read at.
+    generation: u64,
     /// Each icon's file in the folder, from `icons.json`; an icon missing there uses its default.
     files: HashMap<Icon, String>,
     /// Each icon's SVG once read; `None` when it could not be.
@@ -273,6 +338,7 @@ impl Loaded {
         }
         Self {
             dir,
+            generation: GENERATION.load(Ordering::Relaxed),
             files,
             svgs: HashMap::new(),
             textures: HashMap::new(),
@@ -382,6 +448,10 @@ pub fn use_folder(ctx: &Context, dir: &Path) {
 pub fn texture(ctx: &Context, icon: Icon, side: u32, filled: bool) -> Option<TextureId> {
     let shared = shared(ctx);
     let mut loaded = shared.0.lock().ok()?;
+    if loaded.generation != GENERATION.load(Ordering::Relaxed) {
+        // icons.json changed (#403): its files are read again, and every icon drawn again.
+        *loaded = Loaded::new(loaded.dir.clone());
+    }
     loaded.texture(ctx, icon, side.clamp(1, 512), filled)
 }
 
@@ -590,6 +660,63 @@ mod tests {
         let shipped = ColourTable::of(&serde_json::from_str(&manifest_json()).unwrap());
         assert!(shipped.groups.is_empty() && shipped.icons.is_empty());
         assert_eq!(colour_group(Icon::ExplorerPart), Group::Object);
+    }
+
+    #[test]
+    fn a_change_to_the_file_is_seen_at_most_once_a_second() {
+        let dir = temp_folder("watch", &[(MANIFEST, "{}")]);
+        let path = dir.join(MANIFEST);
+        let mut watch = Watch::default();
+        let start = Instant::now();
+        assert!(!watch.changed(&path, LOOK_EVERY, start), "the first look only notes it");
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(5)).unwrap();
+        assert!(
+            !watch.changed(&path, LOOK_EVERY, start + Duration::from_millis(200)),
+            "too soon"
+        );
+        assert!(watch.changed(&path, LOOK_EVERY, start + Duration::from_secs(2)));
+        assert!(
+            !watch.changed(&path, LOOK_EVERY, start + Duration::from_secs(4)),
+            "once"
+        );
+        // Colours read again from the file as it is now.
+        std::fs::write(
+            &path,
+            r##"{ "format": 3, "icons": {}, "colors": { "light": { "dark": "#102030", "light": "#a0b0c0" } } }"##,
+        )
+        .unwrap();
+        assert_eq!(
+            read_colours(Some(&dir)).groups.get(&Group::Light),
+            Some(&(Color32::from_rgb(0x10, 0x20, 0x30), Color32::from_rgb(0xa0, 0xb0, 0xc0)))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_older_file_is_brought_up_to_date_keeping_the_user_s_choices() {
+        let theirs: Manifest = serde_json::from_str(
+            r##"{ "format": 2, "about": "old", "colors": {
+                "light": { "dark": "#102030", "light": "#a0b0c0", "for": "Explorer: lighting and lights" }
+            }, "icons": {
+                "explorer.part": { "file": "mine.svg", "color": "workspace", "for": "A part." },
+                "explorer.model": { "file": "explorer/shapes.svg", "color": "object", "for": "A model." },
+                "explorer.gone_away": { "file": "x.svg" }
+            } }"##,
+        )
+        .unwrap();
+        let text = manifest_json_keeping(Some(&theirs), &HashMap::new());
+        let new: Manifest = serde_json::from_str(&text).unwrap();
+        assert_eq!(new.format, FORMAT);
+        // Their choices kept...
+        assert_eq!(new.icons["explorer.part"].file, "mine.svg");
+        assert_eq!(new.icons["explorer.part"].color.as_deref(), Some("workspace"));
+        assert_eq!(new.colors["light"].dark, "#102030");
+        // ... every icon Studio has listed, what it no longer has dropped, and no description per icon.
+        assert_eq!(new.icons.len(), Icon::ALL.len());
+        assert!(new.icons.contains_key(Icon::ToolbarMove.id()));
+        assert!(!new.icons.contains_key("explorer.gone_away"));
+        assert!(!text.contains("A part."), "{text}");
     }
 
     #[test]
