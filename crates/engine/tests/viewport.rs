@@ -1,7 +1,7 @@
 //! The engine's [`SceneRenderer`] drawing a game into a viewport target on a device the caller made (#213, ADR 0009):
 //! what Studio's viewport panel does with the device it shares with egui-wgpu. The player's graphics settings apply to
-//! it as they do to a window, the game is drawn into the target, and a resize switches to a texture of the new size
-//! that holds the game too. Skips without an adapter unless `METALLIC_REQUIRE_GPU=1` (CI sets it).
+//! it as they do to a window, the game is drawn into the target, and a resize draws the new size in the same frame:
+//! into the target's top-left corner while it fits, else into a target made larger at once (#330). Skips without an adapter unless `METALLIC_REQUIRE_GPU=1` (CI sets it).
 
 use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, Color3, DataModel, Id, Value};
@@ -64,6 +64,12 @@ fn red_wall() -> DataModel {
 
 /// The target's centre pixel, read back as `[r, g, b, a]` (waiting for the GPU).
 fn centre(context: &RenderContext, target: &ViewportTarget) -> [u8; 4] {
+    let (width, height) = target.size();
+    pixel(context, target, (width / 2, height / 2))
+}
+
+/// The target's pixel at `(x, y)`, read back as `[r, g, b, a]` (waiting for the GPU).
+fn pixel(context: &RenderContext, target: &ViewportTarget, (x, y): (u32, u32)) -> [u8; 4] {
     let texture = target.texture();
     let (width, height) = target.size();
     let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -95,7 +101,7 @@ fn centre(context: &RenderContext, target: &ViewportTarget) -> [u8; 4] {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("wait for the readback");
     let data = buffer.get_mapped_range(..).expect("mapped");
-    let at = (height / 2 * padded + width / 2 * 4) as usize;
+    let at = (y * padded + x * 4) as usize;
     [data[at], data[at + 1], data[at + 2], data[at + 3]]
 }
 
@@ -144,16 +150,28 @@ fn a_scene_renderer_draws_a_game_into_a_viewport_on_the_callers_device() {
     );
     assert_eq!(renderer.graphics_status().tier, Some(high.tier));
 
-    // The panel shrinks: the next frame draws into a texture of its size.
+    // The panel shrinks: the next frame fills the top-left corner of its size, in the same texture (#330).
     renderer.resize_viewport(96, 64);
     renderer.render_viewport(&mut dm, FrameStats::default());
+    assert_eq!(renderer.viewport_drawn_size(), Some((96, 64)));
     let viewport = renderer.viewport().expect("a viewport");
-    assert_eq!((viewport.size(), viewport.generation()), ((96, 64), 1));
-    assert_red(centre(&context, viewport), "after the resize");
+    assert_eq!((viewport.size(), viewport.generation()), ((160, 120), 0));
+    assert_red(pixel(&context, viewport, (48, 32)), "after the resize");
+    // It grows past the texture: a larger one, with room to spare, is drawn into in that same frame.
+    renderer.resize_viewport(200, 150);
+    renderer.render_viewport(&mut dm, FrameStats::default());
+    assert_eq!(renderer.viewport_drawn_size(), Some((200, 150)));
+    let viewport = renderer.viewport().expect("a viewport");
+    assert_eq!(viewport.generation(), 1);
+    assert_eq!(
+        viewport.size(),
+        ViewportTarget::room_for((200, 150), (160, 120), u32::MAX)
+    );
+    assert_red(pixel(&context, viewport, (100, 75)), "after growing");
     // A collapsed panel keeps the size it had.
     renderer.resize_viewport(0, 64);
     renderer.render_viewport(&mut dm, FrameStats::default());
-    assert_eq!(renderer.viewport().map(ViewportTarget::size), Some((96, 64)));
+    assert_eq!(renderer.viewport_drawn_size(), Some((200, 150)));
     assert!(renderer.perf_mut().summary().frames > 0, "the frames are recorded");
 }
 

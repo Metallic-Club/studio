@@ -307,3 +307,47 @@ fn a_target_that_does_not_match_its_renderer_is_refused() {
     let drawn = srgb.render_viewport(&mut viewport.target, &mut viewport.scene, camera.as_ref());
     assert!(matches!(drawn, Err(RenderError::UnsupportedTarget { .. })));
 }
+
+#[test]
+fn a_frame_drawn_into_the_corner_is_the_frame_of_that_size() {
+    let Some(context) = gpu() else { return };
+    collect_wgpu_messages();
+    let mut viewport = Viewport::new(&context);
+    viewport.frame(&context);
+    // Only the top-left SMALL of the target (#330): no texture is made, and the corner holds what a target of that
+    // size would.
+    viewport.renderer.set_drawn_size(SMALL.0, SMALL.1);
+    assert_eq!(viewport.renderer.drawn_size(), SMALL);
+    for _ in 0..2 {
+        viewport.frame(&context);
+    }
+    assert_eq!(
+        (viewport.target.size(), viewport.target.generation()),
+        ((SIZE, SIZE), 0)
+    );
+    assert_eq!(viewport.renderer.resolution_stats().width, SMALL.0);
+    let pixels = viewport.pixels(&context);
+    let corner: Vec<[u8; 4]> = (0..SMALL.1)
+        .flat_map(|y| {
+            let row = (y * SIZE) as usize;
+            pixels[row..row + SMALL.0 as usize].iter().copied()
+        })
+        .collect();
+    let expected = offscreen(&context, &[(SIZE, SIZE), SMALL]);
+    // Bloom's blur reaches a few texels past the corner's edges, where a target of the corner's size clamps to them,
+    // as with a render scale: a faint difference there, and none elsewhere.
+    let diff = scenes::compare(&corner, &expected, 8);
+    assert!(
+        diff.over == 0.0,
+        "the corner differs from an offscreen target of its size: {diff:?}"
+    );
+    // A size past the target's is cut to it; the whole target again is the reference.
+    viewport.renderer.set_drawn_size(SIZE * 2, SIZE / 2);
+    assert_eq!(viewport.renderer.drawn_size(), (SIZE, SIZE / 2));
+    viewport.renderer.set_drawn_size(SIZE, SIZE);
+    for _ in 0..2 {
+        viewport.frame(&context);
+    }
+    check_reference(&context, "viewport-corner-back", &viewport.pixels(&context));
+    assert_no_wgpu_errors();
+}

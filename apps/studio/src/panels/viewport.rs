@@ -58,7 +58,7 @@ impl Panel for Viewport {
         match viewport.texture {
             // During a resize this is the old size's frame, drawn at its own size (#311): never stretched, never black.
             Some(texture) => {
-                super::draw_render(ui, texture, viewport.texture_pixels, rect, p.bg);
+                super::draw_render(ui, texture, viewport.texture_pixels, viewport.texture_limit, rect);
             }
             None => {
                 ui.painter().rect_filled(rect, 0.0, p.bg);

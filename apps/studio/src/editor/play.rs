@@ -74,8 +74,11 @@ pub struct GameView {
     pub shown: bool,
     /// The game's render, registered with the UI renderer, once the shell has drawn one.
     pub texture: Option<TextureId>,
-    /// That render's size in pixels: while a resize is under way it differs from [`GameView::pixels`] (#311).
+    /// The size of the target that render is in, as last drawn: kept larger than the tab, whose frame fills its
+    /// top-left corner (#330).
     pub texture_pixels: Option<(u32, u32)>,
+    /// The largest side that target can grow to (the device's largest texture).
+    pub texture_limit: u32,
     /// Why the game cannot be drawn, when it cannot.
     pub error: Option<String>,
 }

@@ -230,13 +230,16 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
 
 ### Viewport: the engine renders, the UI shows it
 
-- The viewport panel asks the engine to render the open scene into a **texture of the panel's size** (physical pixels)
-  (while a resize is under way, #311: the last frame is drawn at its own size, centred, never stretched)
-  on the **shared device**. Studio registers that texture with `egui-wgpu` and draws it as an image, so the UI can draw
-  overlays on top, which Forge's hole could not. The engine side is a new render API, filed for `area:render` (#213).
-- When the panel is resized, the target is recreated through #152's off-the-frame path and the old one is kept until
-  the new one exists, so there is no black frame. Rendering presets, AA and the frame cap come from the Rendering
-  settings.
+- The viewport panel asks the engine to render the open scene **at the panel's size** (physical pixels) on the
+  **shared device**, into the top-left corner of a texture kept larger than the panel (#330, as Forge-Engine drew its
+  view into part of a larger target): a resize is drawn at the new size in the same frame, never stretched and never
+  late. The panel works out the texture's size for the frame as the engine does (`ViewportTarget::room_for`) and
+  shows exactly the corner drawn. Studio registers that texture with `egui-wgpu` and draws it as an image, so the UI
+  can draw overlays on top, which Forge's hole could not. The engine side is a new render API, filed for
+  `area:render` (#213).
+- The texture grows only when the panel outgrows it, by a fifth more than asked for, and then at once before the
+  frame (made in the frame, not off it as #152's settings switches are, so the panel never waits); it never shrinks.
+  Rendering presets, AA and the frame cap come from the Rendering settings.
 - **The editor camera** (orbit and fly) is driven by keymap commands. Input reaches the viewport only while it has
   focus, or is hovered for navigation.
 - **Frame pacing:** continuous while the viewport is visible and the window focused; reactive (redraw on input or

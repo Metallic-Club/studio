@@ -12,6 +12,7 @@ pub mod viewport;
 
 use egui::{Align, Label, Layout, RichText, TextEdit, Ui, vec2};
 use metallic_engine::metallic_core::{ClassId, Registry};
+use metallic_engine::metallic_render::ViewportTarget;
 
 use crate::dock::Panel;
 use crate::theme::current_colors;
@@ -105,33 +106,34 @@ pub(crate) fn search_box(ui: &mut Ui, query: &mut String, hint: &str) -> bool {
     .inner
 }
 
-/// Draws a rendered frame (the Viewport's or the Game tab's) `texture`, `texture_pixels` in size, into `rect` (#311).
-/// At the panel's size it fills `rect`. While a resize is under way the renderer is still making the new size's
-/// target, so the last frame is drawn at its own size, centred, on `ground`: never stretched, so resizing feels steady.
+/// Draws a rendered frame (the Viewport's or the Game tab's) `texture` filling `rect` (#330). The engine draws each
+/// frame at the panel's size into the top-left corner of a target kept larger than the panel, `texture_pixels` in size
+/// as last drawn; the size it has this frame is worked out here as the engine does
+/// ([`ViewportTarget::room_for`], up to `limit`), so the corner shown is exactly the one drawn now. A resize is followed
+/// in the same frame: never stretched, and never an old frame.
 pub(crate) fn draw_render(
     ui: &Ui,
     texture: egui::TextureId,
     texture_pixels: Option<(u32, u32)>,
+    limit: u32,
     rect: egui::Rect,
-    ground: egui::Color32,
 ) -> egui::Rect {
-    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
     let ppp = ui.ctx().pixels_per_point();
     let wanted = (rect.size() * ppp).round();
-    let at = match texture_pixels {
-        Some((width, height)) if (width as f32, height as f32) != (wanted.x, wanted.y) => {
-            ui.painter().rect_filled(rect, 0.0, ground);
-            let size = vec2(width as f32, height as f32) / ppp;
-            // On whole pixels, so the old frame is drawn one texel to a pixel.
-            let min = ((rect.center().to_vec2() - size / 2.0) * ppp).round() / ppp;
-            egui::Rect::from_min_size(min.to_pos2(), size)
+    let wanted = (wanted.x.max(1.0) as u32, wanted.y.max(1.0) as u32);
+    let corner = match texture_pixels {
+        Some(current) => {
+            let room = ViewportTarget::room_for(wanted, current, limit);
+            let drawn = (wanted.0.min(room.0), wanted.1.min(room.1));
+            egui::pos2(drawn.0 as f32 / room.0 as f32, drawn.1 as f32 / room.1 as f32)
         }
-        _ => rect,
+        None => egui::pos2(1.0, 1.0),
     };
+    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), corner);
     ui.painter()
         .with_clip_rect(rect)
-        .image(texture, at, uv, egui::Color32::WHITE);
-    at
+        .image(texture, rect, uv, egui::Color32::WHITE);
+    rect
 }
 
 /// Where a list row's background goes (#301): the row `rect` stretched past the panel's inset to its sides, and a
