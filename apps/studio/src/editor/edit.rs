@@ -4,7 +4,8 @@
 
 use std::time::Instant;
 
-use metallic_engine::metallic_core::{DataModel, DmError, Id, PropId, Value};
+use metallic_engine::metallic_core::glam::Vec3;
+use metallic_engine::metallic_core::{CFrame, ClassId, DataModel, DmError, Id, PropId, Value};
 
 use super::history::{Change, Place};
 use super::{Scene, Selection};
@@ -222,6 +223,26 @@ impl Scene<'_> {
             *self.selection = Selection::of(pasted.iter().copied());
         }
         pasted.len()
+    }
+
+    /// Insert Object (#352): a new `class` inside `parent`, selected and shown in the Explorer, as part of the action
+    /// under way. A part is placed with its centre at `place`.
+    pub fn insert(&mut self, class: ClassId, parent: Id, place: Option<Vec3>) -> Result<Id, DmError> {
+        let id = self.dm.create(class)?;
+        let part = self.dm.registry().class_id("BasePart");
+        if let (Some(at), Some(part)) = (place, part)
+            && self.dm.is_a(id, part)?
+        {
+            // Before it joins the tree: the undo step only has to take it out again.
+            self.dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at)))?;
+        }
+        if let Err(error) = self.move_to(id, Some(parent), None) {
+            let _ = self.dm.destroy(id);
+            return Err(error);
+        }
+        self.selection.set_only(Some(id));
+        self.explorer.reveal(self.dm, id);
+        Ok(id)
     }
 
     /// Renames `id` to `name` (trimmed; an empty name leaves it as it was).

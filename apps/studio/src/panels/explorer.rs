@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{DataModel, Id};
 
+use super::insert::{self, Inserting};
 use super::{class_icon, empty_note, ids, matches_words, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::editor::edit::is_movable;
@@ -45,6 +46,8 @@ pub struct ExplorerState {
     anchor: Option<Id>,
     /// The row being renamed in place (#351).
     renaming: Option<Id>,
+    /// The Insert Object window, while it is open (#352).
+    inserting: Option<Inserting>,
 }
 
 impl ExplorerState {
@@ -124,6 +127,19 @@ impl ExplorerState {
     /// drops it.
     pub fn start_rename(&mut self, id: Id) {
         self.renaming = Some(id);
+    }
+
+    /// Opens the Insert Object window (#352) for `parent`: what is chosen goes inside it.
+    pub fn open_insert(&mut self, parent: Id) {
+        self.inserting = Some(Inserting {
+            parent,
+            query: String::new(),
+        });
+    }
+
+    /// Whether the Insert Object window is open.
+    pub fn is_inserting(&self) -> bool {
+        self.inserting.is_some()
     }
 
     /// The row being renamed, if any.
@@ -251,6 +267,9 @@ impl Panel for Explorer {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        // Where an inserted part goes (#352): in front of the editor camera.
+        let camera = cx.editor.viewport.camera;
+        let place = camera.position + camera.forward() * camera.focus().clamp(4.0, 40.0);
         // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
         let editor = cx.editor.scene();
         search_box(ui, &mut editor.explorer.query, "Search the game");
@@ -308,6 +327,7 @@ impl Panel for Explorer {
                     RowAction::Menu(edit) => menu = Some((row.id, edit)),
                     RowAction::Renamed(name) => renamed = Some((row.id, Some(name))),
                     RowAction::KeepName => renamed = Some((row.id, None)),
+                    RowAction::Insert => editor.explorer.open_insert(row.id),
                 }
             }
         });
@@ -335,6 +355,18 @@ impl Panel for Explorer {
                 editor.selection.set_only(Some(id));
             }
             editor.tree_edit(edit);
+        }
+        if let Some(mut inserting) = editor.explorer.inserting.take() {
+            let registry = std::sync::Arc::clone(editor.dm.registry());
+            let (chosen, open) = insert::show(ui.ctx(), &registry, &mut inserting);
+            if let Some(class) = chosen
+                && let Err(error) = editor.insert(class, inserting.parent, Some(place))
+            {
+                log::warn!("explorer: could not insert: {error}");
+            }
+            if open && editor.dm.contains(inserting.parent) {
+                editor.explorer.inserting = Some(inserting);
+            }
         }
     }
 }
@@ -376,6 +408,8 @@ enum RowAction {
     Renamed(String),
     /// Renaming it ended without a new name.
     KeepName,
+    /// Its `+`, or Insert Object in its menu (#352).
+    Insert,
 }
 
 /// One row on its stripe (#274): the caret, the class icon and the name (a text field while it is renamed, #351); a
@@ -466,8 +500,35 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
             );
         }
     }
+    // The `+` at the end of the hovered row opens Insert Object for it (#352).
+    let plus = Rect::from_center_size(
+        pos2(rect.right() - space::S3 - CARET / 2.0, rect.center().y),
+        vec2(CARET, CARET),
+    );
+    let plus_response = ui.interact(plus, response.id.with("insert"), Sense::click());
+    plus_response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("Insert into {name}")));
+    if response.hovered() || plus_response.hovered() {
+        let tint = if plus_response.hovered() { p.text } else { p.subtle };
+        icons::paint_at(
+            ui.painter(),
+            plus.center(),
+            Align2::CENTER_CENTER,
+            Icon::UiAdd,
+            text::BODY,
+            tint,
+        );
+    }
+    if plus_response.clicked() {
+        return RowAction::Insert;
+    }
+    let mut insert = false;
     let mut chosen = None;
     response.context_menu(|ui| {
+        if ui.button("Insert Object\u{2026}").clicked() {
+            insert = true;
+            ui.close();
+        }
+        ui.separator();
         let movable = is_movable(dm, row.id);
         for (label, edit) in ROW_MENU {
             let enabled = edit.pastes() || movable;
@@ -477,7 +538,9 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
             }
         }
     });
-    if let Some(edit) = chosen {
+    if insert {
+        RowAction::Insert
+    } else if let Some(edit) = chosen {
         RowAction::Menu(edit)
     } else if response.secondary_clicked() && !selected {
         RowAction::Select
