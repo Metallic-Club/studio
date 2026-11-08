@@ -1,5 +1,9 @@
 //! The Explorer panel: the game's tree (the services, then what is under them) with expand and collapse, class
-//! icons, single selection and a search filter.
+//! icons, selection and a search filter.
+//!
+//! Clicks select as in Forge and Roblox Studio (#347): a click selects only that row, Ctrl (Cmd) adds or removes one,
+//! Shift selects the rows from the anchor (the last row clicked without Shift) to it, and Ctrl+Shift adds them. A
+//! closed row that holds something selected is marked with a dot.
 //!
 //! Each frame it lists the rows that show (only expanded instances are walked, so a large closed tree costs nothing)
 //! and draws just the rows in view. A search walks the whole tree: it shows every instance whose name or class
@@ -12,6 +16,7 @@ use metallic_engine::metallic_core::{DataModel, Id};
 
 use super::{class_icon, empty_note, ids, matches_words, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
+use crate::editor::Selection;
 use crate::keymap::Context;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
@@ -21,6 +26,8 @@ use crate::theme::{current_colors, fonts};
 const INDENT: f32 = 14.0;
 /// The width of the expand caret's column.
 const CARET: f32 = 16.0;
+/// The radius of the dot on a closed row that holds something selected.
+const HOLDER_DOT: f32 = 2.5;
 
 /// The Explorer panel.
 #[derive(Clone, Copy, Debug)]
@@ -33,6 +40,8 @@ pub struct ExplorerState {
     query: String,
     /// An instance to scroll into view next frame.
     scroll_to: Option<Id>,
+    /// Where a Shift-click's range starts: the last row clicked without Shift (#347).
+    anchor: Option<Id>,
 }
 
 impl ExplorerState {
@@ -67,6 +76,45 @@ impl ExplorerState {
         } else {
             self.expanded.remove(&id);
         }
+    }
+
+    /// What a click on row `id` does to `selection`, given the `rows` shown (#347): alone, it selects only that row;
+    /// with `add` (Ctrl, Cmd) it adds or removes it; with `range` (Shift) it selects the rows from the anchor to it, or
+    /// adds them with `add` too. The clicked row ends up the active one, unless `add` took it out.
+    pub fn click(&mut self, rows: &[Row], selection: &mut Selection, id: Id, add: bool, range: bool) {
+        let place = |id: Id| rows.iter().position(|row| row.id == id);
+        let anchor = self.anchor.filter(|&anchor| place(anchor).is_some());
+        match (range, anchor.and_then(place), place(id)) {
+            (true, Some(from), Some(to)) => {
+                if !add {
+                    selection.clear();
+                }
+                // From the anchor to the clicked row, so the clicked row is added last and is the active one.
+                if from <= to {
+                    rows[from..=to].iter().for_each(|row| selection.add(row.id));
+                } else {
+                    rows[to..=from].iter().rev().for_each(|row| selection.add(row.id));
+                }
+            }
+            _ if add => {
+                selection.toggle(id);
+                self.anchor = Some(id);
+            }
+            _ => {
+                selection.set_only(Some(id));
+                self.anchor = Some(id);
+            }
+        }
+    }
+
+    /// Edit, Select all (#347): every row the Explorer shows, the active instance kept active if it is one of them.
+    pub fn select_all(&mut self, dm: &DataModel, selection: &mut Selection) {
+        let active = selection.active();
+        let mut all = Selection::of(rows(dm, self).into_iter().map(|row| row.id));
+        if let Some(active) = active.filter(|&id| all.contains(id)) {
+            all.add(active);
+        }
+        *selection = all;
     }
 
     /// Opens every ancestor of `id` and scrolls it into view.
@@ -219,12 +267,14 @@ impl Panel for Explorer {
         let mut clicked = None;
         let mut toggled = None;
         let shades = current_colors(ui.ctx()).palette.rows();
+        let holders = editor.selection.holders(editor.dm);
         // The rows touch (#274), so the stripes are continuous, as the Properties panel's are.
         ui.spacing_mut().item_spacing.y = 0.0;
         scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
             for (index, row) in range.clone().zip(&rows[range]) {
-                let selected = *editor.selection == Some(row.id);
-                match row_ui(ui, editor.dm, *row, selected, searching, shades.fill(index)) {
+                let selected = editor.selection.contains(row.id);
+                let marked = !row.expanded && holders.contains(&row.id);
+                match row_ui(ui, editor.dm, *row, selected, marked, searching, shades.fill(index)) {
                     RowAction::None => {}
                     RowAction::Select => clicked = Some(row.id),
                     RowAction::Toggle => toggled = Some(*row),
@@ -235,7 +285,10 @@ impl Panel for Explorer {
             editor.explorer.set_expanded(row.id, !row.expanded);
         }
         if let Some(id) = clicked {
-            *editor.selection = Some(id);
+            let modifiers = ui.input(|input| input.modifiers);
+            editor
+                .explorer
+                .click(&rows, editor.selection, id, modifiers.command, modifiers.shift);
         }
     }
 }
@@ -247,9 +300,17 @@ enum RowAction {
     Toggle,
 }
 
-/// One row on its `stripe` (#274): the caret, the class icon and the name; the selected row on a square raised fill
-/// (#300).
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool, stripe: Color32) -> RowAction {
+/// One row on its `stripe` (#274): the caret, the class icon and the name; a selected row on a square raised fill
+/// (#300), and a closed row that holds something selected (`marked`) with a dot at its end (#347).
+fn row_ui(
+    ui: &mut Ui,
+    dm: &DataModel,
+    row: Row,
+    selected: bool,
+    marked: bool,
+    searching: bool,
+    stripe: Color32,
+) -> RowAction {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let name = dm.name(row.id).unwrap_or("?").to_owned();
@@ -307,13 +368,21 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, selected: bool, searching: bool
         } else {
             FontId::proportional(text::BODY)
         };
-        ui.painter().text(
+        let label = ui.painter().text(
             pos2(x + text::BODY + space::S3, rect.center().y),
             Align2::LEFT_CENTER,
             &name,
             font,
             if selected { p.text } else { p.muted },
         );
+        if marked {
+            let accent = colors.accent;
+            ui.painter().circle_filled(
+                pos2(label.right() + space::S3 + HOLDER_DOT, rect.center().y),
+                HOLDER_DOT,
+                accent,
+            );
+        }
     }
     if caret_response.is_some_and(|response| response.clicked()) || (row.has_children && response.double_clicked()) {
         RowAction::Toggle
@@ -376,6 +445,58 @@ mod tests {
         assert_eq!(names(&dm, &rows(&dm, &state)), ["Workspace", "  Baseplate"]);
         state.set_query("teleporter");
         assert!(rows(&dm, &state).is_empty());
+    }
+
+    /// The rows' names as one string, the selected ones in brackets, the active one starred.
+    fn picked(dm: &DataModel, rows: &[Row], selection: &Selection) -> String {
+        rows.iter()
+            .filter(|row| selection.contains(row.id))
+            .map(|row| {
+                let star = if selection.active() == Some(row.id) { "*" } else { "" };
+                format!("{}{star}", dm.name(row.id).unwrap())
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn clicks_select_one_add_one_or_a_range_from_the_anchor() {
+        let dm = game();
+        let mut state = ExplorerState::new(&dm);
+        let rows = rows(&dm, &state);
+        let at = |name: &str| rows.iter().find(|row| dm.name(row.id).unwrap() == name).unwrap().id;
+        let mut selection = Selection::new();
+        state.click(&rows, &mut selection, at("Baseplate"), false, false);
+        assert_eq!(picked(&dm, &rows, &selection), "Baseplate*");
+        // Ctrl adds, and takes out again.
+        state.click(&rows, &mut selection, at("Lighting"), true, false);
+        assert_eq!(picked(&dm, &rows, &selection), "Baseplate Lighting*");
+        state.click(&rows, &mut selection, at("Baseplate"), true, false);
+        assert_eq!(picked(&dm, &rows, &selection), "Lighting*");
+        // Shift: from the anchor (the last row clicked without Shift) to the row, either way.
+        state.click(&rows, &mut selection, at("Camera"), false, false);
+        state.click(&rows, &mut selection, at("SpawnLocation"), false, true);
+        let shown: Vec<String> = rows.iter().map(|row| dm.name(row.id).unwrap().to_owned()).collect();
+        let from = shown.iter().position(|name| name == "Camera").unwrap();
+        let to = shown.iter().position(|name| name == "SpawnLocation").unwrap();
+        assert!(from < to, "{shown:?}");
+        assert_eq!(selection.len(), to - from + 1);
+        assert_eq!(selection.active(), Some(at("SpawnLocation")));
+        state.click(&rows, &mut selection, at("Workspace"), false, true);
+        assert_eq!(
+            selection.len(),
+            from + 1,
+            "the range from the anchor up to Workspace, alone"
+        );
+        assert_eq!(selection.active(), Some(at("Workspace")));
+        // Ctrl+Shift adds the range to what is selected.
+        state.click(&rows, &mut selection, at("Lighting"), true, false);
+        state.click(&rows, &mut selection, at("Lighting"), true, true);
+        assert!(selection.contains(at("Workspace")) && selection.contains(at("Lighting")));
+        // Select all: every row shown.
+        state.select_all(&dm, &mut selection);
+        assert_eq!(selection.len(), rows.len());
+        assert_eq!(selection.active(), Some(at("Lighting")), "the active one stays active");
     }
 
     #[test]

@@ -58,6 +58,8 @@ pub(crate) enum MenuAction {
     Step,
     /// Test, Stop: end the game session.
     Stop,
+    /// Edit, Select all: every instance the Explorer shows (#347).
+    SelectAll,
 }
 
 /// Where a game session is, for what the menus and the play buttons allow.
@@ -152,7 +154,7 @@ pub(crate) static MENUS: &[Menu] = &[
             Entry::Planned("Duplicate"),
             Entry::Planned("Delete"),
             Entry::Separator,
-            Entry::Planned("Select all"),
+            item("Select all", MenuAction::SelectAll, Some(ids::EDIT_SELECT_ALL)),
         ],
     },
     Menu {

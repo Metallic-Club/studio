@@ -476,6 +476,11 @@ impl Studio {
             self.show_projects();
             return;
         };
+        {
+            // What left the game since the last frame is not selected (#347).
+            let scene = editor.scene();
+            scene.selection.retain_in_game(scene.dm);
+        }
         if editor.is_playing() {
             // The game's frame first, so the panels show it; it runs every frame, Game tab in front or not.
             let dt = ctx.input(|input| input.stable_dt);
@@ -600,6 +605,12 @@ impl Studio {
                 }
             }
             MenuAction::Stop => self.stop(),
+            MenuAction::SelectAll => {
+                if let Some(editor) = self.editor_mut() {
+                    let scene = editor.scene();
+                    scene.explorer.select_all(scene.dm, scene.selection);
+                }
+            }
         }
     }
 
@@ -949,6 +960,7 @@ impl Studio {
             let (pointer, dt) = ctx.input(|input| (input.pointer.delta(), input.stable_dt));
             let pivot = editor
                 .selection
+                .active()
                 .and_then(|id| crate::viewport::position_of(&editor.dm, id));
             if editor.viewport.navigate(&self.keymap, &activations, pointer, dt, pivot) {
                 ctx.request_repaint();
@@ -967,6 +979,7 @@ impl Studio {
                 ids::TEST_PAUSE if editing => self.menu_action(MenuAction::Pause),
                 ids::TEST_STEP if editing => self.menu_action(MenuAction::Step),
                 ids::TEST_STOP if editing => self.menu_action(MenuAction::Stop),
+                ids::EDIT_SELECT_ALL if editing => self.menu_action(MenuAction::SelectAll),
                 id @ (ids::PROJECTS_OPEN | ids::PROJECTS_NEW | ids::PROJECTS_ADD) if context == Context::Projects => {
                     if let Some(path) = self.projects.run(id) {
                         self.open(path);
@@ -2363,7 +2376,7 @@ mod tests {
         settle(&mut harness);
         let studio = &harness.state().studio;
         let editor = studio.editor().unwrap();
-        assert_eq!(editor.dm.name(editor.selection.unwrap()).unwrap(), "Baseplate");
+        assert_eq!(editor.dm.name(editor.selection.active().unwrap()).unwrap(), "Baseplate");
         // A click in a panel gives it the focus, and the keymap its context.
         assert_eq!(studio.dock().focus().focused, Some(panels::ids::EXPLORER));
         assert_eq!(studio.dock().context(), Context::Explorer);
@@ -2419,6 +2432,60 @@ mod tests {
         settle(&mut harness);
         let again = harness.get_by_label("Name column width").rect();
         assert!((again.center().x - stopped.center().x).abs() < 1.0);
+    }
+
+    /// The names of what is selected in the editor, the active one last.
+    fn selected_names(harness: &Harness<'_, Test>) -> Vec<String> {
+        let editor = harness.state().studio.editor().unwrap();
+        editor
+            .selection
+            .ids()
+            .iter()
+            .map(|&id| editor.dm.name(id).unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn explorer_clicks_select_several_and_select_all_takes_every_row() {
+        let mut harness = editing(settings_file("editor-multi", None), "Multi Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::TreeItem, "SpawnLocation")
+            .click_modifiers(Modifiers::COMMAND);
+        settle(&mut harness);
+        assert_eq!(selected_names(&harness), ["Baseplate", "SpawnLocation"]);
+        // Both rows show selected; Properties follows the active one.
+        for row in ["Baseplate", "SpawnLocation"] {
+            let node = harness.get_by_role_and_label(Role::TreeItem, row);
+            let toggled = egui_kittest::kittest::NodeT::accesskit_node(&node).toggled();
+            assert_eq!(toggled, Some(egui::accesskit::Toggled::True), "{row}");
+        }
+        harness.get_by_label("Size");
+        // Shift: the range from the anchor (the Ctrl-clicked row) up to Workspace.
+        harness
+            .get_by_role_and_label(Role::TreeItem, "Workspace")
+            .click_modifiers(Modifiers::SHIFT);
+        settle(&mut harness);
+        let names = selected_names(&harness);
+        assert_eq!(names.first().map(String::as_str), Some("SpawnLocation"));
+        assert_eq!(names.last().map(String::as_str), Some("Workspace"));
+        assert!(!names.contains(&"Lighting".to_owned()), "{names:?}");
+        // A plain click selects only that row.
+        harness.get_by_role_and_label(Role::TreeItem, "Lighting").click();
+        settle(&mut harness);
+        assert_eq!(selected_names(&harness), ["Lighting"]);
+        // Primary+A: every row shown, Lighting still the active one.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        settle(&mut harness);
+        let all = selected_names(&harness);
+        assert!(all.len() > 5 && all.contains(&"Baseplate".to_owned()), "{all:?}");
+        assert_eq!(all.last().map(String::as_str), Some("Lighting"));
+        // Closing Workspace marks it: it holds something selected.
+        click_label(&mut harness, "Collapse Workspace");
+        harness.get_by_role_and_label(Role::TreeItem, "Workspace");
     }
 
     #[test]
@@ -3049,7 +3116,7 @@ mod tests {
         settle(&mut harness);
         harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
         settle(&mut harness);
-        let editor_selection = harness.state().studio.editor().unwrap().selection;
+        let editor_selection = harness.state().studio.editor().unwrap().selection.clone();
         assert!(
             harness.query_by_label_contains("Running game").is_none(),
             "no banner before Play"
@@ -3066,7 +3133,7 @@ mod tests {
             let editor = studio.editor_mut().unwrap();
             let scene = editor.scene();
             assert!(scene.playing);
-            let selected = scene.selection.expect("carried into the game");
+            let selected = scene.selection.active().expect("carried into the game");
             assert_eq!(scene.dm.name(selected).unwrap(), "Baseplate");
             // The game's own id, not the editor's.
             let session = editor.play.as_ref().unwrap();
@@ -3079,7 +3146,7 @@ mod tests {
         // Expanding goes through the caret; the row click selects it, and Properties follows the game.
         {
             let scene = harness.state_mut().studio.editor_mut().unwrap().scene();
-            let storage = scene.selection.expect("ReplicatedStorage selected");
+            let storage = scene.selection.active().expect("ReplicatedStorage selected");
             assert_eq!(scene.dm.name(storage).unwrap(), "ReplicatedStorage");
             scene.explorer.set_expanded(storage, true);
         }
@@ -3094,7 +3161,7 @@ mod tests {
         {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
             let scene = editor.scene();
-            let storage = scene.selection.unwrap();
+            let storage = scene.selection.active().unwrap();
             let frames = scene.dm.find_first_child(storage, "Frames", false).unwrap().unwrap();
             scene.dm.set_name(frames, "Ticks".into()).unwrap();
         }

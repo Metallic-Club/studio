@@ -188,6 +188,8 @@ pub mod ids {
     pub const ZOOM: &str = "viewport.zoom";
     /// Changes how fast the editor camera flies.
     pub const SPEED: &str = "viewport.speed";
+    /// Select every instance the Explorer shows (#347).
+    pub const EDIT_SELECT_ALL: &str = "edit.select_all";
 }
 
 /// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
@@ -298,6 +300,16 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Stop",
             "Test",
             "Ends the game and puts the scene back as it was before Play.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+A"],
+        ..Command::new(
+            ids::EDIT_SELECT_ALL,
+            "Select all",
+            "Edit",
+            "Selects everything the Explorer shows.",
         )
     },
     Command {
