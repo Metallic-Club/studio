@@ -339,6 +339,12 @@ icons! {
     UiPalette = "ui.palette", Interface, "palette";
     /// Add another.
     UiAdd = "ui.add", Interface, "plus";
+    /// Move up in a list.
+    UiMoveUp = "ui.move_up", Interface, "chevron-up";
+    /// Move down in a list.
+    UiMoveDown = "ui.move_down", Interface, "chevron-down";
+    /// Delete.
+    UiDelete = "ui.delete", Interface, "trash-2";
 }
 
 /// The file types a custom icon may be, in the order one is preferred when both are there.

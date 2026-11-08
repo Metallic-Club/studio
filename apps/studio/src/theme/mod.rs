@@ -385,6 +385,45 @@ pub fn window_header(ui: &mut egui::Ui, title: &str, open: &mut bool) {
 /// The height of [`window_header`]'s row.
 const WINDOW_HEADER: f32 = 32.0;
 
+/// A checkbox's box alone (#329), for a column of them under a heading: `label` is for screen readers and its
+/// tooltip only.
+pub fn checkbox_only(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let box_side = 16.0;
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(box_side), egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
+    if ui.is_rect_visible(rect) {
+        let strength = if ui.is_enabled() { 1.0 } else { 0.48 };
+        let edge = if *on {
+            p.action
+        } else if response.hovered() {
+            p.subtle
+        } else {
+            p.border
+        };
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(4),
+            (if *on { p.action } else { p.input }).gamma_multiply(strength),
+            Stroke::new(size::BORDER, edge.gamma_multiply(strength)),
+            egui::StrokeKind::Inside,
+        );
+        if *on {
+            icons::paint(
+                ui.painter(),
+                icons::Icon::UiCheck,
+                rect.shrink(2.0),
+                p.action_text.gamma_multiply(strength),
+            );
+        }
+    }
+    response.on_hover_text(label)
+}
+
 /// A checkbox (#278): a rounded box, filled with the primary action's colour and Lucide's check when `on`, then
 /// `label`. Clicking either toggles it.
 pub fn checkbox(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {

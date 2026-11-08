@@ -3599,6 +3599,62 @@ mod tests {
     }
 
     #[test]
+    fn the_tabs_window_shows_hides_and_places_the_tabs() {
+        let path = settings_file("toolbar-tabs", None);
+        let mut harness = editing(path.clone(), "Tabs Window Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // A right-click on a tab opens the Tabs window, not a menu (#329).
+        let model = toolbar_tab(&harness, "Model");
+        right_click(&mut harness, model);
+        // A window's first frame only measures it; the next places it.
+        settle(&mut harness);
+        assert!(harness.state().studio.toolbar().is_editing_tabs());
+        for name in ["Home", "Model", "UI", "Scripts", "Plugins"] {
+            harness.get_by_role_and_label(Role::CheckBox, &format!("Show {name}"));
+            harness.get_by_role_and_label(Role::CheckBox, &format!("Own layout for {name}"));
+        }
+        // Hiding Model takes it out of the row.
+        harness.get_by_role_and_label(Role::CheckBox, "Show Model").click();
+        settle(&mut harness);
+        let config = |harness: &Harness<'_, Test>| harness.state().studio.toolbar().config().clone();
+        assert!(!config(&harness).tabs[1].shown);
+        assert!(
+            harness
+                .query_all_by_role_and_label(Role::Tab, "Model")
+                .all(|tab| tab.rect().top() >= editor::BAR_HEIGHT + toolbar::TAB_ROW),
+            "no Model tab in the toolbar"
+        );
+        // Scripts loads a layout of its own; Plugins moves up.
+        harness
+            .get_by_role_and_label(Role::CheckBox, "Own layout for Scripts")
+            .click();
+        settle(&mut harness);
+        assert!(config(&harness).tabs[3].own_layout);
+        harness.get_by_role_and_label(Role::Button, "Move Plugins up").click();
+        settle(&mut harness);
+        let names: Vec<String> = config(&harness).tabs.iter().map(|tab| tab.name.clone()).collect();
+        assert_eq!(names, ["Home", "Model", "UI", "Plugins", "Scripts"]);
+        // The tabs move to the right of the row.
+        let home = toolbar_tab(&harness, "Home");
+        harness.get_by_role(Role::ComboBox).click();
+        settle(&mut harness);
+        harness.step();
+        harness.get_by_role_and_label(Role::Button, "Right").click();
+        settle(&mut harness);
+        assert_eq!(config(&harness).align, toolbar::TabAlign::Right);
+        let moved = toolbar_tab(&harness, "Home");
+        assert!(moved.left() > home.left() + 400.0, "{moved:?} from {home:?}");
+        // Escape closes it; the toolbar is saved with all of it.
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(!harness.state().studio.toolbar().is_editing_tabs());
+        let text = std::fs::read_to_string(path.with_file_name(toolbar::TOOLBAR_FILE)).unwrap();
+        assert!(text.contains("\"align\": \"right\""), "{text}");
+        assert!(text.contains("\"shown\": false"), "{text}");
+    }
+
+    #[test]
     fn a_toolbar_tab_is_renamed_in_place() {
         let mut harness = editing(settings_file("toolbar-rename", None), "Rename Game");
         harness.set_size(egui::vec2(1280.0, 800.0));
@@ -3759,26 +3815,32 @@ mod tests {
         let tool = harness.get_by_role_and_label(Role::Button, "Paint terrain tool");
         assert!(egui_kittest::kittest::NodeT::accesskit_node(&tool).is_disabled());
 
-        // Rename a tab from its menu, and delete another.
-        let scripts = toolbar_tab(&harness, "Scripts");
-        right_click(&mut harness, scripts);
-        harness.get_by_label("Rename").click();
+        // Rename a tab and delete another in the Tabs window (#329).
+        let plugins = toolbar_tab(&harness, "Plugins");
+        right_click(&mut harness, plugins);
         settle(&mut harness);
-        harness
+        let window = harness.get_by_role_and_label(Role::CheckBox, "Show Scripts").rect();
+        let field = harness
             .get_all_by_role(Role::TextInput)
-            .find(|field| field.rect().top() < editor::BAR_HEIGHT + toolbar::TAB_ROW)
-            .expect("the tab's name, in place")
-            .type_text("Code");
-        harness.key_press(Key::Enter);
+            .find(|field| (field.rect().center().y - window.center().y).abs() < 12.0)
+            .expect("Scripts' name in the Tabs window")
+            .rect();
+        left_click(&mut harness, field);
+        harness.key_press(Key::End);
+        harness.event(egui::Event::Text("Code".to_owned()));
         settle(&mut harness);
         let names = |harness: &Harness<'_, Test>| -> Vec<String> {
             let config = harness.state().studio.toolbar().config();
             config.tabs.iter().map(|tab| tab.name.clone()).collect()
         };
-        assert!(names(&harness).contains(&"Code".to_owned()) || names(&harness).iter().any(|n| n.ends_with("Code")));
-        let plugins = toolbar_tab(&harness, "Plugins");
-        right_click(&mut harness, plugins);
-        harness.get_by_label("Delete").click();
+        assert!(
+            names(&harness).contains(&"ScriptsCode".to_owned()),
+            "{:?}",
+            names(&harness)
+        );
+        harness.get_by_role_and_label(Role::Button, "Delete Plugins").click();
+        settle(&mut harness);
+        harness.key_press(Key::Escape);
         settle(&mut harness);
         assert!(!names(&harness).contains(&"Plugins".to_owned()));
         // A new tab from the +.
@@ -3816,7 +3878,7 @@ mod tests {
         // Saved, and read back by the next Studio.
         let saved = harness.state().studio.toolbar().config().clone();
         let text = std::fs::read_to_string(path.with_file_name(toolbar::TOOLBAR_FILE)).unwrap();
-        assert!(text.contains("\"Code\"") || text.contains("Code"), "{text}");
+        assert!(text.contains("\"ScriptsCode\""), "{text}");
         let again = past_the_splash(path);
         let mut read = again.state().studio.toolbar().config().clone();
         read.active = saved.active;
@@ -4327,6 +4389,54 @@ mod tests {
         });
         assert_eq!(studio.screen(), Screen::Editor);
         write_png(&out.join("216-editor.png"), shot);
+    }
+
+    /// The toolbar's windows (`cargo test -p metallic_studio -- --ignored screenshot_of_the_toolbar_windows`): the Add
+    /// window (#327) and the Tabs window (#329) over the editor. Offscreen, like the others.
+    #[test]
+    #[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+    fn screenshot_of_the_toolbar_windows() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+        let path = config(
+            "shot-toolbar",
+            Some(
+                "[general]
+skip_sign_in = true
+",
+            ),
+            None,
+        );
+        let project = make_project_once(path.parent().unwrap(), "Toolbar Race");
+        let mut studio = studio_after_startup(steps_reading(path));
+        let open = |studio: &mut Studio| {
+            studio.open(project.clone());
+            for _ in 0..10_000 {
+                if studio.poll_opening().is_none() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                open(studio);
+                studio.toolbar_mut().select_tab(1);
+            }
+            if frame == 6 {
+                studio.toolbar_mut().open_add(0);
+            }
+        });
+        write_png(&out.join("327-add-window.png"), shot);
+        let shot = render_offscreen(&mut studio, egui::vec2(1280.0, 800.0), 1.25, 40, |studio, frame| {
+            if frame == 2 {
+                studio.toolbar_mut().close_add();
+                studio.toolbar_mut().select_tab(0);
+                studio.toolbar_mut().config_mut().tabs[3].shown = false;
+                studio.toolbar_mut().config_mut().align = crate::toolbar::TabAlign::Center;
+                studio.toolbar_mut().set_editing_tabs(true);
+            }
+        });
+        write_png(&out.join("329-tabs-window.png"), shot);
     }
 
     /// The screenshot of #230 (`cargo test -p metallic_studio -- --ignored screenshot_of_striped_properties`): the

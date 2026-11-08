@@ -353,6 +353,10 @@
       "file": "interface/chevron-down.svg",
       "for": "An expanded tree item or section."
     },
+    "ui.delete": {
+      "file": "interface/trash-2.svg",
+      "for": "Delete."
+    },
     "ui.error": {
       "file": "interface/circle-x.svg",
       "for": "An error."
@@ -364,6 +368,14 @@
     "ui.info": {
       "file": "interface/info.svg",
       "for": "Information."
+    },
+    "ui.move_down": {
+      "file": "interface/chevron-down.svg",
+      "for": "Move down in a list."
+    },
+    "ui.move_up": {
+      "file": "interface/chevron-up.svg",
+      "for": "Move up in a list."
     },
     "ui.palette": {
       "file": "interface/palette.svg",

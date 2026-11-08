@@ -33,6 +33,38 @@ impl Element {
     }
 }
 
+/// Where the tabs sit in their row (#329).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabAlign {
+    /// From the left, the default.
+    #[default]
+    Left,
+    /// In the middle.
+    Center,
+    /// Against the right.
+    Right,
+}
+
+impl TabAlign {
+    /// Every place, in the order the Tabs window lists them.
+    pub const ALL: [TabAlign; 3] = [TabAlign::Left, TabAlign::Center, TabAlign::Right];
+
+    /// Its name in the Tabs window.
+    pub fn label(self) -> &'static str {
+        match self {
+            TabAlign::Left => "Left",
+            TabAlign::Center => "Center",
+            TabAlign::Right => "Right",
+        }
+    }
+}
+
+/// Serde's default for [`TabConfig::shown`]: a tab from before #329 is shown.
+fn shown() -> bool {
+    true
+}
+
 /// One tab.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabConfig {
@@ -41,6 +73,9 @@ pub struct TabConfig {
     pub id: u32,
     /// Its name, on the tab.
     pub name: String,
+    /// Whether it is in the row: a hidden tab keeps its tools and layout until it is shown again (#329).
+    #[serde(default = "shown")]
+    pub shown: bool,
     /// Its toolbar.
     #[serde(default)]
     pub elements: Vec<Element>,
@@ -58,6 +93,7 @@ impl TabConfig {
         Self {
             id: 0,
             name: name.to_owned(),
+            shown: true,
             elements,
             own_layout: false,
             layout: None,
@@ -75,6 +111,9 @@ pub struct ToolbarConfig {
     /// The tab in front, by index.
     #[serde(default)]
     pub active: usize,
+    /// Where the tabs sit in their row.
+    #[serde(default)]
+    pub align: TabAlign,
 }
 
 impl Default for ToolbarConfig {
@@ -107,6 +146,7 @@ impl Default for ToolbarConfig {
                 TabConfig::new("Plugins", Vec::new()),
             ],
             active: 0,
+            align: TabAlign::default(),
         }
         .repaired()
     }
@@ -157,7 +197,26 @@ impl ToolbarConfig {
             }
         }
         self.active = self.active.min(self.tabs.len() - 1);
+        self.show_a_tab();
         self
+    }
+
+    /// Keeps the row from being empty and a shown tab in front: shows the first tab when every one is hidden, and
+    /// brings the nearest shown tab forward when the front one is hidden (#329).
+    pub fn show_a_tab(&mut self) {
+        if !self.tabs.iter().any(|tab| tab.shown)
+            && let Some(first) = self.tabs.first_mut()
+        {
+            first.shown = true;
+        }
+        if self.tabs.get(self.active).is_some_and(|tab| !tab.shown) {
+            let before = self.tabs[..self.active].iter().rposition(|tab| tab.shown);
+            let after = self.tabs[self.active..]
+                .iter()
+                .position(|tab| tab.shown)
+                .map(|at| at + self.active);
+            self.active = after.or(before).unwrap_or(0);
+        }
     }
 
     /// An id no tab has.
@@ -283,6 +342,7 @@ mod tests {
             version: TOOLBAR_VERSION,
             tabs: vec![TabConfig::new("Only", Vec::new())],
             active: 0,
+            align: TabAlign::Left,
         }
         .repaired();
         assert!(!one.remove_tab(0));
@@ -295,6 +355,36 @@ mod tests {
         config.remove_element(0, 1);
         assert_eq!(config.tabs[0].elements, [Element::tool("studio.save")]);
         one.insert_element(5, 0, Element::Separator); // no such tab: nothing
+    }
+
+    #[test]
+    fn hidden_tabs_never_leave_the_row_empty_or_a_hidden_tab_in_front() {
+        let mut config = ToolbarConfig {
+            active: 1,
+            ..ToolbarConfig::default()
+        };
+        // The front tab hidden: the next shown one comes forward.
+        config.tabs[1].shown = false;
+        config.show_a_tab();
+        assert_eq!(config.active, 2);
+        // Hidden at the end: the one before.
+        config.active = 4;
+        config.tabs[4].shown = false;
+        config.show_a_tab();
+        assert_eq!(config.active, 3);
+        // Every tab hidden: the first is shown again, and in front.
+        for tab in &mut config.tabs {
+            tab.shown = false;
+        }
+        config.show_a_tab();
+        assert!(config.tabs[0].shown);
+        assert_eq!(config.active, 0);
+        // Saved and read back with the place of the tabs.
+        config.align = TabAlign::Right;
+        let text = config.to_json();
+        assert!(text.contains("\"align\": \"right\""), "{text}");
+        assert!(text.contains("\"shown\": false"), "{text}");
+        assert_eq!(serde_json::from_str::<ToolbarConfig>(&text).unwrap(), config);
     }
 
     #[test]
@@ -323,6 +413,9 @@ mod tests {
         let repaired = ToolbarConfig::load(&path);
         assert_eq!(repaired.active, 1);
         assert_ne!(repaired.tabs[0].id, repaired.tabs[1].id);
+        // A file from before #329: every tab shown, the tabs on the left.
+        assert!(repaired.tabs.iter().all(|tab| tab.shown));
+        assert_eq!(repaired.align, TabAlign::Left);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
