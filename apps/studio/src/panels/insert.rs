@@ -1,7 +1,8 @@
 //! Insert Object (#352): a small window listing every class the registry can create, with its icon and what it is,
-//! and a search, as Roblox Studio's. It opens from an Explorer row's `+` or its right-click menu, for that row:
-//! choosing a class creates one inside it, selected (one undo step), and closes the window. A part is placed in front
-//! of the editor camera.
+//! and a search, as Roblox Studio's. It opens from an Explorer row's `+` or its right-click menu, for that row, or
+//! with its keybind (Shift+Space, #411) for the selected instance: choosing a class creates one inside it, selected
+//! (one undo step), and closes the window. A part is placed in front of the editor camera. Studio draws it over the
+//! editor ([`frame`]), so it shows whichever panels are open.
 
 use egui::{Align2, CornerRadius, Id, Rect, Response, Role, ScrollArea, Sense, TextEdit, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{ClassId, Registry};
@@ -52,6 +53,29 @@ pub fn choices(registry: &Registry, query: &str) -> Vec<ClassChoice> {
         .collect();
     out.sort_by_key(|choice| choice.name);
     out
+}
+
+/// Draws the Insert Object window over `ctx` while `editor` has it open (#411: from the editor's frame, whichever
+/// panels are open), and inserts the class chosen.
+pub fn frame(ctx: &egui::Context, editor: &mut crate::editor::EditorState) {
+    // Where an inserted part goes (#352): in front of the editor camera.
+    let camera = editor.viewport.camera;
+    let place =
+        camera.position + camera.forward() * camera.focus().map_or(20.0, |focus| focus.distance).clamp(4.0, 40.0);
+    let mut scene = editor.scene();
+    let Some(mut inserting) = scene.explorer.take_inserting() else {
+        return;
+    };
+    let registry = std::sync::Arc::clone(scene.dm.registry());
+    let (chosen, open) = show(ctx, &registry, &mut inserting);
+    if let Some(class) = chosen
+        && let Err(error) = scene.insert(class, inserting.parent, Some(place))
+    {
+        log::warn!("insert: could not insert: {error}");
+    }
+    if open && scene.dm.contains(inserting.parent) {
+        scene.explorer.keep_inserting(inserting);
+    }
 }
 
 /// Draws the window over `ctx`. Returns the class chosen this frame, and whether the window stays open.

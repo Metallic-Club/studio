@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{DataModel, Id};
 
-use super::insert::{self, Inserting};
+use super::insert::Inserting;
 use super::{class_icon, empty_note, ids, matches_words, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::editor::edit::is_movable;
@@ -180,6 +180,16 @@ impl ExplorerState {
         self.inserting.is_some()
     }
 
+    /// The Insert Object window's state, taken while Studio draws it ([`super::insert::frame`]).
+    pub fn take_inserting(&mut self) -> Option<Inserting> {
+        self.inserting.take()
+    }
+
+    /// Puts the Insert Object window's state back after drawing it.
+    pub fn keep_inserting(&mut self, inserting: Inserting) {
+        self.inserting = Some(inserting);
+    }
+
     /// The row being renamed, if any.
     pub fn renaming(&self) -> Option<Id> {
         self.renaming
@@ -305,10 +315,6 @@ impl Panel for Explorer {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
-        // Where an inserted part goes (#352): in front of the editor camera.
-        let camera = cx.editor.viewport.camera;
-        let place =
-            camera.position + camera.forward() * camera.focus().map_or(20.0, |focus| focus.distance).clamp(4.0, 40.0);
         // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
         let editor = cx.editor.scene();
         search_box(ui, &mut editor.explorer.query, "Search the game");
@@ -427,18 +433,6 @@ impl Panel for Explorer {
                 editor.selection.set_only(Some(id));
             }
             editor.tree_edit(edit);
-        }
-        if let Some(mut inserting) = editor.explorer.inserting.take() {
-            let registry = std::sync::Arc::clone(editor.dm.registry());
-            let (chosen, open) = insert::show(ui.ctx(), &registry, &mut inserting);
-            if let Some(class) = chosen
-                && let Err(error) = editor.insert(class, inserting.parent, Some(place))
-            {
-                log::warn!("explorer: could not insert: {error}");
-            }
-            if open && editor.dm.contains(inserting.parent) {
-                editor.explorer.inserting = Some(inserting);
-            }
         }
     }
 }

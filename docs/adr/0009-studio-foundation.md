@@ -401,6 +401,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   shares, so Studio flickered and its text garbled as Settings opened.
 - **No Editing page (#410)**: Settings loses its Editing page; the increments are edited in the toolbar and the camera
   speeds with the wheel, and both are still saved (`[editing]`, `[viewport]`).
+- **Insert Object on a key (#411)**: Shift+Space (`edit.insert`) opens Insert Object for the selected instance, or
+  Workspace with nothing selected. Studio draws the window over the editor (`panels::insert::frame`), not the Explorer,
+  so it shows whichever panels are open.
 
 ## Not in this slice
 
