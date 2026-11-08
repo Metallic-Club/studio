@@ -83,6 +83,11 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `toolbar.close` | The toolbar's Close project tool. | Studio | [`toolbar/folder-x.svg`](https://lucide.dev/icons/folder-x) | `toolbar.close.svg`, `toolbar.close.png` |
 | `toolbar.undo` | The toolbar's Undo tool. | Studio | [`toolbar/undo-2.svg`](https://lucide.dev/icons/undo-2) | `toolbar.undo.svg`, `toolbar.undo.png` |
 | `toolbar.redo` | The toolbar's Redo tool. | Studio | [`toolbar/redo-2.svg`](https://lucide.dev/icons/redo-2) | `toolbar.redo.svg`, `toolbar.redo.png` |
+| `toolbar.select` | The Select tool (#355). | Panels: scene | [`toolbar/mouse-pointer-2.svg`](https://lucide.dev/icons/mouse-pointer-2) | `toolbar.select.svg`, `toolbar.select.png` |
+| `toolbar.move` | The Move tool. | Panels: scene | [`toolbar/move.svg`](https://lucide.dev/icons/move) | `toolbar.move.svg`, `toolbar.move.png` |
+| `toolbar.scale` | The Scale tool. | Panels: scene | [`toolbar/scale-3d.svg`](https://lucide.dev/icons/scale-3d) | `toolbar.scale.svg`, `toolbar.scale.png` |
+| `toolbar.rotate` | The Rotate tool. | Panels: scene | [`toolbar/rotate-3d.svg`](https://lucide.dev/icons/rotate-3d) | `toolbar.rotate.svg`, `toolbar.rotate.png` |
+| `toolbar.local_space` | Local or world axes for the gizmos. | Panels: scene | [`toolbar/axis-3d.svg`](https://lucide.dev/icons/axis-3d) | `toolbar.local_space.svg`, `toolbar.local_space.png` |
 | `toolbar.reset_layout` | The toolbar's Reset layout tool. | Panels: scene | [`toolbar/rotate-ccw.svg`](https://lucide.dev/icons/rotate-ccw) | `toolbar.reset_layout.svg`, `toolbar.reset_layout.png` |
 | `toolbar.plugin` | A plugin's tool that brings no icon of its own. | Studio | [`toolbar/puzzle.svg`](https://lucide.dev/icons/puzzle) | `toolbar.plugin.svg`, `toolbar.plugin.png` |
 | `toolbar.spacer` | A spacer, in the toolbar's Add window. | Interface | [`toolbar/space.svg`](https://lucide.dev/icons/space) | `toolbar.spacer.svg`, `toolbar.spacer.png` |

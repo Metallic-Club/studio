@@ -307,6 +307,14 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   selects the nearest part the pointer's ray meets (each part as its box, every shape for now), or the outermost model
   it is in under Workspace, as Roblox Studio does; Ctrl or Shift adds or removes; a click on nothing clears; Alt is the
   orbit's. The selection is outlined in the accent colour, the part under the pointer faintly. Off while a game runs.
+- **Transform tools (#355)**, after Forge's: `viewport::gizmo` is the maths (handles, picking on the screen, rays
+  against lines and planes), `viewport::tools` the tools, drags and drawing (an egui overlay on the viewport, always in
+  front). Select, Move, Scale and Rotate are toolbar tools (the default Model tab) and keybinds (Primary+1..4), with
+  world or local axes (Primary+L). The gizmo sits on the active instance's pivot, or the middle of several. Move: six
+  arrows and three plane handles facing the camera; a drag moves every selected instance by its pivot (a model with
+  everything in it), measured each frame from where they started, shown with a ruler marked every 5 studs and the
+  distance. The drag writes the data model through the engine's `pivot_to`, so the scene notes the `CFrame`s it
+  changed (`Scene::watching`): one undo step per drag.
 
 ## Not in this slice
 

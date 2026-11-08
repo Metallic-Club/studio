@@ -39,6 +39,7 @@ use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{Accent, radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, Look, ThemeState, button, current_colors, fonts};
 use crate::toolbar::{self, StudioCommand, ToolAction, Toolbar};
+use crate::viewport::tools::Tool;
 use editor::MenuAction;
 use metallic_engine::metallic_classes::input::feed::CursorState;
 pub use shell::run;
@@ -504,12 +505,18 @@ impl Studio {
         );
         let play = editor::MenuState::of(editor);
         let dock = &self.dock;
+        let gizmo = (editor.viewport.gizmo.tool, editor.viewport.gizmo.local);
         let ran = ui
             .scope_builder(UiBuilder::new().max_rect(strip), |ui| {
                 self.toolbar.ui(
                     ui,
                     |action| tool_enabled(action, play),
-                    |action| matches!(action, ToolAction::Studio(StudioCommand::TogglePanel(id)) if dock.is_open(id)),
+                    |action| match action {
+                        ToolAction::Studio(StudioCommand::TogglePanel(id)) => dock.is_open(id),
+                        ToolAction::Studio(StudioCommand::Transform(tool)) => *tool == gizmo.0,
+                        ToolAction::Studio(StudioCommand::LocalSpace) => gizmo.1,
+                        _ => false,
+                    },
                 )
             })
             .inner;
@@ -622,6 +629,16 @@ impl Studio {
                     editor.scene().redo(Instant::now());
                 }
             }
+            MenuAction::Transform(tool) => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.viewport.gizmo.tool = tool;
+                }
+            }
+            MenuAction::LocalSpace => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.viewport.gizmo.local = !editor.viewport.gizmo.local;
+                }
+            }
             MenuAction::Tree(edit) => {
                 if let Some(editor) = self.editor_mut() {
                     editor.scene().tree_edit(edit);
@@ -648,6 +665,8 @@ impl Studio {
                 StudioCommand::Step => MenuAction::Step,
                 StudioCommand::Stop => MenuAction::Stop,
                 StudioCommand::Undo => MenuAction::Undo,
+                StudioCommand::Transform(tool) => MenuAction::Transform(tool),
+                StudioCommand::LocalSpace => MenuAction::LocalSpace,
                 StudioCommand::Redo => MenuAction::Redo,
                 StudioCommand::ResetLayout => MenuAction::ResetLayout,
                 StudioCommand::Settings => MenuAction::Settings,
@@ -1006,6 +1025,11 @@ impl Studio {
                 ids::EDIT_SELECT_ALL if editing => self.menu_action(MenuAction::SelectAll),
                 ids::EDIT_UNDO if editing => self.menu_action(MenuAction::Undo),
                 ids::EDIT_REDO if editing => self.menu_action(MenuAction::Redo),
+                ids::TOOL_SELECT if editing => self.menu_action(MenuAction::Transform(Tool::Select)),
+                ids::TOOL_MOVE if editing => self.menu_action(MenuAction::Transform(Tool::Move)),
+                ids::TOOL_SCALE if editing => self.menu_action(MenuAction::Transform(Tool::Scale)),
+                ids::TOOL_ROTATE if editing => self.menu_action(MenuAction::Transform(Tool::Rotate)),
+                ids::TOOL_LOCAL_SPACE if editing => self.menu_action(MenuAction::LocalSpace),
                 id @ (ids::EDIT_CUT
                 | ids::EDIT_COPY
                 | ids::EDIT_PASTE
@@ -4417,10 +4441,13 @@ mod tests {
         harness.get_by_role_and_label(Role::Button, "Explorer tool").click();
         settle(&mut harness);
 
-        // Model: an empty toolbar, with an Add tool button (#328) that opens the Add window.
+        // Model holds the transform tools (#355). Scripts: an empty toolbar, with an Add tool button (#328) that opens
+        // the Add window.
         click_tab(&mut harness, "Model");
-        assert_eq!(harness.state().studio.toolbar().config().active, 1);
-        assert!(harness.state().studio.toolbar().config().tabs[1].elements.is_empty());
+        harness.get_by_role_and_label(Role::Button, "Move tool");
+        click_tab(&mut harness, "Scripts");
+        assert_eq!(harness.state().studio.toolbar().config().active, 3);
+        assert!(harness.state().studio.toolbar().config().tabs[3].elements.is_empty());
         harness.get_by_role_and_label(Role::Button, "Add tool").click();
         settle(&mut harness);
         assert!(harness.state().studio.toolbar().is_adding());
@@ -4453,7 +4480,7 @@ mod tests {
             .get_by_role_and_label(Role::Button, "Add Separator")
             .click_accesskit();
         settle(&mut harness);
-        let model = |harness: &Harness<'_, Test>| harness.state().studio.toolbar().config().tabs[1].elements.clone();
+        let model = |harness: &Harness<'_, Test>| harness.state().studio.toolbar().config().tabs[3].elements.clone();
         assert_eq!(
             model(&harness),
             [
@@ -5078,6 +5105,8 @@ mod tests {
                     .unwrap();
                 let part = editor.dm.find_first_child(workspace, "SpawnLocation", false).unwrap();
                 editor.select(part);
+                // The Move tool's gizmo on it (#355).
+                editor.viewport.gizmo.tool = Tool::Move;
             }
         });
         assert_eq!(studio.screen(), Screen::Editor);

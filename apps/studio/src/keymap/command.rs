@@ -208,6 +208,16 @@ pub mod ids {
     pub const EDIT_RENAME: &str = "edit.rename";
     /// Delete the selection.
     pub const EDIT_DELETE: &str = "edit.delete";
+    /// The Select tool (#355).
+    pub const TOOL_SELECT: &str = "tools.select";
+    /// The Move tool.
+    pub const TOOL_MOVE: &str = "tools.move";
+    /// The Scale tool.
+    pub const TOOL_SCALE: &str = "tools.scale";
+    /// The Rotate tool.
+    pub const TOOL_ROTATE: &str = "tools.rotate";
+    /// World or local axes.
+    pub const TOOL_LOCAL_SPACE: &str = "tools.local_space";
 }
 
 /// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
@@ -241,6 +251,20 @@ const fn pointer(
         defaults: bind,
         on_hover: true,
         ..Command::new(id, title, MOUSE, description)
+    }
+}
+
+/// A transform tool's command (#355), in the editor.
+const fn tool(
+    id: &'static str,
+    title: &'static str,
+    description: &'static str,
+    bind: &'static [&'static str],
+) -> Command {
+    Command {
+        contexts: &[Context::Editor],
+        defaults: bind,
+        ..Command::new(id, title, "Tools", description)
     }
 }
 
@@ -392,6 +416,31 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         defaults: &["Delete"],
         ..Command::new(ids::EDIT_DELETE, "Delete", "Edit", "Deletes the selection.")
     },
+    tool(ids::TOOL_SELECT, "Select tool", "Selects with a click.", &["Primary+1"]),
+    tool(
+        ids::TOOL_MOVE,
+        "Move tool",
+        "Moves the selection with handles.",
+        &["Primary+2"],
+    ),
+    tool(
+        ids::TOOL_SCALE,
+        "Scale tool",
+        "Resizes the selection with handles.",
+        &["Primary+3"],
+    ),
+    tool(
+        ids::TOOL_ROTATE,
+        "Rotate tool",
+        "Turns the selection with rings.",
+        &["Primary+4"],
+    ),
+    tool(
+        ids::TOOL_LOCAL_SPACE,
+        "Local or world axes",
+        "Puts the gizmos along the selection's own axes, or back along the world's.",
+        &["Primary+L"],
+    ),
     Command {
         contexts: &[Context::Editor],
         defaults: &["Primary+A"],

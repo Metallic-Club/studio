@@ -289,6 +289,16 @@
       "color": "studio",
       "for": "The toolbar's Close project tool."
     },
+    "toolbar.local_space": {
+      "file": "toolbar/axis-3d.svg",
+      "color": "scene",
+      "for": "Local or world axes for the gizmos."
+    },
+    "toolbar.move": {
+      "file": "toolbar/move.svg",
+      "color": "scene",
+      "for": "The Move tool."
+    },
     "toolbar.pause": {
       "file": "toolbar/pause.svg",
       "color": "run",
@@ -314,10 +324,25 @@
       "color": "scene",
       "for": "The toolbar's Reset layout tool."
     },
+    "toolbar.rotate": {
+      "file": "toolbar/rotate-3d.svg",
+      "color": "scene",
+      "for": "The Rotate tool."
+    },
     "toolbar.save": {
       "file": "toolbar/save.svg",
       "color": "studio",
       "for": "The toolbar's Save tool."
+    },
+    "toolbar.scale": {
+      "file": "toolbar/scale-3d.svg",
+      "color": "scene",
+      "for": "The Scale tool."
+    },
+    "toolbar.select": {
+      "file": "toolbar/mouse-pointer-2.svg",
+      "color": "scene",
+      "for": "The Select tool (#355)."
     },
     "toolbar.separator": {
       "file": "toolbar/separator-vertical.svg",
