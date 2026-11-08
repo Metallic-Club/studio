@@ -267,6 +267,52 @@ mod tests {
     }
 
     #[test]
+    fn a_ring_turns_a_model_without_a_primary_part_by_the_angle_shown() {
+        let mut bench = Bench::new();
+        let a = bench.part(Vec3::new(-2.0, 0.0, 0.0), Vec3::ONE);
+        let b = bench.part(Vec3::new(4.0, 0.0, 0.0), Vec3::ONE);
+        let dm = &mut bench.dm;
+        let model = dm.create(dm.registry().class_id("Model").unwrap()).unwrap();
+        dm.set_parent(model, crate::viewport::pick::workspace(dm)).unwrap();
+        dm.set_parent(a, Some(model)).unwrap();
+        dm.set_parent(b, Some(model)).unwrap();
+        bench.select(&[model]);
+        let view = look(Vec3::new(1.0, 30.0, 0.1), Vec3::new(1.0, 0.0, 0.0));
+        let targets = targets(&bench.dm, &bench.selection);
+        let frame = frame_for(&bench.dm, Tool::Rotate, false, &targets, view.pos).unwrap();
+        // The model's pivot is the middle of the box round its parts.
+        let centre = frame.origin;
+        assert!(centre.abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-4));
+        let radius = frame.len * 0.9;
+        let around = |degrees: f32| centre + Quat::from_rotation_y(degrees.to_radians()) * Vec3::X * radius;
+        let on_ring = view.project(around(-45.0)).unwrap();
+        let handle = super::super::hit(Tool::Rotate, &frame, &view, on_ring).unwrap();
+        let mut drag = begin_drag(&bench.dm, handle, frame, view.ray(on_ring).unwrap(), &targets).unwrap();
+        let mut scene = bench.scene();
+        // A frame at a time, as the pointer goes round: each must not add to the last.
+        for step in 1..=18 {
+            let at = around(step as f32 * 5.0 - 45.0);
+            update_drag(
+                &mut scene,
+                &mut drag,
+                view.ray(view.project(at).unwrap()).unwrap(),
+                Keys::default(),
+                Snap::default(),
+            );
+        }
+        let expected = Quat::from_rotation_y(90f32.to_radians());
+        for (part, at) in [(a, -2.0), (b, 4.0)] {
+            let want = centre + expected * (Vec3::new(at, 0.0, 0.0) - centre);
+            assert!(
+                position(scene.dm, part).abs_diff_eq(want, 1e-2),
+                "{} vs {want}",
+                position(scene.dm, part)
+            );
+            assert!(turned(scene.dm, part).angle_between(expected) < 1e-2);
+        }
+    }
+
+    #[test]
     fn a_quarter_turn_turns_the_selection_about_the_up_axis_or_tilts_it() {
         let mut bench = Bench::new();
         let part = bench.part(Vec3::new(3.0, 0.0, 0.0), Vec3::ONE);
