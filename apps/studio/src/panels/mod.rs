@@ -6,6 +6,7 @@
 pub mod assets;
 pub mod explorer;
 pub mod game;
+pub mod insert;
 pub mod output;
 pub mod properties;
 pub mod values;

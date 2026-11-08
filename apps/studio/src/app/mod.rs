@@ -2876,6 +2876,60 @@ mod tests {
     }
 
     #[test]
+    fn insert_object_creates_the_chosen_class_inside_the_row_selected_and_undoes() {
+        let mut harness = editing(settings_file("editor-insert", None), "Insert Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        // A row's + opens the window for that row.
+        harness
+            .get_by_role_and_label(Role::Button, "Insert into Workspace")
+            .click();
+        settle(&mut harness);
+        harness.get_by_label(crate::panels::insert::TITLE);
+        harness.get_by_role_and_label(Role::Button, "Insert Part");
+        // Its search keeps what matches; choosing inserts, selects, and closes the window.
+        harness.event(egui::Event::Text("fold".to_owned()));
+        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::Button, "Insert Part").is_none());
+        harness.get_by_role_and_label(Role::Button, "Insert Folder").click();
+        settle(&mut harness);
+        assert!(harness.query_by_label(crate::panels::insert::TITLE).is_none());
+        assert_eq!(
+            children_of(&harness, "Workspace"),
+            ["Camera", "Baseplate", "SpawnLocation", "Folder"]
+        );
+        assert_eq!(selected_names(&harness), ["Folder"]);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(
+            children_of(&harness, "Workspace"),
+            ["Camera", "Baseplate", "SpawnLocation"]
+        );
+
+        // From a row's menu; a part lands in front of the camera.
+        let row = harness.get_by_role_and_label(Role::TreeItem, "Workspace").rect();
+        right_click(&mut harness, row);
+        harness
+            .get_by_role_and_label(Role::Button, "Insert Object\u{2026}")
+            .click();
+        settle(&mut harness);
+        // Below the fold of the list: the screen reader's click.
+        harness
+            .get_by_role_and_label(Role::Button, "Insert Part")
+            .click_accesskit();
+        settle(&mut harness);
+        let editor = harness.state().studio.editor().unwrap();
+        let part = editor.selection.active().unwrap();
+        assert_eq!(editor.dm.class_name(part).unwrap(), "Part");
+        let camera = editor.viewport.camera;
+        let at = crate::viewport::position_of(&editor.dm, part).unwrap();
+        assert!(
+            (at - camera.position).dot(camera.forward()) > 1.0,
+            "in front of the camera"
+        );
+    }
+
+    #[test]
     fn the_explorer_search_filters_the_tree() {
         let mut harness = editing(settings_file("editor-search", None), "Search Game");
         let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;

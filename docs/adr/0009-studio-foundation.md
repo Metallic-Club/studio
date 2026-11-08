@@ -296,6 +296,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   instance, inside a selected service, in Workspace with nothing selected) and Paste into (Primary+Shift+V). The
   clipboard holds copies out of the tree, so a paste copies them again; a running game's clipboard does not paste into
   the editor's scene. The Edit menu has them, and a right-click on an Explorer row opens a menu of them.
+- **Insert Object (#352)**: a searchable window of every class the registry can create (not services, not classes
+  hidden from the Explorer), with icons and descriptions, opened from a row's `+` (shown on hover) or its menu; the
+  class chosen is created inside that row, selected, as one undo step, a part in front of the editor camera.
 
 ## Not in this slice
 
