@@ -445,7 +445,7 @@ fn split_grip(ui: &mut Ui, rows: Rect, share: f32) {
     }
 }
 
-/// A property's value, as text after a swatch (a colour) or a check box (a boolean).
+/// A property's value: a check box alone (a boolean, #378), or text after a swatch (a colour).
 fn value_ui(ui: &mut Ui, dm: &DataModel, value: &Value) {
     let p = current_colors(ui.ctx()).palette;
     let shown = format_value(dm, value);
@@ -461,16 +461,17 @@ fn value_ui(ui: &mut Ui, dm: &DataModel, value: &Value) {
                 egui::StrokeKind::Inside,
             );
         }
-        Value::Bool(on) => {
-            let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+        &Value::Bool(on) => {
+            let (rect, response) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            response.widget_info(|| WidgetInfo::selected(Role::CheckBox, false, on, &shown));
             ui.painter().rect(
                 rect,
                 CornerRadius::same(3),
-                if *on { p.action } else { p.input },
-                Stroke::new(size::BORDER, if *on { p.action } else { p.border }),
+                if on { p.action } else { p.input },
+                Stroke::new(size::BORDER, if on { p.action } else { p.border }),
                 egui::StrokeKind::Inside,
             );
-            if *on {
+            if on {
                 icons::paint_at(
                     ui.painter(),
                     rect.center(),
@@ -480,6 +481,7 @@ fn value_ui(ui: &mut Ui, dm: &DataModel, value: &Value) {
                     p.action_text,
                 );
             }
+            return;
         }
         _ => {}
     }

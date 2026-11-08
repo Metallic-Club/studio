@@ -348,6 +348,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   from its parts. A drag placed it each frame from where it started with `PivotTo` while it was still turned from the
   frame before, which turned it again, and a Rotate drag spun it away. Each frame of a drag now first puts back the
   properties it watches as they were when it began.
+- **Check boxes alone (#378)**: a boolean is its check box, without "true" or "false" beside it ("Mixed" stays for
+  a selection that disagrees), editable or not.
 
 ## Not in this slice
 
