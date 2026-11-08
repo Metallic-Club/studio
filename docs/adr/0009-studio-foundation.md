@@ -356,6 +356,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   (`-20, 40, 33`), a colour its 0-255 channels, a dash for a component the selection disagrees on. A dash or a blank
   typed leaves that component as each instance has it (`Edit::Components`). The colour's picker button is a square
   as tall as the row, flush with its lines. An enum's drop-down loses its box too.
+- **Dragging numbers (#381)**: a single number (an `Int` too) is plain text like the others; dragged left it goes
+  down and right it goes up, from where the drag began, at the property's speed (the resize pointer over it says
+  so), and a click makes it a text field with the value selected. Kept in its range, whole for an `Int`.
 
 ## Not in this slice
 
