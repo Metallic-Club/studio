@@ -2,13 +2,14 @@
 //! several (shown faintly). Dragging a sphere moves that face and the face opposite stays; with Ctrl both faces move,
 //! about the centre; with Shift all three sizes change by one factor. Every part inside is resized and moved with it:
 //! a part turned between the box's axes cannot be stretched without shearing, so for a scale along one axis only its
-//! place follows. Shown with a ruler along the axis and the new size (or the factor, with Shift).
+//! place follows. Shown as a line from where the face started to where it is, with the new size (or the factor, with
+//! Shift).
 
 use egui::{Painter, Stroke};
 use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, DataModel, Id, Value};
 
-use super::{AXIS_NAMES, AXIS_RGB, Frame, Handle, Keys, axis_colour, label, ruler};
+use super::{AXIS_NAMES, AXIS_RGB, Frame, Handle, Keys, axis_colour, label, trail};
 use crate::viewport::gizmo::{self, AXES};
 use crate::viewport::pick::{self, EDGES};
 use crate::viewport::view::{Ray, View};
@@ -172,7 +173,7 @@ pub(super) fn paint_measurement(painter: &Painter, view: &View, f: &Frame, drag:
     let (axis, sign) = (drag.axis, drag.sign);
     let outward = bounds.outward(axis, sign);
     let face = bounds.face(axis, sign);
-    ruler(painter, view, face, outward, AXIS_RGB[axis], f.len, drag.pull);
+    trail(painter, view, face, face + outward * drag.pull);
     let text = if drag.proportional {
         format!("\u{D7}{:.2}", drag.factor)
     } else {
