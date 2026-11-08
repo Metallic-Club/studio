@@ -420,24 +420,19 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         defaults: &["Delete"],
         ..Command::new(ids::EDIT_DELETE, "Delete", "Edit", "Deletes the selection.")
     },
-    tool(ids::TOOL_SELECT, "Select tool", "Selects with a click.", &["Primary+1"]),
-    tool(
-        ids::TOOL_MOVE,
-        "Move tool",
-        "Moves the selection with handles.",
-        &["Primary+2"],
-    ),
+    tool(ids::TOOL_SELECT, "Select tool", "Selects with a click.", &["1"]),
+    tool(ids::TOOL_MOVE, "Move tool", "Moves the selection with handles.", &["2"]),
     tool(
         ids::TOOL_SCALE,
         "Scale tool",
         "Resizes the selection with handles.",
-        &["Primary+3"],
+        &["3"],
     ),
     tool(
         ids::TOOL_ROTATE,
         "Rotate tool",
         "Turns the selection with rings.",
-        &["Primary+4"],
+        &["4"],
     ),
     tool(
         ids::TOOL_LOCAL_SPACE,

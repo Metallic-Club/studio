@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 /// The file the toolbar is saved in, beside the settings.
 pub const TOOLBAR_FILE: &str = "toolbar.json";
-/// The file's format version.
-pub const TOOLBAR_VERSION: u32 = 1;
+/// The file's format version: 2 put the transform tools first in the first tab (#374).
+pub const TOOLBAR_VERSION: u32 = 2;
 
 /// One element of a tab's toolbar.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +31,18 @@ impl Element {
     pub fn tool(id: &str) -> Self {
         Element::Tool { id: id.to_owned() }
     }
+}
+
+/// Select, Move, Scale and Rotate, then a separator: what the Home tab starts with, at the far left (#374).
+fn transform_tools() -> Vec<Element> {
+    use super::tools::ids;
+    vec![
+        Element::tool(ids::SELECT),
+        Element::tool(ids::MOVE),
+        Element::tool(ids::SCALE),
+        Element::tool(ids::ROTATE),
+        Element::Separator,
+    ]
 }
 
 /// Where the tabs sit in their row (#329).
@@ -117,10 +129,11 @@ pub struct ToolbarConfig {
 }
 
 impl Default for ToolbarConfig {
-    /// Home, Model, UI (with a layout of its own), Scripts and Plugins. Home holds Studio's tools, Model the
-    /// transform tools (#355); the others start empty, for the user (and later plugins) to fill.
+    /// Home, Model, UI (with a layout of its own), Scripts and Plugins. Home holds the transform tools at its left
+    /// (#374) and Studio's tools, Model the transform tools (#355); the others start empty, for the user (and later
+    /// plugins) to fill.
     fn default() -> Self {
-        let home = [
+        let home = transform_tools().into_iter().chain([
             Element::tool(super::tools::ids::SAVE),
             Element::Separator,
             Element::tool(super::tools::ids::PLAY),
@@ -133,13 +146,13 @@ impl Default for ToolbarConfig {
             Element::tool("studio.panel.output"),
             Element::Spacer,
             Element::tool(super::tools::ids::SETTINGS),
-        ];
+        ]);
         let mut ui = TabConfig::new("UI", Vec::new());
         ui.own_layout = true;
         Self {
             version: TOOLBAR_VERSION,
             tabs: vec![
-                TabConfig::new("Home", home.into()),
+                TabConfig::new("Home", home.collect()),
                 TabConfig::new(
                     "Model",
                     vec![
@@ -193,12 +206,21 @@ impl ToolbarConfig {
         text
     }
 
-    /// At least one tab, each with an id of its own, and the active one in range.
+    /// At least one tab, each with an id of its own, and the active one in range; a file from before version 2
+    /// gets the transform tools at the far left of its first tab, unless that tab already holds one of them.
     pub fn repaired(mut self) -> Self {
-        self.version = TOOLBAR_VERSION;
         if self.tabs.is_empty() {
             self.tabs.push(TabConfig::new("Home", Vec::new()));
         }
+        if self.version < 2 {
+            let tools = transform_tools();
+            let first = &mut self.tabs[0].elements;
+            let holds = |element: &Element| matches!(element, Element::Tool { .. }) && first.contains(element);
+            if !tools.iter().any(holds) {
+                first.splice(0..0, tools);
+            }
+        }
+        self.version = TOOLBAR_VERSION;
         let mut seen = std::collections::HashSet::new();
         for index in 0..self.tabs.len() {
             if self.tabs[index].id == 0 || !seen.insert(self.tabs[index].id) {
@@ -329,7 +351,8 @@ mod tests {
         // Every tab has an id of its own.
         let ids: std::collections::HashSet<u32> = config.tabs.iter().map(|tab| tab.id).collect();
         assert_eq!(ids.len(), 5);
-        assert!(!config.tabs[0].elements.is_empty());
+        // Home starts with the transform tools (#374).
+        assert_eq!(config.tabs[0].elements[..5], transform_tools()[..]);
     }
 
     #[test]
@@ -427,6 +450,21 @@ mod tests {
         // A file from before #329: every tab shown, the tabs on the left.
         assert!(repaired.tabs.iter().all(|tab| tab.shown));
         assert_eq!(repaired.align, TabAlign::Left);
+        // From before version 2: the transform tools at the first tab's far left, once (#374).
+        assert_eq!(repaired.tabs[0].elements, transform_tools());
+        assert!(repaired.tabs[1].elements.is_empty());
+        assert_eq!(repaired.version, TOOLBAR_VERSION);
+        assert_eq!(repaired.clone().repaired(), repaired, "not again");
+        let held = format!(
+            r#"{{ "version": 1, "tabs": [ {{ "name": "A", "elements": [ {{ "kind": "tool", "id": "{}" }} ] }} ] }}"#,
+            super::super::tools::ids::MOVE
+        );
+        std::fs::write(&path, held).unwrap();
+        assert_eq!(
+            ToolbarConfig::load(&path).tabs[0].elements.len(),
+            1,
+            "a tab that holds one already is left as it is"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
