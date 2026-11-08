@@ -139,7 +139,7 @@ impl Panel for Viewport {
             for &id in editor.selection.ids() {
                 outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent));
             }
-            tools::paint(&painter, &view, &editor.scene(), &gizmo);
+            tools::paint(&painter, &view, &editor.scene(), &gizmo, snap);
             editor.viewport.gizmo = gizmo;
         }
         // Frame pacing: continuous while the viewport shows and the window has focus, at the frame cap if there is

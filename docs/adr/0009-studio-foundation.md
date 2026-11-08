@@ -320,6 +320,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   factor. Every part inside follows: resized along the axes its own line up with, moved with the box (a part turned
   between the box's axes only moves, as a stretch would shear it). Shown with a ruler and the new size or factor.
   `viewport::tools` keeps a file per gizmo (`moving`, `scale`), sharing the tool, the drag and the measurements.
+- **Rotate (#357)**: three rings and a trackball inside them. A ring turns the targets about its axis through the
+  gizmo's centre (several swing round their middle), its angle counted through half and whole turns, shown with marks
+  round the ring (longest at the quarters, then the eighths), the angle turned filled in, and the angle; the
+  trackball turns them as the pointer rolls it, adding up small arcs. Primary+R turns the selection a quarter about
+  the up axis, Primary+T tilts it, as one group, one undo step each.
 
 ## Not in this slice
 

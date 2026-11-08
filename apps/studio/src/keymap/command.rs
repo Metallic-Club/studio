@@ -218,6 +218,10 @@ pub mod ids {
     pub const TOOL_ROTATE: &str = "tools.rotate";
     /// World or local axes.
     pub const TOOL_LOCAL_SPACE: &str = "tools.local_space";
+    /// Turn the selection a quarter about the up axis (#357).
+    pub const TOOL_TURN: &str = "tools.turn";
+    /// Tilt the selection a quarter.
+    pub const TOOL_TILT: &str = "tools.tilt";
 }
 
 /// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
@@ -440,6 +444,18 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         "Local or world axes",
         "Puts the gizmos along the selection's own axes, or back along the world's.",
         &["Primary+L"],
+    ),
+    tool(
+        ids::TOOL_TURN,
+        "Turn a quarter",
+        "Turns the selection a quarter turn about the up axis.",
+        &["Primary+R"],
+    ),
+    tool(
+        ids::TOOL_TILT,
+        "Tilt a quarter",
+        "Tilts the selection a quarter turn.",
+        &["Primary+T"],
     ),
     Command {
         contexts: &[Context::Editor],

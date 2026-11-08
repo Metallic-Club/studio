@@ -72,6 +72,11 @@ pub(crate) enum MenuAction {
     Transform(Tool),
     /// Switch the gizmos between world and local axes.
     LocalSpace,
+    /// Turn the selection a quarter about the up axis (#357), or tilt it.
+    QuarterTurn {
+        /// Tilt rather than turn.
+        tilt: bool,
+    },
 }
 
 /// Where a game session is and what the history holds, for what the menus, the play buttons and the tools allow.
