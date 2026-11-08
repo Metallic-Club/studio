@@ -3,7 +3,10 @@
 //!
 //! On start ([`prepare`]), Studio renames a folder an older Studio made in lower case (`metallic`) to `Metallic`,
 //! copies the icons it ships beside its executable into its own folder (only the files missing there, so the user's
-//! edits are kept), and makes the games folder, whose games the projects page lists.
+//! edits are kept; a folder in the older flat layout is first moved to the new one, #322), and makes the games
+//! folder, whose games the projects page lists.
+
+use std::collections::HashMap;
 
 use std::path::{Path, PathBuf};
 
@@ -11,6 +14,7 @@ use metallic_engine::metallic_platform::{AppId, UserPaths};
 use metallic_engine::metallic_project::PROJECT_EXTENSION;
 
 use crate::STUDIO_APP_ID;
+use crate::theme::icons::{Icon, builtin};
 
 /// The organization's folder, in the user's profile and in their documents.
 pub const ORGANIZATION: &str = "Metallic";
@@ -88,16 +92,82 @@ pub fn capitalise(wanted: &Path) {
     }
 }
 
-/// Copies every file in `from` (sub-folders too) that `to` does not have yet. Files already there are the user's and
-/// are left as they are. Returns how many were copied.
+/// Installs the icons shipped in `from` into `to`: moves a folder in the older flat layout to the new one first
+/// ([`migrate_flat_icons`]), then copies every file `to` does not have yet. Files already there are the user's and are
+/// left as they are. Returns how many were copied.
 pub fn install_icons(from: &Path, to: &Path) -> std::io::Result<usize> {
+    let migrated = migrate_flat_icons(from, to)?;
+    let copied = copy_missing(from, to)?;
+    if let Some(manifest) = migrated {
+        crate::settings::store::write_atomically(&to.join(builtin::MANIFEST), &manifest)?;
+        log::info!("icons: moved {} to the new layout", to.display());
+    }
+    Ok(copied)
+}
+
+/// Clears an icons folder an older Studio made (`icons.json` format 1: every SVG at the top, #291) for the new layout
+/// (#322): its SVGs and licence go, and the `icons.json` to write once the new files are in is returned. What the user
+/// changed is kept: an icon pointed at a file of their own keeps it, and an SVG they edited in place stays where it
+/// is, its icon pointed at it. `None`, touching nothing, when `to` is not such a folder.
+pub fn migrate_flat_icons(from: &Path, to: &Path) -> std::io::Result<Option<String>> {
+    let Ok(old) = builtin::read_manifest(to) else {
+        return Ok(None);
+    };
+    if old.format >= 2 {
+        return Ok(None);
+    }
+    let mut kept: HashMap<Icon, String> = HashMap::new();
+    for (id, entry) in &old.icons {
+        let Some(icon) = Icon::from_id(id) else {
+            continue;
+        };
+        let flat = format!("{}.svg", icon.lucide());
+        if entry.file != flat {
+            // A file of the user's own.
+            kept.insert(icon, entry.file.clone());
+            continue;
+        }
+        let edited = match (
+            std::fs::read(to.join(&flat)),
+            std::fs::read(from.join(icon.default_file())),
+        ) {
+            (Ok(theirs), Ok(shipped)) => theirs != shipped,
+            _ => false,
+        };
+        if edited {
+            kept.insert(icon, flat);
+        }
+    }
+    let keep: std::collections::HashSet<&str> = kept.values().map(String::as_str).collect();
+    for icon in Icon::ALL {
+        let flat = format!("{}.svg", icon.lucide());
+        if !keep.contains(flat.as_str()) {
+            remove_if_there(&to.join(flat))?;
+        }
+    }
+    for file in ["LICENSE-Lucide.txt", "NOTICE.txt", builtin::MANIFEST] {
+        remove_if_there(&to.join(file))?;
+    }
+    Ok(Some(builtin::manifest_json_with(&kept)))
+}
+
+/// Deletes the file at `path`, if there is one.
+fn remove_if_there(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// Copies every file in `from` (sub-folders too) that `to` does not have yet. Returns how many were copied.
+fn copy_missing(from: &Path, to: &Path) -> std::io::Result<usize> {
     std::fs::create_dir_all(to)?;
     let mut copied = 0;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
         if entry.file_type()?.is_dir() {
-            copied += install_icons(&entry.path(), &target)?;
+            copied += copy_missing(&entry.path(), &target)?;
         } else if !target.exists() {
             std::fs::copy(entry.path(), &target)?;
             copied += 1;
@@ -167,6 +237,75 @@ mod tests {
         assert!(to.join("box.svg").is_file() && to.join("extra").join("note.txt").is_file());
         // Again: nothing left to copy.
         assert_eq!(install_icons(&from, &to).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_flat_folder_moves_to_the_new_layout_keeping_the_user_s_changes() {
+        let dir = temp("flat");
+        let to = dir.join("installed");
+        std::fs::create_dir_all(&to).unwrap();
+        let shipped = builtin::shipped_folder().expect("the shipped icons");
+        let svg = |icon: Icon| std::fs::read(shipped.join(icon.default_file())).unwrap();
+        // What a format 1 Studio installed: every SVG at the top, as shipped...
+        for icon in Icon::ALL {
+            std::fs::write(to.join(format!("{}.svg", icon.lucide())), svg(*icon)).unwrap();
+        }
+        std::fs::write(to.join("LICENSE-Lucide.txt"), "ISC").unwrap();
+        // ... but the part pointed at a file of the user's, and the folder icon edited in place.
+        std::fs::write(to.join("mine.svg"), "<svg/>").unwrap();
+        std::fs::write(to.join("folder.svg"), "<svg>edited</svg>").unwrap();
+        let mut manifest = String::from(r#"{ "format": 1, "about": "", "icons": {"#);
+        let entries: Vec<String> = Icon::ALL
+            .iter()
+            .map(|icon| {
+                let file = if *icon == Icon::ExplorerPart {
+                    "mine.svg".to_owned()
+                } else {
+                    format!("{}.svg", icon.lucide())
+                };
+                format!(r#""{}": {{ "file": "{file}" }}"#, icon.id())
+            })
+            .collect();
+        manifest.push_str(&entries.join(","));
+        manifest.push_str("} }");
+        std::fs::write(to.join(builtin::MANIFEST), manifest).unwrap();
+
+        install_icons(shipped, &to).unwrap();
+        // Only the user's files are left at the top, beside icons.json and the new folders.
+        let mut top: Vec<String> = std::fs::read_dir(&to)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        top.sort();
+        assert_eq!(
+            top,
+            [
+                "assets",
+                "explorer",
+                "folder.svg",
+                "icons.json",
+                "interface",
+                "licenses",
+                "mine.svg",
+                "panels",
+                "toolbar"
+            ]
+        );
+        let new = builtin::read_manifest(&to).unwrap();
+        assert_eq!(new.format, builtin::FORMAT);
+        let file = |icon: Icon| new.icons[icon.id()].file.clone();
+        assert_eq!(file(Icon::ExplorerPart), "mine.svg");
+        assert_eq!(file(Icon::ExplorerFolder), "folder.svg");
+        assert_eq!(file(Icon::ExplorerModel), Icon::ExplorerModel.default_file());
+        assert!(to.join(Icon::ExplorerModel.default_file()).is_file());
+        assert_eq!(new.icons[Icon::ExplorerPart.id()].color.as_deref(), Some("object"));
+        // Migrated once: started again, nothing changes.
+        assert_eq!(install_icons(shipped, &to).unwrap(), 0);
+        assert_eq!(
+            builtin::read_manifest(&to).unwrap().icons[Icon::ExplorerPart.id()].file,
+            "mine.svg"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -311,6 +311,26 @@ impl Hue {
         })
     }
 
+    /// Its colours on the dark and the light mode, the grey's being the palettes' subtle text.
+    pub const fn pair_or_subtle(self) -> (Color32, Color32) {
+        match self.pair() {
+            Some(pair) => pair,
+            None => (DARK.subtle, LIGHT.subtle),
+        }
+    }
+
+    /// A colour pair of someone's own (from `icons.json`, #322) on the dark or the light mode, pulled towards the
+    /// text with high contrast as a hue is.
+    pub fn color_of((on_dark, on_light): (Color32, Color32), dark: bool, high_contrast: bool) -> Color32 {
+        let palette = if dark { DARK } else { LIGHT };
+        let base = if dark { on_dark } else { on_light };
+        if high_contrast {
+            mix(base, palette.text, ICON_STRONG)
+        } else {
+            base
+        }
+    }
+
     /// Its colour on the dark or the light mode, with or without high contrast.
     pub const fn color(self, dark: bool, high_contrast: bool) -> Color32 {
         let palette = if dark { DARK } else { LIGHT };
