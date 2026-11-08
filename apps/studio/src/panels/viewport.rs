@@ -1,11 +1,17 @@
 //! The Viewport panel: the engine's render of the open game, filling the panel edge to edge (see
 //! [`crate::viewport`]). The panel notes its size in physical pixels and shows the texture the shell draws; until
 //! there is one it shows the project's name.
+//!
+//! A left click selects what is under the pointer (#354, [`crate::viewport::pick`]): Ctrl (Cmd) or Shift adds or
+//! removes it, a click on nothing clears the selection, and Alt is left to the camera's orbit. The selection is
+//! outlined in the accent colour, and the part under the pointer faintly. Not while a game runs: the viewport shows
+//! the editor's scene, and the panels the game's.
 
 use std::time::Duration;
 
 use egui::emath::GuiRounding;
-use egui::{Align2, FontId, Sense, Ui};
+use egui::{Align2, FontId, Painter, Sense, Stroke, Ui};
+use metallic_engine::metallic_core::{DataModel, Id};
 
 use super::ids;
 use crate::dock::{Panel, PanelContext, Zone};
@@ -13,10 +19,28 @@ use crate::keymap::Context;
 use crate::theme::icons::Icon;
 use crate::theme::tokens::text;
 use crate::theme::{current_colors, fonts};
+use crate::viewport::View;
+use crate::viewport::pick::{self, EDGES};
+
+/// How thick the selection's outline is, in points.
+const OUTLINE: f32 = 1.5;
 
 /// The Viewport panel.
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport;
+
+/// Draws `id`'s outline box (a part's own, a model's round its parts) with `stroke`.
+fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Stroke) {
+    let Some(bounds) = pick::outline_box(dm, id) else {
+        return;
+    };
+    let corners = bounds.corners();
+    for (a, b) in EDGES {
+        if let Some(line) = view.segment(corners[a], corners[b]) {
+            painter.line_segment(line, stroke);
+        }
+    }
+}
 
 impl Panel for Viewport {
     fn id(&self) -> &'static str {
@@ -80,7 +104,37 @@ impl Panel for Viewport {
                 );
             }
         }
-        ui.allocate_rect(rect, Sense::hover());
+        let response = ui.allocate_rect(rect, Sense::click());
+        if !cx.editor.is_playing() {
+            let view = View::new(&cx.editor.viewport.camera, rect);
+            let editor = &mut *cx.editor;
+            let under = |at| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray));
+            let hovered = response.hover_pos().and_then(under);
+            let modifiers = ui.input(|input| input.modifiers);
+            if response.clicked() && !modifiers.alt {
+                let picked = response.interact_pointer_pos().and_then(under);
+                match picked {
+                    Some(id) if modifiers.command || modifiers.shift => editor.selection.toggle(id),
+                    Some(id) => editor.select(Some(id)),
+                    None if modifiers.command || modifiers.shift => {}
+                    None => editor.selection.clear(),
+                }
+            }
+            let painter = ui.painter().with_clip_rect(rect);
+            let accent = current_colors(ui.ctx()).accent;
+            if let Some(id) = hovered.filter(|&id| !editor.selection.contains(id)) {
+                outline(
+                    &painter,
+                    &view,
+                    &editor.dm,
+                    id,
+                    Stroke::new(1.0, accent.gamma_multiply(0.5)),
+                );
+            }
+            for &id in editor.selection.ids() {
+                outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent));
+            }
+        }
         // Frame pacing: continuous while the viewport shows and the window has focus, at the frame cap if there is
         // one. Otherwise Studio waits for input or a change.
         if ui.input(|input| input.focused) {
