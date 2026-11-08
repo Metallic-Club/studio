@@ -353,6 +353,11 @@
       "color": "studio",
       "for": "The gear that opens Settings."
     },
+    "toolbar.snap": {
+      "file": "toolbar/magnet.svg",
+      "color": "scene",
+      "for": "Snapping on or off (#359)."
+    },
     "toolbar.spacer": {
       "file": "toolbar/space.svg",
       "for": "A spacer, in the toolbar's Add window."

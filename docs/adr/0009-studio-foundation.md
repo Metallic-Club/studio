@@ -329,11 +329,14 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   picks the selection up (selecting that part first if it was not). Over another part the box round what is carried
   sits on its surface, centred on the pointer (snapped to the move increment along a surface lined up with an axis);
   over nothing it slides on a level plane through where it was grabbed (facing the camera when the view is level).
+- **Snapping (#359)**: Settings, Editing has the move increment (1 stud) and the rotate increment (15 degrees), each
+  with its switch, both on by default; moves, sizes and carried parts go in move steps, ring turns in rotate steps
+  (the ring's marks follow the increment). The toolbar's Snap tool turns both on or off.
 
 ## Not in this slice
 
-Gizmos, selection in the viewport, undo and redo, editing properties, the Insert menu, the script editor, Project
-Settings, real sign-in, thumbnails, and single-instance forwarding. These wait for the owner's next list.
+The script editor, Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in
+the viewport, undo and redo, editing properties and Insert Object came with the list of 2026-11-07, above.)
 
 ## Consequences
 

@@ -72,6 +72,8 @@ pub(crate) enum MenuAction {
     Transform(Tool),
     /// Switch the gizmos between world and local axes.
     LocalSpace,
+    /// Turn snapping on or off (#359).
+    Snap,
     /// Turn the selection a quarter about the up axis (#357), or tilt it.
     QuarterTurn {
         /// Tilt rather than turn.

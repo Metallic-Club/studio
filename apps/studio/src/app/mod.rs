@@ -506,6 +506,10 @@ impl Studio {
         let play = editor::MenuState::of(editor);
         let dock = &self.dock;
         let gizmo = (editor.viewport.gizmo.tool, editor.viewport.gizmo.local);
+        let snapping = {
+            let editing = self.settings.settings().editing;
+            editing.snap_moves || editing.snap_turns
+        };
         let ran = ui
             .scope_builder(UiBuilder::new().max_rect(strip), |ui| {
                 self.toolbar.ui(
@@ -515,6 +519,7 @@ impl Studio {
                         ToolAction::Studio(StudioCommand::TogglePanel(id)) => dock.is_open(id),
                         ToolAction::Studio(StudioCommand::Transform(tool)) => *tool == gizmo.0,
                         ToolAction::Studio(StudioCommand::LocalSpace) => gizmo.1,
+                        ToolAction::Studio(StudioCommand::Snap) => snapping,
                         _ => false,
                     },
                 )
@@ -634,6 +639,12 @@ impl Studio {
                     editor.viewport.gizmo.tool = tool;
                 }
             }
+            MenuAction::Snap => {
+                let editing = &mut self.settings.settings_mut().editing;
+                let on = !(editing.snap_moves || editing.snap_turns);
+                editing.snap_moves = on;
+                editing.snap_turns = on;
+            }
             MenuAction::LocalSpace => {
                 if let Some(editor) = self.editor_mut() {
                     editor.viewport.gizmo.local = !editor.viewport.gizmo.local;
@@ -676,6 +687,7 @@ impl Studio {
                 StudioCommand::Undo => MenuAction::Undo,
                 StudioCommand::Transform(tool) => MenuAction::Transform(tool),
                 StudioCommand::LocalSpace => MenuAction::LocalSpace,
+                StudioCommand::Snap => MenuAction::Snap,
                 StudioCommand::Redo => MenuAction::Redo,
                 StudioCommand::ResetLayout => MenuAction::ResetLayout,
                 StudioCommand::Settings => MenuAction::Settings,
@@ -4483,10 +4495,20 @@ mod tests {
         harness.get_by_role_and_label(Role::Button, "Explorer tool").click();
         settle(&mut harness);
 
-        // Model holds the transform tools (#355). Scripts: an empty toolbar, with an Add tool button (#328) that opens
-        // the Add window.
+        // Model holds the transform tools (#355): the one in use, and Snap while it is on (#359), are shown on.
         click_tab(&mut harness, "Model");
-        harness.get_by_role_and_label(Role::Button, "Move tool");
+        harness.get_by_role_and_label(Role::Button, "Move tool").click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.editor().unwrap().viewport.gizmo.tool,
+            crate::viewport::tools::Tool::Move
+        );
+        assert!(harness.state().studio.settings().editing.snap_moves);
+        harness.get_by_role_and_label(Role::Button, "Snap tool").click();
+        settle(&mut harness);
+        let editing = harness.state().studio.settings().editing;
+        assert!(!editing.snap_moves && !editing.snap_turns);
+        // Scripts: an empty toolbar, with an Add tool button (#328) that opens the Add window.
         click_tab(&mut harness, "Scripts");
         assert_eq!(harness.state().studio.toolbar().config().active, 3);
         assert!(harness.state().studio.toolbar().config().tabs[3].elements.is_empty());

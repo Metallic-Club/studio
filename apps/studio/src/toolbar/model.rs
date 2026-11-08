@@ -149,6 +149,7 @@ impl Default for ToolbarConfig {
                         Element::tool(super::tools::ids::ROTATE),
                         Element::Separator,
                         Element::tool(super::tools::ids::LOCAL_SPACE),
+                        Element::tool(super::tools::ids::SNAP),
                     ],
                 ),
                 ui,
