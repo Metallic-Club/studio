@@ -3491,6 +3491,8 @@ mod tests {
         let log = Arc::new(LogBuffer::new());
         let mut harness = editing(path, "Play Game");
         harness.state_mut().studio.set_log(Arc::clone(&log));
+        harness.state_mut().studio.editor_mut().unwrap().output =
+            crate::panels::output::OutputState::new(Arc::clone(&log));
         add_play_script(&mut harness);
         settle(&mut harness);
         let before = baseplate(&harness.state().studio.editor().unwrap().dm);
@@ -3498,6 +3500,18 @@ mod tests {
             harness.query_by_role_and_label(Role::Tab, "Game").is_none(),
             "no Game tab yet"
         );
+        log.push(
+            log::Level::Info,
+            "metallic_studio::app",
+            "before play",
+            crate::logging::Origin::Engine,
+        );
+        settle(&mut harness);
+        let output = |harness: &Harness<'_, Test>| -> Vec<String> {
+            let editor = harness.state().studio.editor().unwrap();
+            editor.output.lines().iter().map(|line| line.message.clone()).collect()
+        };
+        assert!(output(&harness).contains(&"before play".to_owned()));
 
         // F5: the Game tab opens in front, and the scene's script runs in the Player.
         harness.key_press(Key::F5);
@@ -3514,6 +3528,11 @@ mod tests {
                 .any(|line| line.message == "hello from play" && line.origin == crate::logging::Origin::Script),
             "{lines:?}"
         );
+        // The Output shows the new session alone (#383).
+        let shown = output(&harness);
+        assert!(!shown.contains(&"before play".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"hello from play".to_owned()), "{shown:?}");
+        let studio = &harness.state().studio;
         let session = studio.editor().unwrap().play.as_ref().unwrap();
         assert_ne!(
             baseplate(session.player.engine().data_model()),
