@@ -20,8 +20,8 @@ static PROPS: &[PropMeta] = &[PropMeta::enumeration("Shape", "PartShape", "Block
     .group("Part")
     .order(0)
     .desc(
-        "The part's shape. A Ball's diameter is the smallest side of Size; a Cylinder runs along X; a Wedge \
-         slopes down towards -Z.",
+        "The part's shape, stretched to its Size: a Ball whose sides differ is an ellipsoid; a Cylinder runs along X, \
+         its ends the ellipse of the Y and Z sizes; a Wedge slopes down towards -Z.",
     )];
 
 /// A basic building block.

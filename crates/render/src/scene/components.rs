@@ -338,9 +338,9 @@ fn no_mesh(input: &MeshInput<'_>) -> (MeshKind, Vec3) {
     (MeshKind::NONE, input.size)
 }
 
-/// `PrimitiveMesh`: the built-in mesh for the part's `Shape`, scaled as Roblox and the physics colliders do: a
-/// Ball's diameter is the smallest side; a Cylinder runs along X with the smaller of Y and Z as its diameter; Block
-/// and Wedge fill the whole size.
+/// `PrimitiveMesh`: the built-in mesh for the part's `Shape`, stretched to the part's whole `Size` (#384): a Ball whose
+/// sides differ is an ellipsoid, a Cylinder (along X) has the ellipse of its Y and Z sizes for ends. The shader turns
+/// normals by the inverse transpose, so a stretched mesh is lit right.
 fn primitive_mesh(input: &MeshInput<'_>) -> (MeshKind, Vec3) {
     let shape = input
         .props
@@ -352,14 +352,5 @@ fn primitive_mesh(input: &MeshInput<'_>) -> (MeshKind, Vec3) {
             "Wedge" => MeshKind::WEDGE,
             _ => MeshKind::BLOCK,
         });
-    let size = input.size;
-    let scale = match shape {
-        MeshKind::BALL => Vec3::splat(size.min_element()),
-        MeshKind::CYLINDER => {
-            let diameter = size.y.min(size.z);
-            Vec3::new(size.x, diameter, diameter)
-        }
-        _ => size,
-    };
-    (shape, scale)
+    (shape, input.size)
 }
