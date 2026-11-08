@@ -399,6 +399,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   of its own opens hidden and shows once its first frame is drawn, and its first, unseen pass runs at the main
   window's scale: at egui's default one it laid text out at another size and rebuilt the font atlas every window
   shares, so Studio flickered and its text garbled as Settings opened.
+- **No Editing page (#410)**: Settings loses its Editing page; the increments are edited in the toolbar and the camera
+  speeds with the wheel, and both are still saved (`[editing]`, `[viewport]`).
 
 ## Not in this slice
 

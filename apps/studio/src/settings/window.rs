@@ -34,8 +34,6 @@ pub enum Category {
     /// Studio as a whole.
     #[default]
     General,
-    /// How the viewport's tools edit (#359).
-    Editing,
     /// The look of the interface.
     Appearance,
     /// The viewport's graphics.
@@ -46,9 +44,8 @@ pub enum Category {
 
 impl Category {
     /// Every category, in the order the window lists them.
-    pub const ALL: [Category; 5] = [
+    pub const ALL: [Category; 4] = [
         Category::General,
-        Category::Editing,
         Category::Appearance,
         Category::Rendering,
         Category::Keybinds,
@@ -58,7 +55,6 @@ impl Category {
     pub fn label(self) -> &'static str {
         match self {
             Category::General => "General",
-            Category::Editing => "Editing",
             Category::Appearance => "Appearance",
             Category::Rendering => "Rendering",
             Category::Keybinds => "Keybinds",
@@ -69,7 +65,6 @@ impl Category {
     fn lead(self) -> &'static str {
         match self {
             Category::General => "How Studio starts and behaves.",
-            Category::Editing => "How the viewport's tools move, resize and turn things.",
             Category::Appearance => "Changes apply at once.",
             Category::Rendering => "How the editor's viewport draws your scenes. The game's own look is never changed.",
             Category::Keybinds => "Click a shortcut to change it, or + to add another. Right-click one to remove it.",
@@ -130,60 +125,6 @@ pub static ENTRIES: &[Entry] = &[
         description: "Go straight to your projects when Studio starts, without the sign-in screen.",
         control: |ui, s| {
             toggle(ui, &mut s.general.skip_sign_in, "Skip sign-in");
-        },
-    },
-    Entry {
-        category: Category::Editing,
-        name: "Move increment",
-        description: "Moves, resizes and carried parts go in steps of this many studs when on.",
-        control: |ui, s| {
-            let e = &mut s.editing;
-            toggle(ui, &mut e.snap_moves, "Snap moves");
-            ui.add_enabled(
-                e.snap_moves,
-                egui::DragValue::new(&mut e.move_step)
-                    .range(super::MOVE_STEP.0..=super::MOVE_STEP.1)
-                    .speed(0.05)
-                    .suffix(" studs"),
-            );
-        },
-    },
-    Entry {
-        category: Category::Editing,
-        name: "Rotate increment",
-        description: "Turns go in steps of this many degrees when on.",
-        control: |ui, s| {
-            let e = &mut s.editing;
-            toggle(ui, &mut e.snap_turns, "Snap turns");
-            ui.add_enabled(
-                e.snap_turns,
-                egui::DragValue::new(&mut e.turn_step)
-                    .range(super::TURN_STEP.0..=super::TURN_STEP.1)
-                    .speed(0.5)
-                    .suffix("\u{B0}"),
-            );
-        },
-    },
-    Entry {
-        category: Category::Editing,
-        name: "Camera speed",
-        description: "How fast the viewport's camera flies, and what holding Shift multiplies it by (below one for \
-                      slow, careful moves). Alt and the wheel change the first in the viewport, Shift and the wheel \
-                      the second.",
-        control: |ui, s| {
-            let v = &mut s.viewport;
-            ui.add(
-                egui::DragValue::new(&mut v.fly_speed)
-                    .range(super::FLY_SPEED.0..=super::FLY_SPEED.1)
-                    .speed(0.5)
-                    .suffix(" studs/s"),
-            );
-            ui.add(
-                egui::DragValue::new(&mut v.secondary_speed)
-                    .range(super::SECONDARY_SPEED.0..=super::SECONDARY_SPEED.1)
-                    .speed(0.05)
-                    .prefix("Shift \u{D7}"),
-            );
         },
     },
     Entry {
@@ -1062,6 +1003,8 @@ mod tests {
             let count = ENTRIES.iter().filter(|entry| entry.category == category).count();
             assert_eq!(count == 0, category == Category::Keybinds, "{category:?}");
         }
+        // No Editing page (#410): the increments are in the toolbar, the camera speeds on the wheel.
+        assert!(Category::ALL.iter().all(|category| category.label() != "Editing"));
         let mut seen = std::collections::HashSet::new();
         for entry in ENTRIES {
             assert!(seen.insert(entry.name), "{} twice", entry.name);

@@ -49,7 +49,8 @@ pub struct General {
     pub skip_sign_in: bool,
 }
 
-/// The Editing category (#359): the increments the gizmos' drags snap to, and whether they do.
+/// The increments the gizmos' drags snap to, and whether they do (#359), saved in `[editing]`; the toolbar's Snap tool
+/// edits them (#375), and Settings has no page for them since #410.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Editing {
     /// Whether moves and sizes snap to [`Editing::move_step`].
@@ -79,7 +80,7 @@ pub const MOVE_STEP: (f32, f32) = (0.01, 1000.0);
 pub const TURN_STEP: (f32, f32) = (0.1, 180.0);
 
 /// The viewport's settings: how fast its camera flies (#385) and what it shows (#387). Saved in the `[viewport]`
-/// section; the speeds are on Settings, Editing, and the wheel changes them in the viewport; what it shows is in the
+/// section; the wheel changes the speeds in the viewport (Settings has no page for them since #410); what it shows is in the
 /// Viewport's own menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Viewport {
