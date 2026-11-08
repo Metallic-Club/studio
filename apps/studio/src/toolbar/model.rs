@@ -33,7 +33,8 @@ impl Element {
     }
 }
 
-/// Select, Move, Scale and Rotate, then a separator: what the Home tab starts with, at the far left (#374).
+/// Select, Move, Scale and Rotate (#374), the increments (#375), then a separator: what the Home tab starts with, at
+/// the far left.
 fn transform_tools() -> Vec<Element> {
     use super::tools::ids;
     vec![
@@ -41,6 +42,7 @@ fn transform_tools() -> Vec<Element> {
         Element::tool(ids::MOVE),
         Element::tool(ids::SCALE),
         Element::tool(ids::ROTATE),
+        Element::tool(ids::SNAP),
         Element::Separator,
     ]
 }
@@ -351,8 +353,8 @@ mod tests {
         // Every tab has an id of its own.
         let ids: std::collections::HashSet<u32> = config.tabs.iter().map(|tab| tab.id).collect();
         assert_eq!(ids.len(), 5);
-        // Home starts with the transform tools (#374).
-        assert_eq!(config.tabs[0].elements[..5], transform_tools()[..]);
+        // Home starts with the transform tools (#374) and the increments (#375).
+        assert_eq!(config.tabs[0].elements[..6], transform_tools()[..]);
     }
 
     #[test]

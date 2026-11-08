@@ -338,6 +338,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Tools at hand (#374)**: the transform tools' keybinds are 1 (Select), 2 (Move), 3 (Scale) and 4 (Rotate), which
   never fire while typing. The Home tab starts with them, at the far left; `toolbar.json` version 2 puts them at the
   far left of a saved toolbar's first tab once, unless that tab already holds one of them.
+- **Increments in the toolbar (#375)**: the Snap tool is drawn as the move and rotate increments, one above the
+  other (`toolbar::increments`): a check box for each switch, the Move or Rotate icon, the increment as a field to type
+  in or drag, and arrows stepping through common values (0.01 to 100 studs, 1 to 180 degrees). It edits Settings,
+  Editing in place, and the Home tab has it after the transform tools.
 
 ## Not in this slice
 

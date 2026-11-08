@@ -15,6 +15,7 @@
 //! to carry out, which is also how a plugin's tool will reach its plugin.
 
 pub mod add;
+pub mod increments;
 pub mod model;
 pub mod tabs;
 pub mod tools;
@@ -26,6 +27,7 @@ use egui::{
 };
 
 use crate::dock::Panel;
+use crate::settings::Editing;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
 use crate::theme::{PlayControl, current_colors, fonts};
@@ -205,12 +207,13 @@ impl Toolbar {
     }
 
     /// Draws the toolbar filling `ui`'s rect. `enabled` says whether a tool can be used now, `checked` whether it is
-    /// on (a panel that is open). Returns what was clicked.
+    /// on (a panel that is open); the Snap tool edits `editing` (#375). Returns what was clicked.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
         enabled: impl Fn(&ToolAction) -> bool,
         checked: impl Fn(&ToolAction) -> bool,
+        editing: &mut Editing,
     ) -> Vec<ToolbarEvent> {
         let p = current_colors(ui.ctx()).palette;
         let rect = ui.max_rect();
@@ -224,7 +227,7 @@ impl Toolbar {
         let mut changes = Vec::new();
         let mut events = Vec::new();
         self.tab_row(ui, tabs, &mut changes);
-        self.tool_row(ui, tools, &enabled, &checked, &mut changes, &mut events);
+        self.tool_row(ui, tools, &enabled, &checked, editing, &mut changes, &mut events);
         self.add_window(ui.ctx(), &mut changes);
         if self.tabs_open && !tabs::show(ui.ctx(), &mut self.config) {
             changes.push(Change::CloseTabs);
@@ -460,12 +463,14 @@ impl Toolbar {
     }
 
     /// The front tab's elements; right-click on the row to add one.
+    #[allow(clippy::too_many_arguments)]
     fn tool_row(
         &self,
         ui: &mut Ui,
         rect: Rect,
         enabled: &impl Fn(&ToolAction) -> bool,
         checked: &impl Fn(&ToolAction) -> bool,
+        editing: &mut Editing,
         changes: &mut Vec<Change>,
         events: &mut Vec<ToolbarEvent>,
     ) {
@@ -528,6 +533,9 @@ impl Toolbar {
         let mut dragged = false;
         for (index, element) in elements.iter().enumerate() {
             let (width, label) = match element {
+                Element::Tool { id } if self.registry.get(id).is_some_and(is_increments) => {
+                    (increments::WIDTH, "Snap".to_owned())
+                }
                 Element::Tool { id } => {
                     let label = self.registry.get(id).map_or(id.as_str(), |tool| tool.label.as_str());
                     let galley =
@@ -542,7 +550,7 @@ impl Toolbar {
                 pos2(x, rect.top() + space::S1),
                 vec2(width, rect.height() - 2.0 * space::S1),
             );
-            let response = self.element(ui, index, element, at, &label, enabled, checked, events);
+            let response = self.element(ui, index, element, at, &label, enabled, checked, editing, events);
             if response.dragged() {
                 dragged = true;
             }
@@ -593,6 +601,7 @@ impl Toolbar {
         label: &str,
         enabled: &impl Fn(&ToolAction) -> bool,
         checked: &impl Fn(&ToolAction) -> bool,
+        editing: &mut Editing,
         events: &mut Vec<ToolbarEvent>,
     ) -> Response {
         let p = current_colors(ui.ctx()).palette;
@@ -601,6 +610,11 @@ impl Toolbar {
             .with(("metallic.toolbar.element", self.config.active_tab().id, index));
         let response = ui.interact(rect, id, Sense::click_and_drag());
         match element {
+            Element::Tool { id } if self.registry.get(id).is_some_and(is_increments) => {
+                response.widget_info(|| WidgetInfo::labeled(Role::Group, true, "Snap increments"));
+                increments::show(ui, rect, editing);
+                response
+            }
             Element::Tool { id } => {
                 let tool = self.registry.get(id);
                 let usable = tool.is_some_and(|tool| enabled(&tool.action));
@@ -673,6 +687,11 @@ impl Toolbar {
             }
         }
     }
+}
+
+/// Whether `tool` is drawn as the move and rotate increments (#375) rather than a button.
+fn is_increments(tool: &Tool) -> bool {
+    tool.action == ToolAction::Studio(StudioCommand::Snap)
 }
 
 /// How `action` is drawn when it is one of the game's controls, as on the top bar (#325).

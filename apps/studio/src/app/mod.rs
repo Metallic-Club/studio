@@ -506,10 +506,7 @@ impl Studio {
         let play = editor::MenuState::of(editor);
         let dock = &self.dock;
         let gizmo = (editor.viewport.gizmo.tool, editor.viewport.gizmo.local);
-        let snapping = {
-            let editing = self.settings.settings().editing;
-            editing.snap_moves || editing.snap_turns
-        };
+        let editing = &mut self.settings.settings_mut().editing;
         let ran = ui
             .scope_builder(UiBuilder::new().max_rect(strip), |ui| {
                 self.toolbar.ui(
@@ -519,9 +516,9 @@ impl Studio {
                         ToolAction::Studio(StudioCommand::TogglePanel(id)) => dock.is_open(id),
                         ToolAction::Studio(StudioCommand::Transform(tool)) => *tool == gizmo.0,
                         ToolAction::Studio(StudioCommand::LocalSpace) => gizmo.1,
-                        ToolAction::Studio(StudioCommand::Snap) => snapping,
                         _ => false,
                     },
+                    editing,
                 )
             })
             .inner;
@@ -4511,11 +4508,24 @@ mod tests {
             harness.state().studio.editor().unwrap().viewport.gizmo.tool,
             crate::viewport::tools::Tool::Move
         );
+        // Snap is the increments (#375): a switch, a field and arrows for each.
         assert!(harness.state().studio.settings().editing.snap_moves);
-        harness.get_by_role_and_label(Role::Button, "Snap tool").click();
+        harness.get_by_role_and_label(Role::CheckBox, "Snap turns").click();
+        harness.get_by_role_and_label(Role::Button, "Move increment up").click();
         settle(&mut harness);
         let editing = harness.state().studio.settings().editing;
-        assert!(!editing.snap_moves && !editing.snap_turns);
+        assert!(editing.snap_moves && !editing.snap_turns);
+        assert_eq!(editing.move_step, 2.0);
+        harness
+            .get_by_role_and_label(Role::Button, "Rotate increment up")
+            .click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.settings().editing.turn_step,
+            15.0,
+            "off: the arrows do nothing"
+        );
+        harness.get_by_role_and_label(Role::SpinButton, "Move increment");
         // Scripts: an empty toolbar, with an Add tool button (#328) that opens the Add window.
         click_tab(&mut harness, "Scripts");
         assert_eq!(harness.state().studio.toolbar().config().active, 3);
