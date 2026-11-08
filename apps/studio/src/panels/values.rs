@@ -10,7 +10,8 @@
 //!   the focus (Escape leaves the value as it was). A vector is its numbers one after another (`-20, 40, 33`), a
 //!   colour its 0-255 channels;
 //! - `CFrame`: two rows, its position and its orientation in degrees ([`Part`]);
-//! - `Color3`: a square swatch flush with the row's lines opens a colour picker;
+//! - `Color3`: its channels as text; a small square swatch at the right of the name column ([`swatch`], #415) opens a
+//!   colour picker;
 //! - enums: a drop-down of the enum's items.
 //!
 //! With several instances selected (#350) a value they disagree on is **mixed** ([`Mixed`]): a component shows a
@@ -216,7 +217,11 @@ pub fn edit(
         Value::String(s) => text_field(ui, label, &s, width, mixed.whole).map(|s| Edit::Whole(Value::String(s.into()))),
         Value::Vector2(v) => components_field(ui, &[v.x, v.y], &mixed.parts, meta.range, label, width),
         Value::Vector3(v) => components_field(ui, &[v.x, v.y, v.z], &mixed.parts, meta.range, label, width),
-        Value::Color3(color) => colour(ui, color, &mixed.parts, label, width),
+        Value::Color3(color) => {
+            let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round();
+            let values = [channel(color.r), channel(color.g), channel(color.b)];
+            components_field(ui, &values, &mixed.parts, Some((0.0, 255.0)), label, width)
+        }
         Value::Enum(item) => {
             let PropType::Enum(enum_type) = meta.ty else {
                 return None;
@@ -430,15 +435,37 @@ fn components_field(
     parse_components(&typed, values.len(), range).map(Edit::Components)
 }
 
-/// A colour (#380): a square swatch filling the row's height, flush with its lines, which opens a picker (a whole
-/// colour), then its 0-255 channels as a text field.
-fn colour(ui: &mut Ui, color: Color3, mixed: &[bool; 3], label: &str, width: f32) -> Option<Edit> {
-    let side = ui.max_rect().height();
-    let (rect, swatch) = ui.allocate_exact_size(vec2(side, side), Sense::click());
-    labelled(&swatch, Role::ColorWell, label);
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, swatch_fill(color));
+/// The space round a colour's swatch inside its row's lines (#415).
+pub const SWATCH_PAD: f32 = 4.0;
+
+/// A colour row's swatch at `rect` (#415: a small square at the right of the name column): `color`, which opens a
+/// picker when `editable`. Returns the colour picked.
+pub fn swatch(ui: &mut Ui, rect: egui::Rect, color: Color3, label: &str, editable: bool) -> Option<Edit> {
+    let p = current_colors(ui.ctx()).palette;
+    let sense = if editable { Sense::click() } else { Sense::hover() };
+    let response = ui.interact(
+        rect,
+        ui.make_persistent_id(("metallic.properties.swatch", label)),
+        sense,
+    );
+    labelled(&response, Role::ColorWell, label);
+    let edge = if editable && response.hovered() {
+        p.text
+    } else {
+        p.border
+    };
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(2),
+        swatch_fill(color),
+        Stroke::new(size::BORDER, edge),
+        egui::StrokeKind::Inside,
+    );
+    if !editable {
+        return None;
+    }
     let mut picked = None;
-    egui::Popup::menu(&swatch)
+    egui::Popup::menu(&response)
         .id(ui.make_persistent_id(("metallic.properties.picker", label)))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
@@ -449,12 +476,7 @@ fn colour(ui: &mut Ui, color: Color3, mixed: &[bool; 3], label: &str, width: f32
                 picked = Some(Edit::Whole(Value::Color3(Color3::new(unit(r), unit(g), unit(b)))));
             }
         });
-    ui.add_space(space::S3);
-    let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round();
-    let values = [channel(color.r), channel(color.g), channel(color.b)];
-    let rest = (width - side - space::S3).max(16.0);
-    let channels = components_field(ui, &values, mixed, Some((0.0, 255.0)), label, rest);
-    picked.or(channels)
+    picked
 }
 
 /// A one-line text field `width` wide showing `current` (empty, with "Mixed" in grey, when `mixed`). What is typed is
@@ -656,13 +678,13 @@ mod tests {
     }
 
     #[test]
-    fn a_colour_is_a_square_swatch_and_its_channels_as_text() {
+    fn a_colour_is_its_channels_as_text_its_swatch_drawn_by_the_row() {
         static COLOR: PropMeta = PropMeta::color3("Color", 1.0, 0.0, 0.0);
         let harness = editor(&COLOR, Value::Color3(Color3::new(1.0, 0.5, 0.0)), Mixed::default());
-        let swatch = harness.get_by_role_and_label(Role::ColorWell, "Value").rect();
-        assert_eq!(swatch.width(), swatch.height(), "square");
         let field = harness.get_by_role_and_label(Role::TextInput, "Value");
         assert_eq!(field.value().as_deref(), Some("255, 128, 0"));
+        // The swatch is the row's, left of the line between the columns (#415).
+        assert!(harness.query_by_role(Role::ColorWell).is_none());
     }
 
     #[test]

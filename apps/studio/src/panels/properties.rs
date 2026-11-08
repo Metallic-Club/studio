@@ -384,10 +384,21 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
             pos2(right - space::S3, rect.bottom()),
         )
     };
-    let (name_cell, mut value_cell) = (cell(rect.left(), split), cell(split, rect.right()));
-    // A colour's swatch is flush with the row's lines (#380): its cell starts at the column's line, under the row's.
-    if row.editable && matches!(values::shown(&row.value, row.part), Value::Color3(_)) {
-        value_cell.min = pos2(split, rect.top() + size::BORDER);
+    let (mut name_cell, value_cell) = (cell(rect.left(), split), cell(split, rect.right()));
+    // A colour's swatch (#415): a small square at the right of the name column, inside the row's lines with room round
+    // it; the name stops short of it, and the value's text starts where every other value's does.
+    let mut picked = None;
+    if let Value::Color3(color) = values::shown(&row.value, row.part) {
+        let side = size::ROW - 2.0 * values::SWATCH_PAD;
+        let swatch = Rect::from_min_size(
+            pos2(
+                split - size::BORDER - values::SWATCH_PAD - side,
+                rect.top() + values::SWATCH_PAD,
+            ),
+            vec2(side, side),
+        );
+        name_cell.max.x = name_cell.max.x.min(swatch.left() - space::S2);
+        picked = values::swatch(ui, swatch, color, &row.label, row.editable);
     }
     let in_cell = |cell: Rect| {
         UiBuilder::new()
@@ -405,19 +416,21 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
             name.on_hover_text(row.description);
         }
     });
-    ui.scope_builder(in_cell(value_cell), |ui| {
-        ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
-        if row.editable {
-            values::edit(ui, dm, row.meta, &row.label, row.part, &row.value, row.mixed)
-        } else if row.mixed.whole {
-            ui.label(RichText::new("Mixed").size(text::BODY).color(p.subtle));
-            None
-        } else {
-            value_ui(ui, dm, &values::shown(&row.value, row.part));
-            None
-        }
-    })
-    .inner
+    let typed = ui
+        .scope_builder(in_cell(value_cell), |ui| {
+            ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
+            if row.editable {
+                values::edit(ui, dm, row.meta, &row.label, row.part, &row.value, row.mixed)
+            } else if row.mixed.whole {
+                ui.label(RichText::new("Mixed").size(text::BODY).color(p.subtle));
+                None
+            } else {
+                value_ui(ui, dm, &values::shown(&row.value, row.part));
+                None
+            }
+        })
+        .inner;
+    typed.or(picked)
 }
 
 /// The strip over the line between the columns, down every row in `rows` (#324): dragging it moves the line, which
@@ -449,45 +462,31 @@ fn split_grip(ui: &mut Ui, rows: Rect, share: f32) {
     }
 }
 
-/// A property's value: a check box alone (a boolean, #378), or text after a swatch (a colour).
+/// A property's value: a check box alone (a boolean, #378), or text (a colour's swatch is the row's, #415).
 fn value_ui(ui: &mut Ui, dm: &DataModel, value: &Value) {
     let p = current_colors(ui.ctx()).palette;
     let shown = format_value(dm, value);
-    match value {
-        Value::Color3(color) => {
-            let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-            let fill = values::swatch_fill(*color);
-            ui.painter().rect(
-                rect,
-                CornerRadius::same(3),
-                fill,
-                Stroke::new(size::BORDER, p.border),
-                egui::StrokeKind::Inside,
+    if let &Value::Bool(on) = value {
+        let (rect, response) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+        response.widget_info(|| WidgetInfo::selected(Role::CheckBox, false, on, &shown));
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(3),
+            if on { p.action } else { p.input },
+            Stroke::new(size::BORDER, if on { p.action } else { p.border }),
+            egui::StrokeKind::Inside,
+        );
+        if on {
+            icons::paint_at(
+                ui.painter(),
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                Icon::UiCheck,
+                text::SMALL - 1.0,
+                p.action_text,
             );
         }
-        &Value::Bool(on) => {
-            let (rect, response) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-            response.widget_info(|| WidgetInfo::selected(Role::CheckBox, false, on, &shown));
-            ui.painter().rect(
-                rect,
-                CornerRadius::same(3),
-                if on { p.action } else { p.input },
-                Stroke::new(size::BORDER, if on { p.action } else { p.border }),
-                egui::StrokeKind::Inside,
-            );
-            if on {
-                icons::paint_at(
-                    ui.painter(),
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    Icon::UiCheck,
-                    text::SMALL - 1.0,
-                    p.action_text,
-                );
-            }
-            return;
-        }
-        _ => {}
+        return;
     }
     let color = match value {
         Value::Ref(None) => p.subtle,

@@ -2519,7 +2519,15 @@ mod tests {
         // Edited in place (#349): a vector's text (#380), the enum's drop-down, the colour's swatch.
         harness.get_by_role_and_label(Role::TextInput, "Size");
         harness.get_by_role_and_label(Role::ComboBox, "Material");
-        harness.get_by_role_and_label(Role::ColorWell, "Color");
+        // The colour's swatch (#415): a small square inside the row, left of the line, the value's text where the others'
+        // is.
+        let swatch = harness.get_by_role_and_label(Role::ColorWell, "Color").rect();
+        let channels = harness.get_by_role_and_label(Role::TextInput, "Color").rect();
+        let size = harness.get_by_role_and_label(Role::TextInput, "Size").rect();
+        assert_eq!(swatch.width(), swatch.height(), "square");
+        assert!(swatch.height() < crate::theme::tokens::size::ROW - 4.0, "{swatch:?}");
+        assert!(swatch.right() < channels.left(), "{swatch:?} {channels:?}");
+        assert!((channels.left() - size.left()).abs() < 0.5, "{channels:?} {size:?}");
 
         // The Assets tab beside Output (#256): the template's one asset is its scene, and Output goes behind it.
         harness.get_by_role_and_label(Role::Button, "Clear");
