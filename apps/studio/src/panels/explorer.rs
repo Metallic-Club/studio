@@ -344,6 +344,7 @@ impl Panel for Explorer {
         }
         let mut clicked = None;
         let mut toggled = None;
+        let mut rename = None;
         let mut dropped = None;
         let pointer = ui.input(|input| input.pointer.interact_pos());
         let mut menu = None;
@@ -392,6 +393,7 @@ impl Panel for Explorer {
                     }
                     RowAction::Select => clicked = Some(row.id),
                     RowAction::Toggle => toggled = Some(*row),
+                    RowAction::Rename => rename = Some(row.id),
                     RowAction::Menu(edit) => menu = Some((row.id, edit)),
                     RowAction::Renamed(name) => renamed = Some((row.id, Some(name))),
                     RowAction::KeepName => renamed = Some((row.id, None)),
@@ -409,6 +411,11 @@ impl Panel for Explorer {
                 .click(&rows, editor.selection, id, modifiers.command, modifiers.shift);
         }
         let mut editor = editor;
+        // A double-click renames the row's instance in place (#436), as F2 does.
+        if let Some(id) = rename {
+            editor.selection.set_only(Some(id));
+            editor.tree_edit(TreeEdit::Rename);
+        }
         if editor.explorer.dragging && ui.input(|input| input.pointer.any_released()) {
             editor.explorer.dragging = false;
             if let Some((parent, before)) = dropped.and_then(|drop| drop.target(editor.dm)) {
@@ -468,6 +475,8 @@ enum RowAction {
     None,
     Select,
     Toggle,
+    /// A double-click: rename it (#436).
+    Rename,
     /// An item of its right-click menu (#351).
     Menu(TreeEdit),
     /// Its new name, typed in place.
@@ -614,10 +623,10 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
         RowAction::Menu(edit)
     } else if response.secondary_clicked() && !selected {
         RowAction::Select
-    } else if caret_response.is_some_and(|response| response.clicked())
-        || (row.has_children && response.double_clicked())
-    {
+    } else if caret_response.is_some_and(|response| response.clicked()) {
         RowAction::Toggle
+    } else if response.double_clicked() && !renaming {
+        RowAction::Rename
     } else if response.clicked() {
         RowAction::Select
     } else {

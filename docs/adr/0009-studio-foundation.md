@@ -428,6 +428,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Drop-downs (#418)**: an enum's drop-down lists its items as the Properties panel's rows: the row's height and
   font, striped, the current item checked in the accent, a quiet highlight under the pointer.
 
+### The list of 2026-11-09 (#436-#442)
+
+- **Double-click to rename (#436)**: a double-click on an Explorer row renames it in place, as F2 does; a row opens
+  and closes by its arrow alone.
+
 ## Not in this slice
 
 The script editor, Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in
