@@ -421,6 +421,10 @@ impl Studio {
 
     /// Draws one frame into `ui`, the whole window, at `now`.
     pub fn ui(&mut self, ui: &mut egui::Ui, now: Instant) {
+        // Edits to icons.json show without a restart (#403).
+        if crate::theme::icons::builtin::refresh() {
+            ui.ctx().request_repaint();
+        }
         let ctx = ui.ctx().clone();
         // The splash keeps its own look; the settings apply from the first screen after it.
         if self.screen != Screen::Splash {
