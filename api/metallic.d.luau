@@ -845,7 +845,7 @@ end
 declare extern type Light extends WorldObject with
     --- Whether the light shines. Turning it off keeps every other setting.
     Enabled: boolean
-    --- How strong the light is. 1 is an ordinary lamp; 0 gives no light.
+    --- How strong the light is. 1 is an ordinary lamp; 0 gives no light; there is no upper limit.
     Brightness: number
     --- The colour of the light.
     Color: Color3

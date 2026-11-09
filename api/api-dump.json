@@ -2475,11 +2475,11 @@
           "computed": false,
           "range": [
             0.0,
-            100.0
+            null
           ],
           "wraps": false,
           "group": "Light",
-          "description": "How strong the light is. 1 is an ordinary lamp; 0 gives no light.",
+          "description": "How strong the light is. 1 is an ordinary lamp; 0 gives no light; there is no upper limit.",
           "aliases": [],
           "derived_from": []
         },

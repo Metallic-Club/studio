@@ -122,7 +122,9 @@ pub struct ApiProperty {
     pub read_only: bool,
     /// Its value is computed from other state instead of being stored.
     pub computed: bool,
-    /// `[min, max]`: writes are clamped into this range, or wrapped into `[min, max)` when `wraps` is set.
+    /// `[min, max]`: writes are clamped into this range, or wrapped into `[min, max)` when `wraps` is set. An end with
+    /// no limit (infinite) is written as `null`: `[0, null]` is "at least 0" (#406).
+    #[serde(with = "bounds")]
     pub range: Option<[f64; 2]>,
     /// Writes outside `range` wrap around instead of being clamped.
     pub wraps: bool,
@@ -477,6 +479,21 @@ fn component(desc: &ComponentDesc) -> ApiComponent {
     }
 }
 
+/// A range's ends in JSON, which has no infinity: an infinite end is `null`, read back as unbounded on its side.
+mod bounds {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(range: &Option<[f64; 2]>, serializer: S) -> Result<S::Ok, S::Error> {
+        let end = |x: f64| x.is_finite().then_some(x);
+        range.map(|[min, max]| [end(min), end(max)]).serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<[f64; 2]>, D::Error> {
+        let range = Option::<[Option<f64>; 2]>::deserialize(deserializer)?;
+        Ok(range.map(|[min, max]| [min.unwrap_or(f64::NEG_INFINITY), max.unwrap_or(f64::INFINITY)]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use metallic_core::{ClassDesc, MethodCall, RegistryInput, ScriptError, ScriptValue};
@@ -505,6 +522,33 @@ mod tests {
             }
         }
         assert_eq!(ApiDump::from_registry(&registry), dump);
+    }
+
+    #[test]
+    fn an_unbounded_end_is_null_and_reads_back() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct Bounds {
+            #[serde(with = "bounds")]
+            range: Option<[f64; 2]>,
+        }
+        let at_least = Bounds {
+            range: Some([0.0, f64::INFINITY]),
+        };
+        let text = serde_json::to_string(&at_least).unwrap();
+        assert_eq!(text, r#"{"range":[0.0,null]}"#);
+        assert_eq!(serde_json::from_str::<Bounds>(&text).unwrap(), at_least);
+        let none = Bounds { range: None };
+        assert_eq!(
+            serde_json::from_str::<Bounds>(&serde_json::to_string(&none).unwrap()).unwrap(),
+            none
+        );
+        // The shipped dump reads back, unbounded Brightness and all.
+        let dump: ApiDump = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../api/api-dump.json"
+        )))
+        .unwrap();
+        assert!(!dump.classes.is_empty());
     }
 
     #[test]

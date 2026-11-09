@@ -38,12 +38,13 @@ static PROPS: &[PropMeta] = &[
         .order(0)
         .desc("Whether the light shines. Turning it off keeps every other setting."),
     PropMeta::number("Brightness", 1.0)
-        .range(0.0, 100.0)
-        .widget(Widget::Slider)
+        // No upper limit (#406): as bright as a scene needs.
+        .range(0.0, f64::INFINITY)
+        .widget(Widget::Drag { speed: 0.05 })
         .visual()
         .group(GROUP)
         .order(1)
-        .desc("How strong the light is. 1 is an ordinary lamp; 0 gives no light."),
+        .desc("How strong the light is. 1 is an ordinary lamp; 0 gives no light; there is no upper limit."),
     PropMeta::color3("Color", 1.0, 1.0, 1.0)
         .visual()
         .group(GROUP)
@@ -182,7 +183,7 @@ mod tests {
             ("Angle", 180.0, 180.0),
             ("Angle", 0.0, 1.0),
             ("Brightness", -3.0, 0.0),
-            ("Brightness", 1e9, 100.0),
+            ("Brightness", 1e9, 1e9),
             ("Range", 5000.0, 1000.0),
         ] {
             dm.set_by_name(spot, prop, Value::Number(written)).unwrap();
