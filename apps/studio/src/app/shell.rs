@@ -99,6 +99,9 @@ struct OwnWindow {
     info: ViewportInfo,
     /// Whether it was shown in the frame being drawn: one that was not is closed after it.
     shown: bool,
+    /// Whether it is on the screen yet: it opens hidden and shows once its first frame is drawn (#409), so it never
+    /// flashes empty.
+    revealed: bool,
 }
 
 /// Studio's window, the device it is drawn with, and the interface in it.
@@ -468,7 +471,12 @@ impl OwnWindow {
         viewport: ViewportId,
         builder: &ViewportBuilder,
     ) -> Result<Self, StudioError> {
-        let window = Arc::new(egui_winit::create_window(ctx, event_loop, builder)?);
+        // Hidden until its first frame is drawn (#409).
+        let window = Arc::new(egui_winit::create_window(
+            ctx,
+            event_loop,
+            &builder.clone().with_visible(false),
+        )?);
         let size = window.inner_size();
         let surface = context.create_surface(Arc::clone(&window), size.width.max(1), size.height.max(1))?;
         let egui = egui_winit::State::new(
@@ -487,6 +495,7 @@ impl OwnWindow {
             egui,
             info,
             shown: true,
+            revealed: false,
         })
     }
 }
@@ -500,9 +509,13 @@ fn draw_own_window(shared: &std::rc::Weak<RefCell<Shared>>, ctx: &egui::Context,
         builder,
         mut viewport_ui_cb,
     } = viewport;
+    // The main window's scale, for a pass without a window of its own: at egui's default scale it would lay text out
+    // again at another size, rebuilding the font atlas every window shares, and Studio's text garbled for a frame
+    // (#409).
+    let scale = ctx.input(|input| input.viewport().native_pixels_per_point);
     let Some(shared) = shared.upgrade() else {
         // Studio is closing: nothing to draw into, nor textures to keep.
-        let mut output = ctx.run_ui(unseen_input(ids.this), |ui| viewport_ui_cb(ui));
+        let mut output = ctx.run_ui(unseen_input(ids.this, scale), |ui| viewport_ui_cb(ui));
         output.textures_delta.clear();
         return;
     };
@@ -526,7 +539,7 @@ fn draw_own_window(shared: &std::rc::Weak<RefCell<Shared>>, ctx: &egui::Context,
         }
     };
     let Some(input) = input else {
-        let output = ctx.run_ui(unseen_input(ids.this), |ui| viewport_ui_cb(ui));
+        let output = ctx.run_ui(unseen_input(ids.this, scale), |ui| viewport_ui_cb(ui));
         // The textures it made (a font's new glyphs) serve every window.
         let mut shared = shared.borrow_mut();
         let Shared { context, painter, .. } = &mut *shared;
@@ -566,19 +579,29 @@ fn draw_own_window(shared: &std::rc::Weak<RefCell<Shared>>, ctx: &egui::Context,
         pixels_per_point: output.pixels_per_point,
         clear,
     };
-    if let Err(error) = paint(context, painter, &mut own.surface, &own.window, ctx, painted) {
-        log::warn!("window: could not draw {:?}: {error}", own.info.title);
+    match paint(context, painter, &mut own.surface, &own.window, ctx, painted) {
+        Ok(()) if !own.revealed => {
+            own.window.set_visible(true);
+            own.revealed = true;
+        }
+        Ok(()) => {}
+        Err(error) => log::warn!("window: could not draw {:?}: {error}", own.info.title),
     }
 }
 
-/// The input of a viewport's unseen first run: no events, just its id and an empty description of it (egui needs one
-/// for the viewport it runs).
-fn unseen_input(viewport: ViewportId) -> egui::RawInput {
+/// The input of a viewport's unseen first run: no events, just its id and a description of it (egui needs one for the
+/// viewport it runs) at `scale`, the main window's native pixels per point, so it lays text out at the size every other
+/// pass does (#409).
+fn unseen_input(viewport: ViewportId, scale: Option<f32>) -> egui::RawInput {
     let mut input = egui::RawInput {
         viewport_id: viewport,
         ..Default::default()
     };
-    input.viewports.insert(viewport, ViewportInfo::default());
+    let info = ViewportInfo {
+        native_pixels_per_point: scale,
+        ..ViewportInfo::default()
+    };
+    input.viewports.insert(viewport, info);
     input
 }
 
@@ -788,4 +811,19 @@ fn shape_as_splash(window: &Window) {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.width as f32, size.height as f32));
     let outline = rounded_outline(rect, f32::from(radius::PANEL) * scale, 8);
     native::set_window_shape(window, Some(&outline));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unseen_pass_runs_at_the_main_window_s_scale() {
+        // At egui's default scale it would lay text out again at another size and rebuild the shared font atlas (#409).
+        let id = ViewportId::from_hash_of("metallic.settings");
+        let input = unseen_input(id, Some(1.25));
+        assert_eq!(input.viewport_id, id);
+        assert_eq!(input.viewports[&id].native_pixels_per_point, Some(1.25));
+        assert!(input.events.is_empty());
+    }
 }
