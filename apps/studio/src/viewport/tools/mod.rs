@@ -207,6 +207,32 @@ pub fn hit(tool: Tool, frame: &Frame, view: &View, pointer: Pos2) -> Option<Hand
     }
 }
 
+/// Moves `id`'s pivot to `target`, logging what stopped it as `doing`. The parts and models inside a part go with it,
+/// keeping their place relative to it, as a model's contents do (#438); a light inside a part already follows it.
+fn place(dm: &mut DataModel, id: Id, target: CFrame, doing: &str) {
+    let before = world_object::pivot(dm, id);
+    if let Err(error) = world_object::pivot_to(dm, id, target) {
+        log::warn!("tools: could not {doing}: {error}");
+        return;
+    }
+    let Ok(before) = before else { return };
+    if !pick::is_a(dm, id, "BasePart") {
+        return;
+    }
+    let change = target * before.inverse();
+    let inside: Vec<Id> = dm
+        .children(id)
+        .into_iter()
+        .flatten()
+        .filter(|&child| pick::is_a(dm, child, "BasePart") || pick::is_a(dm, child, "Model"))
+        .collect();
+    for child in inside {
+        if let Ok(pivot) = world_object::pivot(dm, child) {
+            place(dm, child, change * pivot, doing);
+        }
+    }
+}
+
 /// What moving or turning instances changes: their `CFrame`s, and a model's kept pivot (#413).
 pub(super) const MOVED: &[&str] = &["CFrame", "WorldPivotData", "WorldPivotSet"];
 

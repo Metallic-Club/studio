@@ -434,6 +434,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   and closes by its arrow alone.
 - **Wide spots shadowed all round (#437)**: one shadow tile covers a spot up to 150°; a wider one (up to 180) is
   shadowed with a cube of six tiles, as a point light is, so its sides no longer light through walls.
+- **A part's parts go with it (#438)**: moving, turning or carrying a part with the tools moves the parts and models
+  inside it rigidly with it (`tools::place`), as a model's contents do; a selected part inside a selected one is left
+  to it. A part's outline and Scale box hold the parts inside it, in its axes.
 
 ## Not in this slice
 
