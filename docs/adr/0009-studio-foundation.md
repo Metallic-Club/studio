@@ -173,6 +173,9 @@ Graphite look (decided by the owner on 2026-11-06, in #211).
   folders are now `Metallic`, capitalised, and a lowercase one is renamed): on start it copies any file missing there
   from the icons shipped beside the executable, so the user's edits are kept. Games go in `Documents\Metallic`,
   made on start, and the projects page lists every game in it.
+  **Since #402 the shipped icons are built into the executable** (the build lists `apps/studio/icons` with
+  `include_bytes!`), because a Studio given to someone without the folder beside it drew none: startup writes them
+  into the user's folder, and anything missing or unreadable there is read from them.
   Since #278 egui's own glyphs are gone too: drop-downs draw Lucide's chevron, Studio's windows (Settings, About) have
   their own header with Lucide's close button, and checkboxes draw Lucide's check. Look-alike classes have their own
   icons (LocalScript, each value type, BindableFunction), still in their section's colour.

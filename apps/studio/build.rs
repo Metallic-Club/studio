@@ -1,7 +1,9 @@
-//! Puts Studio's built-in icons beside the executable (#291): `apps/studio/icons` (the Lucide SVGs, `icons.json` and
-//! Lucide's licence) is copied to `icons` in the folder Cargo builds the executable into, so `cargo run`, the tests
-//! and a packaged build all find it where Studio looks (`theme::icons::builtin::folder`).
+//! Builds Studio's shipped icons into the executable (#402): every file of `apps/studio/icons` (the Lucide SVGs,
+//! `icons.json` and Lucide's licence) is listed in `$OUT_DIR/shipped_icons.rs` as its path in the folder and its bytes
+//! (`include_bytes!`), which `theme::icons::builtin::SHIPPED` includes. So Studio has its icons wherever its executable
+//! goes, with nothing beside it.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 fn main() {
@@ -9,34 +11,35 @@ fn main() {
     let (Some(out), Some(manifest)) = (std::env::var_os("OUT_DIR"), std::env::var_os("CARGO_MANIFEST_DIR")) else {
         return;
     };
-    // OUT_DIR is <target>/<profile>/build/<package>-<hash>/out; the executable is built into <target>/<profile>.
-    let Some(profile) = Path::new(&out).ancestors().nth(3) else {
-        println!("cargo:warning=icons: could not find the executable's folder from OUT_DIR");
-        return;
-    };
-    let from = Path::new(&manifest).join("icons");
-    let to = profile.join("icons");
-    // A fresh copy, so an icon removed from the source is gone beside the executable too.
-    let _ = std::fs::remove_dir_all(&to);
-    if let Err(error) = copy(&from, &to) {
-        println!(
-            "cargo:warning=icons: could not copy {} to {}: {error}",
-            from.display(),
-            to.display()
-        );
+    let root = Path::new(&manifest).join("icons");
+    let mut files = Vec::new();
+    if let Err(error) = list(&root, "", &mut files) {
+        println!("cargo:warning=icons: could not read {}: {error}", root.display());
+    }
+    files.sort();
+    let mut code = String::from("&[\n");
+    for (path, full) in &files {
+        // Debug quoting escapes the backslashes of a Windows path.
+        let _ = writeln!(code, "    ({path:?}, include_bytes!({full:?})),");
+    }
+    code.push_str("]\n");
+    let target = Path::new(&out).join("shipped_icons.rs");
+    if let Err(error) = std::fs::write(&target, code) {
+        println!("cargo:warning=icons: could not write {}: {error}", target.display());
     }
 }
 
-/// Copies the folder `from` to `to`, sub-folders included.
-fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
+/// Every file under `dir`, as its path from the icons folder (`/` between folders, `prefix` before it) and its full
+/// path.
+fn list(dir: &Path, prefix: &str, files: &mut Vec<(String, String)>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let target = to.join(entry.file_name());
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = format!("{prefix}{name}");
         if entry.file_type()?.is_dir() {
-            copy(&entry.path(), &target)?;
+            list(&entry.path(), &format!("{path}/"), files)?;
         } else {
-            std::fs::copy(entry.path(), &target)?;
+            files.push((path, entry.path().to_string_lossy().into_owned()));
         }
     }
     Ok(())

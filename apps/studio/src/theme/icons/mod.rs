@@ -457,7 +457,7 @@ pub fn docs_markdown() -> String {
          Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https://lucide.dev/icons/) SVG \
          (ISC licence) in Studio's icons folder, drawn in its group's colour.\n\n\
          **The icons folder** is `icons` in Studio's own folder: `%APPDATA%\\Metallic\\Studio\\icons` on Windows. \
-         Studio ships its icons beside its executable and copies any file missing there on start, so your edits \
+         Studio's icons are built into it, and it copies any file missing there on start, so your edits \
          are kept. `icons.json` sits at the top; the SVGs are in a folder per part of Studio that draws them \
          (`explorer`, `assets`, `panels`, `toolbar`, `interface`), and Lucide's licence is in `licenses`. \
          `icons.json` says which SVG file each icon id uses and which colour group it is drawn in, with a line on \

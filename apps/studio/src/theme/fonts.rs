@@ -1,6 +1,7 @@
 //! Studio's typefaces, bundled (`apps/studio/assets/fonts`, licences beside them; see `NOTICE.txt` there): Inter for
 //! the interface, as on the website, and JetBrains Mono for code and changing numbers.
-//! Icons are not fonts: they are SVGs in the `icons` folder beside the executable (#291, `theme::icons::builtin`).
+//! Icons are not fonts: they are SVGs, built into Studio and copied to the user's `icons` folder (#291, #402,
+//! `theme::icons::builtin`).
 //!
 //! egui's own fonts are never loaded ([`definitions`] starts empty, and the workspace turns off egui's
 //! `default_fonts`): one of them is under the Ubuntu Font Licence, which `deny.toml` does not allow.
