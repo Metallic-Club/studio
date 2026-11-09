@@ -46,8 +46,8 @@ pub(crate) struct GpuLight {
     color: [f32; 4],
     /// Where a spot points (unit), and one minus the cosine of its cone's half-angle (−2 for a point light).
     direction: [f32; 4],
-    /// The cone's falloff scale, nothing, the light's first tile in the tile table (−1: unshadowed), and how much of
-    /// its shadow is drawn.
+    /// The cone's falloff scale, 1 when its shadow is a cube of six tiles (a point light, or a wide spot, #437), the
+    /// light's first tile in the tile table (−1: unshadowed), and how much of its shadow is drawn.
     params: [f32; 4],
 }
 
@@ -61,8 +61,8 @@ impl GpuLight {
     fn new(light: &SceneLight, camera: Vec3, fade: f32, shadow: f32) -> Self {
         let intensity = light.intensity * (LIGHT_INTENSITY * fade);
         let position = light.position - camera;
-        let (cone, scale, offset) = match light.kind {
-            LightKind::Point => (-2.0, 0.0, 0.0),
+        let (cone, scale) = match light.kind {
+            LightKind::Point => (-2.0, 0.0),
             LightKind::Spot => {
                 // The cone in one minus the cosine of the angle from its axis (#404): near the axis cosines are all
                 // within a few float steps of 1, and a narrow cone's edge flickered; 1 - cos θ = 2 sin²(θ/2) keeps its
@@ -71,14 +71,14 @@ impl GpuLight {
                 let outer = one_minus_cos(half);
                 let inner = one_minus_cos(half * (1.0 - SPOT_SOFTNESS));
                 let scale = 1.0 / (outer - inner).max(1e-12);
-                (outer, scale, 0.0)
+                (outer, scale)
             }
         };
         Self {
             position: [position.x, position.y, position.z, light.range],
             color: [intensity.x, intensity.y, intensity.z, 0.0],
             direction: [light.direction.x, light.direction.y, light.direction.z, cone],
-            params: [scale, offset, -1.0, shadow],
+            params: [scale, f32::from(u8::from(light.cube_shadow())), -1.0, shadow],
         }
     }
 }
@@ -558,6 +558,15 @@ mod tests {
         let off_axis = 0.5 * apart.dot(apart);
         let cone = ((light.direction[3] - off_axis) * light.params[0]).clamp(0.0, 1.0);
         cone * cone
+    }
+
+    #[test]
+    fn a_spot_wider_than_one_tile_is_shadowed_with_a_cube() {
+        // 150° and under: one tile; wider, the six faces a point light has, so its sides cannot light through walls.
+        assert_eq!((spot(150.0).shadow_tiles(), spot(150.0).cube_shadow()), (1, false));
+        assert_eq!((spot(180.0).shadow_tiles(), spot(180.0).cube_shadow()), (6, true));
+        assert_eq!(GpuLight::new(&spot(150.0), Vec3::ZERO, 1.0, 1.0).params[1], 0.0);
+        assert_eq!(GpuLight::new(&spot(180.0), Vec3::ZERO, 1.0, 1.0).params[1], 1.0);
     }
 
     #[test]

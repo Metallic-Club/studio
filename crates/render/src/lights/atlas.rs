@@ -14,8 +14,8 @@ use crate::cull::{Casters, CullView, Frustum, VisibleSet};
 use crate::lod::{LodView, MAX_LOD_LEVELS};
 use crate::parts::MeshPool;
 use crate::scene::{
-    DYNAMIC_ENTRY, GpuInstance, InstanceBinding, InstanceScene, LightKind, MeshKind, Region, SceneLight,
-    bounding_sphere, entry, is_shadow_caster,
+    DYNAMIC_ENTRY, GpuInstance, InstanceBinding, InstanceScene, MeshKind, Region, SceneLight, bounding_sphere, entry,
+    is_shadow_caster,
 };
 use crate::shadow::{SHADOW_FORMAT, caster_pipeline};
 use crate::textures::{Made, TextureMaker, TextureSpec, Ticket};
@@ -24,8 +24,8 @@ use crate::textures::{Made, TextureMaker, TextureSpec, Ticket};
 const BORDER: f32 = 2.0;
 /// The near plane of every tile's projection, in metres.
 const NEAR: f32 = 0.05;
-/// A spot light's shadow covers at most this half-angle (a 150° cone); a wider cone is unshadowed outside it.
-pub(crate) const MAX_SPOT_SHADOW_HALF_DEGREES: f32 = 75.0;
+/// A spot light's one tile covers at most this half-angle (a 150° cone); a wider spot is shadowed with a cube (#437).
+pub(crate) const MAX_SPOT_SHADOW_HALF_DEGREES: f32 = crate::scene::SPOT_TILE_HALF_DEGREES;
 /// Each tile's caster uniform sits at a multiple of this (the strictest dynamic offset alignment there is).
 const UNIFORM_STRIDE: u64 = 256;
 /// The bytes of a tile's caster uniform the shader reads: one matrix.
@@ -69,9 +69,9 @@ pub(crate) struct TileView {
     pub(crate) depth_scale: f32,
 }
 
-/// The views of a shadowed `light`'s tiles of `resolution` texels, origin-relative to `origin`: a point light's six
-/// cube faces, each a little wider than 90° by [`BORDER`] texels, or a spot's cone (up to
-/// [`MAX_SPOT_SHADOW_HALF_DEGREES`]). Returns how many it wrote.
+/// The views of a shadowed `light`'s tiles of `resolution` texels, origin-relative to `origin`: a cube's six faces,
+/// each a little wider than 90° by [`BORDER`] texels (a point light, or a spot wider than one tile covers, #437), or a
+/// spot's cone. Returns how many it wrote.
 pub(crate) fn tile_views(light: &SceneLight, origin: Vec3, resolution: u32, out: &mut [TileView; 6]) -> usize {
     let resolution = resolution.max(16) as f32;
     let widen = resolution / (resolution - 2.0 * BORDER);
@@ -85,21 +85,17 @@ pub(crate) fn tile_views(light: &SceneLight, origin: Vec3, resolution: u32, out:
         texel_angle: 2.0 * tan_half / resolution,
         depth_scale,
     };
-    match light.kind {
-        LightKind::Point => {
-            for (slot, &(forward, up)) in out.iter_mut().zip(&FACES) {
-                *slot = view(forward, up, widen);
-            }
-            6
+    if light.cube_shadow() {
+        for (slot, &(forward, up)) in out.iter_mut().zip(&FACES) {
+            *slot = view(forward, up, widen);
         }
-        LightKind::Spot => {
-            let half = (light.angle * 0.5).min(MAX_SPOT_SHADOW_HALF_DEGREES).to_radians();
-            let forward = light.direction.normalize_or(Vec3::NEG_Z);
-            let up = if forward.y.abs() < 0.99 { Vec3::Y } else { Vec3::Z };
-            out[0] = view(forward, up, half.tan() * widen);
-            1
-        }
+        return 6;
     }
+    let half = (light.angle * 0.5).min(MAX_SPOT_SHADOW_HALF_DEGREES).to_radians();
+    let forward = light.direction.normalize_or(Vec3::NEG_Z);
+    let up = if forward.y.abs() < 0.99 { Vec3::Y } else { Vec3::Z };
+    out[0] = view(forward, up, half.tan() * widen);
+    1
 }
 
 /// A square right-handed perspective with standard depth (0 at `near`, 1 at `far`), `tan_half` the slope of its
@@ -544,7 +540,7 @@ impl ShadowAtlas {
             if n == 0 {
                 continue;
             }
-            let held = n == light.kind.shadow_tiles()
+            let held = n == light.shadow_tiles()
                 && state.tiles[..n]
                     .iter()
                     .all(|&t| self.owner.get(usize::from(t)).copied().flatten() == Some(light.id));
@@ -613,7 +609,7 @@ impl ShadowAtlas {
             if !target || runtime[index as usize].tile_count > 0 {
                 continue;
             }
-            let need = light.kind.shadow_tiles();
+            let need = light.shadow_tiles();
             let mut got = [0u16; 6];
             let mut n = 0;
             for tile in 0..self.capacity {
@@ -1064,6 +1060,7 @@ mod tests {
     use metallic_core::Color3;
 
     use super::*;
+    use crate::scene::LightKind;
 
     fn point(at: Vec3) -> SceneLight {
         SceneLight {

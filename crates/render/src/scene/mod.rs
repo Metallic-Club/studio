@@ -83,7 +83,7 @@ pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, Upload
 pub use grid::CELL_SIZE;
 pub(crate) use grid::bounding_sphere;
 pub use instance::{GpuInstance, MeshKind, affine_rows, pack_color};
-pub use lights::{LightKind, SceneLight};
+pub use lights::{LightKind, SPOT_TILE_HALF_DEGREES, SceneLight};
 pub(crate) use lists::TRANSPARENT_LIST;
 pub use lists::{DYNAMIC_ENTRY, entry, entry_slot};
 pub use sync::InstanceScene;

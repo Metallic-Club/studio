@@ -24,16 +24,9 @@ pub enum LightKind {
     Spot,
 }
 
-impl LightKind {
-    /// How many shadow-atlas tiles a shadowed light of this kind takes: a cube's six faces for a point light, one
-    /// for a spot.
-    pub const fn shadow_tiles(self) -> usize {
-        match self {
-            LightKind::Point => 6,
-            LightKind::Spot => 1,
-        }
-    }
-}
+/// The widest half-angle one shadow tile covers for a spot light (a 150° cone, #437): a wider spot is shadowed with a
+/// cube of six tiles, as a point light is, so its sides cannot light through walls.
+pub const SPOT_TILE_HALF_DEGREES: f32 = 75.0;
 
 /// One light as the renderer reads it: its `Light` properties and its place in the world.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,6 +59,19 @@ pub struct SceneLight {
 }
 
 impl SceneLight {
+    /// Whether its shadow is a cube of six tiles: a point light's, or a spot's wider than one tile covers (#437).
+    pub fn cube_shadow(&self) -> bool {
+        match self.kind {
+            LightKind::Point => true,
+            LightKind::Spot => self.angle * 0.5 > SPOT_TILE_HALF_DEGREES,
+        }
+    }
+
+    /// How many shadow-atlas tiles it takes when shadowed: six for a cube, one for a spot's cone.
+    pub fn shadow_tiles(&self) -> usize {
+        if self.cube_shadow() { 6 } else { 1 }
+    }
+
     /// Whether it lights anything: enabled, with some brightness, colour and range, and a finite place.
     pub fn shines(&self) -> bool {
         self.enabled
