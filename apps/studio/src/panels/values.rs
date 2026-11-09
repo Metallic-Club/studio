@@ -324,11 +324,12 @@ fn labelled(response: &Response, kind: Role, label: &str) {
     response.widget_info(|| WidgetInfo::labeled(kind, response.enabled(), label));
 }
 
-/// How fast a number field changes per point dragged: the property's own, a two-hundredth of its range, or `fallback`.
+/// How fast a number field changes per point dragged: the property's own, a two-hundredth of its range when both its
+/// ends are finite (an endless one would make every drag infinite, #452), or `fallback`.
 fn drag_speed(meta: &PropMeta, fallback: f64) -> f64 {
     match (meta.widget, meta.range) {
         (Widget::Drag { speed }, _) => f64::from(speed),
-        (_, Some((min, max))) if max > min => (max - min) / 200.0,
+        (_, Some((min, max))) if max > min && (max - min).is_finite() => (max - min) / 200.0,
         _ => fallback,
     }
 }
@@ -661,6 +662,24 @@ mod tests {
         harness.hover_at(at + vec2(24.0, 0.0));
         harness.run();
         assert_eq!(*harness.state(), Some(Edit::Whole(Value::Int(5))));
+    }
+
+    #[test]
+    fn a_number_with_no_upper_limit_drags_by_finite_steps() {
+        // A range with no upper end and no speed of its own (#452): a drag gave infinity, which the data model refused.
+        static SCALE: PropMeta = PropMeta::number("Scale", 1.0).range(0.001, f64::INFINITY);
+        assert!(drag_speed(&SCALE, 0.1).is_finite());
+        let mut harness = editor(&SCALE, Value::Number(1.0), Mixed::default());
+        let field = harness.get_by_role_and_label(Role::SpinButton, "Value").rect();
+        let at = field.left_center() + vec2(10.0, 0.0);
+        harness.drag_at(at);
+        harness.run();
+        harness.hover_at(at + vec2(20.0, 0.0));
+        harness.run();
+        let Some(Edit::Whole(Value::Number(n))) = *harness.state() else {
+            panic!("{:?}", harness.state());
+        };
+        assert!(n.is_finite() && n > 1.0, "{n}");
     }
 
     #[test]

@@ -455,6 +455,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **No flicker as a spot crosses 150° (#451)**: a shadowed spot turned across the angle where it takes a cube rather
   than one tile (#437) gave its tiles up and started its shadow again from nothing, so it vanished and faded back each
   time. It keeps its shadow's fade while it takes its new tiles, drawn that same frame.
+- **A model's Scale drags (#452)**: a number field drags by a two-hundredth of its range only when both ends are
+  finite; `Model.Scale`, with no upper end, dragged by infinity, which the data model refused. It drags in hundredths.
 
 ## Not in this slice
 
