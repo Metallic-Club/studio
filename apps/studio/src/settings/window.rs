@@ -588,7 +588,9 @@ impl SettingsWindow {
                 }
             });
             ui.separator();
-            ScrollArea::vertical()
+            // Sideways too, its bar only when the page is wider than the window (#454): a large interface scale on a
+            // small screen leaves no room for the controls' column, the scale's own among them.
+            ScrollArea::both()
                 .id_salt("settings.page")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -995,6 +997,56 @@ mod tests {
         // Spelt as the owner asked (#318).
         assert_eq!(names(&search("accent")), ["Accent Color"]);
         assert_eq!(names(&search("color")), ["Accent Color"]);
+    }
+
+    #[test]
+    fn a_narrow_window_scrolls_its_page_sideways_to_the_controls() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        use crate::keymap::Overrides;
+
+        struct Open {
+            window: SettingsWindow,
+            settings: StudioSettings,
+            keymap: Keymap,
+        }
+        let mut window = SettingsWindow::default();
+        window.show_category(Category::Appearance);
+        let open = Open {
+            window,
+            settings: StudioSettings::default(),
+            keymap: Keymap::studio(&Overrides::new()),
+        };
+        let width = 480.0;
+        let mut harness = Harness::builder()
+            .with_size(vec2(width, 400.0))
+            .with_context_setup(crate::theme::fonts::install)
+            // One of the page's drop-downs has no accessible name yet (not this test's matter).
+            .with_accessibility_check(false)
+            .build_ui_state(
+                |ui, open: &mut Open| open.window.contents(ui, &mut open.settings, &mut open.keymap),
+                open,
+            );
+        harness.run();
+        // The Appearance page's first drop-down, at the right of its row.
+        let control = |harness: &Harness<'_, Open>| harness.get_all_by_role(Role::ComboBox).next().unwrap().rect();
+        assert!(
+            control(&harness).right() > width,
+            "past the window: {:?}",
+            control(&harness)
+        );
+        // Scrolled sideways over the page, it comes into view (#454).
+        harness.hover_at(egui::pos2(width - 40.0, 200.0));
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(-600.0, 0.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run();
+        assert!(control(&harness).right() <= width, "{:?}", control(&harness));
     }
 
     #[test]
