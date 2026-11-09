@@ -14,12 +14,12 @@ pub static COMPONENT: ComponentDesc = ComponentDesc::new("SpotLightEmitter")
     .requires(EMITTER_REQUIRES);
 
 static PROPS: &[PropMeta] = &[PropMeta::number("Angle", 90.0)
-    .range(1.0, 179.0)
+    .range(1.0, 180.0)
     .widget(Widget::Slider)
     .visual()
     .group("Spotlight")
     .order(0)
-    .desc("How wide the cone is: the full angle from one edge to the other, in degrees.")];
+    .desc("How wide the cone is: the full angle from one edge to the other, in degrees, up to 180 (a half sphere).")];
 
 /// A cone of light.
 pub static CLASS: ClassDesc = ClassDesc::new("SpotLight", Some("Light"))

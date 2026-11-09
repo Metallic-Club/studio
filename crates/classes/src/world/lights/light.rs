@@ -178,7 +178,8 @@ mod tests {
         let ws = workspace(&dm);
         let spot = new_in(&mut dm, "SpotLight", ws, "Spot");
         for (prop, written, stored) in [
-            ("Angle", 500.0, 179.0),
+            ("Angle", 500.0, 180.0),
+            ("Angle", 180.0, 180.0),
             ("Angle", 0.0, 1.0),
             ("Brightness", -3.0, 0.0),
             ("Brightness", 1e9, 100.0),

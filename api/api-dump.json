@@ -2931,11 +2931,11 @@
           "computed": false,
           "range": [
             1.0,
-            179.0
+            180.0
           ],
           "wraps": false,
           "group": "Spotlight",
-          "description": "How wide the cone is: the full angle from one edge to the other, in degrees.",
+          "description": "How wide the cone is: the full angle from one edge to the other, in degrees, up to 180 (a half sphere).",
           "aliases": [],
           "derived_from": []
         }
