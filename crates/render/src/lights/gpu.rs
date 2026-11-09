@@ -45,11 +45,17 @@ pub(crate) struct GpuLight {
     position: [f32; 4],
     /// Linear intensity: colour × brightness × [`LIGHT_INTENSITY`] × fade.
     color: [f32; 4],
-    /// Where a spot points (unit), and the cosine of its cone's half-angle (−2 for a point light).
+    /// Where a spot points (unit), and one minus the cosine of its cone's half-angle (−2 for a point light).
     direction: [f32; 4],
-    /// The cone's falloff scale and offset, the light's first tile in the tile table (−1: unshadowed), and how much
-    /// of its shadow is drawn.
+    /// The cone's falloff scale, nothing, the light's first tile in the tile table (−1: unshadowed), and how much of
+    /// its shadow is drawn.
     params: [f32; 4],
+}
+
+/// `1 − cos θ`, exact for small angles: `2 sin²(θ/2)`.
+fn one_minus_cos(angle: f32) -> f32 {
+    let s = (angle * 0.5).sin();
+    2.0 * s * s
 }
 
 impl GpuLight {
@@ -60,11 +66,14 @@ impl GpuLight {
             // Directional lights are never local lights (they are drawn as extra suns, `super::directional`).
             LightKind::Point | LightKind::Directional => (-2.0, 0.0, 0.0),
             LightKind::Spot => {
+                // The cone in one minus the cosine of the angle from its axis (#404): near the axis cosines are all
+                // within a few float steps of 1, and a narrow cone's edge flickered; 1 - cos θ = 2 sin²(θ/2) keeps its
+                // precision there, and grows all the way to a half sphere's 1.
                 let half = (light.angle * 0.5).to_radians();
-                let outer = half.cos();
-                let inner = (half * (1.0 - SPOT_SOFTNESS)).cos();
-                let scale = 1.0 / (inner - outer).max(1e-4);
-                (outer, scale, -outer * scale)
+                let outer = one_minus_cos(half);
+                let inner = one_minus_cos(half * (1.0 - SPOT_SOFTNESS));
+                let scale = 1.0 / (outer - inner).max(1e-12);
+                (outer, scale, 0.0)
             }
         };
         Self {
@@ -531,5 +540,59 @@ impl LocalLights {
         );
         buffers.uploaded_texels[..texels].copy_from_slice(&grid.texels[..texels]);
         buffers.uploaded_rows = rows;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use metallic_core::glam::Quat;
+    use metallic_core::{Color3, Id};
+
+    use super::*;
+
+    fn spot(angle: f32) -> SceneLight {
+        SceneLight {
+            id: Id::new(3, 1),
+            kind: LightKind::Spot,
+            position: Vec3::ZERO,
+            direction: Vec3::NEG_Y,
+            color: Color3::WHITE,
+            brightness: 1.0,
+            intensity: Vec3::ONE,
+            range: 100.0,
+            angle,
+            enabled: true,
+            shadows: false,
+            host: None,
+        }
+    }
+
+    /// The cone's share at a point `degrees` off the axis, as `local_lighting` in lights.wgsl works it out (f32).
+    fn cone_at(light: &GpuLight, degrees: f32) -> f32 {
+        let axis = Vec3::from_slice(&light.direction[..3]);
+        let towards_point = Quat::from_rotation_z(degrees.to_radians()) * axis;
+        let apart = towards_point - axis;
+        let off_axis = 0.5 * apart.dot(apart);
+        let cone = ((light.direction[3] - off_axis) * light.params[0]).clamp(0.0, 1.0);
+        cone * cone
+    }
+
+    #[test]
+    fn a_narrow_cone_falls_off_smoothly_without_steps() {
+        // A 1° cone: full inside 0.4° of its axis, none past 0.5°, and in between it falls steadily with no flat steps
+        // (where cosines a hair below 1 gave the same value to neighbouring pixels, then jumped).
+        let light = GpuLight::new(&spot(1.0), Vec3::ZERO, 1.0, 0.0);
+        assert_eq!(cone_at(&light, 0.0), 1.0);
+        assert_eq!(cone_at(&light, 0.39), 1.0);
+        assert_eq!(cone_at(&light, 0.51), 0.0);
+        let falloff: Vec<f32> = (0..=40).map(|k| cone_at(&light, 0.4 + k as f32 * 0.0025)).collect();
+        for pair in falloff.windows(2).take(39) {
+            assert!(pair[1] < pair[0], "{falloff:?}");
+        }
+        // The widest cone, a half sphere: everything in front lit, nothing behind.
+        let wide = GpuLight::new(&spot(180.0), Vec3::ZERO, 1.0, 0.0);
+        assert_eq!(cone_at(&wide, 60.0), 1.0);
+        assert_eq!(cone_at(&wide, 91.0), 0.0);
+        assert!(cone_at(&wide, 85.0) > 0.0 && cone_at(&wide, 85.0) < 1.0);
     }
 }
