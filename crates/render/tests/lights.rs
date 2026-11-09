@@ -413,6 +413,43 @@ fn a_wide_shadowed_spot_does_not_light_through_walls() {
     assert!(open > behind + 15.0, "the wide spot lights through the wall");
 }
 
+/// A shadowed spot turned past 150°, from one shadow tile to a cube (#437), keeps its shadow on the very next frame
+/// (#451): it used to start its shadow again from nothing, so turning it across that angle made the shadow flicker.
+#[test]
+fn a_spot_turned_across_the_cube_angle_keeps_its_shadow() {
+    let Some(context) = gpu() else { return };
+    let mut game = night_floor();
+    let ws = game.workspace;
+    game.part(
+        Look::new("Block", "Plastic", [196, 40, 28]),
+        Vec3::new(1.0, 4.0, 1.0),
+        CFrame::new(Vec3::new(0.5, 2.0, 0.0)),
+    );
+    let down = CFrame::from_parts(
+        Vec3::new(-2.0, 4.0, 0.0),
+        Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+    );
+    let id = light(&mut game, "SpotLight", ws, down, [255, 230, 190], 30.0, 20.0);
+    game.dm.set_by_name(id, "Shadows", Value::Bool(true)).expect("Shadows");
+    let mut frames = Frames::new(&context, &mut game, LightSettings::default());
+    let mut levels = Vec::new();
+    for angle in [150.0, 151.0, 150.0] {
+        game.dm.set_by_name(id, "Angle", Value::Number(angle)).expect("Angle");
+        for _ in 0..3 {
+            frames.frame(&context, &mut game);
+            let pixels = frames.pixels(&context);
+            // Behind the pillar, 60° off the spot's axis, and as far on the open side.
+            let behind = floor_level(&game, &pixels, 4.9, 0.0);
+            let open = floor_level(&game, &pixels, -8.9, 0.0);
+            levels.push((angle, behind, open));
+        }
+    }
+    eprintln!("(angle, behind the pillar, open side) frame by frame: {levels:.1?}");
+    for &(angle, behind, open) in &levels {
+        assert!(open > behind + 15.0, "no shadow at {angle}° on a frame: {levels:.1?}");
+    }
+}
+
 /// The light in a lamp follows the lamp; a light switched off or out of the world lights nothing.
 #[test]
 fn a_light_in_a_part_follows_it() {
