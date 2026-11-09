@@ -216,6 +216,8 @@ pub mod ids {
     pub const EDIT_RENAME: &str = "edit.rename";
     /// Delete the selection.
     pub const EDIT_DELETE: &str = "edit.delete";
+    /// Open Insert Object for the selection (#411).
+    pub const EDIT_INSERT: &str = "edit.insert";
     /// The Select tool (#355).
     pub const TOOL_SELECT: &str = "tools.select";
     /// The Move tool.
@@ -428,6 +430,16 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         contexts: &[Context::Editor],
         defaults: &["Delete"],
         ..Command::new(ids::EDIT_DELETE, "Delete", "Edit", "Deletes the selection.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Shift+Space"],
+        ..Command::new(
+            ids::EDIT_INSERT,
+            "Insert Object",
+            "Edit",
+            "Opens Insert Object, to add something inside the selected instance (in Workspace with nothing selected).",
+        )
     },
     tool(ids::TOOL_SELECT, "Select tool", "Selects with a click.", &["1"]),
     tool(ids::TOOL_MOVE, "Move tool", "Moves the selection with handles.", &["2"]),

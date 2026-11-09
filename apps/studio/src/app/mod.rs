@@ -536,6 +536,7 @@ impl Studio {
         ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
             self.dock.ui(ui, &mut cx);
         });
+        crate::panels::insert::frame(&ctx, cx.editor);
         if let Some(action) = action {
             self.menu_action(action);
         }
@@ -872,6 +873,21 @@ impl Studio {
         }
     }
 
+    /// Opens Insert Object (#411) for the selected instance, or Workspace with nothing selected.
+    fn open_insert(&mut self) {
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        let scene = editor.scene();
+        let parent = scene
+            .selection
+            .active()
+            .or_else(|| crate::viewport::pick::workspace(scene.dm));
+        if let Some(parent) = parent {
+            scene.explorer.open_insert(parent);
+        }
+    }
+
     /// Starts a game session of the open project (ADR 0010): the scene as it is now runs in an embedded Player, drawn
     /// with the Rendering settings, its output in Output, and the Game tab opens in front with the focus. Tells the
     /// user why if it cannot start.
@@ -1068,6 +1084,7 @@ impl Studio {
                 ids::TEST_STEP if editing => self.menu_action(MenuAction::Step),
                 ids::TEST_STOP if editing => self.menu_action(MenuAction::Stop),
                 ids::EDIT_SELECT_ALL if editing => self.menu_action(MenuAction::SelectAll),
+                ids::EDIT_INSERT if editing => self.open_insert(),
                 ids::EDIT_UNDO if editing => self.menu_action(MenuAction::Undo),
                 ids::EDIT_REDO if editing => self.menu_action(MenuAction::Redo),
                 ids::TOOL_SELECT if editing => self.menu_action(MenuAction::Transform(Tool::Select)),
@@ -3011,6 +3028,42 @@ mod tests {
             (at - camera.position).dot(camera.forward()) > 1.0,
             "in front of the camera"
         );
+    }
+
+    #[test]
+    fn shift_space_opens_insert_object_for_the_selection_with_the_explorer_closed() {
+        let mut harness = editing(settings_file("editor-insert-key", None), "Insert Key Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        // The window is Studio's, not the Explorer's (#411): it shows with the Explorer closed.
+        harness.get_by_role_and_label(Role::Button, "Explorer tool").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.dock().is_open(panels::ids::EXPLORER));
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+        settle(&mut harness);
+        harness.get_by_label(crate::panels::insert::TITLE);
+        harness.event(egui::Event::Text("fold".to_owned()));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Insert Folder").click();
+        settle(&mut harness);
+        assert_eq!(
+            children_of_part(&harness, "Baseplate"),
+            ["Folder"],
+            "inside the selection"
+        );
+    }
+
+    /// The names of the children of Workspace's `name`.
+    fn children_of_part(harness: &Harness<'_, Test>, name: &str) -> Vec<String> {
+        let dm = &harness.state().studio.editor().unwrap().dm;
+        let workspace = crate::viewport::pick::workspace(dm).unwrap();
+        let part = dm.find_first_child(workspace, name, false).unwrap().unwrap();
+        dm.children(part)
+            .unwrap()
+            .map(|id| dm.name(id).unwrap().to_owned())
+            .collect()
     }
 
     #[test]
