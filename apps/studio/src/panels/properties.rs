@@ -1,6 +1,10 @@
 //! The Properties panel: the selected instance's properties as the class registry describes them (`PropMeta`), in
 //! their groups and order, **edited in place** (#349, see [`super::values`]): each change is written through the
-//! scene, so it is an undo step. A `CFrame` is two rows, its position and its orientation.
+//! scene, so it is an undo step.
+//!
+//! **Rows open in place** (#417): a vector opens into its X, Y and Z, a colour into its R, G and B, each on a row of its
+//! own that edits that part alone; a `CFrame` (`CFrame`, `PivotOffset`) shows whole on one row and opens into its
+//! Position and Orientation, which open in turn. What is open is kept while Studio runs.
 //!
 //! What cannot be edited is formatted for reading: references as the instance's name, read-only properties as their
 //! value (vectors as their components, a colour as a swatch and its 0-255 channels, a boolean as a check box).
@@ -58,11 +62,24 @@ fn split_x(left: f32, width: f32, share: f32) -> f32 {
 #[derive(Clone, Copy, Debug)]
 pub struct Properties;
 
-/// One property as the panel lists it (a `CFrame` is two: its position and its orientation).
+/// One row of the panel: a property, or a part of one (#417: a vector's X, a `CFrame`'s Position).
 #[derive(Clone, Debug)]
 pub struct PropertyRow {
-    /// The name shown (`PropMeta::label`, or the name; a `CFrame`'s rows add Position and Orientation).
+    /// Its full name, which screen readers hear and which names its controls (`PropMeta::label`, or the name, then
+    /// its parts: `CFrame Position X`).
     pub label: String,
+    /// The name shown: the property's, or the part's alone (`X`) on a part's row.
+    pub shown: String,
+    /// Where it is in the tree of rows (`CFrame/Position/X`), which open state is kept by.
+    pub key: String,
+    /// The row it opens from, if it is a part.
+    pub parent: Option<String>,
+    /// How deep it is: 0 for a property, 1 for its parts, 2 for theirs.
+    pub depth: u8,
+    /// Whether it opens into rows of its parts.
+    pub opens: bool,
+    /// The component it edits alone (0, 1, 2), on a part's row.
+    pub component: Option<usize>,
     /// What it does.
     pub description: &'static str,
     /// Its value: the active instance's.
@@ -137,26 +154,66 @@ pub fn groups(dm: &DataModel, ids: &[Id]) -> Vec<Group> {
             meta.group
         };
         let label = if meta.label.is_empty() { meta.name } else { meta.label };
-        let parts: &[(Part, &str)] = if matches!(value, Value::CFrame(_)) {
-            &[(Part::Position, " Position"), (Part::Orientation, " Orientation")]
-        } else {
-            &[(Part::Whole, "")]
-        };
-        for &(part, suffix) in parts {
-            let row = PropertyRow {
-                label: format!("{label}{suffix}"),
+        let row = |shown: &str, path: &[&str], part: Part, component: Option<usize>, opens: bool| {
+            let full: Vec<&str> = std::iter::once(label).chain(path.iter().copied()).collect();
+            let key = full.join("/");
+            let parent = (!path.is_empty()).then(|| full[..full.len() - 1].join("/"));
+            let mixed = Mixed::of(&all, part);
+            PropertyRow {
+                label: full.join(" "),
+                shown: shown.to_owned(),
+                key,
+                parent,
+                depth: path.len() as u8,
+                opens,
+                component,
                 description: meta.description,
                 value: value.clone(),
-                mixed: Mixed::of(&all, part),
+                mixed: match component {
+                    // A part's row is mixed where its component is.
+                    Some(i) => Mixed {
+                        whole: mixed.parts[i],
+                        parts: [mixed.parts[i]; 3],
+                    },
+                    None => mixed,
+                },
                 prop: PropId::new(index as u16),
                 meta,
                 part,
                 editable: shared_editable,
-            };
-            match groups.iter_mut().find(|(group, _)| *group == name) {
-                Some((_, rows)) => rows.push((meta.order, index, row)),
-                None => groups.push((name, vec![(meta.order, index, row)])),
             }
+        };
+        // The property's row, then its parts' (#417).
+        let mut rows = Vec::new();
+        let axes = |value: &Value| -> &'static [&'static str] {
+            match value {
+                Value::Vector2(_) => &["X", "Y"],
+                Value::Color3(_) => &["R", "G", "B"],
+                _ => &["X", "Y", "Z"],
+            }
+        };
+        match &value {
+            Value::CFrame(_) => {
+                rows.push(row(label, &[], Part::Whole, None, true));
+                for (part, name) in [(Part::Position, "Position"), (Part::Orientation, "Orientation")] {
+                    rows.push(row(name, &[name], part, None, true));
+                    for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+                        rows.push(row(axis, &[name, axis], part, Some(i), false));
+                    }
+                }
+            }
+            Value::Vector3(_) | Value::Vector2(_) | Value::Color3(_) => {
+                rows.push(row(label, &[], Part::Whole, None, true));
+                for (i, &axis) in axes(&value).iter().enumerate() {
+                    rows.push(row(axis, &[axis], Part::Whole, Some(i), false));
+                }
+            }
+            _ => rows.push(row(label, &[], Part::Whole, None, false)),
+        }
+        let keyed = rows.into_iter().map(|row| (meta.order, index, row));
+        match groups.iter_mut().find(|(group, _)| *group == name) {
+            Some((_, list)) => list.extend(keyed),
+            None => groups.push((name, keyed.collect())),
         }
     }
     groups
@@ -315,24 +372,47 @@ impl Panel for Properties {
             .show(ui, |ui| {
                 let share = name_share(ui.ctx());
                 let top = ui.cursor().top();
+                let mut open = open_rows(ui.ctx());
                 for group in groups(dm, &ids) {
                     section_label(ui, group.name);
+                    // A part's row shows while every row it opens from is open (#417).
+                    let shown: Vec<&PropertyRow> = group
+                        .rows
+                        .iter()
+                        .filter(|row| {
+                            let mut at = row.parent.as_deref();
+                            while let Some(parent) = at {
+                                if !open.contains(parent) {
+                                    return false;
+                                }
+                                at = parent.rsplit_once('/').map(|(up, _)| up);
+                            }
+                            true
+                        })
+                        .collect();
                     // The rows touch, so the stripes and the lines between them are continuous.
                     ui.scope(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         let shades = p.rows();
-                        for (index, row) in group.rows.iter().enumerate() {
-                            let last = index + 1 == group.rows.len();
-                            let edited = ui
-                                .push_id(&row.label, |ui| row_ui(ui, dm, row, shades.fill(index), last, share))
+                        for (index, row) in shown.iter().enumerate() {
+                            let last = index + 1 == shown.len();
+                            let is_open = row.opens.then(|| open.contains(&row.key));
+                            let out = ui
+                                .push_id(&row.key, |ui| {
+                                    row_ui(ui, dm, row, shades.fill(index), last, share, is_open)
+                                })
                                 .inner;
-                            if let Some(edit) = edited {
+                            if let Some(edit) = out.edit {
                                 edits.push((row.meta.name, row.part, edit));
+                            }
+                            if out.toggled && !open.remove(&row.key) {
+                                open.insert(row.key.clone());
                             }
                         }
                     });
                     ui.add_space(space::S5);
                 }
+                ui.data_mut(|data| data.insert_temp(open_id(), open));
                 let rows = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
                 split_grip(ui, rows, share);
             });
@@ -354,17 +434,51 @@ impl Panel for Properties {
     }
 }
 
-/// One property, a row of a fixed height striped with `fill`: its name on the left, cut short with an ellipsis (and
-/// shown whole on hover) when it does not fit, and its editor (or, when it cannot be edited, its value) on the right.
-/// A faint line sits above the row and between its columns, and under it when it is the group's `last`. The names
-/// take `share` of its width. Returns what the user changed.
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: bool, share: f32) -> Option<Edit> {
+/// Which rows are open (#417), by key, kept while Studio runs.
+fn open_id() -> egui::Id {
+    egui::Id::unique("metallic.properties.open")
+}
+
+/// The rows open now.
+fn open_rows(ctx: &egui::Context) -> std::collections::HashSet<String> {
+    ctx.data(|data| data.get_temp(open_id())).unwrap_or_default()
+}
+
+/// What a row did this frame.
+struct RowOut {
+    /// What the user changed.
+    edit: Option<Edit>,
+    /// Its arrow was clicked: open or close it.
+    toggled: bool,
+}
+
+/// How far a part's row is indented per level.
+const INDENT: f32 = 14.0;
+
+/// One row of a fixed height striped with `fill`: its name on the left (indented by its depth, after an arrow that
+/// opens or closes it when `open` says it opens, #417), cut short with an ellipsis (and shown whole on hover) when it
+/// does not fit, and its editor (or, when it cannot be edited, its value) on the right. A faint line sits above the
+/// row and between its columns, and under it when it is the group's `last`. The names take `share` of its width.
+#[allow(clippy::too_many_arguments)]
+fn row_ui(
+    ui: &mut Ui,
+    dm: &DataModel,
+    row: &PropertyRow,
+    fill: Color32,
+    last: bool,
+    share: f32,
+    open: Option<bool>,
+) -> RowOut {
+    let mut out = RowOut {
+        edit: None,
+        toggled: false,
+    };
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, size::ROW), Sense::hover());
     if !ui.is_rect_visible(rect) {
-        return None;
+        return out;
     }
     let split = split_x(rect.left(), width, share);
     // The stripe and the lines between rows reach the panel's sides (#301).
@@ -385,10 +499,33 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
         )
     };
     let (mut name_cell, value_cell) = (cell(rect.left(), split), cell(split, rect.right()));
+    // Indented by its depth, after its arrow when it opens (#417).
+    name_cell.min.x += f32::from(row.depth) * INDENT;
+    if let Some(is_open) = open {
+        let arrow = Rect::from_min_size(
+            pos2(name_cell.left() - space::S1, rect.center().y - INDENT / 2.0),
+            vec2(INDENT, INDENT),
+        );
+        let response = ui.interact(arrow, ui.scope_id().with("open"), Sense::click());
+        let verb = if is_open { "Close" } else { "Open" };
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("{verb} {}", row.label)));
+        let icon = if is_open { Icon::UiCollapse } else { Icon::UiExpand };
+        let ink = if response.hovered() { p.text } else { p.subtle };
+        icons::paint_at(
+            ui.painter(),
+            arrow.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            text::SMALL,
+            ink,
+        );
+        out.toggled = response.clicked();
+    }
+    name_cell.min.x += INDENT;
     // A colour's swatch (#415): a small square at the right of the name column, inside the row's lines with room round
     // it; the name stops short of it, and the value's text starts where every other value's does.
     let mut picked = None;
-    if let Value::Color3(color) = values::shown(&row.value, row.part) {
+    if let (Value::Color3(color), None) = (values::shown(&row.value, row.part), row.component) {
         let side = size::ROW - 2.0 * values::SWATCH_PAD;
         let swatch = Rect::from_min_size(
             pos2(
@@ -408,7 +545,7 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
     ui.scope_builder(in_cell(name_cell), |ui| {
         ui.set_clip_rect(name_cell.intersect(ui.clip_rect()));
         let name = ui.add(
-            Label::new(RichText::new(&row.label).size(text::BODY).color(p.muted))
+            Label::new(RichText::new(&row.shown).size(text::BODY).color(p.muted))
                 .truncate()
                 .selectable(false),
         );
@@ -419,18 +556,30 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, fill: Color32, last: b
     let typed = ui
         .scope_builder(in_cell(value_cell), |ui| {
             ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
-            if row.editable {
-                values::edit(ui, dm, row.meta, &row.label, row.part, &row.value, row.mixed)
-            } else if row.mixed.whole {
-                ui.label(RichText::new("Mixed").size(text::BODY).color(p.subtle));
-                None
-            } else {
-                value_ui(ui, dm, &values::shown(&row.value, row.part));
-                None
+            match row.component {
+                // A part's row edits its component alone (#417).
+                Some(index) if row.editable => {
+                    values::edit_component(ui, row.meta, &row.label, row.part, &row.value, index, row.mixed.whole)
+                }
+                Some(index) => {
+                    let shown = values::component_text(&row.value, row.part, index).unwrap_or_default();
+                    ui.label(RichText::new(shown).size(text::BODY).color(p.text));
+                    None
+                }
+                None if row.editable => values::edit(ui, dm, row.meta, &row.label, row.part, &row.value, row.mixed),
+                None if row.mixed.whole => {
+                    ui.label(RichText::new("Mixed").size(text::BODY).color(p.subtle));
+                    None
+                }
+                None => {
+                    value_ui(ui, dm, &values::shown(&row.value, row.part));
+                    None
+                }
             }
         })
         .inner;
-    typed.or(picked)
+    out.edit = typed.or(picked);
+    out
 }
 
 /// The strip over the line between the columns, down every row in `rows` (#324): dragging it moves the line, which

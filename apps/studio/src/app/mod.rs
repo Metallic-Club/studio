@@ -2567,7 +2567,7 @@ mod tests {
         let stopped = harness.get_by_label("Name column width").rect();
         let size = harness.get_by_role_and_label(Role::Label, "Size").rect();
         assert!(
-            stopped.center().x > size.left() + 40.0,
+            stopped.center().x > size.left() + 25.0,
             "{stopped:?}, the name at {size:?}"
         );
         // It stays where it was left, for another part too.
@@ -2776,8 +2776,17 @@ mod tests {
         undo(&mut harness);
         assert!(matches!(value(&harness, "Size"), Value::Vector3(size) if size.x == 512.0));
 
-        // A CFrame's position row moves the part; its orientation row turns it.
+        // A CFrame shows whole, and opens into its position and orientation (#417): the position row moves the part,
+        // the orientation row turns it.
         let placed = value(&harness, "CFrame");
+        assert!(
+            harness
+                .query_by_role_and_label(Role::TextInput, "CFrame Position")
+                .is_none(),
+            "closed"
+        );
+        harness.get_by_role_and_label(Role::Button, "Open CFrame").click();
+        settle(&mut harness);
         // A blank leaves that component.
         type_into(&mut harness, "CFrame Position", ", 20, ");
         let Value::CFrame(frame) = value(&harness, "CFrame") else {
@@ -2792,6 +2801,19 @@ mod tests {
         // Two edits of one property this close together are one step (#348).
         undo(&mut harness);
         assert_eq!(value(&harness, "CFrame"), placed);
+        // A vector opens into its parts, each on a row of its own that edits it alone (#417).
+        harness.get_by_role_and_label(Role::Button, "Open Size").click();
+        settle(&mut harness);
+        type_into(&mut harness, "Size Y", "5");
+        let Value::Vector3(size) = value(&harness, "Size") else {
+            panic!("a vector");
+        };
+        assert_eq!((size.x, size.y, size.z), (512.0, 5.0, 512.0));
+        undo(&mut harness);
+        // Opened rows close again.
+        harness.get_by_role_and_label(Role::Button, "Close Size").click();
+        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::SpinButton, "Size Y").is_none());
 
         // A colour's channel.
         type_into(&mut harness, "Color", "255, -, -");
