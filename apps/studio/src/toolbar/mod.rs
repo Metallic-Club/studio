@@ -103,6 +103,8 @@ pub struct Toolbar {
     adding: Option<add::Adding>,
     /// Whether the Tabs window is open.
     tabs_open: bool,
+    /// Whether it draws its lines (under it, in its separators): Settings' Panel borders, as of this pass (#441).
+    lines: bool,
 }
 
 impl Default for Toolbar {
@@ -124,6 +126,7 @@ impl Toolbar {
             renaming: None,
             adding: None,
             tabs_open: false,
+            lines: true,
         }
     }
 
@@ -138,6 +141,7 @@ impl Toolbar {
             renaming: None,
             adding: None,
             tabs_open: false,
+            lines: true,
         }
     }
 
@@ -218,21 +222,26 @@ impl Toolbar {
     }
 
     /// Draws the toolbar filling `ui`'s rect. `enabled` says whether a tool can be used now, `checked` whether it is
-    /// on (a panel that is open); the Snap tool edits `editing` (#375). Returns what was clicked.
+    /// on (a panel that is open); the Snap tool edits `editing` (#375). With `lines` off (Settings' Panel borders,
+    /// #441) it draws no line under it nor in its separators. Returns what was clicked.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
         enabled: impl Fn(&ToolAction) -> bool,
         checked: impl Fn(&ToolAction) -> bool,
         editing: &mut Editing,
+        lines: bool,
     ) -> Vec<ToolbarEvent> {
+        self.lines = lines;
         let p = current_colors(ui.ctx()).palette;
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, p.header);
-        // One physical pixel under it, as the dock's lines (#287).
-        let pixel = 1.0 / ui.ctx().pixels_per_point();
-        let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - pixel), rect.right_bottom());
-        ui.painter().rect_filled(line, 0.0, p.border);
+        if lines {
+            // One physical pixel under it, as the dock's lines (#287).
+            let pixel = 1.0 / ui.ctx().pixels_per_point();
+            let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - pixel), rect.right_bottom());
+            ui.painter().rect_filled(line, 0.0, p.border);
+        }
         let tabs = Rect::from_min_size(rect.min, vec2(rect.width(), TAB_ROW));
         let tools = Rect::from_min_size(
             pos2(rect.left(), tabs.bottom()),
@@ -748,8 +757,11 @@ impl Toolbar {
             }
             Element::Separator => {
                 response.widget_info(|| WidgetInfo::labeled(Role::Unknown, true, "Separator"));
-                let line = Rect::from_center_size(rect.center(), vec2(size::BORDER, rect.height() - 2.0 * space::S3));
-                ui.painter().rect_filled(line, 0.0, p.border);
+                if self.lines {
+                    let line =
+                        Rect::from_center_size(rect.center(), vec2(size::BORDER, rect.height() - 2.0 * space::S3));
+                    ui.painter().rect_filled(line, 0.0, p.border);
+                }
                 response
             }
         }
