@@ -4731,31 +4731,6 @@ mod tests {
     }
 
     #[test]
-    fn the_toolbar_s_elements_keep_their_shape_as_it_is_resized() {
-        let mut harness = editing(settings_file("toolbar-shape", None), "Toolbar Shape Game");
-        harness.set_size(egui::vec2(1600.0, 800.0));
-        settle(&mut harness);
-        let width = |harness: &Harness<'_, Test>, role: Role, label: &str| {
-            harness.get_by_role_and_label(role, label).rect().width()
-        };
-        let (tool, snap) = (
-            width(&harness, Role::Button, "Move tool"),
-            width(&harness, Role::Group, "Snap increments"),
-        );
-        // Half as tall again: as much wider (#442).
-        let grip = harness
-            .get_by_role_and_label(Role::Splitter, "Toolbar height")
-            .rect()
-            .center();
-        drag(&mut harness, grip, grip + egui::vec2(0.0, 27.0));
-        assert_eq!(harness.state().studio.toolbar().config().tool_row, 81);
-        let grown = width(&harness, Role::Button, "Move tool") / tool;
-        assert!((grown - 1.5).abs() < 0.05, "{grown}");
-        let grown = width(&harness, Role::Group, "Snap increments") / snap;
-        assert!((grown - 1.5).abs() < 0.05, "{grown}");
-    }
-
-    #[test]
     fn the_toolbar_resizes_from_its_bottom_line_and_keeps_its_height() {
         let path = settings_file("toolbar-resize", None);
         let mut harness = editing(path.clone(), "Toolbar Resize Game");

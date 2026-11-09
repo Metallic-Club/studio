@@ -55,20 +55,9 @@ const SEPARATOR_WIDTH: f32 = 13.0;
 /// A tool's icon size in the tool row as it starts, and as an empty tab's Add tool button has it.
 const TOOL_ICON: f32 = 20.0;
 
-/// How big an element is in a tool row `row` points tall against the row it starts with (#442): its width, padding,
-/// icon and label grow and shrink with the row, so it keeps its shape.
-fn grow(row: f32) -> f32 {
-    row / TOOL_ROW
-}
-
-/// A tool's icon size in a tool row `row` points tall: [`TOOL_ICON`] at the start, with the row, never under 16.
+/// A tool's icon size in a tool row `row` points tall: [`TOOL_ICON`] at the start, growing a little with the row.
 fn icon_side(row: f32) -> f32 {
-    (TOOL_ICON * grow(row)).max(16.0)
-}
-
-/// A tool's label font in a tool row `row` points tall.
-fn label_font(row: f32) -> FontId {
-    FontId::proportional((text::SMALL * grow(row)).max(9.0))
+    (row * TOOL_ICON / TOOL_ROW).clamp(16.0, 28.0)
 }
 /// The room the + after the tabs takes.
 const PLUS_WIDTH: f32 = 28.0;
@@ -604,27 +593,26 @@ impl Toolbar {
         let mut x = rect.left() + space::S3;
         let mut rects = Vec::new();
         let mut dragged = false;
-        let k = grow(rect.height());
         for (index, element) in elements.iter().enumerate() {
             let (width, label) = match element {
-                // Its boxes and fields keep their size, so it widens with a taller row but never narrows.
                 Element::Tool { id } if self.registry.get(id).is_some_and(is_increments) => {
-                    (increments::width(rect.height()) * k.max(1.0), "Snap".to_owned())
+                    (increments::width(rect.height()), "Snap".to_owned())
                 }
                 Element::Tool { id } => {
                     let label = self.registry.get(id).map_or(id.as_str(), |tool| tool.label.as_str());
                     let width = if rect.height() < LABELS_FROM {
                         // Icons alone in a short row.
-                        icon_side(rect.height()) + 2.0 * space::S3 * k
+                        icon_side(rect.height()) + 2.0 * space::S3
                     } else {
-                        let font = label_font(rect.height());
-                        let galley = ui.painter().layout_no_wrap(label.to_owned(), font, p.text);
-                        (galley.size().x + 2.0 * space::S3 * k).max(TOOL_WIDTH * k)
+                        let galley =
+                            ui.painter()
+                                .layout_no_wrap(label.to_owned(), FontId::proportional(text::SMALL), p.text);
+                        (galley.size().x + 2.0 * space::S3).max(TOOL_WIDTH)
                     };
                     (width, label.to_owned())
                 }
-                Element::Spacer => (SPACER_WIDTH * k, "Spacer".to_owned()),
-                Element::Separator => (SEPARATOR_WIDTH * k, "Separator".to_owned()),
+                Element::Spacer => (SPACER_WIDTH, "Spacer".to_owned()),
+                Element::Separator => (SEPARATOR_WIDTH, "Separator".to_owned()),
             };
             let at = Rect::from_min_size(
                 pos2(x, rect.top() + space::S1),
@@ -721,9 +709,8 @@ impl Toolbar {
                     let row = rect.height() + 2.0 * space::S1;
                     let side = icon_side(row);
                     let labelled = row >= LABELS_FROM;
-                    let air = space::S2 * grow(row);
                     let at = if labelled {
-                        Align2::CENTER_TOP.anchor_size(pos2(rect.center().x, rect.top() + air), vec2(side, side))
+                        Align2::CENTER_TOP.anchor_size(pos2(rect.center().x, rect.top() + space::S2), vec2(side, side))
                     } else {
                         Rect::from_center_size(rect.center(), vec2(side, side))
                     };
@@ -734,10 +721,10 @@ impl Toolbar {
                     }
                     if labelled {
                         ui.painter().text(
-                            pos2(rect.center().x, rect.bottom() - air),
+                            pos2(rect.center().x, rect.bottom() - space::S2),
                             Align2::CENTER_BOTTOM,
                             label,
-                            label_font(row),
+                            FontId::proportional(text::SMALL),
                             ink,
                         );
                     }

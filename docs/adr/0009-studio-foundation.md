@@ -447,9 +447,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   window's (`unseen_input`), as its scale (#409).
 - **Panel borders reach the toolbar (#441)**: with Settings' Panel borders off, the toolbar draws no line under it nor
   in its separators.
-- **The toolbar's elements keep their shape (#442)**: resizing the tool row (#414) scales its elements with it, by the
-  row's height over its starting 54 points (`toolbar::grow`): widths, padding, icons, labels, spacers and separators;
-  the increments widen with a taller row (their boxes and fields keep their size, so they never narrow).
+
+### The second list of 2026-11-09 (#450-#456)
+
+- **The toolbar's elements keep their sizes (#450)**: #442, which scaled them with the tool row, is reverted; resizing
+  the row (#414) changes their height only, as before.
 
 ## Not in this slice
 
