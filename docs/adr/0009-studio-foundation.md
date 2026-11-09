@@ -463,6 +463,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   wider than the window, so a large interface scale on a small screen still reaches the controls' column.
 - **Rotation, not Orientation (#455)**: Properties labels a part's `Orientation` and a CFrame's orientation row as
   Rotation, as a model's is (#439); scripts still call it `Orientation`.
+- **A tool twice in the toolbar (#456)**: the Snap increments' widgets were named after their rows alone, so a second
+  Snap element reused the first's ids and egui drew its warning; they now take the element's own id.
 
 ## Not in this slice
 

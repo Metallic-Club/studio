@@ -2,7 +2,7 @@
 //! has them. Each row is a check box (snapping on or off), the Move or Rotate icon, the increment as a field to type
 //! in or drag, and arrows stepping through common values. It edits the saved increments (`settings::Editing`) in place.
 
-use egui::{Align, Align2, Color32, DragValue, Layout, Rect, Role, Sense, Stroke, Ui, UiBuilder, WidgetInfo, vec2};
+use egui::{Align, Align2, Color32, DragValue, Id, Layout, Rect, Role, Sense, Stroke, Ui, UiBuilder, WidgetInfo, vec2};
 
 use crate::settings::{Editing, MOVE_STEP, TURN_STEP};
 use crate::theme::icons::{self, Icon};
@@ -73,8 +73,9 @@ pub fn step(common: &[f32], value: f32, up: bool) -> f32 {
     found.unwrap_or(value)
 }
 
-/// Draws the increments in `rect`, editing `editing`.
-pub fn show(ui: &mut Ui, rect: Rect, editing: &mut Editing) {
+/// Draws the increments in `rect`, editing `editing`. `id` is the element's own, so a toolbar showing them twice gives
+/// each its own widgets (#456).
+pub fn show(ui: &mut Ui, rect: Rect, editing: &mut Editing, id: Id) {
     // The element's rect is the row's less a little air above and below.
     let (first, second) = if rect.height() + 2.0 * space::S1 >= STACKED_FROM {
         let half = rect.height() / 2.0;
@@ -85,16 +86,16 @@ pub fn show(ui: &mut Ui, rect: Rect, editing: &mut Editing) {
         let left = Rect::from_min_size(rect.min, vec2(half, rect.height()));
         (left, Rect::from_min_size(left.right_top(), vec2(half, rect.height())))
     };
-    row(ui, first, &MOVE, &mut editing.snap_moves, &mut editing.move_step);
-    row(ui, second, &TURN, &mut editing.snap_turns, &mut editing.turn_step);
+    row(ui, id, first, &MOVE, &mut editing.snap_moves, &mut editing.move_step);
+    row(ui, id, second, &TURN, &mut editing.snap_turns, &mut editing.turn_step);
 }
 
-fn row(ui: &mut Ui, rect: Rect, row: &Row, on: &mut bool, value: &mut f32) {
+fn row(ui: &mut Ui, id: Id, rect: Rect, row: &Row, on: &mut bool, value: &mut f32) {
     let p = current_colors(ui.ctx()).palette;
     let mut ui = ui.new_child(
         UiBuilder::new()
             .max_rect(rect.shrink2(vec2(space::S2, 1.0)))
-            .id_salt(row.field)
+            .id_salt((id, row.field))
             .layout(Layout::left_to_right(Align::Center)),
     );
     ui.spacing_mut().item_spacing.x = space::S1;

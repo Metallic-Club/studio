@@ -675,7 +675,7 @@ impl Toolbar {
         match element {
             Element::Tool { id } if self.registry.get(id).is_some_and(is_increments) => {
                 response.widget_info(|| WidgetInfo::labeled(Role::Group, true, "Snap increments"));
-                increments::show(ui, rect, editing);
+                increments::show(ui, rect, editing, response.id);
                 response
             }
             Element::Tool { id } => {
@@ -830,6 +830,43 @@ fn paint_drop_marker(ui: &Ui, rects: &[Rect], accent: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// egui's warnings drawn over widgets whose ids clash ("First use of widget ID ...", "Double use of ...").
+    fn clash_warnings(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("use of") => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_tool_in_the_toolbar_twice_draws_without_a_warning() {
+        use egui_kittest::Harness;
+
+        let mut toolbar = Toolbar::default();
+        let active = toolbar.config.active;
+        let tab = &mut toolbar.config.tabs[active];
+        // Every element of the default tab twice, the Snap increments among them (#456).
+        let again = tab.elements.clone();
+        tab.elements.extend(again);
+        let mut harness = Harness::builder()
+            .with_size(vec2(4000.0, TOOLBAR_HEIGHT))
+            .with_context_setup(crate::theme::fonts::install)
+            // egui's warning starts with an emoji Studio's fonts do not have: drawn as a box, it can be read.
+            .allow_missing_glyphs()
+            .build_ui_state(
+                |ui, (toolbar, editing): &mut (Toolbar, Editing)| {
+                    toolbar.ui(ui, |_| true, |_| false, editing, true);
+                },
+                (toolbar, Editing::default()),
+            );
+        harness.run();
+        assert_eq!(clash_warnings(harness.output()), Vec::<String>::new());
+    }
 
     #[test]
     fn drops_land_between_their_neighbours() {
