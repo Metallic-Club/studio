@@ -457,6 +457,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   time. It keeps its shadow's fade while it takes its new tiles, drawn that same frame.
 - **A model's Scale drags (#452)**: a number field drags by a two-hundredth of its range only when both ends are
   finite; `Model.Scale`, with no upper end, dragged by infinity, which the data model refused. It drags in hundredths.
+- **The toolbar's separators stay (#453)**: with Panel borders off only the line under the toolbar goes (#441); its
+  separators keep their lines.
 
 ## Not in this slice
 

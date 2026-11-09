@@ -103,8 +103,6 @@ pub struct Toolbar {
     adding: Option<add::Adding>,
     /// Whether the Tabs window is open.
     tabs_open: bool,
-    /// Whether it draws its lines (under it, in its separators): Settings' Panel borders, as of this pass (#441).
-    lines: bool,
 }
 
 impl Default for Toolbar {
@@ -126,7 +124,6 @@ impl Toolbar {
             renaming: None,
             adding: None,
             tabs_open: false,
-            lines: true,
         }
     }
 
@@ -141,7 +138,6 @@ impl Toolbar {
             renaming: None,
             adding: None,
             tabs_open: false,
-            lines: true,
         }
     }
 
@@ -223,7 +219,7 @@ impl Toolbar {
 
     /// Draws the toolbar filling `ui`'s rect. `enabled` says whether a tool can be used now, `checked` whether it is
     /// on (a panel that is open); the Snap tool edits `editing` (#375). With `lines` off (Settings' Panel borders,
-    /// #441) it draws no line under it nor in its separators. Returns what was clicked.
+    /// #441) it draws no line under it; its separators stay (#453). Returns what was clicked.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
@@ -232,7 +228,6 @@ impl Toolbar {
         editing: &mut Editing,
         lines: bool,
     ) -> Vec<ToolbarEvent> {
-        self.lines = lines;
         let p = current_colors(ui.ctx()).palette;
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, p.header);
@@ -757,11 +752,8 @@ impl Toolbar {
             }
             Element::Separator => {
                 response.widget_info(|| WidgetInfo::labeled(Role::Unknown, true, "Separator"));
-                if self.lines {
-                    let line =
-                        Rect::from_center_size(rect.center(), vec2(size::BORDER, rect.height() - 2.0 * space::S3));
-                    ui.painter().rect_filled(line, 0.0, p.border);
-                }
+                let line = Rect::from_center_size(rect.center(), vec2(size::BORDER, rect.height() - 2.0 * space::S3));
+                ui.painter().rect_filled(line, 0.0, p.border);
                 response
             }
         }
