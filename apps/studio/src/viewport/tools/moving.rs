@@ -4,11 +4,10 @@
 //! with the distance.
 
 use egui::{Color32, Painter, Pos2, Shape, Stroke, pos2};
-use metallic_engine::metallic_classes::base::world_object;
 use metallic_engine::metallic_core::glam::{Vec2, Vec3};
 use metallic_engine::metallic_core::{CFrame, DataModel};
 
-use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, axis_colour, label, trail};
+use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, axis_colour, label, place, trail};
 use crate::viewport::gizmo::{self, MoveHandle};
 use crate::viewport::view::{Ray, View};
 
@@ -69,9 +68,7 @@ pub(super) fn update(dm: &mut DataModel, drag: &mut MoveDrag, f: &Frame, starts:
     };
     for start in starts {
         let target = CFrame::from_parts(start.pivot.position() + delta, start.pivot.rotation());
-        if let Err(error) = world_object::pivot_to(dm, start.id, target) {
-            log::warn!("tools: could not move: {error}");
-        }
+        place(dm, start.id, target, "move");
     }
 }
 
@@ -192,6 +189,33 @@ mod tests {
             "one line, no marks"
         );
         assert_eq!(count(|s| matches!(s, egui::Shape::Circle(_))), 1, "one dot");
+    }
+
+    #[test]
+    fn the_parts_inside_a_part_move_with_it() {
+        let mut bench = Bench::new();
+        let parent = bench.part(Vec3::ZERO, Vec3::ONE);
+        let child = bench.part(Vec3::new(0.0, 2.0, 0.0), Vec3::ONE);
+        bench.dm.set_parent(child, Some(parent)).unwrap();
+        bench.select(&[child, parent]);
+        let view = look(Vec3::new(0.0, 10.0, 30.0), Vec3::ZERO);
+        let targets = targets(&bench.dm, &bench.selection);
+        assert_eq!(targets, [parent]);
+        let frame = frame_for(&bench.dm, Tool::Move, false, &targets, view.pos).unwrap();
+        let on_arrow = view.project(frame.origin + Vec3::X * frame.len * 0.6).unwrap();
+        let handle = hit(Tool::Move, &frame, &view, on_arrow).unwrap();
+        let mut drag = begin_drag(&bench.dm, handle, frame, view.ray(on_arrow).unwrap(), &targets).unwrap();
+        let pulled = view.project(frame.origin + Vec3::X * (frame.len * 0.6 + 3.0)).unwrap();
+        let mut scene = bench.scene();
+        for _ in 0..2 {
+            let ray = view.ray(pulled).unwrap();
+            update_drag(&mut scene, &mut drag, ray, Keys::default(), Snap::default());
+        }
+        assert!(position(scene.dm, parent).abs_diff_eq(Vec3::new(3.0, 0.0, 0.0), 1e-3));
+        assert!(
+            position(scene.dm, child).abs_diff_eq(Vec3::new(3.0, 2.0, 0.0), 1e-3),
+            "(#438)"
+        );
     }
 
     #[test]

@@ -113,16 +113,25 @@ pub fn part_box(dm: &DataModel, id: Id) -> Option<Bounds> {
     })
 }
 
-/// The box an instance's outline is: a part's own, else the box round the parts inside it, along the axes of its
-/// pivot (#413: a model's turns with it), or the world's when it has none.
+/// The box an instance's outline is: round it and the parts inside it, along its axes (#438: a part's own; #413: a
+/// model's pivot's, turning with it), or the world's when it has none. A part with none inside is its own box.
 pub fn outline_box(dm: &DataModel, id: Id) -> Option<Bounds> {
-    if let Some(own) = part_box(dm, id) {
-        return Some(own);
+    let own = part_box(dm, id);
+    let mut inside = dm
+        .descendants(id)
+        .ok()?
+        .filter_map(|inside| part_box(dm, inside))
+        .peekable();
+    if inside.peek().is_none() {
+        return own;
     }
-    let rot = world_object::pivot(dm, id).map_or(Quat::IDENTITY, |pivot| pivot.rotation());
+    let rot = match own {
+        Some(own) => own.rot,
+        None => world_object::pivot(dm, id).map_or(Quat::IDENTITY, |pivot| pivot.rotation()),
+    };
     let back = rot.inverse();
     let mut span: Option<(Vec3, Vec3)> = None;
-    for part in dm.descendants(id).ok()?.filter_map(|inside| part_box(dm, inside)) {
+    for part in own.into_iter().chain(inside) {
         for corner in part.corners().map(|corner| back * corner) {
             span = Some(span.map_or((corner, corner), |(min, max)| (min.min(corner), max.max(corner))));
         }

@@ -8,7 +8,7 @@ use metallic_engine::metallic_classes::base::world_object;
 use metallic_engine::metallic_core::glam::{Quat, Vec3};
 use metallic_engine::metallic_core::{CFrame, DataModel};
 
-use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, Tool, axis_colour, colour, label};
+use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, Tool, axis_colour, colour, label, place};
 use crate::editor::Scene;
 use crate::viewport::gizmo;
 use crate::viewport::view::{Ray, View};
@@ -58,9 +58,7 @@ fn turn_all(dm: &mut DataModel, origin: Vec3, starts: &[Start], turn: Quat) {
     for start in starts {
         let position = origin + turn * (start.pivot.position() - origin);
         let target = CFrame::from_parts(position, (turn * start.pivot.rotation()).normalize());
-        if let Err(error) = world_object::pivot_to(dm, start.id, target) {
-            log::warn!("tools: could not turn: {error}");
-        }
+        place(dm, start.id, target, "turn");
     }
 }
 
@@ -223,6 +221,39 @@ mod tests {
 
     fn turned(dm: &DataModel, id: metallic_engine::metallic_core::Id) -> Quat {
         world_object::pivot(dm, id).unwrap().rotation()
+    }
+
+    #[test]
+    fn the_parts_inside_a_part_turn_with_it_and_its_outline_holds_them() {
+        let mut bench = Bench::new();
+        let parent = bench.part(Vec3::ZERO, Vec3::ONE);
+        let child = bench.part(Vec3::new(3.0, 0.0, 0.0), Vec3::ONE);
+        let grandchild = bench.part(Vec3::new(3.0, 0.0, 2.0), Vec3::ONE);
+        bench.dm.set_parent(child, Some(parent)).unwrap();
+        bench.dm.set_parent(grandchild, Some(child)).unwrap();
+        // The box round all three, in the parent's axes (#438).
+        let outline = crate::viewport::pick::outline_box(&bench.dm, parent).unwrap();
+        assert!(
+            outline.center.abs_diff_eq(Vec3::new(1.5, 0.0, 1.0), 1e-4),
+            "{outline:?}"
+        );
+        assert!(outline.half.abs_diff_eq(Vec3::new(2.0, 0.5, 1.5), 1e-4), "{outline:?}");
+        // The child selected too is left to its parent: one target, which carries it round.
+        bench.select(&[parent, child]);
+        assert_eq!(targets(&bench.dm, &bench.selection), [parent]);
+        let mut scene = bench.scene();
+        assert!(quarter_turn(&mut scene, false, false));
+        let quarter = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        assert!(position(scene.dm, parent).abs_diff_eq(Vec3::ZERO, 1e-4));
+        assert!(position(scene.dm, child).abs_diff_eq(quarter * Vec3::new(3.0, 0.0, 0.0), 1e-4));
+        assert!(position(scene.dm, grandchild).abs_diff_eq(quarter * Vec3::new(3.0, 0.0, 2.0), 1e-4));
+        assert!(turned(scene.dm, grandchild).abs_diff_eq(quarter, 1e-4));
+        // One undo step puts them all back.
+        let now = std::time::Instant::now();
+        scene.commit(now, false);
+        assert!(scene.undo(now));
+        assert!(position(scene.dm, grandchild).abs_diff_eq(Vec3::new(3.0, 0.0, 2.0), 1e-4));
+        assert!(turned(scene.dm, child).abs_diff_eq(Quat::IDENTITY, 1e-4));
     }
 
     #[test]

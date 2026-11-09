@@ -4,11 +4,10 @@
 //! snaps to the move increment, so things land on one grid). Over nothing it slides on a plane through where it was
 //! grabbed: level, unless the view is nearly level too, when it faces the camera.
 
-use metallic_engine::metallic_classes::base::world_object;
 use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, DataModel, Id};
 
-use super::{Start, span};
+use super::{Start, place, span};
 use crate::viewport::gizmo;
 use crate::viewport::pick::{self, Bounds};
 use crate::viewport::view::Ray;
@@ -88,9 +87,7 @@ pub(super) fn update(dm: &mut DataModel, drag: &CarryDrag, starts: &[Start], ray
     };
     for start in starts {
         let target = CFrame::from_parts(start.pivot.position() + delta, start.pivot.rotation());
-        if let Err(error) = world_object::pivot_to(dm, start.id, target) {
-            log::warn!("tools: could not carry: {error}");
-        }
+        place(dm, start.id, target, "carry");
     }
 }
 
