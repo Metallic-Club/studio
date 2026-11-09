@@ -2911,6 +2911,31 @@ mod tests {
     }
 
     #[test]
+    fn a_double_click_on_an_explorer_row_renames_it() {
+        let mut harness = editing(settings_file("editor-double-rename", None), "Double Rename Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        // Two clicks 50 ms apart, as `double_click` does (#436).
+        let row = |harness: &Harness<'_, Test>| harness.get_by_role_and_label(Role::TreeItem, "Baseplate").rect();
+        let at = row(&harness);
+        left_click(&mut harness, at);
+        let time = harness.ctx.input(|input| input.time);
+        harness.input_mut().time = Some(time + 0.05);
+        left_click(&mut harness, at);
+        harness.input_mut().time = None;
+        settle(&mut harness);
+        assert_eq!(selected_names(&harness), ["Baseplate"]);
+        harness.get_by_role_and_label(Role::TextInput, "Name of Baseplate");
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("Floor".to_owned()));
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Floor");
+        // A row with children still opens by its arrow, not by a double-click.
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Camera").is_some());
+    }
+
+    #[test]
     fn tree_edits_duplicate_delete_cut_copy_paste_and_rename_and_each_undoes() {
         let mut harness = editing(settings_file("editor-tree-edits", None), "Tree Edits Game");
         harness.set_size(egui::vec2(1280.0, 1000.0));
