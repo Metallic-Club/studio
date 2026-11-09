@@ -4699,7 +4699,7 @@ mod tests {
     }
 
     #[test]
-    fn panel_borders_off_takes_the_toolbar_s_lines_too() {
+    fn panel_borders_off_takes_the_line_under_the_toolbar_but_not_its_separators() {
         let mut harness = editing(settings_file("toolbar-lines", None), "Toolbar Lines Game");
         harness.set_size(egui::vec2(1280.0, 800.0));
         settle(&mut harness);
@@ -4718,7 +4718,7 @@ mod tests {
                 .count()
         };
         // The line under it, and one in each separator of the default tab.
-        assert!(lines(&harness) >= 2, "{}", lines(&harness));
+        let with = lines(&harness);
         harness
             .state_mut()
             .studio
@@ -4727,7 +4727,10 @@ mod tests {
             .appearance
             .panel_borders = false;
         settle(&mut harness);
-        assert_eq!(lines(&harness), 0, "(#441)");
+        // The line under it goes (#441); the separators stay (#453).
+        let without = lines(&harness);
+        assert!(without >= 1, "the default tab's separators");
+        assert_eq!(with, without + 1);
     }
 
     #[test]
