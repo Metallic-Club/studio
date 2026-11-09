@@ -859,8 +859,14 @@ end
 
 --- A group of world objects that belong together, such as a car or a house, moved and copied as one.
 declare extern type Model extends WorldObject with
-    --- The part the model moves and rotates around. When it is nil (or not inside the model), the model pivots on the centre of its parts.
+    --- The part the model moves and rotates around. When it is nil (or not inside the model), the model pivots on its WorldPivot.
     PrimaryPart: BasePart?
+    --- Where the model moves and rotates around when it has no PrimaryPart. Until it is first set (by PivotTo, Studio's tools or a script) it is the centre of the model's parts; from then on it is kept, turning with the model.
+    WorldPivot: CFrame
+    --- Where WorldPivot is kept once set.
+    WorldPivotData: CFrame
+    --- Whether WorldPivot was ever set; until it is, it is the centre of the model's parts.
+    WorldPivotSet: boolean
 end
 
 --- Code shared between scripts. It runs the first time a script requires it and returns a value, usually a table of functions; later requires return that same value.

@@ -2592,7 +2592,66 @@
           "range": null,
           "wraps": false,
           "group": "Model",
-          "description": "The part the model moves and rotates around. When it is nil (or not inside the model), the model pivots on the centre of its parts.",
+          "description": "The part the model moves and rotates around. When it is nil (or not inside the model), the model pivots on its WorldPivot.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "WorldPivot",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "wraps": false,
+          "group": "Model",
+          "description": "Where the model moves and rotates around when it has no PrimaryPart. Until it is first set (by PivotTo, Studio's tools or a script) it is the centre of the model's parts; from then on it is kept, turning with the model.",
+          "aliases": [],
+          "derived_from": [
+            "WorldPivotData",
+            "WorldPivotSet"
+          ]
+        },
+        {
+          "name": "WorldPivotData",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "HIDDEN"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "",
+          "description": "Where WorldPivot is kept once set.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "WorldPivotSet",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "HIDDEN"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "",
+          "description": "Whether WorldPivot was ever set; until it is, it is the centre of the model's parts.",
           "aliases": [],
           "derived_from": []
         }
