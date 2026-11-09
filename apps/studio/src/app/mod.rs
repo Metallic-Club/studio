@@ -1621,7 +1621,8 @@ mod tests {
         harness.state_mut().studio.settings_window().set_query("frames");
         settle(&mut harness);
         harness.get_by_label("RENDERING");
-        harness.get_by_label("Frame cap");
+        // Its field is named after it too (#464).
+        harness.get_by_role_and_label(Role::SpinButton, "Frame cap");
         harness.get_by_label("Dynamic resolution");
         assert!(harness.query_by_label("APPEARANCE").is_none());
         assert!(harness.query_by_label("High contrast").is_none());

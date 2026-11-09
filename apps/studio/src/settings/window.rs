@@ -157,7 +157,7 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let scale = &mut s.appearance.ui_scale;
             let percent = |scale: f32| format!("{:.0} %", scale * 100.0);
-            egui::ComboBox::from_id_salt("settings.ui_scale")
+            let shown = egui::ComboBox::from_id_salt("settings.ui_scale")
                 .icon(crate::theme::combo_icon)
                 .selected_text(percent(*scale))
                 .width(COMBO_WIDTH)
@@ -166,6 +166,7 @@ pub static ENTRIES: &[Entry] = &[
                         ui.selectable_value(scale, choice, percent(choice));
                     }
                 });
+            named(&shown.response, "Interface scale");
         },
     },
     Entry {
@@ -212,7 +213,7 @@ pub static ENTRIES: &[Entry] = &[
         description: "How much a viewport frame may cost. Auto measures this machine and holds the frame time.",
         control: |ui, s| {
             let preset = &mut s.rendering.preset;
-            egui::ComboBox::from_id_salt("settings.preset")
+            let shown = egui::ComboBox::from_id_salt("settings.preset")
                 .icon(crate::theme::combo_icon)
                 .selected_text(preset_label(*preset))
                 .width(COMBO_WIDTH)
@@ -221,6 +222,7 @@ pub static ENTRIES: &[Entry] = &[
                         ui.selectable_value(preset, choice, preset_label(choice));
                     }
                 });
+            named(&shown.response, "Quality preset");
         },
     },
     Entry {
@@ -230,7 +232,7 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let preset = aa_label(preset_quality(&s.rendering).anti_aliasing);
             let choices = AntiAliasing::ALL.map(|aa| (aa, aa_label(aa)));
-            override_combo(ui, "settings.aa", &mut s.rendering.anti_aliasing, preset, &choices);
+            override_combo(ui, "Anti-aliasing", &mut s.rendering.anti_aliasing, preset, &choices);
         },
     },
     Entry {
@@ -240,7 +242,7 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let choices = [(true, "On"), (false, "Off")];
             let preset = if PRESET_VSYNC { "On" } else { "Off" };
-            override_combo(ui, "settings.vsync", &mut s.rendering.vsync, preset, &choices);
+            override_combo(ui, "VSync", &mut s.rendering.vsync, preset, &choices);
         },
     },
     Entry {
@@ -250,6 +252,7 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             override_number(
                 ui,
+                "Frame cap",
                 &mut s.rendering.frame_cap,
                 PRESET_FRAME_CAP,
                 0..=MAX_FRAME_CAP,
@@ -266,6 +269,7 @@ pub static ENTRIES: &[Entry] = &[
             let preset = preset_quality(&s.rendering).resolution.scale;
             override_number(
                 ui,
+                "Render scale",
                 &mut s.rendering.render_scale,
                 preset,
                 MIN_SCALE..=MAX_SCALE,
@@ -301,7 +305,15 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let preset = preset_quality(&s.rendering).resolution.target_ms;
             let range = TARGET_FRAME_MS.0..=TARGET_FRAME_MS.1;
-            override_number(ui, &mut s.rendering.target_frame_ms, preset, range, 0.1, " ms");
+            override_number(
+                ui,
+                "Target frame time",
+                &mut s.rendering.target_frame_ms,
+                preset,
+                range,
+                0.1,
+                " ms",
+            );
         },
     },
     Entry {
@@ -312,7 +324,15 @@ pub static ENTRIES: &[Entry] = &[
             let distance = preset_quality(&s.rendering).cull.max_distance;
             let preset = if distance.is_finite() { distance } else { 0.0 };
             let range = 0.0..=MAX_VIEW_DISTANCE;
-            override_number(ui, &mut s.rendering.view_distance, preset, range, 10.0, " m");
+            override_number(
+                ui,
+                "View distance",
+                &mut s.rendering.view_distance,
+                preset,
+                range,
+                10.0,
+                " m",
+            );
         },
     },
     Entry {
@@ -338,7 +358,15 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let preset = preset_quality(&s.rendering).shadows.distance;
             let range = SHADOW_DISTANCE.0..=SHADOW_DISTANCE.1;
-            override_number(ui, &mut s.rendering.shadow_distance, preset, range, 1.0, " m");
+            override_number(
+                ui,
+                "Shadow distance",
+                &mut s.rendering.shadow_distance,
+                preset,
+                range,
+                1.0,
+                " m",
+            );
         },
     },
     Entry {
@@ -348,7 +376,15 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let preset = preset_quality(&s.rendering).lights.budget;
             let range = 1..=MAX_GPU_LIGHTS as u32;
-            override_number(ui, &mut s.rendering.light_budget, preset, range, 1.0, "");
+            override_number(
+                ui,
+                "Light budget",
+                &mut s.rendering.light_budget,
+                preset,
+                range,
+                1.0,
+                "",
+            );
         },
     },
     Entry {
@@ -358,7 +394,15 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             let preset = preset_quality(&s.rendering).lod.bias;
             let range = LOD_BIAS.0..=LOD_BIAS.1;
-            override_number(ui, &mut s.rendering.lod_bias, preset, range, 0.01, " ×");
+            override_number(
+                ui,
+                "Level of detail",
+                &mut s.rendering.lod_bias,
+                preset,
+                range,
+                0.01,
+                " ×",
+            );
         },
     },
     Entry {
@@ -877,13 +921,18 @@ fn custom_accent(ui: &mut Ui) -> Response {
     .inner
 }
 
-/// A drop-down over `choices`.
-fn combo<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, choices: &[(T, String)]) {
+/// Gives a drop-down `name` for screen readers (#464): the setting it changes, which its row shows beside it.
+fn named(response: &Response, name: &str) {
+    response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, response.enabled(), name));
+}
+
+/// A drop-down over `choices` for the setting `name`.
+fn combo<T: Copy + PartialEq>(ui: &mut Ui, name: &str, value: &mut T, choices: &[(T, String)]) {
     let selected = choices
         .iter()
         .find(|(choice, _)| choice == value)
         .map_or_else(String::new, |(_, label)| label.clone());
-    egui::ComboBox::from_id_salt(id)
+    let shown = egui::ComboBox::from_id_salt(("settings.combo", name))
         .icon(crate::theme::combo_icon)
         .selected_text(selected)
         .width(COMBO_WIDTH)
@@ -892,24 +941,26 @@ fn combo<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, choices: &[(
                 ui.selectable_value(value, *choice, label);
             }
         });
+    named(&shown.response, name);
 }
 
 /// A drop-down for an override: the preset's value (named) or one of `choices`.
 fn override_combo<T: Copy + PartialEq>(
     ui: &mut Ui,
-    id: &str,
+    name: &str,
     value: &mut Option<T>,
     preset: &str,
     choices: &[(T, &str)],
 ) {
     let mut all = vec![(None, format!("Preset ({preset})"))];
     all.extend(choices.iter().map(|&(choice, label)| (Some(choice), label.to_owned())));
-    combo(ui, id, value, &all);
+    combo(ui, name, value, &all);
 }
 
-/// A number for an override: the preset's value until it is edited, with "Reset" to go back to it.
+/// A number for the override `name`: the preset's value until it is edited, with "Reset" to go back to it.
 fn override_number<N: Numeric>(
     ui: &mut Ui,
+    name: &str,
     value: &mut Option<N>,
     preset: N,
     range: RangeInclusive<N>,
@@ -932,6 +983,8 @@ fn override_number<N: Numeric>(
             .speed(speed)
             .suffix(suffix.to_owned()),
     );
+    // Named for screen readers (#464), as its row is.
+    response.widget_info(|| WidgetInfo::labeled(Role::SpinButton, response.enabled(), name));
     if response.changed() {
         *value = Some(shown);
     }
@@ -1022,8 +1075,6 @@ mod tests {
         let mut harness = Harness::builder()
             .with_size(vec2(width, 400.0))
             .with_context_setup(crate::theme::fonts::install)
-            // One of the page's drop-downs has no accessible name yet (not this test's matter).
-            .with_accessibility_check(false)
             .build_ui_state(
                 |ui, open: &mut Open| open.window.contents(ui, &mut open.settings, &mut open.keymap),
                 open,
@@ -1047,6 +1098,29 @@ mod tests {
         });
         harness.run();
         assert!(control(&harness).right() <= width, "{:?}", control(&harness));
+    }
+
+    #[test]
+    fn every_page_s_controls_have_accessible_names() {
+        use egui_kittest::Harness;
+
+        use crate::keymap::Overrides;
+
+        // kittest's accessibility check fails a page with an unnamed control (#464: the drop-downs were).
+        for category in Category::ALL {
+            let mut window = SettingsWindow::default();
+            window.show_category(category);
+            let mut harness = Harness::builder()
+                .with_size(vec2(900.0, 2000.0))
+                .with_context_setup(crate::theme::fonts::install)
+                .build_ui_state(
+                    |ui, (window, settings, keymap): &mut (SettingsWindow, StudioSettings, Keymap)| {
+                        window.contents(ui, settings, keymap);
+                    },
+                    (window, StudioSettings::default(), Keymap::studio(&Overrides::new())),
+                );
+            harness.run();
+        }
     }
 
     #[test]

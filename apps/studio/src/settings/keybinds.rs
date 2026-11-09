@@ -269,6 +269,12 @@ impl KeybindsPage {
                         .desired_width(f32::INFINITY)
                         .margin(vec2(space::S4, space::S3)),
                 );
+                // Named for screen readers (#464), as the section is, keeping the path it reads out.
+                field.widget_info(|| {
+                    let mut info = egui::WidgetInfo::text_edit(true, &path, &path, "");
+                    info.label = Some("Keymap file".to_owned());
+                    info
+                });
                 if field.changed() {
                     self.file = Some(path.clone());
                 }

@@ -39,7 +39,7 @@ pub(super) fn show(ctx: &egui::Context, config: &mut ToolbarConfig) -> bool {
             let p = current_colors(ui.ctx()).palette;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Tabs on the").color(p.muted));
-                egui::ComboBox::from_id_salt("toolbar.tabs.align")
+                let shown = egui::ComboBox::from_id_salt("toolbar.tabs.align")
                     .icon(crate::theme::combo_icon)
                     .selected_text(config.align.label())
                     .width(110.0)
@@ -48,6 +48,9 @@ pub(super) fn show(ctx: &egui::Context, config: &mut ToolbarConfig) -> bool {
                             ui.selectable_value(&mut config.align, align, align.label());
                         }
                     });
+                // Named for screen readers (#464), as the words round it say.
+                let response = &shown.response;
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Tab alignment"));
                 ui.label(egui::RichText::new("of the row").color(p.muted));
             });
             ui.add_space(space::S4);

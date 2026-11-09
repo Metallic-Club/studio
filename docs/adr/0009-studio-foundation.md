@@ -465,6 +465,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   Rotation, as a model's is (#439); scripts still call it `Orientation`.
 - **A tool twice in the toolbar (#456)**: the Snap increments' widgets were named after their rows alone, so a second
   Snap element reused the first's ids and egui drew its warning; they now take the element's own id.
+- **Settings' controls are named (#464)**: its drop-downs, its override number fields and the keymap file's path had
+  no accessible name, so a screen reader announced a bare control; each is named after its setting, as the toolbar's
+  tab alignment is. A test checks every page with kittest's accessibility check.
 
 ## Not in this slice
 
