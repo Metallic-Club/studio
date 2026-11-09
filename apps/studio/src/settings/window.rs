@@ -698,8 +698,9 @@ impl SettingsWindow {
         // Keybinds last, as in the category list.
         if !commands.is_empty() {
             section_label(ui, Category::Keybinds.label());
-            for command in &commands {
-                self.keybinds.command_row(ui, command, keymap);
+            for (index, command) in commands.iter().enumerate() {
+                let rule = super::keybinds::rule_below(index, commands.len());
+                self.keybinds.command_row(ui, command, keymap, rule);
             }
         }
     }

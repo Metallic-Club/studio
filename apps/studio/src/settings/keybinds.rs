@@ -228,8 +228,8 @@ impl KeybindsPage {
 
     /// A section's commands, then the sections inside it.
     fn section_body(&mut self, ui: &mut Ui, section: &Section, keymap: &mut Keymap, searching: bool) {
-        for command in &section.commands {
-            self.command_row(ui, command, keymap);
+        for (index, command) in section.commands.iter().enumerate() {
+            self.command_row(ui, command, keymap, rule_below(index, section.commands.len()));
         }
         for inner in &section.sections {
             ui.add_space(space::S3);
@@ -333,6 +333,12 @@ impl Section {
         });
         sections.len() - 1
     }
+}
+
+/// Whether the row at `index` of `count` has a line under it: between rows only, so a section's last (or only) row
+/// ends at the section's own edge (#408).
+pub(super) fn rule_below(index: usize, count: usize) -> bool {
+    index + 1 < count
 }
 
 /// `commands` as the page's sections, nested by their category paths, in the order each first appears.
@@ -565,7 +571,9 @@ impl KeybindsPage {
 
     /// One command: its name, description and conflicts on the left; its shortcuts, + and Reset on the right; and
     /// while a binding it recorded clashes, how to settle that under it.
-    pub(super) fn command_row(&mut self, ui: &mut Ui, command: &Command, keymap: &mut Keymap) {
+    /// One command's row: its name, what it does and its shortcuts, with a line under it when `rule` (between rows,
+    /// never after the last: #408).
+    pub(super) fn command_row(&mut self, ui: &mut Ui, command: &Command, keymap: &mut Keymap, rule: bool) {
         let colors = current_colors(ui.ctx());
         let p = colors.palette;
         let mut action = None;
@@ -679,12 +687,14 @@ impl KeybindsPage {
             {
                 action = Some(RowAction::Settle(settle));
             }
-            let rect = ui.min_rect();
-            ui.painter().hline(
-                rect.x_range(),
-                ui.cursor().top() - ui.spacing().item_spacing.y / 2.0,
-                Stroke::new(size::BORDER, p.border),
-            );
+            if rule {
+                let rect = ui.min_rect();
+                ui.painter().hline(
+                    rect.x_range(),
+                    ui.cursor().top() - ui.spacing().item_spacing.y / 2.0,
+                    Stroke::new(size::BORDER, p.border),
+                );
+            }
         });
         if let Some(capture) = self.capture.as_mut().filter(|capture| capture.command == command.id) {
             capture.seen = true;
@@ -909,6 +919,13 @@ mod tests {
 
     fn command(id: &'static str, category: &'static str) -> Command {
         Command::new(id, id, category, "A command.")
+    }
+
+    #[test]
+    fn lines_go_between_rows_never_after_the_last() {
+        assert!(!rule_below(0, 1), "a lone row has none");
+        assert!(rule_below(0, 3) && rule_below(1, 3));
+        assert!(!rule_below(2, 3));
     }
 
     #[test]
