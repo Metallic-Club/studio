@@ -1,6 +1,6 @@
 //! The Snap tool's element (#375): the move and rotate increments, one above the other, as Roblox Studio's Model tab
 //! has them. Each row is a check box (snapping on or off), the Move or Rotate icon, the increment as a field to type
-//! in or drag, and arrows stepping through common values. It edits Settings, Editing in place.
+//! in or drag, and arrows stepping through common values. It edits the saved increments (`settings::Editing`) in place.
 
 use egui::{Align, Align2, Color32, DragValue, Layout, Rect, Role, Sense, Stroke, Ui, UiBuilder, WidgetInfo, vec2};
 

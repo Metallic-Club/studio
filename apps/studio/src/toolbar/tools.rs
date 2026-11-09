@@ -301,7 +301,7 @@ impl ToolRegistry {
             Tool::studio(
                 ids::SNAP,
                 "Snap",
-                "The move and rotate increments drags snap to, each with its switch (Settings, Editing).",
+                "The move and rotate increments drags snap to, each with its switch.",
                 Icon::ToolbarSnap,
                 groups::TRANSFORM,
                 StudioCommand::Snap,
