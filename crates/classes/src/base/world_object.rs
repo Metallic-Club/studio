@@ -192,6 +192,52 @@ pub fn pivot_to(dm: &mut DataModel, id: Id, target: CFrame) -> Result<(), Script
     }
 }
 
+/// Resizes everything in `model` by `factor` about its pivot (#439), as Roblox's `Model:ScaleTo` does by the change of
+/// scale: its parts' and cameras' places, its parts' sizes, its lights' places and ranges, and every pivot offset and
+/// kept pivot in it, so its own pivot stays where it is.
+pub fn scale_model(dm: &mut DataModel, model: Id, factor: f32) -> Result<(), ScriptError> {
+    let centre = pivot(dm, model)?.position();
+    let about = |frame: CFrame| CFrame::from_parts(centre + (frame.position() - centre) * factor, frame.rotation());
+    let stretch = |frame: CFrame| CFrame::from_parts(frame.position() * factor, frame.rotation());
+    let objects: Vec<Id> = std::iter::once(model).chain(dm.descendants(model)?).collect();
+    // Everything is read before anything is written: a light in a part is placed through the part, which moves.
+    let mut writes: Vec<(Id, &str, Value)> = Vec::new();
+    let mut lights = Vec::new();
+    for &object in &objects {
+        let Some(kind) = placement(dm, object)? else {
+            continue;
+        };
+        writes.push((object, "PivotOffset", Value::CFrame(stretch(cframe_prop(dm, object, "PivotOffset")?))));
+        match kind {
+            Placement::Frame => {
+                writes.push((object, "CFrame", Value::CFrame(about(cframe_prop(dm, object, "CFrame")?))));
+                if let Ok(Value::Vector3(size)) = dm.get_by_name(object, "Size") {
+                    writes.push((object, "Size", Value::Vector3(size * factor)));
+                }
+            }
+            Placement::Light => {
+                lights.push((object, about(light::world_cframe(dm, object)?)));
+                if let Ok(Value::Number(range)) = dm.get_by_name(object, "Range") {
+                    writes.push((object, "Range", Value::Number(range * f64::from(factor))));
+                }
+            }
+            Placement::Model => {
+                if dm.get_by_name(object, "WorldPivotSet") == Ok(Value::Bool(true)) {
+                    let kept = about(cframe_prop(dm, object, "WorldPivotData")?);
+                    writes.push((object, "WorldPivotData", Value::CFrame(kept)));
+                }
+            }
+        }
+    }
+    for (object, name, value) in writes {
+        dm.set_by_name(object, name, value)?;
+    }
+    for (object, world) in lights {
+        light::set_world_cframe(dm, object, world)?;
+    }
+    Ok(())
+}
+
 fn get_pivot(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
     Ok(ScriptValue::CFrame(pivot(call.dm, call.this)?))
 }
