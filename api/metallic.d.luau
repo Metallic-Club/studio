@@ -867,6 +867,14 @@ declare extern type Model extends WorldObject with
     WorldPivotData: CFrame
     --- Whether WorldPivot was ever set; until it is, it is the centre of the model's parts.
     WorldPivotSet: boolean
+    --- Where the model's pivot is, in metres. Setting it moves the whole model without rotating it.
+    Position: Vector3
+    --- The model's rotation about its pivot, as angles in degrees about X, Y and Z, applied Z first, then X, then Y. Setting it turns the whole model in place.
+    Rotation: Vector3
+    --- How big the model is against its size when made, one number for all three axes: 2 is twice as big. Setting it resizes everything in the model about its pivot.
+    Scale: number
+    --- Where Scale is kept.
+    ScaleData: number
 end
 
 --- Code shared between scripts. It runs the first time a script requires it and returns a value, usually a table of functions; later requires return that same value.

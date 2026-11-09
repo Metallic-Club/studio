@@ -437,6 +437,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **A part's parts go with it (#438)**: moving, turning or carrying a part with the tools moves the parts and models
   inside it rigidly with it (`tools::place`), as a model's contents do; a selected part inside a selected one is left
   to it. A part's outline and Scale box hold the parts inside it, in its axes.
+- **A model's Position, Rotation and Scale (#439)**: `Model.Position` and `Rotation` are its pivot's place and turn
+  (in degrees); writing them moves or turns the model about its pivot. `Scale` is one number, 1 to start, kept in the
+  hidden `ScaleData`: writing it resizes everything in the model about its pivot by the change
+  (`world_object::scale_model`: parts' sizes and places, lights' places and ranges, pivot offsets and kept pivots).
 
 ## Not in this slice
 

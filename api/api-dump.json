@@ -2654,6 +2654,96 @@
           "description": "Whether WorldPivot was ever set; until it is, it is the centre of the model's parts.",
           "aliases": [],
           "derived_from": []
+        },
+        {
+          "name": "Position",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "wraps": false,
+          "group": "Transform",
+          "description": "Where the model's pivot is, in metres. Setting it moves the whole model without rotating it.",
+          "aliases": [],
+          "derived_from": [
+            "PrimaryPart",
+            "PivotOffset",
+            "WorldPivotData",
+            "WorldPivotSet"
+          ]
+        },
+        {
+          "name": "Rotation",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "wraps": false,
+          "group": "Transform",
+          "description": "The model's rotation about its pivot, as angles in degrees about X, Y and Z, applied Z first, then X, then Y. Setting it turns the whole model in place.",
+          "aliases": [],
+          "derived_from": [
+            "PrimaryPart",
+            "PivotOffset",
+            "WorldPivotData",
+            "WorldPivotSet"
+          ]
+        },
+        {
+          "name": "Scale",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [
+            "TRANSFORM",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": [
+            0.001,
+            null
+          ],
+          "wraps": false,
+          "group": "Transform",
+          "description": "How big the model is against its size when made, one number for all three axes: 2 is twice as big. Setting it resizes everything in the model about its pivot.",
+          "aliases": [],
+          "derived_from": [
+            "ScaleData"
+          ]
+        },
+        {
+          "name": "ScaleData",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [
+            "HIDDEN"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "",
+          "description": "Where Scale is kept.",
+          "aliases": [],
+          "derived_from": []
         }
       ],
       "methods": [],
