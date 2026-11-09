@@ -459,6 +459,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   finite; `Model.Scale`, with no upper end, dragged by infinity, which the data model refused. It drags in hundredths.
 - **The toolbar's separators stay (#453)**: with Panel borders off only the line under the toolbar goes (#441); its
   separators keep their lines.
+- **Settings scrolls sideways (#454)**: its page scrolls both ways, the horizontal bar showing only when the page is
+  wider than the window, so a large interface scale on a small screen still reaches the controls' column.
 
 ## Not in this slice
 
