@@ -452,6 +452,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 
 - **The toolbar's elements keep their sizes (#450)**: #442, which scaled them with the tool row, is reverted; resizing
   the row (#414) changes their height only, as before.
+- **No flicker as a spot crosses 150° (#451)**: a shadowed spot turned across the angle where it takes a cube rather
+  than one tile (#437) gave its tiles up and started its shadow again from nothing, so it vanished and faded back each
+  time. It keeps its shadow's fade while it takes its new tiles, drawn that same frame.
 
 ## Not in this slice
 

@@ -540,17 +540,21 @@ impl ShadowAtlas {
             if n == 0 {
                 continue;
             }
-            let held = n == light.shadow_tiles()
-                && state.tiles[..n]
-                    .iter()
-                    .all(|&t| self.owner.get(usize::from(t)).copied().flatten() == Some(light.id));
-            if held {
+            let owned = state.tiles[..n]
+                .iter()
+                .all(|&t| self.owner.get(usize::from(t)).copied().flatten() == Some(light.id));
+            if owned && n == light.shadow_tiles() {
                 for &t in &state.tiles[..n] {
                     self.holder[usize::from(t)] = index;
                 }
             } else {
                 state.tile_count = 0;
-                state.shadow_fade = 0.0;
+                // A spot turned across the angle where it takes a cube rather than one tile (#437) keeps its shadow
+                // while it takes its new tiles, drawn this frame: from nothing it would vanish and fade back each
+                // time (#451).
+                if !owned {
+                    state.shadow_fade = 0.0;
+                }
             }
         }
         for (tile, owner) in self.owner.iter_mut().enumerate() {
@@ -651,7 +655,11 @@ impl ShadowAtlas {
             let state = &mut runtime[index as usize];
             state.tiles = got;
             state.tile_count = need as u8;
-            state.shadow_fade = if state.fresh { 1.0 } else { step.min(1.0) };
+            state.shadow_fade = if state.fresh {
+                1.0
+            } else {
+                state.shadow_fade.max(step).min(1.0)
+            };
             for &t in &got[..need] {
                 self.owner[usize::from(t)] = Some(light.id);
                 self.holder[usize::from(t)] = index;
