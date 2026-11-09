@@ -5,7 +5,9 @@
 //! saved with the model: the frame, and whether it was ever set. `Position`, `Rotation` and `Scale` (#439) are the
 //! pivot's place and turn and the model's size, for Properties and scripts; the scale is kept in a hidden property.
 
-use metallic_core::{CFrame, ClassDesc, DataModel, Id, PropFlags, PropMeta, ScriptError, ScriptValue, Value, Vector3};
+use metallic_core::{
+    CFrame, ClassDesc, DataModel, Id, PropFlags, PropMeta, ScriptError, ScriptValue, Value, Vector3, Widget,
+};
 
 use crate::base::world_object;
 
@@ -135,6 +137,8 @@ pub static CLASS: ClassDesc = ClassDesc::new("Model", Some("WorldObject"))
             .computed(scale_get, Some(scale_set))
             .derived_from(&["ScaleData"])
             .range(MIN_SCALE, f64::INFINITY)
+            // Dragged in hundredths, as there is no upper end to slide to (#452).
+            .widget(Widget::Drag { speed: 0.01 })
             .transform()
             .flags(PropFlags::NO_SAVE)
             .group("Transform")
