@@ -510,6 +510,7 @@ impl Studio {
         let play = editor::MenuState::of(editor);
         let dock = &self.dock;
         let gizmo = (editor.viewport.gizmo.tool, editor.viewport.gizmo.local);
+        let lines = self.settings.settings().appearance.panel_borders;
         let editing = &mut self.settings.settings_mut().editing;
         let ran = ui
             .scope_builder(UiBuilder::new().max_rect(strip), |ui| {
@@ -523,6 +524,7 @@ impl Studio {
                         _ => false,
                     },
                     editing,
+                    lines,
                 )
             })
             .inner;
@@ -4694,6 +4696,38 @@ mod tests {
         settle(&mut harness);
         assert_eq!(harness.state().studio.toolbar().config().tabs[1].name, "Models");
         toolbar_tab(&harness, "Models");
+    }
+
+    #[test]
+    fn panel_borders_off_takes_the_toolbar_s_lines_too() {
+        let mut harness = editing(settings_file("toolbar-lines", None), "Toolbar Lines Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        settle(&mut harness);
+        // The toolbar's own lines: rectangles in the border colour over its tool row, the dock's being below it.
+        let lines = |harness: &Harness<'_, Test>| {
+            let border = current_colors(&harness.ctx).palette.border;
+            let row = harness.get_by_role_and_label(Role::Toolbar, "Toolbar").rect();
+            harness
+                .output()
+                .shapes
+                .iter()
+                .filter(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(shape) => shape.fill == border && row.expand(0.5).contains_rect(shape.rect),
+                    _ => false,
+                })
+                .count()
+        };
+        // The line under it, and one in each separator of the default tab.
+        assert!(lines(&harness) >= 2, "{}", lines(&harness));
+        harness
+            .state_mut()
+            .studio
+            .settings
+            .settings_mut()
+            .appearance
+            .panel_borders = false;
+        settle(&mut harness);
+        assert_eq!(lines(&harness), 0, "(#441)");
     }
 
     #[test]

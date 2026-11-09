@@ -445,6 +445,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   a pass's text options differ, the largest texture side among them. A window's unseen first pass had egui's default
   (2048) rather than the device's, so the atlas was made again and Studio's text garbled; it now has the main
   window's (`unseen_input`), as its scale (#409).
+- **Panel borders reach the toolbar (#441)**: with Settings' Panel borders off, the toolbar draws no line under it nor
+  in its separators.
 
 ## Not in this slice
 
