@@ -62,9 +62,6 @@
 //! and keeps nothing over 100 frames. The compiles themselves run on worker threads, whose allocations these
 //! per-thread counters never see.
 //!
-//! `DirectionalLight`s (#123) too: the lit frames' lamps hold four, drawn as extra suns through the frame uniform the
-//! frames already write (no wgpu call of their own), and their sync, turning with the moving lamps, allocates nothing.
-//!
 //! Viewport targets (#213) too: a frame drawn into one allocates no more than the same renderer's scene frame into the
 //! target's view, the same wgpu calls, and the heap does not grow over 100 such frames.
 //!
@@ -3680,15 +3677,13 @@ fn nothing_accumulates_over_overlay_frames() {
 }
 
 /// Lamps on a grid of parts: 64 neon balls 2 m up, each holding a `PointLight` (every ninth a `SpotLight` pointing
-/// down), every eighth point light with `Shadows`, and every sixteenth lamp a `DirectionalLight` too (#123: four
-/// extra suns, which turn with their lamps). Returns the lamps.
+/// down), and every eighth point light with `Shadows`. Returns the lamps.
 fn lit_grid(game: &mut support::scenes::Game) -> Vec<Id> {
     support::scenes::grid(game, 2_000, 10, support::scenes::SeeThrough::Mixed(25));
     let registry = game.dm.registry().clone();
-    let (point, spot, directional) = (
+    let (point, spot) = (
         registry.class_id("PointLight").expect("PointLight"),
         registry.class_id("SpotLight").expect("SpotLight"),
-        registry.class_id("DirectionalLight").expect("DirectionalLight"),
     );
     (0..64)
         .map(|i| {
@@ -3715,24 +3710,13 @@ fn lit_grid(game: &mut support::scenes::Game) -> Vec<Id> {
                     .expect("Shadows");
             }
             game.dm.set_parent(light, Some(lamp)).expect("parented");
-            if i % 16 == 0 {
-                let sun = game.dm.create(directional).expect("a directional light");
-                let slanted = CFrame::look_at(Vec3::ZERO, Vec3::new(i as f32 - 30.0, -40.0, 10.0), Vec3::Y);
-                game.dm
-                    .set_by_name(sun, "CFrame", Value::CFrame(slanted))
-                    .expect("CFrame");
-                game.dm
-                    .set_by_name(sun, "Brightness", Value::Number(0.2 + i as f64 / 100.0))
-                    .expect("Brightness");
-                game.dm.set_parent(sun, Some(lamp)).expect("parented");
-            }
             lamp
         })
         .collect()
 }
 
-/// Local lights (#83): the sync of lights in lamps that move every frame (each move places the lamp's light again,
-/// directional lights among them, #123) allocates nothing at all once warm.
+/// Local lights (#83): the sync of lights in lamps that move every frame (each move places the lamp's light again)
+/// allocates nothing at all once warm.
 #[test]
 fn a_sync_of_moving_lamps_allocates_nothing() {
     let mut game = support::scenes::Game::new();
@@ -3755,7 +3739,6 @@ fn a_sync_of_moving_lamps_allocates_nothing() {
         scene.coalesce();
     }
     assert_eq!(scene.light_count(), 64);
-    assert_eq!(scene.directional_lights().len(), 4);
     assert_eq!(total, 0, "syncing moving lamps allocated");
 }
 
@@ -3792,8 +3775,7 @@ fn a_lit_frame_allocates_only_its_writes() {
         )
         .expect("a scene");
         scene.sync(&mut game.dm);
-        // The first frame queues the extra suns' pipelines (the lamps hold `DirectionalLight`s, #123), compiled in
-        // the background like the rest: wait for them too before anything is measured.
+        // The lit pipelines compile in the background: wait for them before anything is measured.
         let first = Camera::from_cframe(CFrame::look_at(Vec3::new(20.0, 150.0, 0.0), Vec3::ZERO, Vec3::Y), 70.0);
         renderer.render_scene(target.view(), &mut scene, Some(&first));
         renderer.wait_for_pipelines();
@@ -3910,8 +3892,7 @@ fn nothing_accumulates_over_lit_frames() {
         let target = OffscreenTarget::new(&context, SIZE, SIZE, FORMAT).expect("a target");
         let mut renderer = Renderer::new(&context, RendererSettings::new(FORMAT, SIZE, SIZE)).expect("a renderer");
         renderer.wait_for_pipelines();
-        // The first frame queues the extra suns' pipelines (the lamps hold `DirectionalLight`s, #123), compiled in the
-        // background like the rest: wait for them too before anything is measured.
+        // The lit pipelines compile in the background: wait for them before anything is measured.
         scene.sync(&mut game.dm);
         renderer.render_scene(target.view(), &mut scene, Some(&orbiting_camera(0)));
         renderer.wait_for_pipelines();

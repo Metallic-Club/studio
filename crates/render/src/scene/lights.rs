@@ -1,7 +1,5 @@
-//! The scene's lights: every `PointLight`, `SpotLight` and `DirectionalLight` in the world, kept current from the
-//! same change consumer as the parts (see [`crate::lights`] for how they are drawn). The scene keeps two sets of
-//! records, the local lights (point and spot) and the directional ones, so that the local lights' selection and
-//! clustering never meet a light that has no place or range.
+//! The scene's lights: every `PointLight` and `SpotLight` in the world, kept current from the same change consumer
+//! as the parts (see [`crate::lights`] for how they are drawn).
 //!
 //! A light is a dense record ([`SceneLight`]) with its world placement resolved: a light inside a part follows the
 //! part (its `CFrame` is relative to the part's), anywhere else its `CFrame` is in world space, as `Light` says. The
@@ -24,19 +22,15 @@ pub enum LightKind {
     Point,
     /// A cone of light along the light's forward direction (`SpotLight`).
     Spot,
-    /// Parallel light along the light's forward direction over the whole world, like the sun
-    /// (`DirectionalLight`): an extra sun ([`crate::lights`]), not a local light.
-    Directional,
 }
 
 impl LightKind {
     /// How many shadow-atlas tiles a shadowed light of this kind takes: a cube's six faces for a point light, one
-    /// for a spot, none for a directional light (only the sun casts directional shadows, see [`crate::lights`]).
+    /// for a spot.
     pub const fn shadow_tiles(self) -> usize {
         match self {
             LightKind::Point => 6,
             LightKind::Spot => 1,
-            LightKind::Directional => 0,
         }
     }
 }
@@ -50,8 +44,7 @@ pub struct SceneLight {
     pub kind: LightKind,
     /// Where it is, in world space (after the part it follows, if any).
     pub position: Vec3,
-    /// Its forward direction (−Z of its world `CFrame`), unit length: where a spot light points, and where a
-    /// directional light's rays go.
+    /// Its forward direction (−Z of its world `CFrame`), unit length: where a spot light points.
     pub direction: Vec3,
     /// `Color`, sRGB-encoded as stored.
     pub color: Color3,
@@ -73,11 +66,11 @@ pub struct SceneLight {
 }
 
 impl SceneLight {
-    /// Whether it lights anything: enabled, with some brightness, colour and range (a directional light needs none),
-    /// and a finite place.
+    /// Whether it lights anything: enabled, with some brightness, colour and range, and a finite place.
     pub fn shines(&self) -> bool {
         self.enabled
-            && (self.kind == LightKind::Directional || (self.range > 0.0 && self.range.is_finite()))
+            && self.range > 0.0
+            && self.range.is_finite()
             && self.intensity.max_element() > 0.0
             && self.intensity.is_finite()
             && self.position.is_finite()
@@ -370,13 +363,10 @@ fn read(dm: &DataModel, id: Id, binding: &LightBinding, host: Option<Id>, link: 
         color,
         brightness,
         intensity: color.to_linear().max(Vec3::ZERO) * brightness,
-        range: match binding.kind {
-            LightKind::Directional => 0.0,
-            LightKind::Point | LightKind::Spot => number(props.range, 16.0).max(0.0),
-        },
+        range: number(props.range, 16.0).max(0.0),
         angle: match binding.kind {
             LightKind::Spot => number(props.angle, 90.0).clamp(1.0, 180.0),
-            LightKind::Point | LightKind::Directional => 0.0,
+            LightKind::Point => 0.0,
         },
         enabled: flag(props.enabled, true),
         shadows: flag(props.shadows, false),

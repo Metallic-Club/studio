@@ -54,11 +54,6 @@ struct Frame {
     // x: one shadow-atlas texel in atlas coordinates, y: the filter's reach in texels, z: 1 when any drawn light has
     // a shadow.
     lights_atlas: vec4<f32>,
-    // `DirectionalLight`s drawn as extra suns (lights/directional.rs). x: how many (0: none).
-    extra_suns: vec4<f32>,
-    // Per extra sun: xyz, the unit vector towards it; rgb, its radiance.
-    extra_sun_directions: array<vec4<f32>, 4>,
-    extra_sun_colors: array<vec4<f32>, 4>,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

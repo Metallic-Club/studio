@@ -956,8 +956,6 @@ mod tests {
             assert!(q.shadows.enabled && q.shadows.cascade_count() >= 1, "{tier:?}");
             assert!(q.lights.enabled && q.lights.light_budget() >= 32, "{tier:?}");
             assert!(q.lights.shadows && q.lights.shadowed_lights >= 2, "{tier:?}");
-            // Every tier draws a game's DirectionalLights; Low 1, Medium 2, High and Ultra 4.
-            assert!(q.lights.directional_budget() >= 1, "{tier:?}");
             assert!(q.cull.enabled && q.lod.enabled, "{tier:?}");
             if let Some(p) = previous {
                 // Each tier costs at least as much as the one below it, everywhere.
@@ -968,7 +966,6 @@ mod tests {
                 assert!(q.shadows.resolution >= p.shadows.resolution, "{tier:?}");
                 assert!(q.shadows.distance >= p.shadows.distance, "{tier:?}");
                 assert!(q.lights.budget >= p.lights.budget, "{tier:?}");
-                assert!(q.lights.directional_lights >= p.lights.directional_lights, "{tier:?}");
                 assert!(q.lights.atlas_resolution >= p.lights.atlas_resolution, "{tier:?}");
                 assert!(q.lod.bias >= p.lod.bias, "{tier:?}");
                 assert!(

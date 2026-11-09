@@ -45,7 +45,6 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `explorer.part` | A part. | Explorer and Assets: parts, models, folders, cameras | [`explorer/box.svg`](https://lucide.dev/icons/box) | `explorer.part.svg`, `explorer.part.png` |
 | `explorer.mesh_part` | A mesh part. | Explorer and Assets: parts, models, folders, cameras | [`explorer/cuboid.svg`](https://lucide.dev/icons/cuboid) | `explorer.mesh_part.svg`, `explorer.mesh_part.png` |
 | `explorer.model` | A model. | Explorer and Assets: parts, models, folders, cameras | [`explorer/shapes.svg`](https://lucide.dev/icons/shapes) | `explorer.model.svg`, `explorer.model.png` |
-| `explorer.directional_light` | A directional light. | Explorer: lighting and lights | [`explorer/sun.svg`](https://lucide.dev/icons/sun) | `explorer.directional_light.svg`, `explorer.directional_light.png` |
 | `explorer.spot_light` | A spotlight. | Explorer: lighting and lights | [`explorer/spotlight.svg`](https://lucide.dev/icons/spotlight) | `explorer.spot_light.svg`, `explorer.spot_light.png` |
 | `explorer.light` | Any other light. | Explorer: lighting and lights | [`explorer/lightbulb.svg`](https://lucide.dev/icons/lightbulb) | `explorer.light.svg`, `explorer.light.png` |
 | `explorer.script` | A script. | Explorer and Assets: server scripts and server storage | [`explorer/scroll.svg`](https://lucide.dev/icons/scroll) | `explorer.script.svg`, `explorer.script.png` |

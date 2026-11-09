@@ -9,7 +9,7 @@ use super::assets::{AssetKinds, MeshAssetKey};
 use super::components::{AssetProps, ClassBinding, ClassTable, MeshInput, RenderComponents};
 use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
-use super::lights::{LightChange, LightKind, LightSet, SceneLight};
+use super::lights::{LightChange, LightSet, SceneLight};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
 use super::{
@@ -78,11 +78,9 @@ pub struct InstanceScene {
     watched: Vec<Id>,
     /// Static shadow casters that changed (see the module documentation).
     shadow: ShadowChanges,
-    /// The local lights in the world (see [`super::lights`]).
+    /// The lights in the world (see [`super::lights`]).
     lights: LightSet,
-    /// The directional lights in the world, the extra suns (see [`super::lights`]).
-    suns: LightSet,
-    /// Whether either set holds a light: the one test a part's change pays for lights (see
+    /// Whether it holds a light: the one test a part's change pays for lights (see
     /// [`InstanceScene::apply`]).
     has_lights: bool,
     /// The mesh-asset kinds (see [`super::assets`]).
@@ -145,7 +143,6 @@ impl InstanceScene {
             watched: Vec::new(),
             shadow: ShadowChanges::default(),
             lights: LightSet::default(),
-            suns: LightSet::default(),
             has_lights: false,
             asset_kinds: AssetKinds::default(),
         })
@@ -191,7 +188,6 @@ impl InstanceScene {
         self.revision = self.revision.wrapping_add(1);
         self.shadow.everything();
         self.lights.clear();
-        self.suns.clear();
         self.has_lights = false;
         self.rest_cursor = 0;
         dm.mark_all(self.consumer);
@@ -228,7 +224,7 @@ impl InstanceScene {
         }
         self.changes = changes;
         self.changes.clear();
-        stats.lights += self.lights.place_moved(dm, self.frame) + self.suns.place_moved(dm, self.frame);
+        stats.lights += self.lights.place_moved(dm, self.frame);
 
         self.demote_resting(&mut stats);
         stats
@@ -402,31 +398,18 @@ impl InstanceScene {
         self.lights.split_mut()
     }
 
-    /// The directional lights in the world (`DirectionalLight`, the extra suns), in no particular order (see
-    /// [`super::lights`]). They are not among [`InstanceScene::lights`].
-    pub fn directional_lights(&self) -> &[SceneLight] {
-        self.suns.lights()
-    }
-
-    /// Changes whenever a directional light appeared, changed, turned or left.
-    pub fn directional_light_revision(&self) -> u64 {
-        self.suns.revision()
-    }
-
-    /// Removes the light `id`, of either set. Returns whether it was one. Out of line, like the rest of the lights'
-    /// upkeep.
+    /// Removes the light `id`. Returns whether it was one. Out of line, like the rest of the lights' upkeep.
     #[inline(never)]
     fn remove_light(&mut self, id: Id) -> bool {
-        let removed = self.lights.remove(id) || self.suns.remove(id);
-        self.has_lights = !self.lights.is_empty() || !self.suns.is_empty();
+        let removed = self.lights.remove(id);
+        self.has_lights = !self.lights.is_empty();
         removed
     }
 
-    /// Notes that part `id`'s transform changed, for the lights of either set that follow it.
+    /// Notes that part `id`'s transform changed, for the lights that follow it.
     #[inline(never)]
     fn part_moved(&mut self, id: Id) {
         self.lights.part_moved(id, self.frame);
-        self.suns.part_moved(id, self.frame);
     }
 
     /// Instances in the culling grid: every one on a draw list.
@@ -639,14 +622,10 @@ impl InstanceScene {
             }
             return;
         };
-        let set = match light.kind {
-            LightKind::Directional => &mut self.suns,
-            LightKind::Point | LightKind::Spot => &mut self.lights,
-        };
-        if set.apply(dm, id, bits, &light, self.world, &self.classes) == LightChange::Changed {
+        if self.lights.apply(dm, id, bits, &light, self.world, &self.classes) == LightChange::Changed {
             stats.lights += 1;
         }
-        self.has_lights = !self.lights.is_empty() || !self.suns.is_empty();
+        self.has_lights = !self.lights.is_empty();
     }
 
     /// Counts a transform change towards promotion (static region) or as activity (dynamic region). Returns the

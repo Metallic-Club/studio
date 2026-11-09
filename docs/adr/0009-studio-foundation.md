@@ -388,6 +388,14 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   tab bar while its tab is in front open it (egui_tiles' `top_bar_right_ui`). The Viewport's holds its settings, for
   now whether the axis gizmo shows (`[viewport] show_axes`).
 
+### Second viewport and Properties list (the owner's list of 2026-11-08, #402-#418)
+
+- **Icons built in (#402)** and **icons.json applying edits (#403)**: see the icons above.
+- **Lights (#404-#407)**: a spot light's cone is measured as one minus the cosine of the angle from its axis, which
+  keeps a narrow cone's edge from flickering; `SpotLight.Angle` goes to 180; `Light.Brightness` has no upper limit
+  (the API dump writes the open end as `null`); and `DirectionalLight` is gone, renderer variants and all:
+  `Lighting`'s sun is the one directional light.
+
 ## Not in this slice
 
 The script editor, Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in

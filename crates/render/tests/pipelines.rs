@@ -44,13 +44,12 @@ fn the_first_frame_is_compiled_first_and_the_rest_behind_it() {
     renderer.wait_for_pipelines();
     let all = renderer.pipeline_stats();
     // Every permutation without a new colour format: the scene's 11 at each MSAA count up to 8, the post chain's 11,
-    // the upscale pass and the overlay. The scene's 9 with extra suns follow only once a scene has a
-    // `DirectionalLight` (#123), but inline (OpenGL) they are compiled up front too. Bloom's 6 of the post chain's are
+    // the upscale pass and the overlay. Bloom's 6 of the post chain's are
     // its compute chain's where the device has one (#145), its render passes' where not; both where the compute
     // chain's levels are wider than the scene colour's (`Rgba16Float` against `Rg11b10Ufloat`: a large window draws
     // the render passes).
     let counts = renderer.msaa_sample_counts().iter().filter(|&n| n <= 8).count() as u32;
-    let scene = if all.background { 11 } else { 20 };
+    let scene = 11;
     let texel = |format: wgpu::TextureFormat| format.block_copy_size(None);
     let hdr = metallic_render::post::hdr_format(&context);
     let both = metallic_render::post::bloom_compute_format(&context).is_some_and(|f| texel(f) > texel(hdr));

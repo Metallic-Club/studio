@@ -23,7 +23,7 @@ We start with simple classes and services only. Forge-Engine has about 200 class
 | `Light` | WorldObject | `Enabled`, `Brightness`, `Color`, `Range`, `Shadows` | M1 (#17) |
 | `PointLight` | Light | none (uses `Range`) | M1 (#17) |
 | `SpotLight` | Light | `Angle` | M1 (#17) |
-| `DirectionalLight` | Light | hides `Range` | M1 (#17) |
+| `DirectionalLight` | Light | hides `Range` | M1 (#17); removed in #407 |
 | `Camera` | WorldObject | `CFrame`, `FieldOfView` | M1 (#17) |
 | `ValueBase` + `BoolValue`, `IntValue`, `NumberValue`, `StringValue`, `ObjectValue` | Instance | `Value` | M1 (#17) |
 | `SourceContainer`, `BaseScript` (`Enabled`, `Source`), `Script`, `LocalScript`, `ModuleScript` | Instance | see #4 | M2 |

@@ -63,8 +63,6 @@
 //! `PointLight`s and `SpotLight`s in the world are kept as dense records ([`SceneLight`], [`InstanceScene::lights`])
 //! from the same change consumer, with their world placement resolved (a light in a part follows the part). They
 //! have no slot: the renderer selects, clusters and uploads the ones it draws every frame ([`crate::lights`]).
-//! `DirectionalLight`s are kept the same way in a set of their own ([`InstanceScene::directional_lights`]): they
-//! reach everywhere, so they are drawn beside the sun as extra suns, never clustered.
 
 mod assets;
 mod components;

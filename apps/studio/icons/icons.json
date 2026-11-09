@@ -116,10 +116,6 @@
       "file": "explorer/camera.svg",
       "color": "object"
     },
-    "explorer.directional_light": {
-      "file": "explorer/sun.svg",
-      "color": "light"
-    },
     "explorer.event": {
       "file": "explorer/radio.svg",
       "color": "event"

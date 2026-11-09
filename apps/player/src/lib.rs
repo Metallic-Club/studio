@@ -123,7 +123,7 @@ mod tests {
             printed.iter().any(|line| line.starts_with("Metallic demo:")),
             "{printed:?}"
         );
-        for name in ["Baseplate", "NeonWedge", "GlassBall", "Sun", "Spot", "LampBulb"] {
+        for name in ["Baseplate", "NeonWedge", "GlassBall", "Spot", "LampBulb"] {
             read(&player, name, "Name");
         }
 

@@ -6,7 +6,7 @@
 //! per-change cost is a table index, never a name lookup.
 //!
 //! Lights work the same way: a class is a light when it has a light component registered here
-//! (`PointLightEmitter`, `SpotLightEmitter`, `DirectionalLightEmitter`), and its `Light` properties are resolved
+//! (`PointLightEmitter`, `SpotLightEmitter`), and its `Light` properties are resolved
 //! once per class.
 
 use metallic_core::glam::Vec3;
@@ -66,8 +66,7 @@ impl RenderComponents {
 
     /// The built-in components: `PrimitiveMesh` (a part drawn as the built-in mesh for its `Shape`), `AssetMesh` (a
     /// part drawn as the mesh asset its `MeshId` names, textured with its `TextureId`: `MeshPart`), the local lights
-    /// `PointLightEmitter` and `SpotLightEmitter`, and `DirectionalLightEmitter`, drawn as an extra sun
-    /// ([`crate::lights`]).
+    /// `PointLightEmitter` and `SpotLightEmitter` ([`crate::lights`]).
     pub fn builtin() -> Self {
         let mut components = Self::empty();
         components.register(MeshComponent {
@@ -82,10 +81,6 @@ impl RenderComponents {
         components.register_light(LightComponent {
             name: "SpotLightEmitter",
             kind: LightKind::Spot,
-        });
-        components.register_light(LightComponent {
-            name: "DirectionalLightEmitter",
-            kind: LightKind::Directional,
         });
         components
     }
@@ -226,7 +221,7 @@ pub(crate) struct LightProps {
     pub(crate) enabled: Option<PropId>,
     pub(crate) brightness: Option<PropId>,
     pub(crate) color: Option<PropId>,
-    /// `Range` (a `DirectionalLight` hides it, and the scene does not read it there).
+    /// `Range`.
     pub(crate) range: Option<PropId>,
     pub(crate) shadows: Option<PropId>,
     /// `SpotLight.Angle`.

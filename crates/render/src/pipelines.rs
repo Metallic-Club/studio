@@ -7,14 +7,13 @@
 //!   they are done: the time to the first frame.
 //! - **Everything else** follows in the background: the lit variants of the scene's pipelines and every post
 //!   effect's passes (which a frame may switch on at any time), then the scene's pipelines for every other MSAA
-//!   count. The variants with extra suns (`DirectionalLight`s) are queued the same way, but only once a frame first
-//!   draws one: a game without any never compiles them.
+//!   count.
 //! - **A compile may wait for another** whose shader stages it shares (the depth prepass and the opaque pass after
 //!   it for the opaque pass; another MSAA count for the first one's), so a backend that caches compiled stages
 //!   inside the device (DX12, whose FXC takes up to half a second for the lit parts' shader) compiles each stage
 //!   once, not once per worker that happens to need it at the same time.
 //! - **A scene's first frame waits for what it draws with**, and nothing else: the pipelines of the settings asked
-//!   for (a change still compiling included) and, when the scene has local lights or extra suns, the lit ones, moved
+//!   for (a change still compiling included) and, when the scene has local lights, the lit ones, moved
 //!   to the front of the queue ([`Compiler::prioritize`]). So the first frame a player sees looks as every later one
 //!   does.
 //! - **Later frames never wait.** They take what has finished (one lock, nothing allocated) and draw with it: a
@@ -76,8 +75,7 @@ pub(crate) enum PartPipeline {
     Prepass,
     /// The sky's full-screen triangle.
     Sky,
-    /// Opaque parts with `lights` (0: none, 1: local lights, 2: local lights and their shadows), plus 3 with the
-    /// extra suns (`DirectionalLight`s).
+    /// Opaque parts with `lights` (0: none, 1: local lights, 2: local lights and their shadows).
     Opaque(u8),
     /// Opaque parts after a depth prepass, likewise.
     Tested(u8),
@@ -87,7 +85,7 @@ pub(crate) enum PartPipeline {
 
 impl PartPipeline {
     /// How many there are for one format and MSAA count.
-    pub(crate) const COUNT: usize = 20;
+    pub(crate) const COUNT: usize = 11;
 
     /// What a frame without local lights draws with, those with shader stages of their own first.
     pub(crate) const BASE: [PartPipeline; 5] = [
@@ -108,42 +106,8 @@ impl PartPipeline {
         PartPipeline::Tested(1),
     ];
 
-    /// What frames with extra suns (`DirectionalLight`s) and no local lights draw with, likewise.
-    pub(crate) const SUNS: [PartPipeline; 3] = [
-        PartPipeline::Opaque(3),
-        PartPipeline::Transparent(3),
-        PartPipeline::Tested(3),
-    ];
-
-    /// What frames with extra suns and local lights draw with (without and with their shadows), likewise.
-    pub(crate) const LIT_SUNS: [PartPipeline; 6] = [
-        PartPipeline::Opaque(5),
-        PartPipeline::Opaque(4),
-        PartPipeline::Transparent(5),
-        PartPipeline::Transparent(4),
-        PartPipeline::Tested(5),
-        PartPipeline::Tested(4),
-    ];
-
-    /// Every lit variant a frame may switch to after its first: [`PartPipeline::LIT`], [`PartPipeline::SUNS`] and
-    /// [`PartPipeline::LIT_SUNS`], in that order.
-    pub(crate) const ALL_LIT: [PartPipeline; 15] = [
-        PartPipeline::Opaque(2),
-        PartPipeline::Opaque(1),
-        PartPipeline::Transparent(2),
-        PartPipeline::Transparent(1),
-        PartPipeline::Tested(2),
-        PartPipeline::Tested(1),
-        PartPipeline::Opaque(3),
-        PartPipeline::Transparent(3),
-        PartPipeline::Tested(3),
-        PartPipeline::Opaque(5),
-        PartPipeline::Opaque(4),
-        PartPipeline::Transparent(5),
-        PartPipeline::Transparent(4),
-        PartPipeline::Tested(5),
-        PartPipeline::Tested(4),
-    ];
+    /// Every lit variant a frame may switch to after its first: [`PartPipeline::LIT`].
+    pub(crate) const ALL_LIT: [PartPipeline; 6] = PartPipeline::LIT;
 
     /// The pipeline of the same target whose shader stages this one reuses entirely: its compile waits for that
     /// one's (see the [module documentation](self)).
@@ -160,9 +124,9 @@ impl PartPipeline {
         match self {
             PartPipeline::Prepass => 0,
             PartPipeline::Sky => 1,
-            PartPipeline::Opaque(lights) => 2 + 3 * usize::from(lights.min(5)),
-            PartPipeline::Tested(lights) => 3 + 3 * usize::from(lights.min(5)),
-            PartPipeline::Transparent(lights) => 4 + 3 * usize::from(lights.min(5)),
+            PartPipeline::Opaque(lights) => 2 + 3 * usize::from(lights.min(2)),
+            PartPipeline::Tested(lights) => 3 + 3 * usize::from(lights.min(2)),
+            PartPipeline::Transparent(lights) => 4 + 3 * usize::from(lights.min(2)),
         }
     }
 }
@@ -446,11 +410,6 @@ impl Compiler {
         &self.turn
     }
 
-    /// Whether compiles run inline (OpenGL, and wherever no worker thread can compile), not in the background.
-    pub(crate) fn is_inline(&self) -> bool {
-        self.pool.is_none()
-    }
-
     /// Whether `key` is queued or compiling.
     pub(crate) fn is_queued(&self, key: PipelineKey) -> bool {
         self.queued.contains(&key)
@@ -646,11 +605,6 @@ mod tests {
             .collect();
         slots.sort_unstable();
         assert_eq!(slots, (0..PartPipeline::COUNT).collect::<Vec<_>>());
-        let parts: Vec<PartPipeline> = PartPipeline::LIT
-            .into_iter()
-            .chain(PartPipeline::SUNS)
-            .chain(PartPipeline::LIT_SUNS)
-            .collect();
-        assert_eq!(parts, PartPipeline::ALL_LIT);
+        assert_eq!(PartPipeline::LIT, PartPipeline::ALL_LIT);
     }
 }
