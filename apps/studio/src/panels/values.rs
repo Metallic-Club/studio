@@ -12,7 +12,7 @@
 //! - `CFrame`: two rows, its position and its orientation in degrees ([`Part`]);
 //! - `Color3`: its channels as text; a small square swatch at the right of the name column ([`swatch`], #415) opens
 //!   Studio's colour picker ([`super::color_picker`], #416);
-//! - enums: a drop-down of the enum's items.
+//! - enums: a drop-down of the enum's items, its list in the panel's style ([`choice_row`], #418).
 //!
 //! With several instances selected (#350) a value they disagree on is **mixed** ([`Mixed`]): a component shows a
 //! dash (a text field "Mixed" in grey, a drop-down "Mixed", a check box a bar), and an edit of some components of a
@@ -235,9 +235,11 @@ pub fn edit(
                     .selected_text(shown)
                     .width(width)
                     .show_ui(ui, |ui| {
-                        for &name in desc.items {
+                        // Rows as the panel's (#418): touching, striped, the panel's height and font.
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for (index, &name) in desc.items.iter().enumerate() {
                             let current = !mixed.whole && name == item.name();
-                            if ui.selectable_label(current, name).clicked() && !current {
+                            if choice_row(ui, name, current, index).clicked() && !current {
                                 chosen = Some(name);
                             }
                         }
@@ -259,6 +261,40 @@ pub fn edit(
         // References are read-only (the Parent changes by dragging in the Explorer); the panel draws them.
         Value::Ref(_) => None,
     }
+}
+
+/// One item of an enum's drop-down (#418), in the Properties panel's style: a row its height, striped as its rows are
+/// (the `index`th), the item's name in its font, the `current` item marked with a check in the accent, and a quiet
+/// highlight under the pointer.
+fn choice_row(ui: &mut Ui, name: &str, current: bool, index: usize) -> Response {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let width = ui.available_width().max(120.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, size::ROW), Sense::click());
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, current, name));
+    if ui.is_rect_visible(rect) {
+        let fill = if response.hovered() {
+            p.surface_hover
+        } else {
+            p.rows().fill(index)
+        };
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, fill);
+        let mark = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + space::S2, rect.center().y - SWATCH / 2.0),
+            vec2(SWATCH, SWATCH),
+        );
+        if current {
+            icons::paint(ui.painter(), Icon::UiCheck, mark, colors.accent);
+        }
+        ui.painter().text(
+            egui::pos2(mark.right() + space::S2, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            egui::FontId::proportional(text::BODY),
+            if current { p.text } else { p.muted },
+        );
+    }
+    response
 }
 
 /// Takes the boxes off the controls `ui` draws next (#380): the row's stripe and lines frame them, and the text starts
@@ -568,6 +604,7 @@ pub fn swatch_fill(color: Color3) -> Color32 {
 mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
+    use metallic_engine::metallic_core::EnumItem;
     use metallic_engine::metallic_core::glam::Vec2;
 
     use super::*;
@@ -645,6 +682,41 @@ mod tests {
             Some(Edit::Whole(Value::Number(1.0))),
             "kept within 0 to 1"
         );
+    }
+
+    #[test]
+    fn a_drop_down_lists_its_items_as_the_panel_s_rows() {
+        let mut harness = editor(
+            dm_meta("Material"),
+            Value::Enum(EnumItem::new("Material", "Concrete")),
+            Mixed::default(),
+        );
+        harness.set_size(egui::vec2(300.0, 600.0));
+        harness.get_by_role_and_label(Role::ComboBox, "Value").click();
+        harness.run();
+        // Rows the panel's height (#418), the current one marked.
+        let wood = harness.get_by_role_and_label(Role::Button, "Wood");
+        assert_eq!(wood.rect().height(), size::ROW);
+        let concrete = harness.get_by_role_and_label(Role::Button, "Concrete");
+        assert_eq!(
+            egui_kittest::kittest::NodeT::accesskit_node(&concrete).toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+        harness.get_by_role_and_label(Role::Button, "Wood").click();
+        harness.run();
+        assert!(
+            matches!(harness.state(), Some(Edit::Whole(Value::Enum(item))) if item.name() == "Wood"),
+            "{:?}",
+            harness.state()
+        );
+    }
+
+    /// The registry's declaration of `BasePart`'s property `name`, for the editor.
+    fn dm_meta(name: &str) -> &'static PropMeta {
+        let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
+        let class = registry.class_id("Part").unwrap();
+        let info = registry.class(class).unwrap();
+        info.prop(info.prop_id(name).unwrap()).unwrap().meta
     }
 
     #[test]

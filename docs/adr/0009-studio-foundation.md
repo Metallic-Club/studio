@@ -425,6 +425,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   vector into X, Y and Z, a colour into R, G and B, each part's row editing that component alone; a `CFrame`
   (`CFrame`, `PivotOffset`) shows whole on one row and opens into Position and Orientation, which open in turn. What is
   open is kept by the row's key while Studio runs.
+- **Drop-downs (#418)**: an enum's drop-down lists its items as the Properties panel's rows: the row's height and
+  font, striped, the current item checked in the accent, a quiet highlight under the pointer.
 
 ## Not in this slice
 
