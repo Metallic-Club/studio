@@ -441,6 +441,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   (in degrees); writing them moves or turns the model about its pivot. `Scale` is one number, 1 to start, kept in the
   hidden `ScaleData`: writing it resizes everything in the model about its pivot by the change
   (`world_object::scale_model`: parts' sizes and places, lights' places and ranges, pivot offsets and kept pivots).
+- **Opening Settings keeps Studio's text (#440)**: egui keeps one font atlas for every window and makes it again when
+  a pass's text options differ, the largest texture side among them. A window's unseen first pass had egui's default
+  (2048) rather than the device's, so the atlas was made again and Studio's text garbled; it now has the main
+  window's (`unseen_input`), as its scale (#409).
 
 ## Not in this slice
 

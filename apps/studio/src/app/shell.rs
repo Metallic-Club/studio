@@ -509,13 +509,13 @@ fn draw_own_window(shared: &std::rc::Weak<RefCell<Shared>>, ctx: &egui::Context,
         builder,
         mut viewport_ui_cb,
     } = viewport;
-    // The main window's scale, for a pass without a window of its own: at egui's default scale it would lay text out
-    // again at another size, rebuilding the font atlas every window shares, and Studio's text garbled for a frame
-    // (#409).
-    let scale = ctx.input(|input| input.viewport().native_pixels_per_point);
+    // The main window's scale and largest texture, for a pass without a window of its own: with egui's defaults it
+    // would lay text out with other text options, rebuilding the font atlas every window shares, and Studio's text
+    // garbled for a frame (#409, #440).
+    let (scale, side) = ctx.input(|input| (input.viewport().native_pixels_per_point, input.max_texture_side));
     let Some(shared) = shared.upgrade() else {
         // Studio is closing: nothing to draw into, nor textures to keep.
-        let mut output = ctx.run_ui(unseen_input(ids.this, scale), |ui| viewport_ui_cb(ui));
+        let mut output = ctx.run_ui(unseen_input(ids.this, scale, side), |ui| viewport_ui_cb(ui));
         output.textures_delta.clear();
         return;
     };
@@ -539,7 +539,7 @@ fn draw_own_window(shared: &std::rc::Weak<RefCell<Shared>>, ctx: &egui::Context,
         }
     };
     let Some(input) = input else {
-        let output = ctx.run_ui(unseen_input(ids.this, scale), |ui| viewport_ui_cb(ui));
+        let output = ctx.run_ui(unseen_input(ids.this, scale, side), |ui| viewport_ui_cb(ui));
         // The textures it made (a font's new glyphs) serve every window.
         let mut shared = shared.borrow_mut();
         let Shared { context, painter, .. } = &mut *shared;
@@ -590,11 +590,13 @@ fn draw_own_window(shared: &std::rc::Weak<RefCell<Shared>>, ctx: &egui::Context,
 }
 
 /// The input of a viewport's unseen first run: no events, just its id and a description of it (egui needs one for the
-/// viewport it runs) at `scale`, the main window's native pixels per point, so it lays text out at the size every other
-/// pass does (#409).
-fn unseen_input(viewport: ViewportId, scale: Option<f32>) -> egui::RawInput {
+/// viewport it runs) at `scale`, the main window's native pixels per point, with its largest texture side `side`. egui
+/// keeps one font atlas for every window and makes it again when a pass's text options differ: these are the ones
+/// every other pass has (#409, #440).
+fn unseen_input(viewport: ViewportId, scale: Option<f32>, side: usize) -> egui::RawInput {
     let mut input = egui::RawInput {
         viewport_id: viewport,
+        max_texture_side: Some(side),
         ..Default::default()
     };
     let info = ViewportInfo {
@@ -821,9 +823,40 @@ mod tests {
     fn an_unseen_pass_runs_at_the_main_window_s_scale() {
         // At egui's default scale it would lay text out again at another size and rebuild the shared font atlas (#409).
         let id = ViewportId::from_hash_of("metallic.settings");
-        let input = unseen_input(id, Some(1.25));
+        let input = unseen_input(id, Some(1.25), 8192);
         assert_eq!(input.viewport_id, id);
         assert_eq!(input.viewports[&id].native_pixels_per_point, Some(1.25));
+        assert_eq!(input.max_texture_side, Some(8192));
         assert!(input.events.is_empty());
+    }
+
+    #[test]
+    fn an_unseen_pass_keeps_the_font_atlas_every_window_shares() {
+        let ctx = egui::Context::default();
+        let draw = |ui: &mut egui::Ui| {
+            ui.label("Settings");
+        };
+        // A whole new font image: the atlas made again, which garbled Studio's text for a frame (#440).
+        let remade = |mut output: egui::FullOutput| {
+            let font = egui::TextureId::default();
+            let whole = output
+                .textures_delta
+                .set
+                .iter()
+                .any(|(id, deltas)| *id == font && deltas.iter().any(|delta| delta.pos.is_none()));
+            output.textures_delta.clear();
+            whole
+        };
+        let main = egui::RawInput {
+            max_texture_side: Some(8192),
+            ..Default::default()
+        };
+        assert!(remade(ctx.run_ui(main, draw)), "the first pass makes it");
+        let id = ViewportId::from_hash_of("metallic.settings");
+        assert!(!remade(ctx.run_ui(unseen_input(id, None, 8192), draw)));
+        // A window egui had not seen starts at its default largest texture (2048): it was made again (before #440).
+        let mut before = unseen_input(ViewportId::from_hash_of("metallic.other"), None, 8192);
+        before.max_texture_side = None;
+        assert!(remade(ctx.run_ui(before, draw)), "the test would catch it");
     }
 }
