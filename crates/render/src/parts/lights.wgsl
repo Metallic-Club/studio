@@ -28,7 +28,8 @@ struct LocalLight {
     color: vec4<f32>,
     // xyz: where a spot points; w: one minus the cosine of its half-angle, −2 for a point light.
     direction: vec4<f32>,
-    // x: the cone's falloff scale; z: the first shadow tile (−1: none); w: how much shadow.
+    // x: the cone's falloff scale; y: 1 when the shadow is a cube of six tiles (a point light, or a spot wider than one
+    // tile covers); z: the first shadow tile (−1: none); w: how much shadow.
     params: vec4<f32>,
 }
 
@@ -67,7 +68,7 @@ fn cluster_index(frag: vec2<f32>, depth: f32) -> u32 {
 // `from_light`'s major axis, in the order +X, −X, +Y, −Y, +Z, −Z (`FACES` in lights/atlas.rs).
 fn local_visibility(light: LocalLight, p: vec3<f32>, n: vec3<f32>, n_dot_l: f32, from_light: vec3<f32>, d: f32) -> f32 {
     var index = u32(light.params.z);
-    if light.direction.w < -1.5 {
+    if light.params.y > 0.5 {
         let a = abs(from_light);
         if a.x >= a.y && a.x >= a.z {
             index += select(1u, 0u, from_light.x > 0.0);

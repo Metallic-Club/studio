@@ -376,6 +376,43 @@ fn a_shadowed_light_casts_shadows_from_its_lamp() {
     assert!(behind_lit > behind + 15.0, "{behind_lit} against {behind}");
 }
 
+/// A shadowed spot wider than one shadow tile covers (180°, #437) is shadowed all round: far off its axis, beyond a
+/// hanging wall, a block's side stays dark, while the same block on the open side is lit. (One tile reached 75° off the
+/// axis, and a point further off read the depth at its edge, here the floor below the wall: nearer, it was lit
+/// through the wall.)
+#[test]
+fn a_wide_shadowed_spot_does_not_light_through_walls() {
+    let Some(context) = gpu() else { return };
+    let mut game = night_floor();
+    let ws = game.workspace;
+    let down = CFrame::from_parts(
+        Vec3::new(0.0, 6.0, 0.0),
+        Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+    );
+    let id = light(&mut game, "SpotLight", ws, down, [255, 230, 190], 40.0, 16.0);
+    game.dm.set_by_name(id, "Angle", Value::Number(180.0)).expect("Angle");
+    game.dm.set_by_name(id, "Shadows", Value::Bool(true)).expect("Shadows");
+    game.part(
+        Look::new("Block", "Plastic", [196, 40, 28]),
+        Vec3::new(0.3, 2.4, 12.0),
+        CFrame::new(Vec3::new(2.0, 6.8, 0.0)),
+    );
+    for x in [-6.0, 6.0] {
+        game.part(
+            Look::new("Block", "Plastic", [170, 168, 160]),
+            Vec3::new(2.0, 5.6, 2.0),
+            CFrame::new(Vec3::new(x, 2.8, 0.0)),
+        );
+    }
+    let pixels = render(&context, &mut game, LightSettings::default());
+    // The point on each block's side facing the light is 82° off the axis, past the 75° one tile covers; the wall
+    // hangs from 5.6 m, under the light's ray to it but over its 75° one.
+    let behind = level(&pixels, project(&game, Vec3::new(5.0, 5.3, 0.0)));
+    let open = level(&pixels, project(&game, Vec3::new(-5.0, 5.3, 0.0)));
+    eprintln!("a block beyond the wall {behind:.1}, on the open side {open:.1}");
+    assert!(open > behind + 15.0, "the wide spot lights through the wall");
+}
+
 /// The light in a lamp follows the lamp; a light switched off or out of the world lights nothing.
 #[test]
 fn a_light_in_a_part_follows_it() {

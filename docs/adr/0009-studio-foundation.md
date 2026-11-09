@@ -432,6 +432,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 
 - **Double-click to rename (#436)**: a double-click on an Explorer row renames it in place, as F2 does; a row opens
   and closes by its arrow alone.
+- **Wide spots shadowed all round (#437)**: one shadow tile covers a spot up to 150°; a wider one (up to 180) is
+  shadowed with a cube of six tiles, as a point light is, so its sides no longer light through walls.
 
 ## Not in this slice
 
