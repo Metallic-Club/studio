@@ -145,6 +145,15 @@ pub fn nearest_part(dm: &DataModel, ray: Ray) -> Option<(Id, f32)> {
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// The nearest part's face `ray` meets in Workspace: how far along, and the face's outward normal.
+pub fn nearest_face(dm: &DataModel, ray: Ray) -> Option<(f32, Vec3)> {
+    let world = workspace(dm)?;
+    dm.descendants(world)
+        .ok()?
+        .filter_map(|id| part_box(dm, id).and_then(|bounds| bounds.hit_face(ray)))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+}
+
 /// What a click on `part` selects: the outermost model it is in under Workspace, or the part itself.
 pub fn selectable(dm: &DataModel, part: Id) -> Id {
     let world = workspace(dm);

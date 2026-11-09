@@ -3014,6 +3014,10 @@ mod tests {
             .get_by_role_and_label(Role::Button, "Insert Object\u{2026}")
             .click();
         settle(&mut harness);
+        let aim = {
+            let editor = harness.state().studio.editor().unwrap();
+            crate::viewport::aim(&editor.dm, &editor.viewport.camera)
+        };
         // Below the fold of the list: the screen reader's click.
         harness
             .get_by_role_and_label(Role::Button, "Insert Part")
@@ -3022,12 +3026,42 @@ mod tests {
         let editor = harness.state().studio.editor().unwrap();
         let part = editor.selection.active().unwrap();
         assert_eq!(editor.dm.class_name(part).unwrap(), "Part");
-        let camera = editor.viewport.camera;
+        // Where the camera looks (#412): resting on what is there, lifted off it by half its size along the surface's
+        // normal.
         let at = crate::viewport::position_of(&editor.dm, part).unwrap();
+        let normal = aim.normal.expect("the camera looks at something");
+        let half = metallic_engine::metallic_core::glam::Vec3::new(4.0, 1.0, 2.0) * 0.5;
         assert!(
-            (at - camera.position).dot(camera.forward()) > 1.0,
+            at.abs_diff_eq(aim.point + normal * normal.abs().dot(half), 1e-3),
+            "{at} vs {aim:?}"
+        );
+        assert!(
+            (at - editor.viewport.camera.position).dot(editor.viewport.camera.forward()) > 1.0,
             "in front of the camera"
         );
+
+        // Into something with a pivot: at that pivot. A light in a part sits at its middle.
+        for (class, place) in [("Part", "at the Baseplate's pivot"), ("PointLight", "at its middle")] {
+            harness
+                .get_by_role_and_label(Role::Button, "Insert into Baseplate")
+                .click();
+            settle(&mut harness);
+            harness.event(egui::Event::Text(class.to_owned()));
+            settle(&mut harness);
+            harness
+                .get_by_role_and_label(Role::Button, &format!("Insert {class}"))
+                .click();
+            settle(&mut harness);
+            let editor = harness.state().studio.editor().unwrap();
+            let new = editor.selection.active().unwrap();
+            let baseplate = editor_baseplate(&harness);
+            let pivot = metallic_engine::metallic_classes::base::world_object::pivot(&editor.dm, baseplate).unwrap();
+            let where_it_is = metallic_engine::metallic_classes::base::world_object::pivot(&editor.dm, new).unwrap();
+            assert!(
+                where_it_is.position().abs_diff_eq(pivot.position(), 1e-3),
+                "{class}: {place}"
+            );
+        }
     }
 
     #[test]

@@ -217,6 +217,37 @@ fn bounds_of(dm: &DataModel, ids: &[Id]) -> Option<(Vec3, f32)> {
     }
 }
 
+/// Where the editor camera looks (#412): a point, and the outward normal of the surface it is on, if any.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Aim {
+    /// The point.
+    pub point: Vec3,
+    /// The surface's outward normal there; `None` in open space.
+    pub normal: Option<Vec3>,
+}
+
+/// Where `camera` looks (#412): the first part's surface the middle of its view meets, else where that line meets the
+/// ground (y = 0, facing up), else a point [`OPEN_REACH`] ahead.
+pub fn aim(dm: &DataModel, camera: &EditorCamera) -> Aim {
+    let ray = (camera.position, camera.forward());
+    if let Some((t, normal)) = pick::nearest_face(dm, ray) {
+        return Aim {
+            point: ray.0 + ray.1 * t,
+            normal: Some(normal),
+        };
+    }
+    match reach_along(dm, ray) {
+        (t, true) => Aim {
+            point: ray.0 + ray.1 * t,
+            normal: Some(Vec3::Y),
+        },
+        (t, false) => Aim {
+            point: ray.0 + ray.1 * t,
+            normal: None,
+        },
+    }
+}
+
 /// Where instance `id` is, if it is placed in the world (a part, a model with a pivot): what an orbit circles.
 pub fn position_of(dm: &DataModel, id: Id) -> Option<Vec3> {
     match dm.get_by_name(id, "CFrame") {

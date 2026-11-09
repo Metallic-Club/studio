@@ -404,6 +404,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Insert Object on a key (#411)**: Shift+Space (`edit.insert`) opens Insert Object for the selected instance, or
   Workspace with nothing selected. Studio draws the window over the editor (`panels::insert::frame`), not the Explorer,
   so it shows whichever panels are open.
+- **Inserting where you look (#412)**: something inserted with a place in the world (a part, a light, a camera) goes
+  where the camera looks (`viewport::aim`: the surface of the first part the middle of the view meets, a part resting
+  on it; else the ground; else a point ahead), not the origin; inserted into something with a pivot, it goes at that
+  pivot (a light in a part at its middle).
 
 ## Not in this slice
 
