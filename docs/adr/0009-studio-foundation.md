@@ -461,6 +461,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   separators keep their lines.
 - **Settings scrolls sideways (#454)**: its page scrolls both ways, the horizontal bar showing only when the page is
   wider than the window, so a large interface scale on a small screen still reaches the controls' column.
+- **Rotation, not Orientation (#455)**: Properties labels a part's `Orientation` and a CFrame's orientation row as
+  Rotation, as a model's is (#439); scripts still call it `Orientation`.
 
 ## Not in this slice
 

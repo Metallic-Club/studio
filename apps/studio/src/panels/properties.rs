@@ -4,7 +4,7 @@
 //!
 //! **Rows open in place** (#417): a vector opens into its X, Y and Z, a colour into its R, G and B, each on a row of its
 //! own that edits that part alone; a `CFrame` (`CFrame`, `PivotOffset`) shows whole on one row and opens into its
-//! Position and Orientation, which open in turn. What is open is kept while Studio runs.
+//! Position and Rotation (its orientation, #455), which open in turn. What is open is kept while Studio runs.
 //!
 //! What cannot be edited is formatted for reading: references as the instance's name, read-only properties as their
 //! value (vectors as their components, a colour as a swatch and its 0-255 channels, a boolean as a check box).
@@ -195,7 +195,7 @@ pub fn groups(dm: &DataModel, ids: &[Id]) -> Vec<Group> {
         match &value {
             Value::CFrame(_) => {
                 rows.push(row(label, &[], Part::Whole, None, true));
-                for (part, name) in [(Part::Position, "Position"), (Part::Orientation, "Orientation")] {
+                for (part, name) in [(Part::Position, "Position"), (Part::Orientation, "Rotation")] {
                     rows.push(row(name, &[name], part, None, true));
                     for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
                         rows.push(row(axis, &[name, axis], part, Some(i), false));

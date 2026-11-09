@@ -2795,7 +2795,10 @@ mod tests {
             panic!("a CFrame");
         };
         assert!((frame.position().y - 20.0).abs() < 1e-4);
-        type_into(&mut harness, "CFrame Orientation", "0, 90, 0");
+        // Rotation, as a part's own Orientation row reads too (#455).
+        assert!(harness.query_by_label("Orientation").is_none());
+        harness.get_by_role_and_label(Role::TextInput, "Rotation");
+        type_into(&mut harness, "CFrame Rotation", "0, 90, 0");
         let Value::Vector3(turned) = value(&harness, "Orientation") else {
             panic!("a vector");
         };

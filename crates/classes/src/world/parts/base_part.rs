@@ -142,6 +142,8 @@ static PROPS: &[PropMeta] = &[
         .order(1)
         .desc("Where the part's centre is, in metres. Setting it moves the part without rotating it."),
     PropMeta::vector3("Orientation", 0.0, 0.0, 0.0)
+        // Shown as a model's is (#439, #455); scripts still call it Orientation.
+        .label("Rotation")
         .computed(orientation_get, Some(orientation_set))
         .derived_from(&["CFrame"])
         .transform()
