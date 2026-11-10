@@ -175,11 +175,11 @@ impl Gizmo {
     }
 
     /// The mode a selecting drag starting on a part (`on_part`) has, or none when it carries the part instead: the
-    /// Select tool's Lasso and Paint start anywhere, and a box only on nothing.
+    /// Select tool's Lasso and Paint start anywhere; a box starts on nothing, whatever the tool, or with none (#468).
     fn gesture_mode(&self, on_part: bool) -> Option<SelectMode> {
         match (self.tool, self.select_mode) {
             (Some(Tool::Select), SelectMode::Lasso | SelectMode::Paint) => Some(self.select_mode),
-            (Some(Tool::Select), SelectMode::Box) if !on_part => Some(SelectMode::Box),
+            _ if !on_part => Some(SelectMode::Box),
             _ => None,
         }
     }
