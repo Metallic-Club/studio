@@ -3281,6 +3281,68 @@ mod tests {
         assert!(selected_names(&harness).is_empty());
     }
 
+    /// A click of the left button at `at` with `modifiers` held.
+    fn click_with(harness: &mut Harness<'_, Test>, at: egui::Pos2, modifiers: Modifiers) {
+        harness.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            let press = egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            harness.event_modifiers(press, modifiers);
+        }
+        settle(harness);
+    }
+
+    #[test]
+    fn alt_clicks_pick_a_part_in_a_model_then_the_parts_behind_it() {
+        let mut harness = editing(settings_file("editor-alt-pick", None), "Alt Pick Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let spawn = on_screen(&harness, "SpawnLocation");
+        // The spawn in a model: a plain click picks the model.
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let dm = &mut editor.dm;
+            let workspace = crate::viewport::pick::workspace(dm).unwrap();
+            let model = dm.create(dm.registry().class_id("Model").unwrap()).unwrap();
+            dm.set_name(model, "Spawn Model".into()).unwrap();
+            dm.set_parent(model, Some(workspace)).unwrap();
+            let part = dm.find_first_child(workspace, "SpawnLocation", false).unwrap().unwrap();
+            dm.set_parent(part, Some(model)).unwrap();
+        }
+        settle(&mut harness);
+        click_with(&mut harness, spawn, Modifiers::NONE);
+        assert_eq!(selected_names(&harness), ["Spawn Model"]);
+        // Alt picks the part itself (#482), then, on the same spot, the baseplate behind it, then round again.
+        click_with(&mut harness, spawn, Modifiers::ALT);
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        click_with(&mut harness, spawn + egui::vec2(1.0, 0.0), Modifiers::ALT);
+        assert_eq!(selected_names(&harness), ["Baseplate"]);
+        click_with(&mut harness, spawn, Modifiers::ALT);
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        // Shift+Alt walks on and adds.
+        click_with(&mut harness, spawn, Modifiers::ALT | Modifiers::SHIFT);
+        assert_eq!(selected_names(&harness), ["SpawnLocation", "Baseplate"]);
+        // A plain click starts over; Alt on the sky clears.
+        click_with(&mut harness, spawn, Modifiers::NONE);
+        assert_eq!(selected_names(&harness), ["Spawn Model"]);
+        let sky = harness
+            .state()
+            .studio
+            .editor()
+            .unwrap()
+            .viewport
+            .rect
+            .unwrap()
+            .center_top()
+            + egui::vec2(0.0, 10.0);
+        click_with(&mut harness, sky, Modifiers::ALT);
+        assert!(selected_names(&harness).is_empty());
+    }
+
     #[test]
     fn choosing_the_select_tool_again_turns_it_off_and_the_hover_outline_with_it() {
         let mut harness = editing(settings_file("editor-select-off", None), "Select Off Game");

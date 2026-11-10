@@ -92,6 +92,8 @@ pub struct ViewportState {
     pub speed_note: Option<(SpeedChange, Instant)>,
     /// When the Select tool's mode last changed (#467): the viewport shows it for a moment.
     pub mode_note: Option<Instant>,
+    /// The walk of Alt+clicks through the parts behind one another (#482).
+    pub pick_cycle: pick::PickCycle,
 }
 
 impl ViewportState {
@@ -110,6 +112,7 @@ impl ViewportState {
             hold: None,
             speed_note: None,
             mode_note: None,
+            pick_cycle: pick::PickCycle::default(),
         }
     }
 

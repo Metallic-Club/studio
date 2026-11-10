@@ -186,6 +186,63 @@ pub fn pick(dm: &DataModel, ray: Ray) -> Option<Id> {
     nearest_part(dm, ray).map(|(part, _)| selectable(dm, part))
 }
 
+/// Every part `ray` meets in Workspace, nearest first: what an Alt+click walks through (#482).
+pub fn parts_along(dm: &DataModel, ray: Ray) -> Vec<Id> {
+    let Some(world) = workspace(dm) else {
+        return Vec::new();
+    };
+    let Ok(descendants) = dm.descendants(world) else {
+        return Vec::new();
+    };
+    let mut hits: Vec<(Id, f32)> = descendants
+        .filter_map(|id| part_box(dm, id).and_then(|bounds| bounds.hit(ray)).map(|t| (id, t)))
+        .collect();
+    hits.sort_by(|a, b| a.1.total_cmp(&b.1));
+    hits.into_iter().map(|(id, _)| id).collect()
+}
+
+/// How far, in points, the pointer may move between Alt+clicks that still walk on behind (#482).
+pub const CYCLE_TOLERANCE: f32 = 4.0;
+
+/// Alt+clicking one spot again and again walks through the parts behind one another there (#482), after
+/// Forge-Engine's `PickCycle`.
+#[derive(Clone, Debug, Default)]
+pub struct PickCycle {
+    /// Where the walk began, in points.
+    at: [f32; 2],
+    /// What was under the pointer then, nearest first.
+    ids: Vec<Id>,
+    /// Which of them was chosen last.
+    next: usize,
+}
+
+impl PickCycle {
+    /// The part an Alt+click at `at` chooses, given the parts under it nearest first (`hits`): the nearest the first
+    /// time; then, clicked again within `tolerance` points with the same parts under it, the next one behind, round
+    /// to the nearest after the last. Elsewhere, or over other parts, it starts again; over nothing it chooses nothing.
+    pub fn advance(&mut self, at: [f32; 2], hits: &[Id], tolerance: f32) -> Option<Id> {
+        if hits.is_empty() {
+            self.reset();
+            return None;
+        }
+        let moved = (at[0] - self.at[0]).hypot(at[1] - self.at[1]);
+        if !self.ids.is_empty() && moved <= tolerance && self.ids == hits {
+            self.next = (self.next + 1) % hits.len();
+        } else {
+            self.ids = hits.to_vec();
+            self.at = at;
+            self.next = 0;
+        }
+        hits.get(self.next).copied()
+    }
+
+    /// Forgets the walk: the next Alt+click picks the nearest part again.
+    pub fn reset(&mut self) {
+        self.ids.clear();
+        self.next = 0;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use metallic_engine::metallic_core::CFrame;
@@ -214,6 +271,23 @@ mod tests {
         assert_eq!(turned.hit((Vec3::ZERO, Vec3::X)), Some(0.0), "from inside");
         assert_eq!(turned.hit((Vec3::new(0.0, 0.0, 10.0), Vec3::Z)), None, "behind the ray");
         assert_eq!(turned.corners().len(), 8);
+    }
+
+    #[test]
+    fn alt_clicks_walk_through_what_is_behind_and_wrap() {
+        let (a, b, c) = (Id::new(1, 0), Id::new(2, 0), Id::new(3, 0));
+        let mut cycle = PickCycle::default();
+        let at = [10.0, 10.0];
+        assert_eq!(cycle.advance(at, &[a, b, c], CYCLE_TOLERANCE), Some(a));
+        assert_eq!(cycle.advance([12.0, 11.0], &[a, b, c], CYCLE_TOLERANCE), Some(b));
+        assert_eq!(cycle.advance(at, &[a, b, c], CYCLE_TOLERANCE), Some(c));
+        assert_eq!(cycle.advance(at, &[a, b, c], CYCLE_TOLERANCE), Some(a), "round again");
+        // Somewhere else, or over other parts, it starts over.
+        assert_eq!(cycle.advance([40.0, 10.0], &[a, b, c], CYCLE_TOLERANCE), Some(a));
+        assert_eq!(cycle.advance([40.0, 10.0], &[b, c], CYCLE_TOLERANCE), Some(b));
+        // Over nothing it chooses nothing, and the next walk begins at the nearest.
+        assert_eq!(cycle.advance([40.0, 10.0], &[], CYCLE_TOLERANCE), None);
+        assert_eq!(cycle.advance([40.0, 10.0], &[b, c], CYCLE_TOLERANCE), Some(b));
     }
 
     #[test]
