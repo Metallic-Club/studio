@@ -4654,6 +4654,14 @@ mod tests {
         harness.get_by_role_and_label(Role::CheckBox, "Axis gizmo").click();
         settle(&mut harness);
         assert!(!harness.state().studio.settings().viewport.show_axes);
+        // Still open after the click (#476), so a second setting can be turned straight after: on again.
+        harness.get_by_role_and_label(Role::CheckBox, "Axis gizmo").click();
+        settle(&mut harness);
+        assert!(harness.state().studio.settings().viewport.show_axes);
+        // A click outside it closes it.
+        harness.get_by_role_and_label(Role::Tab, "Viewport").click();
+        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::CheckBox, "Axis gizmo").is_none());
     }
 
     #[test]
