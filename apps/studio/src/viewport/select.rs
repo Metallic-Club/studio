@@ -1,12 +1,14 @@
 //! Selecting by dragging in the viewport (#467), after the archive's Select tool (`studio-achive-`, `tools/select.rs`):
 //! the Select tool's **Box**, **Lasso** and **Paint** modes, cycled by a keybind.
 //!
-//! - **Box**: what lies wholly inside the rectangle dragged out.
-//! - **Lasso**: what has its middle inside the shape drawn.
+//! - **Box**: what has its visual centre inside the rectangle dragged out (#474): a box over a floor's corner, or
+//!   round the parts standing on it, does not take the floor.
+//! - **Lasso**: what has its visual centre inside the shape drawn.
 //! - **Paint**: what the [`BRUSH`] circle passes over, and what lies under its path ([`Gesture::finish`]).
 //!
-//! What can be picked is what a click picks ([`pick::selectable`]: a part, or the model it is in), seen as the screen
-//! rectangle round its outline ([`pick::outline_box`]). When the gesture ends, Shift adds what it picked, Ctrl (Cmd)
+//! What can be picked is what a click picks ([`pick::selectable`]: a part, or the model it is in), seen as its visual
+//! bounding box: the screen rectangle round the part of its outline ([`pick::outline_box`]) the viewport shows, and
+//! that rectangle's middle, its visual centre. When the gesture ends, Shift adds what it picked, Ctrl (Cmd)
 //! removes it, and otherwise it becomes the selection ([`SelectOp`]).
 
 use egui::{Painter, Pos2, Rect, Stroke};
@@ -83,13 +85,40 @@ impl SelectOp {
 pub struct ScreenItem {
     /// What a click on it selects.
     pub id: Id,
-    /// The rectangle round its outline on the screen.
+    /// Its visual bounding box: the rectangle round the part of its outline the viewport shows.
     pub rect: Rect,
-    /// Its outline's middle on the screen.
+    /// That rectangle's middle (#474).
     pub centre: Pos2,
 }
 
-/// Everything in Workspace that can be picked and is wholly in front of the camera, as `view` shows it.
+impl ScreenItem {
+    /// `id` with the visual bounding box `rect`.
+    pub fn new(id: Id, rect: Rect) -> Self {
+        Self {
+            id,
+            rect,
+            centre: rect.center(),
+        }
+    }
+}
+
+/// The visual bounding box of `bounds` as `view` shows it: round its edges' parts in front of the camera, clipped to
+/// the viewport. `None` when none of it shows.
+fn visual_box(view: &View, bounds: &pick::Bounds) -> Option<Rect> {
+    let corners = bounds.corners();
+    let points: Vec<Pos2> = pick::EDGES
+        .iter()
+        .filter_map(|&(a, b)| view.segment(corners[a], corners[b]))
+        .flatten()
+        .collect();
+    if points.is_empty() {
+        return None;
+    }
+    let shown = Rect::from_points(&points).intersect(view.rect);
+    shown.is_positive().then_some(shown)
+}
+
+/// Everything in Workspace that can be picked and shows in the viewport, as `view` shows it.
 pub fn screen_items(dm: &DataModel, view: &View) -> Vec<ScreenItem> {
     let Some(world) = pick::workspace(dm) else {
         return Vec::new();
@@ -105,27 +134,15 @@ pub fn screen_items(dm: &DataModel, view: &View) -> Vec<ScreenItem> {
         }
     }
     ids.into_iter()
-        .filter_map(|id| {
-            let bounds = pick::outline_box(dm, id)?;
-            let points = bounds
-                .corners()
-                .map(|corner| view.project(corner))
-                .into_iter()
-                .collect::<Option<Vec<Pos2>>>()?;
-            Some(ScreenItem {
-                id,
-                rect: Rect::from_points(&points),
-                centre: view.project(bounds.center)?,
-            })
-        })
+        .filter_map(|id| Some(ScreenItem::new(id, visual_box(view, &pick::outline_box(dm, id)?)?)))
         .collect()
 }
 
-/// What lies wholly inside `area`.
+/// What has its visual centre inside `area` (#474).
 pub fn box_hits(area: Rect, items: &[ScreenItem]) -> Vec<Id> {
     items
         .iter()
-        .filter(|item| area.contains_rect(item.rect))
+        .filter(|item| area.contains(item.centre))
         .map(|item| item.id)
         .collect()
 }
@@ -234,8 +251,7 @@ impl Gesture {
     }
 
     /// What it picks in `dm` as `view` shows it, now it has ended. Paint also picks whatever lies under the middle of
-    /// its path, as a click would: a part too big to be wholly in front of the camera (a baseplate) has no rectangle
-    /// on the screen, but the brush can still pass over it.
+    /// its path, as a click would: what is under the brush, where its visual bounding box also takes in what is not.
     pub fn finish(&self, dm: &DataModel, view: &View) -> Vec<Id> {
         let mut hits = self.hits(&screen_items(dm, view));
         if self.mode == SelectMode::Paint {
@@ -297,25 +313,31 @@ mod tests {
         let class = dm.registry().class_id("Part").unwrap();
         let a = dm.create(class).unwrap();
         let b = dm.create(class).unwrap();
-        let item = |id, x: f32| ScreenItem {
-            id,
-            rect: Rect::from_center_size(pos2(x, 100.0), vec2(40.0, 40.0)),
-            centre: pos2(x, 100.0),
-        };
+        let item = |id, x: f32| ScreenItem::new(id, Rect::from_center_size(pos2(x, 100.0), vec2(40.0, 40.0)));
         (dm, vec![item(a, 100.0), item(b, 300.0)])
     }
 
     #[test]
-    fn a_box_picks_what_lies_wholly_inside_it() {
+    fn a_box_picks_what_has_its_visual_centre_inside_it() {
         let (_dm, items) = items();
         let mut gesture = Gesture::start(SelectMode::Box, pos2(50.0, 50.0));
         gesture.extend(pos2(150.0, 150.0));
         assert_eq!(gesture.hits(&items), [items[0].id]);
-        // Half over the second is not enough.
-        gesture.extend(pos2(310.0, 150.0));
+        // Over the second's edge, short of its middle (300, 100): not picked (#474).
+        gesture.extend(pos2(295.0, 150.0));
         assert_eq!(gesture.hits(&items), [items[0].id]);
-        gesture.extend(pos2(350.0, 150.0));
+        // Past its middle, though not round all of it: picked.
+        gesture.extend(pos2(305.0, 105.0));
         assert_eq!(gesture.hits(&items), [items[0].id, items[1].id]);
+        // A floor under both, far wider than the box: its middle is outside it, so not picked.
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let floor = dm.create(dm.registry().class_id("Part").unwrap()).unwrap();
+        let mut with_floor = items.clone();
+        with_floor.push(ScreenItem::new(
+            floor,
+            Rect::from_min_max(pos2(0.0, 60.0), pos2(1000.0, 600.0)),
+        ));
+        assert_eq!(gesture.hits(&with_floor), [items[0].id, items[1].id]);
     }
 
     #[test]
