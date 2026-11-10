@@ -246,6 +246,17 @@ pub fn edit(
                     })
             });
             labelled(&combo.inner.response, Role::ComboBox, label);
+            // The wheel over it steps through its items (#469), down to the next.
+            if let Some(steps) = wheel_steps(ui, &combo.inner.response) {
+                let last = desc.items.len().saturating_sub(1) as i64;
+                let at = desc.items.iter().position(|&name| name == item.name()).unwrap_or(0) as i64;
+                let to = (at + steps).clamp(0, last) as usize;
+                if (to as i64 != at || mixed.whole)
+                    && let Some(&name) = desc.items.get(to)
+                {
+                    chosen = Some(name);
+                }
+            }
             chosen
                 .and_then(|name| dm.registry().enum_item(enum_type, name))
                 .map(|item| Edit::Whole(Value::Enum(item)))
@@ -332,6 +343,41 @@ fn drag_speed(meta: &PropMeta, fallback: f64) -> f64 {
         (_, Some((min, max))) if max > min && (max - min).is_finite() => (max - min) / 200.0,
         _ => fallback,
     }
+}
+
+/// How many points of a smooth (trackpad) scroll make one wheel notch.
+const NOTCH: f32 = 40.0;
+
+/// The whole wheel notches turned this frame with the pointer over `response` (down positive), the part of a notch
+/// short of one kept for the next frames; none while a pop-up is open or Ctrl (Cmd) zooms. The panel under it does not
+/// scroll meanwhile (#469).
+fn wheel_steps(ui: &Ui, response: &Response) -> Option<i64> {
+    if !response.hovered() || ui.ctx().any_popup_open() || ui.input(|input| input.modifiers.command) {
+        return None;
+    }
+    let turned: f32 = ui.input(|input| {
+        input
+            .events
+            .iter()
+            .map(|event| match event {
+                egui::Event::MouseWheel { unit, delta, .. } => match unit {
+                    egui::MouseWheelUnit::Point => delta.y / NOTCH,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => delta.y,
+                },
+                _ => 0.0,
+            })
+            .sum()
+    });
+    ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+    if turned == 0.0 {
+        return None;
+    }
+    // A wheel turned down moves the content up: a negative delta, the next item.
+    let id = response.id.with("metallic.wheel");
+    let total = ui.data(|data| data.get_temp::<f32>(id)).unwrap_or(0.0) - turned;
+    let steps = total.trunc();
+    ui.data_mut(|data| data.insert_temp(id, total - steps));
+    (steps != 0.0).then_some(steps as i64)
 }
 
 /// A check box, `on` or not (a bar when `mixed`); returns the new state when clicked (on, from mixed).
@@ -728,6 +774,39 @@ mod tests {
             "{:?}",
             harness.state()
         );
+    }
+
+    #[test]
+    fn the_wheel_over_a_drop_down_steps_through_its_items() {
+        let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
+        let PropType::Enum(material) = dm_meta("Material").ty else {
+            panic!("an enum");
+        };
+        let items = registry.enum_desc(material).unwrap().items;
+        let at = items.iter().position(|&name| name == "Concrete").unwrap();
+        let wheel = |down: bool| {
+            let mut harness = editor(
+                dm_meta("Material"),
+                Value::Enum(EnumItem::new("Material", "Concrete")),
+                Mixed::default(),
+            );
+            let combo = harness.get_by_role_and_label(Role::ComboBox, "Value").rect();
+            harness.hover_at(combo.center());
+            harness.run();
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, if down { -1.0 } else { 1.0 }),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+                modifiers: egui::Modifiers::NONE,
+            });
+            harness.run();
+            harness.state().clone()
+        };
+        // One notch down, the next item (#469); up, the one before.
+        let item = |index: usize| Some(Edit::Whole(Value::Enum(EnumItem::new("Material", items[index]))));
+        assert_eq!(wheel(true), item(at + 1));
+        assert_eq!(wheel(false), item(at - 1));
     }
 
     /// The registry's declaration of `BasePart`'s property `name`, for the editor.
