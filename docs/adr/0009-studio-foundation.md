@@ -479,6 +479,9 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   Select tool, and the viewport names the mode for a moment. In Box mode a drag on a part still carries it (#358).
 - **Box select with any tool (#468)**: a drag that starts on nothing boxes whatever tool is active, or with none;
   Lasso and Paint stay the Select tool's.
+- **The wheel over a drop-down (#469)**: over an enum's drop-down in Properties, a wheel notch down picks the next item
+  and up the one before (a trackpad's scroll adds up to notches, `values::wheel_steps`); the panel does not scroll
+  meanwhile, and the change undoes as any edit.
 
 ## Not in this slice
 

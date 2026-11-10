@@ -2858,6 +2858,22 @@ mod tests {
         assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Wood"));
         undo(&mut harness);
         assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Concrete"));
+        // Or by the wheel over it (#469): a notch down, another item, in place; undone as any edit.
+        let combo = harness.get_by_role_and_label(Role::ComboBox, "Material").rect();
+        harness.hover_at(combo.center());
+        settle(&mut harness);
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        });
+        settle(&mut harness);
+        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() != "Concrete"));
+        assert_eq!(harness.get_by_role_and_label(Role::ComboBox, "Material").rect(), combo);
+        undo(&mut harness);
+        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Concrete"));
 
         // A number past its range is kept in it; a reference is not a field.
         type_into(&mut harness, "Transparency", "4");
