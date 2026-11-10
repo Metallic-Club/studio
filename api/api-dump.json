@@ -803,11 +803,11 @@
           "computed": false,
           "range": [
             0.0,
-            10.0
+            null
           ],
           "wraps": false,
           "group": "Sun",
-          "description": "How strong the sunlight is (and the moonlight, at night). 0 turns the sun off.",
+          "description": "How strong the sunlight is (and the moonlight, at night). 0 turns the sun off; there is no upper limit.",
           "aliases": [],
           "derived_from": []
         },

@@ -611,7 +611,7 @@ declare extern type Lighting extends Instance with
     ClockTime: number
     --- ClockTime written as hours, minutes and seconds, such as "14:30:00" (hours 0-23, seconds optional when writing). Setting it sets ClockTime; a text that is not a time is an error.
     TimeOfDay: string
-    --- How strong the sunlight is (and the moonlight, at night). 0 turns the sun off.
+    --- How strong the sunlight is (and the moonlight, at night). 0 turns the sun off; there is no upper limit.
     Brightness: number
     --- Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it passes straight overhead at noon, further north it stays lower in the south.
     GeographicLatitude: number

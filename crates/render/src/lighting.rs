@@ -354,6 +354,23 @@ mod tests {
     }
 
     #[test]
+    fn the_sun_has_no_upper_brightness() {
+        // Brightness 50 is kept by the data model (#481) and lights 25 times as strongly as the default 2.
+        let mut dm = metallic_classes::new_game().unwrap();
+        let id = lighting(&dm);
+        dm.set_by_name(id, "ClockTime", Value::Number(12.0)).unwrap();
+        let normal = LightingReader::new().read(&dm, id).resolve();
+        dm.set_by_name(id, "Brightness", Value::Number(50.0)).unwrap();
+        let read = LightingReader::new().read(&dm, id);
+        assert_eq!(read.brightness, 50.0);
+        let bright = read.resolve();
+        assert!(
+            bright.light_color.abs_diff_eq(normal.light_color * 25.0, 1e-3),
+            "{bright:?}"
+        );
+    }
+
+    #[test]
     fn sunset_hands_over_to_the_moon_without_a_jump() {
         // Around 18:00 the light changes direction where both the sun and the moon are dark.
         let mut last: Option<ResolvedLighting> = None;
