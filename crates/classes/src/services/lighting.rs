@@ -149,11 +149,16 @@ static PROPS: &[PropMeta] = &[
              when writing). Setting it sets ClockTime; a text that is not a time is an error.",
         ),
     PropMeta::number("Brightness", 2.0)
-        .range(0.0, 10.0)
+        // No upper limit (#481), as for the other lights (#406).
+        .range(0.0, f64::INFINITY)
+        .widget(Widget::Drag { speed: 0.05 })
         .visual()
         .group("Sun")
         .order(2)
-        .desc("How strong the sunlight is (and the moonlight, at night). 0 turns the sun off."),
+        .desc(
+            "How strong the sunlight is (and the moonlight, at night). 0 turns the sun off; there is no upper \
+             limit.",
+        ),
     PropMeta::number("GeographicLatitude", DEFAULT_LATITUDE)
         .range(-90.0, 90.0)
         .visual()
@@ -270,6 +275,16 @@ mod tests {
         assert!(close(sun_direction(24.0, 0.0), Vector3::NEG_Y));
         for hour in 0..=24 {
             assert!((sun_direction(f64::from(hour), 30.0).length() - 1.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn the_sun_s_brightness_has_no_upper_limit() {
+        let mut dm = crate::new_game().unwrap();
+        let lighting = lighting_of(&dm);
+        for (written, stored) in [(50.0, 50.0), (1e6, 1e6), (-1.0, 0.0)] {
+            dm.set_by_name(lighting, "Brightness", Value::Number(written)).unwrap();
+            assert_eq!(number(&dm, lighting, "Brightness", f64::NAN), stored, "{written}");
         }
     }
 
