@@ -519,7 +519,7 @@ impl Studio {
                     |action| tool_enabled(action, play),
                     |action| match action {
                         ToolAction::Studio(StudioCommand::TogglePanel(id)) => dock.is_open(id),
-                        ToolAction::Studio(StudioCommand::Transform(tool)) => *tool == gizmo.0,
+                        ToolAction::Studio(StudioCommand::Transform(tool)) => gizmo.0 == Some(*tool),
                         ToolAction::Studio(StudioCommand::LocalSpace) => gizmo.1,
                         _ => false,
                     },
@@ -640,7 +640,7 @@ impl Studio {
             }
             MenuAction::Transform(tool) => {
                 if let Some(editor) = self.editor_mut() {
-                    editor.viewport.gizmo.tool = tool;
+                    editor.viewport.gizmo.choose(tool);
                 }
             }
             MenuAction::Snap => {
@@ -3257,6 +3257,50 @@ mod tests {
     }
 
     #[test]
+    fn choosing_the_select_tool_again_turns_it_off_and_the_hover_outline_with_it() {
+        let mut harness = editing(settings_file("editor-select-off", None), "Select Off Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let tool = |harness: &Harness<'_, Test>| harness.state().studio.editor().unwrap().viewport.gizmo.tool;
+        // The faint outline round the part under the pointer: lines in half the accent.
+        let faint = |harness: &Harness<'_, Test>| {
+            let ink = current_colors(&harness.ctx).accent.gamma_multiply(0.5);
+            harness
+                .output()
+                .shapes
+                .iter()
+                .filter(
+                    |clipped| matches!(&clipped.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == ink),
+                )
+                .count()
+        };
+        let spawn = on_screen(&harness, "SpawnLocation");
+        harness.event(egui::Event::PointerMoved(spawn));
+        settle(&mut harness);
+        assert_eq!(tool(&harness), Some(Tool::Select));
+        assert!(faint(&harness) > 0, "outlined under the pointer");
+        // Chosen again (#466): no tool, and no outline.
+        harness.key_press(Key::Num1);
+        settle(&mut harness);
+        assert_eq!(tool(&harness), None);
+        assert_eq!(faint(&harness), 0);
+        // A click still selects.
+        left_click(&mut harness, egui::Rect::from_center_size(spawn, egui::Vec2::ZERO));
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        // Another tool, or Select again, turns one on.
+        harness.key_press(Key::Num2);
+        settle(&mut harness);
+        assert_eq!(tool(&harness), Some(Tool::Move));
+        harness.key_press(Key::Num1);
+        settle(&mut harness);
+        assert_eq!(tool(&harness), Some(Tool::Select));
+        harness.key_press(Key::Num1);
+        harness.key_press(Key::Num1);
+        settle(&mut harness);
+        assert_eq!(tool(&harness), Some(Tool::Select));
+    }
+
+    #[test]
     fn dragging_a_part_in_the_viewport_carries_it_across_the_floor() {
         let mut harness = editing(settings_file("editor-viewport-carry", None), "Carry Game");
         harness.set_size(egui::vec2(1280.0, 900.0));
@@ -4798,7 +4842,7 @@ mod tests {
         settle(&mut harness);
         assert_eq!(
             harness.state().studio.editor().unwrap().viewport.gizmo.tool,
-            crate::viewport::tools::Tool::Scale
+            Some(crate::viewport::tools::Tool::Scale)
         );
 
         // Model holds the transform tools (#355): the one in use, and Snap while it is on (#359), are shown on.
@@ -4807,7 +4851,7 @@ mod tests {
         settle(&mut harness);
         assert_eq!(
             harness.state().studio.editor().unwrap().viewport.gizmo.tool,
-            crate::viewport::tools::Tool::Move
+            Some(crate::viewport::tools::Tool::Move)
         );
         // Snap is the increments (#375): a switch, a field and arrows for each.
         assert!(harness.state().studio.settings().editing.snap_moves);
@@ -5489,7 +5533,7 @@ mod tests {
                 let part = editor.dm.find_first_child(workspace, "SpawnLocation", false).unwrap();
                 editor.select(part);
                 // The Move tool's gizmo on it (#355).
-                editor.viewport.gizmo.tool = Tool::Move;
+                editor.viewport.gizmo.tool = Some(Tool::Move);
             }
         });
         assert_eq!(studio.screen(), Screen::Editor);
