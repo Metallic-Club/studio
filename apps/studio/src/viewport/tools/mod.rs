@@ -26,6 +26,7 @@ use metallic_engine::metallic_core::{CFrame, DataModel, Id, PropId, Value};
 
 use super::gizmo::{self, MoveHandle};
 use super::pick::{self, Bounds};
+use super::select::{self, Gesture, SelectMode, SelectOp};
 use super::view::{Ray, View};
 use crate::editor::edit::is_movable;
 use crate::editor::{Scene, Selection};
@@ -128,6 +129,10 @@ pub struct Gizmo {
     hover: Option<Handle>,
     /// The drag in progress.
     drag: Option<Drag>,
+    /// How the Select tool picks with a drag (#467).
+    pub select_mode: SelectMode,
+    /// The selecting drag in progress.
+    gesture: Option<Gesture>,
 }
 
 impl Default for Gizmo {
@@ -137,6 +142,8 @@ impl Default for Gizmo {
             local: false,
             hover: None,
             drag: None,
+            select_mode: SelectMode::default(),
+            gesture: None,
         }
     }
 }
@@ -156,9 +163,25 @@ impl Gizmo {
         self.tool.unwrap_or(Tool::Select)
     }
 
-    /// Whether a handle is being dragged.
+    /// Whether a handle is being dragged, or a selecting drag goes on.
     pub fn is_dragging(&self) -> bool {
-        self.drag.is_some()
+        self.drag.is_some() || self.gesture.is_some()
+    }
+
+    /// Moves the Select tool on to its next mode (#467), choosing it.
+    pub fn next_select_mode(&mut self) {
+        self.select_mode = self.select_mode.next();
+        self.tool = Some(Tool::Select);
+    }
+
+    /// The mode a selecting drag starting on a part (`on_part`) has, or none when it carries the part instead: the
+    /// Select tool's Lasso and Paint start anywhere, and a box only on nothing.
+    fn gesture_mode(&self, on_part: bool) -> Option<SelectMode> {
+        match (self.tool, self.select_mode) {
+            (Some(Tool::Select), SelectMode::Lasso | SelectMode::Paint) => Some(self.select_mode),
+            (Some(Tool::Select), SelectMode::Box) if !on_part => Some(SelectMode::Box),
+            _ => None,
+        }
     }
 }
 
@@ -375,6 +398,26 @@ pub fn interact(
     gizmo: &mut Gizmo,
     snap: Snap,
 ) -> bool {
+    if let Some(mut gesture) = gizmo.gesture.take() {
+        let (down, at, modifiers) = ui.input(|input| {
+            (
+                input.pointer.primary_down(),
+                input.pointer.latest_pos(),
+                input.modifiers,
+            )
+        });
+        if let Some(at) = at {
+            gesture.extend(at);
+        }
+        if down {
+            gizmo.gesture = Some(gesture);
+        } else {
+            // Released: what it picked joins the selection as the keys held then say.
+            let hits = gesture.finish(scene.dm, view);
+            select::combine(scene.selection, &hits, SelectOp::from_modifiers(modifiers));
+        }
+        return true;
+    }
     if let Some(mut drag) = gizmo.drag.take() {
         if ui.input(|input| input.pointer.primary_down()) {
             let (at, modifiers) = ui.input(|input| (input.pointer.latest_pos(), input.modifiers));
@@ -404,22 +447,45 @@ pub fn interact(
             .and_then(|(frame, at)| Some((frame, hit(tool, &frame, view, at)?)));
         gizmo.drag = match (handle, ray) {
             (Some((frame, handle)), Some(ray)) => begin_drag(scene.dm, handle, frame, ray, &targets),
-            // Off the handles, a drag on a part carries it (#358), selected first if it was not.
             (None, Some(ray)) => {
-                if let Some(picked) = pick::pick(scene.dm, ray).filter(|&id| !scene.selection.contains(id)) {
-                    scene.selection.set_only(Some(picked));
+                let picked = pick::pick(scene.dm, ray);
+                // Off the handles, a selecting drag (#467), or else a drag on a part carries it (#358), selected
+                // first if it was not.
+                match gizmo.gesture_mode(picked.is_some()).zip(origin) {
+                    Some((mode, at)) => {
+                        gizmo.gesture = Some(Gesture::start(mode, at));
+                        None
+                    }
+                    None => {
+                        if let Some(picked) = picked.filter(|&id| !scene.selection.contains(id)) {
+                            scene.selection.set_only(Some(picked));
+                        }
+                        carry(scene.dm, scene.selection, ray)
+                    }
                 }
-                carry(scene.dm, scene.selection, ray)
             }
             _ => None,
         };
     }
-    gizmo.hover.is_some() || gizmo.drag.is_some()
+    gizmo.hover.is_some() || gizmo.is_dragging()
 }
 
 /// Draws the tool's gizmo for the selection, or while dragging the drag's measurement (the handles step aside),
 /// a ring's marked every `snap.turn_step`.
 pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo, snap: Snap) {
+    let accent = crate::theme::current_colors(painter.ctx()).accent;
+    if let Some(gesture) = &gizmo.gesture {
+        gesture.paint(painter, accent);
+        return;
+    }
+    // The Paint brush under the pointer, before it is pressed.
+    if gizmo.tool == Some(Tool::Select)
+        && gizmo.select_mode == SelectMode::Paint
+        && gizmo.drag.is_none()
+        && let Some(at) = painter.ctx().pointer_hover_pos().filter(|&at| view.rect.contains(at))
+    {
+        painter.circle_stroke(at, select::BRUSH * 0.5, Stroke::new(1.5, accent));
+    }
     if let Some(drag) = &gizmo.drag {
         match &drag.kind {
             Kind::Move(state) => moving::paint_measurement(painter, view, &drag.frame, state),

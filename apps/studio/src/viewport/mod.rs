@@ -18,6 +18,7 @@ pub mod axes;
 pub mod camera;
 pub mod gizmo;
 pub mod pick;
+pub mod select;
 pub mod tools;
 pub mod view;
 
@@ -89,6 +90,8 @@ pub struct ViewportState {
     pub hold: Option<Pos2>,
     /// The speed the wheel last changed, and when: the viewport shows it for a moment.
     pub speed_note: Option<(SpeedChange, Instant)>,
+    /// When the Select tool's mode last changed (#467): the viewport shows it for a moment.
+    pub mode_note: Option<Instant>,
 }
 
 impl ViewportState {
@@ -106,6 +109,7 @@ impl ViewportState {
             gizmo: tools::Gizmo::default(),
             hold: None,
             speed_note: None,
+            mode_note: None,
         }
     }
 

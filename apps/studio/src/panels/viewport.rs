@@ -4,8 +4,9 @@
 //!
 //! A left click selects what is under the pointer (#354, [`crate::viewport::pick`]): Ctrl (Cmd) or Shift adds or
 //! removes it, a click on nothing clears the selection, and Alt is left to the camera's orbit. The selection is
-//! outlined in the accent colour, and the part under the pointer faintly. Not while a game runs: the viewport shows
-//! the editor's scene, and the panels the game's.
+//! outlined in the accent colour, and the part under the pointer faintly. A drag selects too, as the Select tool's
+//! mode says (#467, [`crate::viewport::select`]). Not while a game runs: the viewport shows the editor's scene, and
+//! the panels the game's.
 
 use std::time::Duration;
 
@@ -45,23 +46,35 @@ fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Strok
     }
 }
 
-/// The camera speed the wheel just changed (#385), in small plain text in the bottom-left corner for a moment, with a
-/// faint shadow to read on a bright sky, as Forge's.
-fn speed_note(painter: &Painter, rect: egui::Rect, viewport: &ViewportState, speeds: &crate::settings::Viewport) {
-    let Some((change, when)) = viewport.speed_note else {
-        return;
-    };
-    if when.elapsed() >= SPEED_NOTE {
-        return;
-    }
+/// What the speed note says for `change` (#385).
+fn speed_text(change: SpeedChange, speeds: &crate::settings::Viewport) -> String {
     let fly = crate::panels::properties::number(f64::from(speeds.fly_speed));
-    let text = match change {
+    match change {
         SpeedChange::Fly => format!("Fly speed  {fly} studs/s"),
         SpeedChange::Secondary => {
             let fast = crate::panels::properties::number(f64::from(speeds.fly_speed * speeds.secondary_speed));
             let times = crate::panels::properties::number(f64::from(speeds.secondary_speed));
             format!("Secondary speed  \u{D7}{times}  ({fast} studs/s)")
         }
+    }
+}
+
+/// The camera speed the wheel just changed (#385), or the Select tool's mode just chosen (#467), whichever is newer,
+/// in small plain text in the bottom-left corner for a moment, with a faint shadow to read on a bright sky, as Forge's.
+fn note(
+    painter: &Painter,
+    rect: egui::Rect,
+    viewport: &ViewportState,
+    mode: crate::viewport::select::SelectMode,
+    speeds: &crate::settings::Viewport,
+) {
+    let speed = viewport.speed_note.filter(|(_, when)| when.elapsed() < SPEED_NOTE);
+    let chosen = viewport.mode_note.filter(|when| when.elapsed() < SPEED_NOTE);
+    let text = match (speed, chosen) {
+        (Some((change, said)), Some(when)) if said >= when => speed_text(change, speeds),
+        (_, Some(_)) => format!("Select mode  {}", mode.label()),
+        (Some((change, _)), None) => speed_text(change, speeds),
+        (None, None) => return,
     };
     let at = rect.left_bottom() + egui::vec2(14.0, -12.0);
     let font = FontId::proportional(text::BODY);
@@ -194,8 +207,9 @@ impl Panel for Viewport {
                 outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent));
             }
             tools::paint(&painter, &view, &editor.scene(), &gizmo, snap);
+            let gizmo_mode = gizmo.select_mode;
             editor.viewport.gizmo = gizmo;
-            speed_note(&painter, rect, &editor.viewport, &cx.settings.viewport);
+            note(&painter, rect, &editor.viewport, gizmo_mode, &cx.settings.viewport);
         }
         // Which way the axes point (#386), unless the Viewport's menu turned it off (#387).
         if cx.settings.viewport.show_axes {
