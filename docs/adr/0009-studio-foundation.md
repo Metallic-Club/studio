@@ -482,6 +482,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **The wheel over a drop-down (#469)**: over an enum's drop-down in Properties, a wheel notch down picks the next item
   and up the one before (a trackpad's scroll adds up to notches, `values::wheel_steps`); the panel does not scroll
   meanwhile, and the change undoes as any edit.
+- **A drag from the floor boxes, by visual centre (#474)**: a drag that starts on a part not selected draws a box
+  (only a drag on a selected part carries, #358), so the floor under the parts being boxed is no longer picked up.
+  Box and Lasso pick by each part's visual centre: the middle of its on-screen bounding box, clipped to the viewport
+  (`select::visual_box`), so a box round the parts on a floor leaves the floor out, and a part partly behind the
+  camera can be picked too.
 
 ## Not in this slice
 

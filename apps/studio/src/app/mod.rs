@@ -3362,11 +3362,11 @@ mod tests {
         settle(&mut harness);
         let mode = |harness: &Harness<'_, Test>| harness.state().studio.editor().unwrap().viewport.gizmo.select_mode;
         let spawn = on_screen(&harness, "SpawnLocation");
-        // Box (#467): from the sky, round the spawn but not the whole baseplate.
+        // Box (#467): from the sky down round the spawn's middle, short of the baseplate's just below it (#474).
         let top = sky(&harness);
         trail(
             &mut harness,
-            &[egui::pos2(spawn.x - 220.0, top.y), spawn + egui::vec2(220.0, 90.0)],
+            &[egui::pos2(spawn.x - 100.0, top.y), spawn + egui::vec2(100.0, 35.0)],
         );
         assert_eq!(selected_names(&harness), ["SpawnLocation"]);
         left_click(&mut harness, egui::Rect::from_center_size(top, egui::Vec2::ZERO));
@@ -3386,7 +3386,7 @@ mod tests {
         );
         assert!(said, "the mode shown");
         // A lasso round the spawn's middle, starting on the baseplate: it draws rather than carries.
-        let r = 60.0;
+        let r = 40.0;
         let around: Vec<egui::Pos2> = (0..=8)
             .map(|i| {
                 let a = i as f32 * std::f32::consts::TAU / 8.0;
@@ -3440,6 +3440,44 @@ mod tests {
     }
 
     #[test]
+    fn a_drag_from_the_floor_boxes_the_parts_on_it_and_not_the_floor() {
+        let mut harness = editing(settings_file("editor-box-floor", None), "Box Floor Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let floor = || {
+            move |harness: &Harness<'_, Test>| {
+                let editor = harness.state().studio.editor().unwrap();
+                let workspace = crate::viewport::pick::workspace(&editor.dm).unwrap();
+                let id = editor
+                    .dm
+                    .find_first_child(workspace, "Baseplate", false)
+                    .unwrap()
+                    .unwrap();
+                crate::viewport::position_of(&editor.dm, id).unwrap()
+            }
+        };
+        let at = floor();
+        let before = at(&harness);
+        // From the floor beside the spawn, round the spawn: a box, not a carry of the floor (#474). Its middle is
+        // inside, the floor's (further down the screen) is not.
+        let spawn = on_screen(&harness, "SpawnLocation");
+        trail(
+            &mut harness,
+            &[spawn + egui::vec2(-100.0, 35.0), spawn + egui::vec2(100.0, -60.0)],
+        );
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        assert_eq!(at(&harness), before, "the floor stays put");
+        // A box over the spawn's edge alone, short of its middle, picks nothing.
+        let top = sky(&harness);
+        left_click(&mut harness, egui::Rect::from_center_size(top, egui::Vec2::ZERO));
+        trail(
+            &mut harness,
+            &[egui::pos2(spawn.x - 100.0, top.y), spawn + egui::vec2(100.0, -15.0)],
+        );
+        assert!(selected_names(&harness).is_empty(), "{:?}", selected_names(&harness));
+    }
+
+    #[test]
     fn a_drag_from_nothing_box_selects_with_any_tool() {
         use crate::viewport::select::SelectMode;
 
@@ -3448,7 +3486,7 @@ mod tests {
         settle(&mut harness);
         let spawn = on_screen(&harness, "SpawnLocation");
         let top = sky(&harness);
-        let corners = [egui::pos2(spawn.x - 220.0, top.y), spawn + egui::vec2(220.0, 90.0)];
+        let corners = [egui::pos2(spawn.x - 100.0, top.y), spawn + egui::vec2(100.0, 35.0)];
         // The Move tool, then none (the Select tool chosen twice), then the Select tool in Lasso mode: a drag from
         // the sky boxes in each (#468), as the Select tool's own Box mode does.
         for (keys, tool) in [
@@ -3496,8 +3534,10 @@ mod tests {
         };
         let at = spawn();
         let before = at(&harness);
-        // Not selected yet: the drag selects it, and carries it over the baseplate, still sitting on it.
+        // Selected, a drag on it carries it over the baseplate, still sitting on it (a drag on a part not selected
+        // boxes, #474).
         let from = on_screen(&harness, "SpawnLocation");
+        left_click(&mut harness, egui::Rect::from_center_size(from, egui::Vec2::ZERO));
         drag(&mut harness, from, from + egui::vec2(120.0, 40.0));
         assert_eq!(selected_names(&harness), ["SpawnLocation"]);
         let after = at(&harness);

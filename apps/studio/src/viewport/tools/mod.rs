@@ -174,12 +174,14 @@ impl Gizmo {
         self.tool = Some(Tool::Select);
     }
 
-    /// The mode a selecting drag starting on a part (`on_part`) has, or none when it carries the part instead: the
-    /// Select tool's Lasso and Paint start anywhere; a box starts on nothing, whatever the tool, or with none (#468).
-    fn gesture_mode(&self, on_part: bool) -> Option<SelectMode> {
+    /// The mode a selecting drag has, or none when it carries the selection instead (`on_selected`: it starts on a
+    /// part that is selected, or inside something selected): the Select tool's Lasso and Paint start anywhere; a box
+    /// starts anywhere else, a part not selected included (#474: the floor under the parts being boxed), whatever
+    /// the tool, or with none (#468).
+    fn gesture_mode(&self, on_selected: bool) -> Option<SelectMode> {
         match (self.tool, self.select_mode) {
             (Some(Tool::Select), SelectMode::Lasso | SelectMode::Paint) => Some(self.select_mode),
-            _ if !on_part => Some(SelectMode::Box),
+            _ if !on_selected => Some(SelectMode::Box),
             _ => None,
         }
     }
@@ -448,20 +450,14 @@ pub fn interact(
         gizmo.drag = match (handle, ray) {
             (Some((frame, handle)), Some(ray)) => begin_drag(scene.dm, handle, frame, ray, &targets),
             (None, Some(ray)) => {
-                let picked = pick::pick(scene.dm, ray);
-                // Off the handles, a selecting drag (#467), or else a drag on a part carries it (#358), selected
-                // first if it was not.
-                match gizmo.gesture_mode(picked.is_some()).zip(origin) {
+                // Off the handles, a selecting drag (#467), or a drag on a selected part carries the selection (#358).
+                let on_selected = pick::pick(scene.dm, ray).is_some_and(|id| scene.selection.contains(id));
+                match gizmo.gesture_mode(on_selected).zip(origin) {
                     Some((mode, at)) => {
                         gizmo.gesture = Some(Gesture::start(mode, at));
                         None
                     }
-                    None => {
-                        if let Some(picked) = picked.filter(|&id| !scene.selection.contains(id)) {
-                            scene.selection.set_only(Some(picked));
-                        }
-                        carry(scene.dm, scene.selection, ray)
-                    }
+                    None => carry(scene.dm, scene.selection, ray),
                 }
             }
             _ => None,
