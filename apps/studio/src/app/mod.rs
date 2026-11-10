@@ -4658,6 +4658,30 @@ mod tests {
         harness.get_by_role_and_label(Role::CheckBox, "Axis gizmo").click();
         settle(&mut harness);
         assert!(harness.state().studio.settings().viewport.show_axes);
+        // Its sections fold (#477): View's header hides the axis gizmo's checkbox, and shows it again, the window
+        // staying open throughout.
+        // (The menu bar has a View too: the section's is the one under the dots.)
+        let below = dots.bottom();
+        let section = |harness: &Harness<'static, Test>| {
+            harness
+                .query_all_by_label("View")
+                .filter(|node| node.rect().top() > below)
+                .count()
+        };
+        assert_eq!(section(&harness), 1);
+        let click_section = |harness: &mut Harness<'static, Test>| {
+            harness
+                .query_all_by_label("View")
+                .find(|node| node.rect().top() > below)
+                .expect("the View section")
+                .click();
+            settle(harness);
+        };
+        click_section(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::CheckBox, "Axis gizmo").is_none());
+        assert_eq!(section(&harness), 1, "the header stays");
+        click_section(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::CheckBox, "Axis gizmo").is_some());
         // A click outside it closes it.
         harness.get_by_role_and_label(Role::Tab, "Viewport").click();
         settle(&mut harness);
