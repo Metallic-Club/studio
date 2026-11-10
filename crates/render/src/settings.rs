@@ -217,6 +217,8 @@ impl Quality {
             resolution: 1024,
             distance: 128.0,
             dynamic_cascades: 1,
+            // See-through parts cast no shadow at Low (#122).
+            see_through: false,
             ..ShadowSettings::OFF
         },
         lights: LightSettings::LOW,

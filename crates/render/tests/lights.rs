@@ -376,6 +376,36 @@ fn a_shadowed_light_casts_shadows_from_its_lamp() {
     assert!(behind_lit > behind + 15.0, "{behind_lit} against {behind}");
 }
 
+/// #122: a see-through pillar's shadow from a local light lets light through by its Transparency, above Low; at
+/// Low it casts none, as before.
+#[test]
+fn a_see_through_part_lets_a_lamp_s_light_through_its_shadow() {
+    let Some(context) = gpu() else { return };
+    let (mut game, _, pillar) = shadow_game();
+    let behind = |pixels: &[[u8; 4]], game: &Game| floor_level(game, pixels, 4.0, 0.0);
+    let solid = behind(&render(&context, &mut game, LightSettings::default()), &game);
+    game.dm
+        .set_by_name(pillar, "CastShadow", Value::Bool(false))
+        .expect("CastShadow");
+    let off = behind(&render(&context, &mut game, LightSettings::default()), &game);
+    game.dm
+        .set_by_name(pillar, "CastShadow", Value::Bool(true))
+        .expect("CastShadow");
+    game.dm
+        .set_by_name(pillar, "Transparency", Value::Number(0.5))
+        .expect("Transparency");
+    let half = behind(&render(&context, &mut game, LightSettings::default()), &game);
+    let low = behind(&render(&context, &mut game, LightSettings::LOW), &game);
+    eprintln!("behind the pillar: solid {solid:.1}, no shadow {off:.1}, 0.5 {half:.1}, Low at 0.5 {low:.1}");
+    let depth = off - solid;
+    assert!(depth > 15.0, "the solid pillar casts a shadow");
+    assert!(
+        half > solid + depth * 0.2 && half < off - depth * 0.2,
+        "0.5 is not about half the shadow ({half})"
+    );
+    assert!((low - off).abs() < 3.0, "Low drew the see-through shadow ({low})");
+}
+
 /// A shadowed spot wider than one shadow tile covers (180°, #437) is shadowed all round: far off its axis, beyond a
 /// hanging wall, a block's side stays dark, while the same block on the open side is lit. (One tile reached 75° off the
 /// axis, and a point further off read the depth at its edge, here the floor below the wall: nearer, it was lit

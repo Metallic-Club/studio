@@ -109,14 +109,24 @@ pub const MAX_UPLOAD_GAP: u32 = 4;
 /// loading) costs one redraw of every cascade and no memory beyond this.
 pub const MAX_SHADOW_CHANGES: usize = 4096;
 
-/// The flags that decide whether an instance casts a sun shadow.
+/// The flags that decide whether an instance casts a shadow, and how (solid or see-through, #122).
 const SHADOW_FLAGS: u32 = GpuInstance::LIVE | GpuInstance::CAST_SHADOW | GpuInstance::HIDDEN | GpuInstance::TRANSLUCENT;
 
-/// Whether a packed instance casts a sun shadow: live, `CastShadow` on, and solid. See-through parts cast none
-/// yet (their shadows would need the transparent list sorted per cascade).
+/// The flags of [`SHADOW_FLAGS`] a caster has set, solid or see-through.
+const CASTER_FLAGS: u32 = GpuInstance::LIVE | GpuInstance::CAST_SHADOW;
+
+/// Whether a packed instance casts a shadow: live, drawn, and `CastShadow` on. A partly see-through one casts a
+/// shadow that lets light through by its Transparency where the settings draw see-through shadows (#122); see
+/// [`is_see_through`].
 #[inline]
 pub fn is_shadow_caster(instance: &GpuInstance) -> bool {
-    instance.flags & SHADOW_FLAGS == GpuInstance::LIVE | GpuInstance::CAST_SHADOW
+    instance.flags & (CASTER_FLAGS | GpuInstance::HIDDEN) == CASTER_FLAGS
+}
+
+/// Whether a packed instance is partly see-through (and so, as a caster, drawn with the see-through casters, #122).
+#[inline]
+pub fn is_see_through(instance: &GpuInstance) -> bool {
+    instance.flags & GpuInstance::TRANSLUCENT != 0
 }
 
 /// One of the scene's two instance regions, each with its own buffer. See the module documentation.

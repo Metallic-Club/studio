@@ -6,12 +6,16 @@ use std::time::{Duration, Instant};
 use metallic_core::glam::{Mat4, Vec3};
 
 use super::cascade::{CascadeCache, CascadeFit, SceneState, fit_cascades};
+use super::see_through::SeeThroughCasters;
 use super::{CascadeStats, MAX_CASCADES, MAX_RECEIVER_OFFSET, ShadowSettings, ShadowStats};
 use crate::context::{DescriptorHeapTurn, in_heap_turn};
 use crate::cull::{Casters, VisibleSet};
 use crate::lod::{self, LodView, MAX_LOD_LEVELS};
 use crate::parts::{Camera, MeshPool, MeshVertex};
-use crate::scene::{GpuInstance, InstanceBinding, MeshKind, Region, bounding_sphere, entry, is_shadow_caster};
+use crate::scene::{
+    GpuInstance, InstanceBinding, MeshKind, Region, TRANSPARENT_LIST, bounding_sphere, entry, is_see_through,
+    is_shadow_caster,
+};
 use crate::textures::{Slot, TextureMaker, TextureSpec};
 use crate::{GpuScene, InstanceScene};
 
@@ -84,6 +88,9 @@ struct CascadeState {
     /// A cached cascade's moving casters this frame, and how many.
     moving: VisibleSet,
     moving_count: u32,
+    /// The see-through casters of `visible` and of `moving`, sorted into draws (#122).
+    see_through: SeeThroughCasters,
+    moving_see_through: SeeThroughCasters,
     /// A cached cascade's map is built this frame: its static map copied in (or restored under the previous moving
     /// casters), the moving casters drawn on top.
     build: bool,
@@ -180,6 +187,8 @@ struct Mover {
     entry: u32,
     kind: u16,
     class: u8,
+    /// Partly see-through: drawn with the see-through casters, where the settings draw them (#122).
+    see_through: bool,
     center: Vec3,
     radius: f32,
 }
@@ -206,11 +215,18 @@ struct ShadowLists {
     offsets: Vec<u32>,
     /// Entries in a cascade's block.
     stride: u32,
+    /// Where the see-through casters' segment starts in a cascade's block, and the entries it holds (0 while the
+    /// settings draw no see-through shadows, #122).
+    see_through_offset: u32,
+    see_through_capacity: u32,
     /// Changes whenever the lists are laid out again (every cached map is drawn again then).
     revision: u64,
-    /// This frame's uploads: list, kind, count. Reused.
+    /// This frame's uploads: list, kind ([`SEE_THROUGH_SEGMENT`] for the see-through casters), count. Reused.
     ranges: Vec<(Block, usize, u32)>,
 }
+
+/// The kind [`ShadowLists::ranges`] gives the see-through casters' segment (#122).
+const SEE_THROUGH_SEGMENT: usize = usize::MAX;
 
 /// A list of casters a frame uploads: cascade `i`'s casters, or cached cascade `i`'s moving casters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,6 +282,8 @@ pub(crate) struct ShadowMaps {
     instance_layout: Option<wgpu::BindGroupLayout>,
     instance_group: Option<InstanceGroup>,
     pipeline: wgpu::RenderPipeline,
+    /// The see-through casters' pipeline (#122).
+    see_through_pipeline: wgpu::RenderPipeline,
     /// The cached cascades' static maps, the first cached cascade's first (empty when every cascade is dynamic).
     static_maps: Vec<StaticMap>,
     copy_layout: wgpu::BindGroupLayout,
@@ -340,6 +358,17 @@ impl ShadowMaps {
             &cascade_layout,
             instance_layout,
             CASCADE_CASTER_BIAS,
+            false,
+        );
+        // Made with the renderer whatever the settings, so turning see-through shadows on compiles nothing.
+        let see_through_pipeline = caster_pipeline(
+            device,
+            cache,
+            binding,
+            &cascade_layout,
+            instance_layout,
+            CASCADE_CASTER_BIAS,
+            true,
         );
         let entry_size = match binding {
             InstanceBinding::Storage => size_of::<u32>() as u64,
@@ -383,6 +412,7 @@ impl ShadowMaps {
             instance_layout: instance_layout.cloned(),
             instance_group: None,
             pipeline,
+            see_through_pipeline,
             static_maps: Vec::new(),
             copy_layout,
             copy_pipeline,
@@ -397,6 +427,8 @@ impl ShadowMaps {
                 gather: binding == InstanceBinding::Vertex,
                 capacities: Vec::new(),
                 offsets: Vec::new(),
+                see_through_offset: 0,
+                see_through_capacity: 0,
                 stride: 0,
                 revision: 0,
                 ranges: Vec::new(),
@@ -636,10 +668,12 @@ impl ShadowMaps {
         scene.clear_shadow_changes();
 
         let mut cull_time = Duration::ZERO;
+        let see_through = self.settings.see_through;
         for (i, cascade) in self.cascades.iter_mut().enumerate().take(count) {
             if cascade.redraw {
                 let casters = if i < dynamic { Casters::All } else { Casters::Static };
-                let stats = scene.cull_casters(&cascade.fit.cull_view(), casters, &mut cascade.visible);
+                let view = cascade.fit.cull_view().with_see_through(see_through);
+                let stats = scene.cull_casters(&view, casters, &mut cascade.visible);
                 cull_time += stats.cpu_time;
                 cascade.casters = stats.visible;
                 cascade.drawings += 1;
@@ -708,6 +742,7 @@ impl ShadowMaps {
                             entry: entry(Region::Dynamic, slot),
                             kind: instance.mesh().0,
                             class: lod::lod_class(instance.mesh()),
+                            see_through: is_see_through(instance),
                             center,
                             radius,
                         }
@@ -717,18 +752,27 @@ impl ShadowMaps {
         }
         let kinds = self.lists.capacities.len();
         let resolution = self.resolution;
+        let see_through = self.settings.see_through;
         for cascade in self.cascades.iter_mut().take(count).skip(dynamic) {
             let set = &mut cascade.moving;
             let levels = cascade.fit.lod;
             let view = FootprintView::new(cascade.fit.clip, resolution);
             // Every kind's list has room for every mover, so the pushes never allocate; nor do the footprints'
             // once they have had room for every mover.
-            set.begin(std::iter::repeat_n(self.movers.len(), kinds), 0, 0, levels.enabled());
+            set.begin(
+                std::iter::repeat_n(self.movers.len(), kinds),
+                self.movers.len(),
+                0,
+                levels.enabled(),
+            );
             let footprints = &mut cascade.next_footprints;
             footprints.clear();
             footprints.reserve(self.movers.len());
             let mut moving = 0u32;
             for mover in &self.movers {
+                if mover.see_through && !see_through {
+                    continue;
+                }
                 if usize::from(mover.kind) < kinds && cascade.fit.frustum.contains_sphere(mover.center, mover.radius) {
                     // At the level the cascade's static casters take (crate::lod).
                     let level = if mover.class != 0 && levels.enabled() {
@@ -736,7 +780,12 @@ impl ShadowMaps {
                     } else {
                         0
                     };
-                    set.push_level(mover.entry, mover.kind, level);
+                    let list = if mover.see_through {
+                        TRANSPARENT_LIST
+                    } else {
+                        mover.kind
+                    };
+                    set.push_level(mover.entry, list, level);
                     footprints.push(view.footprint(mover.center, mover.radius));
                     moving += 1;
                 }
@@ -771,16 +820,23 @@ impl ShadowMaps {
         self.count + cascade.saturating_sub(self.settings.dynamic_count())
     }
 
-    /// Lays the cascades' lists out again when a kind's live list outgrew its segment (or a kind appeared).
+    /// Lays the cascades' lists out again when a kind's live list outgrew its segment (or a kind appeared), or the
+    /// see-through list outgrew the see-through casters' segment, which comes after every kind's (#122).
     fn layout_lists(&mut self, scene: &GpuScene) {
         let instances = scene.scene();
         let kinds = instances.draw_list_count();
+        let see_through = if self.settings.see_through {
+            u32::try_from(instances.transparent_list().len()).unwrap_or(u32::MAX)
+        } else {
+            0
+        };
         let lists = &mut self.lists;
         let outgrown = lists.capacities.len() < kinds
             || (0..kinds).any(|kind| {
                 let len = instances.draw_list(MeshKind(kind as u16)).len();
                 len > lists.capacities[kind] as usize
-            });
+            })
+            || see_through > lists.see_through_capacity;
         if !outgrown {
             return;
         }
@@ -796,6 +852,14 @@ impl ShadowMaps {
             lists.offsets[kind] = first;
             first = first.saturating_add(capacity);
         }
+        if see_through > 0 {
+            lists.see_through_capacity = lists
+                .see_through_capacity
+                .max(see_through.checked_next_power_of_two().unwrap_or(u32::MAX))
+                .max(MIN_LIST_CAPACITY);
+        }
+        lists.see_through_offset = first;
+        first = first.saturating_add(lists.see_through_capacity);
         lists.stride = first;
         // A block per cascade, then one per cached cascade for its moving casters.
         let blocks = self.count.max(1) + self.static_maps.len();
@@ -821,15 +885,38 @@ impl ShadowMaps {
         if self.footprint_buffer.size() < footprint_bytes {
             self.footprint_buffer = footprint_buffer(&self.device, footprint_bytes.next_power_of_two());
         }
+        let instances = scene.scene();
+        let room = self.lists.see_through_capacity as usize;
+        // The see-through casters, sorted into draws (#122): empty while the settings draw none.
+        for cascade in self.cascades.iter_mut().take(self.active) {
+            if cascade.redraw {
+                cascade.see_through.gather(&cascade.visible, instances, room, None);
+            }
+            if cascade.build {
+                cascade
+                    .moving_see_through
+                    .gather(&cascade.moving, instances, room, None);
+            }
+        }
         let lists = &mut self.lists;
         lists.ranges.clear();
         let mut total = 0u64;
         for (index, cascade) in self.cascades.iter().enumerate().take(self.active) {
             let sets = [
-                (cascade.redraw, &cascade.visible, Block::Casters(index)),
-                (cascade.build, &cascade.moving, Block::Moving(index)),
+                (
+                    cascade.redraw,
+                    &cascade.visible,
+                    &cascade.see_through,
+                    Block::Casters(index),
+                ),
+                (
+                    cascade.build,
+                    &cascade.moving,
+                    &cascade.moving_see_through,
+                    Block::Moving(index),
+                ),
             ];
-            for (drawn, set, block) in sets {
+            for (drawn, set, see_through, block) in sets {
                 if !drawn {
                     continue;
                 }
@@ -839,6 +926,11 @@ impl ShadowMaps {
                         lists.ranges.push((block, kind, count));
                         total += u64::from(count);
                     }
+                }
+                if !see_through.is_empty() {
+                    let count = u32::try_from(see_through.len()).unwrap_or(u32::MAX);
+                    lists.ranges.push((block, SEE_THROUGH_SEGMENT, count));
+                    total += u64::from(count);
                 }
             }
         }
@@ -852,13 +944,24 @@ impl ShadowMaps {
         let Some(mut view) = self.queue.write_buffer_with(&lists.staging, 0, size) else {
             return;
         };
-        let instances = scene.scene();
         let mut offset = 0usize;
         for &(block, kind, _) in &lists.ranges {
-            let set = match block {
-                Block::Casters(index) => &self.cascades[index].visible,
-                Block::Moving(index) => &self.cascades[index].moving,
+            let (set, see_through) = match block {
+                Block::Casters(index) => (&self.cascades[index].visible, &self.cascades[index].see_through),
+                Block::Moving(index) => (&self.cascades[index].moving, &self.cascades[index].moving_see_through),
             };
+            if kind == SEE_THROUGH_SEGMENT {
+                for entry in see_through.entries() {
+                    let bytes = if lists.gather {
+                        bytemuck::bytes_of(instances.entry_instance(entry).unwrap_or(&GpuInstance::FREE))
+                    } else {
+                        bytemuck::bytes_of(&entry)
+                    };
+                    view.slice(offset..offset + bytes.len()).copy_from_slice(bytes);
+                    offset += bytes.len();
+                }
+                continue;
+            }
             let kind = MeshKind(kind as u16);
             let capacity = lists.capacities.get(usize::from(kind.0)).copied().unwrap_or(0);
             for (level, n) in level_counts(set, kind, capacity).into_iter().enumerate() {
@@ -893,7 +996,12 @@ impl ShadowMaps {
                 Block::Moving(index) => self.moving_block(index),
             };
             let lists = &self.lists;
-            let first = index as u64 * u64::from(lists.stride) + u64::from(lists.offsets[kind]);
+            let segment = if kind == SEE_THROUGH_SEGMENT {
+                lists.see_through_offset
+            } else {
+                lists.offsets[kind]
+            };
+            let first = index as u64 * u64::from(lists.stride) + u64::from(segment);
             let bytes = u64::from(count) * lists.entry_size;
             encoder.copy_buffer_to_buffer(&lists.staging, source, &lists.buffer, first * lists.entry_size, bytes);
             source += bytes;
@@ -961,7 +1069,7 @@ impl ShadowMaps {
         let Some(state) = self.cascades.get(cascade) else {
             return (0, 0, 0);
         };
-        self.draw_list(cascade, cascade, &state.visible, meshes, pass)
+        self.draw_list(cascade, cascade, (&state.visible, &state.see_through), meshes, pass)
     }
 
     /// Whether cached cascade `cascade`'s build this frame keeps what its map holds and restores only the footprints
@@ -1000,15 +1108,22 @@ impl ShadowMaps {
         if state.moving_count == 0 {
             return (0, 0, 0);
         }
-        self.draw_list(cascade, self.moving_block(cascade), &state.moving, meshes, pass)
+        self.draw_list(
+            cascade,
+            self.moving_block(cascade),
+            (&state.moving, &state.moving_see_through),
+            meshes,
+            pass,
+        )
     }
 
-    /// Records the casters `set` holds, uploaded to list block `block`, seen from cascade `cascade`.
+    /// Records the casters `set` holds, and its see-through casters as gathered (#122), uploaded to list block
+    /// `block`, seen from cascade `cascade`.
     fn draw_list(
         &self,
         cascade: usize,
         block: usize,
-        set: &VisibleSet,
+        (set, see_through): (&VisibleSet, &SeeThroughCasters),
         meshes: &MeshPool,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> (u32, u32, u64) {
@@ -1047,6 +1162,26 @@ impl ShadowMaps {
                 draws += 1;
                 instances += count;
                 triangles += u64::from(count) * u64::from(mesh.index_count / 3);
+            }
+        }
+        if !see_through.is_empty() {
+            // The same bind groups and buffers: the see-through pipeline's layout is the solid one's.
+            pass.set_pipeline(&self.see_through_pipeline);
+            let first = block + self.lists.see_through_offset;
+            for run in see_through.runs() {
+                let mesh = meshes.range(run.kind, usize::from(run.level));
+                if mesh.index_count == 0 {
+                    continue;
+                }
+                let start = first + run.first;
+                pass.draw_indexed(
+                    mesh.first_index..mesh.first_index + mesh.index_count,
+                    0,
+                    start..start + run.count,
+                );
+                draws += 1;
+                instances += run.count;
+                triangles += u64::from(run.count) * u64::from(mesh.index_count / 3);
             }
         }
         (draws, instances, triangles)
@@ -1259,6 +1394,9 @@ fn staging_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
 /// depth right where the parts touch, and the receivers' bias lit a band along every contact (#126). A front face is
 /// a whole part's thickness nearer the light than anything it shades. Parts are closed solids, so every caster has
 /// front faces.
+///
+/// With `see_through`, the pipeline of see-through casters (#122): a fragment stage leaves out a share of each
+/// caster's texels as large as its Transparency (shadow.wgsl).
 pub(crate) fn caster_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -1266,6 +1404,7 @@ pub(crate) fn caster_pipeline(
     cascade_layout: &wgpu::BindGroupLayout,
     instance_layout: Option<&wgpu::BindGroupLayout>,
     bias: wgpu::DepthBiasState,
+    see_through: bool,
 ) -> wgpu::RenderPipeline {
     let source = match binding {
         InstanceBinding::Storage => concat!(include_str!("shadow.wgsl"), include_str!("shadow_storage.wgsl")),
@@ -1301,7 +1440,7 @@ pub(crate) fn caster_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &module,
-            entry_point: Some("vs_shadow"),
+            entry_point: Some(if see_through { "vs_see_through" } else { "vs_shadow" }),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers,
         },
@@ -1319,7 +1458,14 @@ pub(crate) fn caster_pipeline(
             bias,
         }),
         multisample: wgpu::MultisampleState::default(),
-        fragment: None,
+        // Solid casters have no fragment stage, which keeps early depth testing; see-through ones leave out texels
+        // by their Transparency (#122).
+        fragment: see_through.then_some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_see_through"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[],
+        }),
         multiview_mask: None,
         cache,
     })

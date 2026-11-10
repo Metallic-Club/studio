@@ -17,7 +17,7 @@ use crate::scene::{
     DYNAMIC_ENTRY, GpuInstance, InstanceBinding, InstanceScene, MeshKind, Region, SceneLight, bounding_sphere, entry,
     is_shadow_caster,
 };
-use crate::shadow::{SHADOW_FORMAT, caster_pipeline};
+use crate::shadow::{SHADOW_FORMAT, SeeThroughCasters, caster_pipeline};
 use crate::textures::{Made, TextureMaker, TextureSpec, Ticket};
 
 /// Texels kept clear around a tile's face, so the filter's taps near its edge stay inside the tile.
@@ -284,10 +284,15 @@ pub(crate) struct ShadowAtlas {
     /// Per drawn light: it is one of the frame's shadowed lights.
     targets: Vec<bool>,
     jobs: Vec<Job>,
-    /// This frame's caster entries, every job's in turn, and the draws over them: (job, kind, level, first, count).
+    /// This frame's caster entries, every job's in turn, and the draws over them: (job, kind, level, first, count,
+    /// see-through, #122).
     list: Vec<u32>,
     gathered: Vec<GpuInstance>,
-    ranges: Vec<(u16, u16, u8, u32, u32)>,
+    ranges: Vec<(u16, u16, u8, u32, u32, bool)>,
+    /// A job's see-through casters, sorted into draws (#122).
+    see_through_casters: SeeThroughCasters,
+    /// The settings draw see-through casters' shadows (#122).
+    see_through: bool,
     /// The casters' lists on the GPU, made with the first tile drawn.
     list_buffer: Option<wgpu::Buffer>,
     visible: VisibleSet,
@@ -296,6 +301,8 @@ pub(crate) struct ShadowAtlas {
     dynamic_revision: Option<u64>,
     caster_data: Vec<[f32; (UNIFORM_STRIDE / 4) as usize]>,
     caster: wgpu::RenderPipeline,
+    /// The see-through casters' pipeline (#122).
+    see_through_pipeline: wgpu::RenderPipeline,
     clear: wgpu::RenderPipeline,
     instance_layout: Option<wgpu::BindGroupLayout>,
     instance_group: Option<InstanceGroup>,
@@ -332,7 +339,24 @@ impl ShadowAtlas {
         });
         let (resolution, tile, per_row, capacity) = layout(device, settings);
         // The pipelines are made now, with the renderer (no hitch when the first shadow appears); the memory waits.
-        let caster = caster_pipeline(device, cache, binding, &caster_layout, instance_layout, CASTER_BIAS);
+        let caster = caster_pipeline(
+            device,
+            cache,
+            binding,
+            &caster_layout,
+            instance_layout,
+            CASTER_BIAS,
+            false,
+        );
+        let see_through_pipeline = caster_pipeline(
+            device,
+            cache,
+            binding,
+            &caster_layout,
+            instance_layout,
+            CASTER_BIAS,
+            true,
+        );
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -355,12 +379,15 @@ impl ShadowAtlas {
             list: Vec::new(),
             gathered: Vec::new(),
             ranges: Vec::new(),
+            see_through_casters: SeeThroughCasters::default(),
+            see_through: settings.see_through_shadows,
             list_buffer: None,
             visible: VisibleSet::new(),
             dynamic: Vec::new(),
             dynamic_revision: None,
             caster_data: Vec::new(),
             caster,
+            see_through_pipeline,
             clear: clear_pipeline(device, cache),
             instance_layout: instance_layout.cloned(),
             instance_group: None,
@@ -467,6 +494,13 @@ impl ShadowAtlas {
     /// atlas before it until it is made, and every tile is drawn again into it then. Without an atlas yet, the next
     /// frame with a shadow makes it at that size.
     pub(crate) fn configure(&mut self, settings: &LightSettings) {
+        if settings.see_through_shadows != self.see_through {
+            // Every tile holds the casters of the old rule: draw them again.
+            self.see_through = settings.see_through_shadows;
+            for cache in &mut self.caches {
+                cache.valid = false;
+            }
+        }
         let layout = layout(&self.device, settings);
         if let Some(incoming) = self.incoming.take() {
             self.maker.cancel(incoming.ticket);
@@ -814,7 +848,11 @@ impl ShadowAtlas {
                 lod: job.lod,
                 ..CullView::from_frustum(Frustum::from_clip(job.view.clip), job.view.eye, job.view.forward)
             };
-            scene.cull_casters(&view, Casters::All, &mut self.visible);
+            scene.cull_casters(
+                &view.with_see_through(self.see_through),
+                Casters::All,
+                &mut self.visible,
+            );
             let mut dynamic = false;
             for kind in 0..self.visible.opaque_count() {
                 for level in 0..MAX_LOD_LEVELS {
@@ -828,10 +866,29 @@ impl ShadowAtlas {
                     }
                     let count = self.list.len() - first;
                     if count > 0 {
-                        self.ranges
-                            .push((index as u16, kind as u16, level as u8, first as u32, count as u32));
+                        self.ranges.push((
+                            index as u16,
+                            kind as u16,
+                            level as u8,
+                            first as u32,
+                            count as u32,
+                            false,
+                        ));
                     }
                 }
+            }
+            // The see-through casters after the solid ones (#122), one draw per kind and level.
+            let instances = scene.scene();
+            self.see_through_casters
+                .gather(&self.visible, instances, usize::MAX, job.host);
+            let base = self.list.len() as u32;
+            for e in self.see_through_casters.entries() {
+                dynamic |= e & DYNAMIC_ENTRY != 0;
+                self.list.push(e);
+            }
+            for run in self.see_through_casters.runs() {
+                self.ranges
+                    .push((index as u16, run.kind.0, run.level, base + run.first, run.count, true));
             }
             if let Some(cache) = self.caches.get_mut(usize::from(job.tile)) {
                 *cache = TileCache {
@@ -944,11 +1001,17 @@ impl ShadowAtlas {
                 }
                 InstanceBinding::Vertex => pass.set_vertex_buffer(1, list.slice(..)),
             }
-            while let Some(&&(job_index, kind, level, first, count)) = ranges.peek() {
+            let mut see_through = false;
+            while let Some(&&(job_index, kind, level, first, count, see)) = ranges.peek() {
                 if usize::from(job_index) != index {
                     break;
                 }
                 ranges.next();
+                if see != see_through {
+                    // The same bind groups and buffers: the see-through pipeline's layout is the solid one's.
+                    see_through = see;
+                    pass.set_pipeline(if see { &self.see_through_pipeline } else { &self.caster });
+                }
                 let mesh = meshes.range(MeshKind(kind), usize::from(level));
                 if mesh.index_count == 0 {
                     continue;

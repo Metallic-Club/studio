@@ -343,6 +343,41 @@ fn cast_shadow_and_global_shadows_turn_shadows_off() {
     assert_eq!(scenes::compare(&global_off, &off, 0).max, 0);
 }
 
+/// #122: a see-through part's shadow lets light through by its Transparency (a little see-through, a little light;
+/// half, about half), above Low; at Low it casts none, as before.
+#[test]
+fn a_see_through_part_lets_light_through_its_shadow() {
+    let Some(context) = gpu() else { return };
+    let mut built = shadow_game();
+    let (shadowed, _) = floor_points(&built.game);
+    let off = level(&render(&context, &mut built.game, ShadowSettings::OFF), shadowed);
+    let solid = level(&render(&context, &mut built.game, ShadowSettings::default()), shadowed);
+    let at = |game: &mut Game, transparency: f64, shadows: ShadowSettings| {
+        game.dm
+            .set_by_name(built.pillar, "Transparency", Value::Number(transparency))
+            .expect("Transparency");
+        level(&render(&context, game, shadows), shadowed)
+    };
+    let faint = at(&mut built.game, 0.01, ShadowSettings::default());
+    let half = at(&mut built.game, 0.5, ShadowSettings::default());
+    let mostly = at(&mut built.game, 0.9, ShadowSettings::default());
+    let low = at(&mut built.game, 0.5, Quality::LOW.shadows);
+    eprintln!(
+        "no shadow {off:.1}, solid {solid:.1}; 0.01 {faint:.1}, 0.5 {half:.1}, 0.9 {mostly:.1}; Low at 0.5 {low:.1}"
+    );
+    let depth = off - solid;
+    assert!(depth > 10.0, "the solid pillar casts a shadow");
+    // 0.01 is still nearly all of the shadow; 0.5 about half of it; 0.9 little of it.
+    assert!(faint < solid + depth * 0.1, "0.01 lets too much through ({faint})");
+    assert!(
+        half > solid + depth * 0.25 && half < off - depth * 0.25,
+        "0.5 is not about half the shadow ({half})"
+    );
+    assert!(mostly > off - depth * 0.3, "0.9 lets too little through ({mostly})");
+    // Low draws no see-through casters (and the pillar is the only one here).
+    assert!((low - off).abs() < 3.0, "Low drew the see-through shadow ({low})");
+}
+
 #[test]
 fn the_vertex_buffer_fallback_draws_the_same_shadows() {
     let Some(primary) = gpu() else { return };
