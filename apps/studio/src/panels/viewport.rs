@@ -180,7 +180,8 @@ impl Panel for Viewport {
             }
             let painter = ui.painter().with_clip_rect(rect);
             let accent = current_colors(ui.ctx()).accent;
-            if let Some(id) = hovered.filter(|&id| !editor.selection.contains(id)) {
+            // Under the pointer, faintly, while a tool is active (#466).
+            if let Some(id) = hovered.filter(|&id| gizmo.tool.is_some() && !editor.selection.contains(id)) {
                 outline(
                     &painter,
                     &view,

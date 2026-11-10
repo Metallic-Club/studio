@@ -441,7 +441,12 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Opens Insert Object, to add something inside the selected instance (in Workspace with nothing selected).",
         )
     },
-    tool(ids::TOOL_SELECT, "Select tool", "Selects with a click.", &["1"]),
+    tool(
+        ids::TOOL_SELECT,
+        "Select tool",
+        "Selects with a click. Chosen again, no tool is active.",
+        &["1"],
+    ),
     tool(ids::TOOL_MOVE, "Move tool", "Moves the selection with handles.", &["2"]),
     tool(
         ids::TOOL_SCALE,

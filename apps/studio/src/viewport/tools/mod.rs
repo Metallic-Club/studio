@@ -117,10 +117,11 @@ pub struct Drag {
 }
 
 /// The tool, its axes and what the pointer does with the gizmo: the viewport's part of the editor.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Gizmo {
-    /// The active tool.
-    pub tool: Tool,
+    /// The active tool: none once the Select tool is chosen again (#466), when the viewport only selects with a click
+    /// and outlines nothing under the pointer.
+    pub tool: Option<Tool>,
     /// Whether the handles follow the active instance's axes rather than the world's.
     pub local: bool,
     /// The handle under the pointer.
@@ -129,7 +130,32 @@ pub struct Gizmo {
     drag: Option<Drag>,
 }
 
+impl Default for Gizmo {
+    fn default() -> Self {
+        Self {
+            tool: Some(Tool::Select),
+            local: false,
+            hover: None,
+            drag: None,
+        }
+    }
+}
+
 impl Gizmo {
+    /// Chooses `tool`: the Select tool chosen while it is the active one turns it off (#466).
+    pub fn choose(&mut self, tool: Tool) {
+        self.tool = if tool == Tool::Select && self.tool == Some(Tool::Select) {
+            None
+        } else {
+            Some(tool)
+        };
+    }
+
+    /// The tool whose handles show: with none active, the Select tool's (it has none).
+    fn handles(&self) -> Tool {
+        self.tool.unwrap_or(Tool::Select)
+    }
+
     /// Whether a handle is being dragged.
     pub fn is_dragging(&self) -> bool {
         self.drag.is_some()
@@ -364,17 +390,18 @@ pub fn interact(
         return true;
     }
     let targets = targets(scene.dm, scene.selection);
-    let frame = frame_for(scene.dm, gizmo.tool, gizmo.local, &targets, view.pos);
+    let tool = gizmo.handles();
+    let frame = frame_for(scene.dm, tool, gizmo.local, &targets, view.pos);
     gizmo.hover = frame
         .zip(response.hover_pos())
-        .and_then(|(frame, at)| hit(gizmo.tool, &frame, view, at));
+        .and_then(|(frame, at)| hit(tool, &frame, view, at));
     let alt = ui.input(|input| input.modifiers.alt);
     if response.drag_started_by(egui::PointerButton::Primary) && !alt {
         let origin = ui.input(|input| input.pointer.press_origin());
         let ray = origin.and_then(|at| view.ray(at));
         let handle = frame
             .zip(origin)
-            .and_then(|(frame, at)| Some((frame, hit(gizmo.tool, &frame, view, at)?)));
+            .and_then(|(frame, at)| Some((frame, hit(tool, &frame, view, at)?)));
         gizmo.drag = match (handle, ray) {
             (Some((frame, handle)), Some(ray)) => begin_drag(scene.dm, handle, frame, ray, &targets),
             // Off the handles, a drag on a part carries it (#358), selected first if it was not.
@@ -404,10 +431,10 @@ pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo, s
         return;
     }
     let targets = targets(scene.dm, scene.selection);
-    let Some(frame) = frame_for(scene.dm, gizmo.tool, gizmo.local, &targets, view.pos) else {
+    let Some(frame) = frame_for(scene.dm, gizmo.handles(), gizmo.local, &targets, view.pos) else {
         return;
     };
-    match gizmo.tool {
+    match gizmo.handles() {
         Tool::Move => moving::paint(painter, view, &frame, gizmo.hover),
         Tool::Scale => scale::paint(painter, view, &frame, gizmo.hover, targets.len() > 1),
         Tool::Rotate => rotate::paint(painter, view, &frame, gizmo.hover),

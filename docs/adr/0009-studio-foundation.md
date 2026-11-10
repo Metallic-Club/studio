@@ -469,6 +469,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   no accessible name, so a screen reader announced a bare control; each is named after its setting, as the toolbar's
   tab alignment is. A test checks every page with kittest's accessibility check.
 
+### The list of 2026-11-10 (#466-#469)
+
+- **The Select tool turns off (#466)**: chosen while it is the active tool (its button or 1), it leaves none active
+  (`Gizmo::tool` is optional): a click still selects, and nothing under the pointer is outlined.
+
 ## Not in this slice
 
 The script editor, Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in
