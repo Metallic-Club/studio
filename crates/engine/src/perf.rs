@@ -838,26 +838,158 @@ fn draw_graphics_line(overlay: &mut Overlay, x0: f32, y: f32, graphics: &Graphic
     }
 }
 
-/// Clears `overlay` and draws the performance overlay at its top-left corner: frame time with p50, p99 and the
-/// 1% low; script, physics, render and cull CPU time; GPU time per pass; the shadow cascades; the point and spot
-/// lights (in the scene, in view, drawn, fading, shadowed) and their CPU and atlas cost; draws, instances and
-/// triangles per pass and the instances culled; the graphics settings in effect (`graphics`: the preset and its
-/// tier, or Auto's calibration while it runs, the render scale and size drawn, and dynamic resolution's range and
-/// target); the pipelines compiled and still compiling, and the spike counter (frames over twice the frame target
-/// since the first 2 s, and the slowest); and a graph of the last [`GRAPH_FRAMES`] frame times (green within 60 fps,
-/// yellow within 30, red beyond; guides at 16.7 and 33.3 ms). `summary` is usually refreshed a few times a second;
-/// the graph, the spikes and the "now" numbers come from `stats` every frame. Allocates nothing.
-pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSummary, graphics: &GraphicsStatus) {
-    overlay.clear();
-    let (x0, y0) = (12.0, 12.0);
-    let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
-    // Wide enough for the graph and for the longest line of text (about 74 characters).
-    let width = (GRAPH_FRAMES as f32 * BAR).max(76.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE) + 16.0;
-    let lines = 15.0;
-    overlay.rect(x0 - 8.0, y0 - 8.0, width, lines * line + GRAPH_HEIGHT + 24.0, PANEL);
+/// One of the performance overlay's four viewers (#479): a part of it that can be shown on its own or with the
+/// others. Players toggle each with Shift and F1 to F4 (F3 alone shows them all); Studio's viewport has them in its
+/// options' Debug section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StatsViewer {
+    /// The frame rate: the frame time with p50, p99 and the 1% low, the spikes, and the frame-time graph.
+    FrameRate,
+    /// The draw calls: draws, instances and triangles per pass, the instances culled.
+    Draws,
+    /// The lights and shadows: the sun's cascades, the local lights and their shadow atlas.
+    Lighting,
+    /// The graphics: the preset and tier, the render scale and size, the post chain, the pipelines, the CPU and GPU
+    /// time.
+    Graphics,
+}
 
+impl StatsViewer {
+    /// Every viewer, in the order they stack down the screen (and of their keys, F1 to F4).
+    pub const ALL: [StatsViewer; 4] = [
+        StatsViewer::FrameRate,
+        StatsViewer::Draws,
+        StatsViewer::Lighting,
+        StatsViewer::Graphics,
+    ];
+
+    /// Its name, as a menu shows it.
+    pub fn name(self) -> &'static str {
+        match self {
+            StatsViewer::FrameRate => "Frame rate",
+            StatsViewer::Draws => "Draw calls",
+            StatsViewer::Lighting => "Lights and shadows",
+            StatsViewer::Graphics => "Graphics",
+        }
+    }
+
+    fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// Which of the overlay's viewers are shown ([`StatsViewer`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct StatsViewers(u8);
+
+impl StatsViewers {
+    /// None: the overlay is off.
+    pub const NONE: Self = Self(0);
+    /// All four: the whole performance overlay.
+    pub const ALL: Self = Self(0b1111);
+
+    /// Whether `viewer` is shown.
+    pub fn contains(self, viewer: StatsViewer) -> bool {
+        self.0 & viewer.bit() != 0
+    }
+
+    /// Shows or hides `viewer`.
+    pub fn set(&mut self, viewer: StatsViewer, on: bool) {
+        if on {
+            self.0 |= viewer.bit();
+        } else {
+            self.0 &= !viewer.bit();
+        }
+    }
+
+    /// Shows `viewer` if it is hidden, hides it if it is shown.
+    pub fn toggle(&mut self, viewer: StatsViewer) {
+        self.0 ^= viewer.bit();
+    }
+
+    /// Whether none is shown.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The viewers shown, in [`StatsViewer::ALL`]'s order.
+    pub fn iter(self) -> impl Iterator<Item = StatsViewer> {
+        StatsViewer::ALL
+            .into_iter()
+            .filter(move |&viewer| self.contains(viewer))
+    }
+}
+
+/// Clears `overlay` and draws the whole performance overlay at its top-left corner: every viewer
+/// ([`draw_viewers`] with [`StatsViewers::ALL`]). Allocates nothing.
+pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSummary, graphics: &GraphicsStatus) {
+    draw_viewers(overlay, stats, summary, graphics, StatsViewers::ALL);
+}
+
+/// Clears `overlay` and draws the `viewers` shown, each on its own panel, stacked down from the top-left corner
+/// (#479):
+///
+/// - **Frame rate:** frame time with p50, p99 and the 1% low; the spike counter (frames over twice the frame target
+///   since the first 2 s, and the slowest); and a graph of the last [`GRAPH_FRAMES`] frame times (green within
+///   60 fps, yellow within 30, red beyond; guides at 16.7 and 33.3 ms).
+/// - **Draw calls:** draws, instances and triangles per pass and the instances culled.
+/// - **Lights and shadows:** the shadow cascades and their casters; the point and spot lights (in the scene, in view,
+///   drawn, fading, shadowed) and their CPU and atlas cost.
+/// - **Graphics:** the graphics settings in effect (`graphics`: the preset and its tier, or Auto's calibration while
+///   it runs, the render scale and size drawn, and dynamic resolution's range and target); the post chain; the
+///   pipelines compiled and still compiling; script, physics, render and cull CPU time; GPU time per pass.
+///
+/// `summary` is usually refreshed a few times a second; the graph, the spikes and the "now" numbers come from `stats`
+/// every frame. Allocates nothing.
+pub fn draw_viewers(
+    overlay: &mut Overlay,
+    stats: &PerfStats,
+    summary: &PerfSummary,
+    graphics: &GraphicsStatus,
+    viewers: StatsViewers,
+) {
+    overlay.clear();
+    let x0 = 12.0;
+    let mut y = 12.0;
+    for viewer in viewers.iter() {
+        let lines = match viewer {
+            StatsViewer::FrameRate => 3.0,
+            StatsViewer::Draws => 4.0 + f32::from(u8::from(summary.draws.prepass_draws > 0)),
+            StatsViewer::Lighting => 4.0,
+            StatsViewer::Graphics => 5.0,
+        };
+        let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
+        let graph = if viewer == StatsViewer::FrameRate {
+            GRAPH_HEIGHT + 4.0
+        } else {
+            0.0
+        };
+        let height = lines * line + graph + 8.0;
+        overlay.rect(x0 - 8.0, y - 8.0, PANEL_WIDTH, height + 8.0, PANEL);
+        match viewer {
+            StatsViewer::FrameRate => draw_frame_rate(overlay, x0, y, stats, summary),
+            StatsViewer::Draws => draw_draws(overlay, x0, y, summary),
+            StatsViewer::Lighting => draw_lighting(overlay, x0, y, summary),
+            StatsViewer::Graphics => draw_graphics(overlay, x0, y, graphics, summary),
+        }
+        y += height + VIEWER_GAP;
+    }
+}
+
+/// How wide a viewer's panel is: wide enough for the graph and for the longest line of text (about 74 characters).
+const PANEL_WIDTH: f32 = {
+    let graph = GRAPH_FRAMES as f32 * BAR;
+    let text = 76.0 * metallic_render::overlay::GLYPH_ADVANCE * SCALE;
+    (if graph > text { graph } else { text }) + 16.0
+};
+
+/// The space between two viewers' panels.
+const VIEWER_GAP: f32 = 12.0;
+
+/// The frame-rate viewer from `(x0, y)`: the frame time, the spikes, the frames summarised and the graph.
+fn draw_frame_rate(overlay: &mut Overlay, x0: f32, mut y: f32, stats: &PerfStats, summary: &PerfSummary) {
+    let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
     let now = stats.last().copied().unwrap_or_default();
-    let mut y = y0;
     overlay.text_fmt(
         x0,
         y,
@@ -873,45 +1005,14 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
         ),
     );
     y += line;
-    draw_graphics_line(overlay, x0, y, graphics, summary);
-    y += line;
-    let post = &graphics.post;
+    // The frames over twice the frame target since the first 2 s, and the slowest of them.
     overlay.text_fmt(
         x0,
-        y,
-        SCALE,
-        TEXT,
-        format_args!(
-            "POST  {}  AA {}  BLOOM {}  PASSES {} + {} COMPUTE ({} FULL-SCREEN)",
-            post.format_name(),
-            post.anti_aliasing().name(),
-            post.bloom_levels,
-            post.render_passes,
-            post.compute_passes,
-            post.full_screen_passes
-        ),
-    );
-    y += line;
-    // Pipelines compiled and still compiling (background compiles, ADR 0008 §9), then the frames over twice the
-    // frame target since the first 2 s, and the slowest of them.
-    let pipelines = &graphics.pipelines;
-    let (x, _) = overlay.text_fmt(
-        x0,
-        y,
-        SCALE,
-        if pipelines.pending > 0 { SLOW } else { TEXT },
-        format_args!(
-            "PIPELINES {} ({} PENDING) FIRST {:.0} MS",
-            pipelines.compiled, pipelines.pending, pipelines.first_frame_ms
-        ),
-    );
-    overlay.text_fmt(
-        x,
         y,
         SCALE,
         if stats.spikes() > 0 { BAD } else { TEXT },
         format_args!(
-            "  SPIKES {} OVER {:.1} MS  WORST {:.2}",
+            "SPIKES {} OVER {:.1} MS  WORST {:.2}",
             stats.spikes(),
             2.0 * stats.frame_target_ms(),
             stats.worst_frame_ms()
@@ -922,32 +1023,104 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
         x0,
         y,
         SCALE,
-        TEXT,
-        format_args!(
-            "CPU   SCRIPT {:.2}  PHYSICS {:.2}  RENDER {:.2} (CULL {:.2}) MS (P50)",
-            summary.script_ms.p50, summary.physics_ms.p50, summary.render_ms.p50, summary.cull_ms.p50
-        ),
+        DIM,
+        format_args!("{} FRAMES (P50/P99 OVER THE LAST {})", stats.recorded(), summary.frames),
     );
-    y += line;
-    let (mut x, _) = overlay.text_fmt(
+    y += line + 4.0;
+
+    // The graph: one bar per frame, newest on the right.
+    let bottom = y + GRAPH_HEIGHT;
+    let skip = stats.frames.len().saturating_sub(GRAPH_FRAMES);
+    let first = GRAPH_FRAMES - (stats.frames.len() - skip);
+    for (i, frame) in stats.frames().skip(skip).enumerate() {
+        let h = (frame.frame_ms / GRAPH_TOP_MS).min(1.0) * GRAPH_HEIGHT;
+        let x = x0 + (first + i) as f32 * BAR;
+        overlay.rect(x, bottom - h.max(1.0), BAR, h.max(1.0), bar_color(frame.frame_ms));
+    }
+    for guide_ms in [1000.0 / 60.0, 1000.0 / 30.0] {
+        let gy = bottom - (guide_ms / GRAPH_TOP_MS).min(1.0) * GRAPH_HEIGHT;
+        overlay.rect(x0, gy, GRAPH_FRAMES as f32 * BAR, 1.0, GUIDE);
+    }
+}
+
+/// The draw-call viewer from `(x0, y)`: draws, instances and triangles per pass, and the instances culled.
+fn draw_draws(overlay: &mut Overlay, x0: f32, mut y: f32, summary: &PerfSummary) {
+    let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
+    let draws = summary.draws;
+    // Every draw of the frame: the scene's passes, the sky, the sun's cascades and the local lights' atlas.
+    let total = draws.opaque_draws
+        + draws.transparent_draws
+        + draws.prepass_draws
+        + draws.sky_draws
+        + draws.shadow_draws
+        + draws.light_shadow_draws;
+    overlay.text_fmt(
         x0,
         y,
         SCALE,
         TEXT,
-        format_args!("GPU   {:.2} MS", summary.gpu_total_ms.p50),
+        format_args!(
+            "DRAW CALLS {:5}  INSTANCES {:7}  {:.3} M TRI",
+            total,
+            draws.instances,
+            draws.triangles as f64 / 1e6
+        ),
     );
-    for pass in PassId::ALL {
-        if summary.gpu_pass_ran(pass) {
-            (x, _) = overlay.text_fmt(
-                x,
-                y,
-                SCALE,
-                DIM,
-                format_args!("  {} {:.2}", pass.name(), summary.gpu_pass_ms[pass as usize].p50),
-            );
-        }
-    }
     y += line;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!(
+            "OPAQUE      {:4} DRAWS {:7} INST {:8.3} M TRI",
+            draws.opaque_draws,
+            draws.opaque_instances,
+            draws.opaque_triangles as f64 / 1e6
+        ),
+    );
+    y += line;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!(
+            "TRANSPARENT {:4} DRAWS {:7} INST {:8.3} M TRI",
+            draws.transparent_draws,
+            draws.transparent_instances,
+            draws.transparent_triangles as f64 / 1e6
+        ),
+    );
+    y += line;
+    if draws.prepass_draws > 0 {
+        overlay.text_fmt(
+            x0,
+            y,
+            SCALE,
+            TEXT,
+            format_args!(
+                "PREPASS     {:4} DRAWS {:7} INST {:8.3} M TRI",
+                draws.prepass_draws,
+                draws.opaque_instances,
+                draws.opaque_triangles as f64 / 1e6
+            ),
+        );
+        y += line;
+    }
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        DIM,
+        format_args!("CULLED            {:7} INST", draws.culled_instances),
+    );
+}
+
+/// The lights-and-shadows viewer from `(x0, y)`: the cascades' cost and casters, then the local lights and their
+/// cost.
+fn draw_lighting(overlay: &mut Overlay, x0: f32, mut y: f32, summary: &PerfSummary) {
+    let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
     // Shadow cascades: GPU time per cascade (the mean, which counts the frames that kept a map as 0, with a cached
     // cascade's build passes, and the share of frames that drew its casters), then what the last frame drew and each
     // map's casters.
@@ -1011,77 +1184,71 @@ pub fn draw_overlay(overlay: &mut Overlay, stats: &PerfStats, summary: &PerfSumm
             lights.max_per_cluster
         ),
     );
-    y += line;
-    overlay.text_fmt(
-        x0,
-        y,
-        SCALE,
-        TEXT,
-        format_args!(
-            "OPAQUE      {:4} DRAWS {:7} INST {:8.3} M TRI",
-            draws.opaque_draws,
-            draws.opaque_instances,
-            draws.opaque_triangles as f64 / 1e6
-        ),
-    );
-    y += line;
-    overlay.text_fmt(
-        x0,
-        y,
-        SCALE,
-        TEXT,
-        format_args!(
-            "TRANSPARENT {:4} DRAWS {:7} INST {:8.3} M TRI",
-            draws.transparent_draws,
-            draws.transparent_instances,
-            draws.transparent_triangles as f64 / 1e6
-        ),
-    );
-    y += line;
-    overlay.text_fmt(
-        x0,
-        y,
-        SCALE,
-        DIM,
-        format_args!("CULLED            {:7} INST", draws.culled_instances),
-    );
-    y += line;
-    if draws.prepass_draws > 0 {
-        overlay.text_fmt(
-            x0,
-            y,
-            SCALE,
-            TEXT,
-            format_args!(
-                "PREPASS     {:4} DRAWS {:7} INST {:8.3} M TRI",
-                draws.prepass_draws,
-                draws.opaque_instances,
-                draws.opaque_triangles as f64 / 1e6
-            ),
-        );
-    }
-    y += line;
-    overlay.text_fmt(
-        x0,
-        y,
-        SCALE,
-        DIM,
-        format_args!("{} FRAMES (P50/P99 OVER THE LAST {})", stats.recorded(), summary.frames),
-    );
-    y += line + 4.0;
+}
 
-    // The graph: one bar per frame, newest on the right.
-    let bottom = y + GRAPH_HEIGHT;
-    let skip = stats.frames.len().saturating_sub(GRAPH_FRAMES);
-    let first = GRAPH_FRAMES - (stats.frames.len() - skip);
-    for (i, frame) in stats.frames().skip(skip).enumerate() {
-        let h = (frame.frame_ms / GRAPH_TOP_MS).min(1.0) * GRAPH_HEIGHT;
-        let x = x0 + (first + i) as f32 * BAR;
-        overlay.rect(x, bottom - h.max(1.0), BAR, h.max(1.0), bar_color(frame.frame_ms));
-    }
-    for guide_ms in [1000.0 / 60.0, 1000.0 / 30.0] {
-        let gy = bottom - (guide_ms / GRAPH_TOP_MS).min(1.0) * GRAPH_HEIGHT;
-        overlay.rect(x0, gy, GRAPH_FRAMES as f32 * BAR, 1.0, GUIDE);
+/// The graphics viewer from `(x0, y)`: the settings in effect, the post chain, the pipelines, CPU and GPU time.
+fn draw_graphics(overlay: &mut Overlay, x0: f32, mut y: f32, graphics: &GraphicsStatus, summary: &PerfSummary) {
+    let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
+    draw_graphics_line(overlay, x0, y, graphics, summary);
+    y += line;
+    let post = &graphics.post;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!(
+            "POST  {}  AA {}  BLOOM {}  PASSES {} + {} COMPUTE ({} FULL-SCREEN)",
+            post.format_name(),
+            post.anti_aliasing().name(),
+            post.bloom_levels,
+            post.render_passes,
+            post.compute_passes,
+            post.full_screen_passes
+        ),
+    );
+    y += line;
+    // Pipelines compiled and still compiling (background compiles, ADR 0008 §9).
+    let pipelines = &graphics.pipelines;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        if pipelines.pending > 0 { SLOW } else { TEXT },
+        format_args!(
+            "PIPELINES {} ({} PENDING) FIRST {:.0} MS",
+            pipelines.compiled, pipelines.pending, pipelines.first_frame_ms
+        ),
+    );
+    y += line;
+    overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!(
+            "CPU   SCRIPT {:.2}  PHYSICS {:.2}  RENDER {:.2} (CULL {:.2}) MS (P50)",
+            summary.script_ms.p50, summary.physics_ms.p50, summary.render_ms.p50, summary.cull_ms.p50
+        ),
+    );
+    y += line;
+    let (mut x, _) = overlay.text_fmt(
+        x0,
+        y,
+        SCALE,
+        TEXT,
+        format_args!("GPU   {:.2} MS", summary.gpu_total_ms.p50),
+    );
+    for pass in PassId::ALL {
+        if summary.gpu_pass_ran(pass) {
+            (x, _) = overlay.text_fmt(
+                x,
+                y,
+                SCALE,
+                DIM,
+                format_args!("  {} {:.2}", pass.name(), summary.gpu_pass_ms[pass as usize].p50),
+            );
+        }
     }
 }
 
@@ -1099,6 +1266,44 @@ mod tests {
             shadow_redrawn: 0,
             ..FrameSample::default()
         }
+    }
+
+    /// #479: each viewer draws on its own, and together they are the whole overlay.
+    #[test]
+    fn each_viewer_draws_on_its_own_and_all_of_them_are_the_overlay() {
+        let mut stats = PerfStats::new(64);
+        for ms in 1..=64 {
+            stats.record(sample(ms as f32), None, DrawStats::default());
+        }
+        let summary = stats.summary();
+        let graphics = GraphicsStatus::default();
+        let mut overlay = Overlay::new();
+        let mut quads = |viewers: StatsViewers| {
+            draw_viewers(&mut overlay, &stats, &summary, &graphics, viewers);
+            assert_eq!(overlay.dropped(), 0);
+            overlay.len()
+        };
+        assert_eq!(quads(StatsViewers::NONE), 0);
+        let alone: Vec<usize> = StatsViewer::ALL
+            .iter()
+            .map(|&viewer| {
+                let mut viewers = StatsViewers::NONE;
+                viewers.set(viewer, true);
+                quads(viewers)
+            })
+            .collect();
+        assert!(alone.iter().all(|&n| n > 1), "{alone:?}");
+        // The frame-rate viewer holds the graph: a bar per frame.
+        assert!(alone[0] > alone[1] + 64, "{alone:?}");
+        assert_eq!(quads(StatsViewers::ALL), alone.iter().sum::<usize>());
+        let all = quads(StatsViewers::ALL);
+        draw_overlay(&mut overlay, &stats, &summary, &graphics);
+        assert_eq!(overlay.len(), all);
+        let mut viewers = StatsViewers::NONE;
+        viewers.toggle(StatsViewer::Lighting);
+        assert!(viewers.contains(StatsViewer::Lighting) && !viewers.is_empty());
+        viewers.toggle(StatsViewer::Lighting);
+        assert!(viewers.is_empty());
     }
 
     #[test]

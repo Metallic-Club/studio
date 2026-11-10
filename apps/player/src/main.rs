@@ -34,7 +34,7 @@ Options:
   --project <FILE>   A .mtproj project to run in place of a built-in game: its start scene, with its scripts
   --preset <NAME>    The graphics preset for this run, in place of the settings file's (presets: {presets})
   --bench <FRAMES>   Run FRAMES frames after a warm-up, without a frame cap, print the stats as JSON and exit
-  --overlay          Start with the performance overlay shown (F3 toggles it)
+  --overlay          Start with the performance overlay shown (F3 toggles it; Shift+F1 to F4 one viewer each)
   -h, --help         Print this help
   -V, --version      Print the version";
 
@@ -131,7 +131,7 @@ fn main() -> ExitCode {
             None => format!("scene `{}`", config.scene),
         };
         eprintln!(
-            "Metallic Player {}: {game}. {}F3 shows the performance overlay.",
+            "Metallic Player {}: {game}. {}F3 shows the performance overlay; Shift+F1 to F4 one part each.",
             metallic_player::VERSION,
             if config.project.is_none() && config.scene == Scene::Demo {
                 "WASD and Q/E move, hold the right mouse button to look, C orbits, Space pauses. "

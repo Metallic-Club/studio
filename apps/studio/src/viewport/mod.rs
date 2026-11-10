@@ -31,6 +31,8 @@ use metallic_engine::metallic_core::{DataModel, Id, Value};
 pub use camera::EditorCamera;
 pub use view::View;
 
+use metallic_engine::perf::{StatsViewer, StatsViewers};
+
 use crate::keymap::{Activation, ActivationKind, Keymap, ids};
 use crate::settings::{FLY_SPEED, SECONDARY_SPEED};
 
@@ -97,6 +99,8 @@ pub struct ViewportState {
     /// The viewport's device draws lines, so the wireframe shading view can be chosen (#478). False until the viewport
     /// draws.
     pub wireframe: bool,
+    /// The performance overlay's viewers shown over the viewport (#479): its Debug options and Shift+F1 to F4.
+    pub stats: StatsViewers,
 }
 
 impl ViewportState {
@@ -117,6 +121,7 @@ impl ViewportState {
             mode_note: None,
             pick_cycle: pick::PickCycle::default(),
             wireframe: false,
+            stats: StatsViewers::NONE,
         }
     }
 
@@ -152,6 +157,10 @@ impl ViewportState {
                         .begin_look(Some(ray.0 + ray.1 * reach.max(camera::ORBIT_MIN_DISTANCE)));
                     self.hold = input.pointer;
                 }
+                (ids::STATS_FRAME_RATE, ActivationKind::Press) => self.stats.toggle(StatsViewer::FrameRate),
+                (ids::STATS_DRAWS, ActivationKind::Press) => self.stats.toggle(StatsViewer::Draws),
+                (ids::STATS_LIGHTING, ActivationKind::Press) => self.stats.toggle(StatsViewer::Lighting),
+                (ids::STATS_GRAPHICS, ActivationKind::Press) => self.stats.toggle(StatsViewer::Graphics),
                 (ids::FOCUS, ActivationKind::Press) => {
                     if let Some((centre, radius)) = bounds_of(input.dm, input.selection) {
                         let aspect = self.rect.map_or(1.5, |rect| rect.aspect_ratio());

@@ -14,7 +14,7 @@ use metallic_engine::metallic_platform::{
 use metallic_engine::metallic_project::{Project, ProjectError};
 use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderError};
 use metallic_engine::metallic_script::OutputSink;
-use metallic_engine::perf::PerfSummary;
+use metallic_engine::perf::{PerfSummary, StatsViewer, StatsViewers};
 use metallic_engine::stress::{StressError, StressScene};
 use metallic_engine::{
     Engine, EngineConfig, EngineError, EngineMode, FrameStats, RunContext, SceneRenderer, SourceLoader, StdOutput,
@@ -295,6 +295,7 @@ impl<O: OutputSink> Player<O> {
             stress: self.stress,
             first_frame: None,
             last_frame_end: None,
+            shift: false,
         })
     }
 
@@ -329,6 +330,8 @@ pub struct PlayerApp<O: OutputSink = StdOutput> {
     stress: Option<StressScene>,
     first_frame: Option<Instant>,
     last_frame_end: Option<Instant>,
+    /// Shift is held: F1 to F4 toggle the overlay's viewers one by one (#479).
+    shift: bool,
 }
 
 impl<O: OutputSink> PlayerApp<O> {
@@ -378,6 +381,32 @@ impl<O: OutputSink> PlayerApp<O> {
     }
 }
 
+/// What the performance overlay's viewers become when `key` is pressed with Shift held or not (#479): F3 alone shows
+/// them all, or hides them when any is shown; Shift and F1 to F4 toggle the frame rate, the draw calls, the lights and
+/// shadows, and the graphics one by one. `None` for any other key.
+fn stats_key(viewers: StatsViewers, key: KeyCode, shift: bool) -> Option<StatsViewers> {
+    let viewer = match key {
+        KeyCode::F3 if !shift => {
+            return Some(if viewers.is_empty() {
+                StatsViewers::ALL
+            } else {
+                StatsViewers::NONE
+            });
+        }
+        KeyCode::F1 => StatsViewer::FrameRate,
+        KeyCode::F2 => StatsViewer::Draws,
+        KeyCode::F3 => StatsViewer::Lighting,
+        KeyCode::F4 => StatsViewer::Graphics,
+        _ => return None,
+    };
+    if !shift {
+        return None;
+    }
+    let mut viewers = viewers;
+    viewers.toggle(viewer);
+    Some(viewers)
+}
+
 impl<O: OutputSink> AppHandler for PlayerApp<O> {
     fn resumed(&mut self, cx: &mut dyn EventLoopContext) {
         self.app.resumed(cx);
@@ -388,14 +417,17 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
     }
 
     fn window_event(&mut self, cx: &mut dyn EventLoopContext, window: WindowId, event: WindowEvent) {
+        if let WindowEvent::ModifiersChanged(modifiers) = &event {
+            self.shift = modifiers.shift;
+        }
         if let WindowEvent::Key(key) = &event
-            && key.key_code == KeyCode::F3
             && key.state == ButtonState::Pressed
             && !key.repeat
         {
             let mut renderer = self.renderer.borrow_mut();
-            let on = !renderer.overlay();
-            renderer.set_overlay(on);
+            if let Some(viewers) = stats_key(renderer.stats_viewers(), key.key_code, self.shift) {
+                renderer.set_stats_viewers(viewers);
+            }
         }
         self.app.window_event(cx, window, event);
     }
@@ -472,6 +504,31 @@ mod tests {
 
     use super::*;
     use crate::scene::Scene;
+
+    #[test]
+    fn f3_shows_every_viewer_and_shift_with_f1_to_f4_one_each() {
+        let none = StatsViewers::NONE;
+        assert_eq!(stats_key(none, KeyCode::F3, false), Some(StatsViewers::ALL));
+        assert_eq!(stats_key(StatsViewers::ALL, KeyCode::F3, false), Some(none));
+        let mut frame_rate = none;
+        frame_rate.set(StatsViewer::FrameRate, true);
+        // A viewer on its own: F3 hides it.
+        assert_eq!(stats_key(frame_rate, KeyCode::F3, false), Some(none));
+        assert_eq!(stats_key(none, KeyCode::F1, true), Some(frame_rate));
+        assert_eq!(stats_key(frame_rate, KeyCode::F1, true), Some(none));
+        for (key, viewer) in [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4]
+            .into_iter()
+            .zip(StatsViewer::ALL)
+        {
+            let shown = stats_key(none, key, true).expect("a viewer key");
+            assert!(shown.contains(viewer) && shown.iter().count() == 1, "{key:?}");
+        }
+        // F1, F2 and F4 alone, and other keys, do nothing.
+        for key in [KeyCode::F1, KeyCode::F2, KeyCode::F4, KeyCode::F5] {
+            assert_eq!(stats_key(none, key, false), None, "{key:?}");
+        }
+        assert_eq!(stats_key(none, KeyCode::F5, true), None);
+    }
 
     /// A window with no OS behind it.
     struct FakeWindow;

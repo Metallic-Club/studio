@@ -966,13 +966,13 @@ mod tests {
     }
 
     #[test]
-    fn studio_commands_nest_the_viewport_s_two_sections() {
+    fn studio_commands_nest_the_viewport_s_sections() {
         let sections = sections(crate::keymap::STUDIO_COMMANDS);
         let viewport = sections
             .iter()
             .find(|s| s.name == "Viewport")
             .expect("a Viewport section");
         let inner: Vec<&str> = viewport.sections.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(inner, ["Fly camera", "Mouse"]);
+        assert_eq!(inner, ["Fly camera", "Mouse", "Stats"]);
     }
 }

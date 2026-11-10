@@ -15,6 +15,7 @@ use egui::emath::GuiRounding;
 use egui::{Align2, FontId, Painter, Sense, Stroke, Ui};
 use metallic_engine::metallic_core::{DataModel, Id};
 use metallic_engine::metallic_render::ShadingView;
+use metallic_engine::perf::StatsViewer;
 
 use super::ids;
 use crate::dock::{Panel, PanelContext, Zone};
@@ -152,6 +153,18 @@ impl Panel for Viewport {
                     }
                     if !enabled {
                         response.on_hover_text("This graphics device cannot draw lines.");
+                    }
+                }
+            });
+        });
+        // The performance overlay's viewers (#479), as the Player draws them; Shift+F1 to F4 by default.
+        crate::theme::section(ui, "metallic.viewport.menu.debug", "Debug", |ui| {
+            indented(ui, |ui| {
+                let stats = &mut cx.editor.viewport.stats;
+                for viewer in StatsViewer::ALL {
+                    let mut on = stats.contains(viewer);
+                    if crate::theme::checkbox(ui, &mut on, viewer.name()).changed() {
+                        stats.set(viewer, on);
                     }
                 }
             });
