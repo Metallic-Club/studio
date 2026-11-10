@@ -477,6 +477,8 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   its middle inside) and **Paint** (what a 24-point brush passes over, and what lies under its path); Shift adds,
   Ctrl takes out, otherwise it replaces (`viewport::select`). Ctrl+1 (`tools.select_mode`) cycles them, choosing the
   Select tool, and the viewport names the mode for a moment. In Box mode a drag on a part still carries it (#358).
+- **Box select with any tool (#468)**: a drag that starts on nothing boxes whatever tool is active, or with none;
+  Lasso and Paint stay the Select tool's.
 
 ## Not in this slice
 

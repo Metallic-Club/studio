@@ -3424,6 +3424,44 @@ mod tests {
     }
 
     #[test]
+    fn a_drag_from_nothing_box_selects_with_any_tool() {
+        use crate::viewport::select::SelectMode;
+
+        let mut harness = editing(settings_file("editor-box-any-tool", None), "Box Any Tool Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let spawn = on_screen(&harness, "SpawnLocation");
+        let top = sky(&harness);
+        let corners = [egui::pos2(spawn.x - 220.0, top.y), spawn + egui::vec2(220.0, 90.0)];
+        // The Move tool, then none (the Select tool chosen twice), then the Select tool in Lasso mode: a drag from
+        // the sky boxes in each (#468), as the Select tool's own Box mode does.
+        for (keys, tool) in [
+            (&[Key::Num2][..], Some(Tool::Move)),
+            (&[Key::Num1, Key::Num1][..], None),
+        ] {
+            for &key in keys {
+                harness.key_press(key);
+            }
+            settle(&mut harness);
+            assert_eq!(harness.state().studio.editor().unwrap().viewport.gizmo.tool, tool);
+            trail(&mut harness, &corners);
+            assert_eq!(selected_names(&harness), ["SpawnLocation"], "with {tool:?}");
+            left_click(&mut harness, egui::Rect::from_center_size(top, egui::Vec2::ZERO));
+            assert!(selected_names(&harness).is_empty());
+        }
+        // Lasso and Paint stay the Select tool's: in Lasso mode with the Move tool, a drag on nothing still boxes.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
+        harness.key_press(Key::Num2);
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.editor().unwrap().viewport.gizmo.select_mode,
+            SelectMode::Lasso
+        );
+        trail(&mut harness, &corners);
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+    }
+
+    #[test]
     fn dragging_a_part_in_the_viewport_carries_it_across_the_floor() {
         let mut harness = editing(settings_file("editor-viewport-carry", None), "Carry Game");
         harness.set_size(egui::vec2(1280.0, 900.0));
