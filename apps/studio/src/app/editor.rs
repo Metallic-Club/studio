@@ -70,6 +70,8 @@ pub(crate) enum MenuAction {
     Tree(TreeEdit),
     /// Pick a transform tool (#355).
     Transform(Tool),
+    /// Cycle the Select tool's mode (#467), choosing it.
+    SelectMode,
     /// Switch the gizmos between world and local axes.
     LocalSpace,
     /// Turn snapping on or off (#359).

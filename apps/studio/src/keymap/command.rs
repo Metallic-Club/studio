@@ -232,6 +232,8 @@ pub mod ids {
     pub const TOOL_TURN: &str = "tools.turn";
     /// Tilt the selection a quarter.
     pub const TOOL_TILT: &str = "tools.tilt";
+    /// Cycle the Select tool's mode: Box, Lasso, Paint (#467).
+    pub const TOOL_SELECT_MODE: &str = "tools.select_mode";
 }
 
 /// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
@@ -446,6 +448,12 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         "Select tool",
         "Selects with a click. Chosen again, no tool is active.",
         &["1"],
+    ),
+    tool(
+        ids::TOOL_SELECT_MODE,
+        "Selection mode",
+        "Cycles how the Select tool picks with a drag: a box, a lasso, or a brush to paint over parts.",
+        &["Primary+1"],
     ),
     tool(ids::TOOL_MOVE, "Move tool", "Moves the selection with handles.", &["2"]),
     tool(

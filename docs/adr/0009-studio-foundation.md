@@ -473,6 +473,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 
 - **The Select tool turns off (#466)**: chosen while it is the active tool (its button or 1), it leaves none active
   (`Gizmo::tool` is optional): a click still selects, and nothing under the pointer is outlined.
+- **Selection modes (#467)**, after the archive's Select tool: **Box** (what lies wholly inside), **Lasso** (what has
+  its middle inside) and **Paint** (what a 24-point brush passes over, and what lies under its path); Shift adds,
+  Ctrl takes out, otherwise it replaces (`viewport::select`). Ctrl+1 (`tools.select_mode`) cycles them, choosing the
+  Select tool, and the viewport names the mode for a moment. In Box mode a drag on a part still carries it (#358).
 
 ## Not in this slice
 

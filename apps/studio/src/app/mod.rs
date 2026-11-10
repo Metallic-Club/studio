@@ -649,6 +649,14 @@ impl Studio {
                 editing.snap_moves = on;
                 editing.snap_turns = on;
             }
+            MenuAction::SelectMode => {
+                if let Some(editor) = self.editor_mut()
+                    && !editor.viewport.gizmo.is_dragging()
+                {
+                    editor.viewport.gizmo.next_select_mode();
+                    editor.viewport.mode_note = Some(Instant::now());
+                }
+            }
             MenuAction::LocalSpace => {
                 if let Some(editor) = self.editor_mut() {
                     editor.viewport.gizmo.local = !editor.viewport.gizmo.local;
@@ -1093,6 +1101,7 @@ impl Studio {
                 ids::TOOL_MOVE if editing => self.menu_action(MenuAction::Transform(Tool::Move)),
                 ids::TOOL_SCALE if editing => self.menu_action(MenuAction::Transform(Tool::Scale)),
                 ids::TOOL_ROTATE if editing => self.menu_action(MenuAction::Transform(Tool::Rotate)),
+                ids::TOOL_SELECT_MODE if editing => self.menu_action(MenuAction::SelectMode),
                 ids::TOOL_LOCAL_SPACE if editing => self.menu_action(MenuAction::LocalSpace),
                 ids::TOOL_TURN if editing => self.menu_action(MenuAction::QuarterTurn { tilt: false }),
                 ids::TOOL_TILT if editing => self.menu_action(MenuAction::QuarterTurn { tilt: true }),
@@ -3298,6 +3307,120 @@ mod tests {
         harness.key_press(Key::Num1);
         settle(&mut harness);
         assert_eq!(tool(&harness), Some(Tool::Select));
+    }
+
+    /// A held drag of the left button through `points`, a few steps between each.
+    fn trail(harness: &mut Harness<'_, Test>, points: &[egui::Pos2]) {
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        harness.event(egui::Event::PointerMoved(points[0]));
+        harness.step();
+        harness.event(button(points[0], true));
+        harness.step();
+        for pair in points.windows(2) {
+            for i in 1..=4 {
+                harness.event(egui::Event::PointerMoved(pair[0].lerp(pair[1], i as f32 / 4.0)));
+                harness.step();
+            }
+        }
+        harness.event(button(points[points.len() - 1], false));
+        settle(harness);
+    }
+
+    /// The top of the viewport, where it shows the sky.
+    fn sky(harness: &Harness<'_, Test>) -> egui::Pos2 {
+        let rect = harness.state().studio.editor().unwrap().viewport.rect.unwrap();
+        rect.center_top() + egui::vec2(0.0, 10.0)
+    }
+
+    #[test]
+    fn the_select_tool_picks_with_a_box_a_lasso_or_a_brush_and_ctrl_1_cycles_them() {
+        use crate::viewport::select::SelectMode;
+
+        let mut harness = editing(settings_file("editor-select-modes", None), "Select Modes Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let mode = |harness: &Harness<'_, Test>| harness.state().studio.editor().unwrap().viewport.gizmo.select_mode;
+        let spawn = on_screen(&harness, "SpawnLocation");
+        // Box (#467): from the sky, round the spawn but not the whole baseplate.
+        let top = sky(&harness);
+        trail(
+            &mut harness,
+            &[egui::pos2(spawn.x - 220.0, top.y), spawn + egui::vec2(220.0, 90.0)],
+        );
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        left_click(&mut harness, egui::Rect::from_center_size(top, egui::Vec2::ZERO));
+        assert!(selected_names(&harness).is_empty());
+        // Ctrl+1 moves on to Lasso, and the viewport says so.
+        harness.key_press(Key::Num2);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
+        settle(&mut harness);
+        assert_eq!(mode(&harness), SelectMode::Lasso);
+        assert_eq!(
+            harness.state().studio.editor().unwrap().viewport.gizmo.tool,
+            Some(Tool::Select),
+            "and picks the Select tool"
+        );
+        let said = harness.output().shapes.iter().any(
+            |clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == "Select mode  Lasso"),
+        );
+        assert!(said, "the mode shown");
+        // A lasso round the spawn's middle, starting on the baseplate: it draws rather than carries.
+        let r = 60.0;
+        let around: Vec<egui::Pos2> = (0..=8)
+            .map(|i| {
+                let a = i as f32 * std::f32::consts::TAU / 8.0;
+                spawn + egui::vec2(a.cos() * r, a.sin() * r)
+            })
+            .collect();
+        let spawn_id = {
+            let editor = harness.state().studio.editor().unwrap();
+            let workspace = crate::viewport::pick::workspace(&editor.dm).unwrap();
+            editor
+                .dm
+                .find_first_child(workspace, "SpawnLocation", false)
+                .unwrap()
+                .unwrap()
+        };
+        let at = |harness: &Harness<'_, Test>| {
+            crate::viewport::position_of(&harness.state().studio.editor().unwrap().dm, spawn_id)
+        };
+        let before = at(&harness);
+        trail(&mut harness, &around);
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        assert_eq!(at(&harness), before, "not carried");
+        // Paint, and Shift adds: a stroke across the baseplate alone adds it.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
+        settle(&mut harness);
+        assert_eq!(mode(&harness), SelectMode::Paint);
+        let floor = spawn + egui::vec2(0.0, 160.0);
+        harness.event_modifiers(egui::Event::PointerMoved(floor), Modifiers::SHIFT);
+        let shift = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::SHIFT,
+        };
+        harness.event_modifiers(shift(floor, true), Modifiers::SHIFT);
+        harness.step();
+        for i in 1..=4 {
+            harness.event_modifiers(
+                egui::Event::PointerMoved(floor + egui::vec2(15.0 * i as f32, 0.0)),
+                Modifiers::SHIFT,
+            );
+            harness.step();
+        }
+        harness.event_modifiers(shift(floor + egui::vec2(60.0, 0.0), false), Modifiers::SHIFT);
+        settle(&mut harness);
+        assert_eq!(selected_names(&harness), ["SpawnLocation", "Baseplate"]);
+        // And round to Box again.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
+        settle(&mut harness);
+        assert_eq!(mode(&harness), SelectMode::Box);
     }
 
     #[test]
