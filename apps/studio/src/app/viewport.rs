@@ -57,6 +57,10 @@ impl ViewportRenderer {
             self.scene.set_frame_cap(graphics.frame_cap.filter(|cap| *cap > 0));
             self.graphics = Some(graphics.clone());
         }
+        let shading = studio.settings().viewport.shading;
+        if self.scene.shading_view() != shading {
+            self.scene.set_shading_view(shading);
+        }
         if !self.attached && self.error.is_none() {
             self.attach(context, studio);
         }
@@ -104,6 +108,7 @@ impl ViewportRenderer {
         }
         viewport.texture_pixels = Some(target.size());
         viewport.texture_limit = context.capabilities().max_texture_size;
+        viewport.wireframe = context.capabilities().polygon_mode_line;
         // The frame fills the panel's size in the target's corner (#330); it differs only past the device's limit.
         let resizing = wanted.is_some_and(|size| Some(size) != self.scene.viewport_drawn_size());
         let loading = self.scene.assets().is_some_and(|assets| assets.pending() > 0);

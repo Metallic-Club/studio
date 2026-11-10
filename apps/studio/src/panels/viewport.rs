@@ -14,6 +14,7 @@ use std::time::Duration;
 use egui::emath::GuiRounding;
 use egui::{Align2, FontId, Painter, Sense, Stroke, Ui};
 use metallic_engine::metallic_core::{DataModel, Id};
+use metallic_engine::metallic_render::ShadingView;
 
 use super::ids;
 use crate::dock::{Panel, PanelContext, Zone};
@@ -136,6 +137,23 @@ impl Panel for Viewport {
         crate::theme::section(ui, "metallic.viewport.menu.view", "View", |ui| {
             indented(ui, |ui| {
                 crate::theme::checkbox(ui, &mut cx.settings.viewport.show_axes, "Axis gizmo");
+            });
+        });
+        // How the parts are drawn (#478). The wireframe needs a device that draws lines.
+        let wireframe = cx.editor.viewport.wireframe;
+        crate::theme::section(ui, "metallic.viewport.menu.shading", "Shading", |ui| {
+            indented(ui, |ui| {
+                for view in ShadingView::ALL {
+                    let enabled = view != ShadingView::Wireframe || wireframe;
+                    let chosen = cx.settings.viewport.shading == view;
+                    let response = crate::theme::radio(ui, chosen, enabled, view.name());
+                    if response.clicked() {
+                        cx.settings.viewport.shading = view;
+                    }
+                    if !enabled {
+                        response.on_hover_text("This graphics device cannot draw lines.");
+                    }
+                }
             });
         });
     }

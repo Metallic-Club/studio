@@ -178,3 +178,32 @@ fn local_lighting(
     }
     return out;
 }
+
+// How many local lights reach camera-relative `p`, seen at fragment `frag`: within their range and, for a spot,
+// inside its cone (the light-density view, #478; shadows are not counted).
+fn local_light_count(frag: vec2<f32>, p: vec3<f32>) -> u32 {
+    if frame.lights_local.x < 0.5 {
+        return 0u;
+    }
+    let header = cluster_texel(cluster_index(frag, dot(p, frame.view_forward.xyz)));
+    let first = header >> 8u;
+    let count = header & 255u;
+    var reached = 0u;
+    for (var k = 0u; k < count; k += 1u) {
+        let at = first + k;
+        let light = local_lights[(cluster_texel(CLUSTER_COUNT + at / 4u) >> ((at % 4u) * 8u)) & 255u];
+        let to_light = light.position.xyz - p;
+        if dot(to_light, to_light) >= light.position.w * light.position.w {
+            continue;
+        }
+        if light.direction.w > -1.5 {
+            let l = to_light * inverseSqrt(max(dot(to_light, to_light), 1e-8));
+            let apart = -l - light.direction.xyz;
+            if (light.direction.w - 0.5 * dot(apart, apart)) * light.params.x <= 0.0 {
+                continue;
+            }
+        }
+        reached += 1u;
+    }
+    return reached;
+}

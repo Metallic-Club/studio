@@ -229,19 +229,70 @@ fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     return out;
 }
 
+// The light-density view's colour for `count` lights (#478): dark blue for none, then blue, cyan, green, yellow,
+// orange, and red for 8 or more.
+fn density_heat(count: u32) -> vec3<f32> {
+    var ramp = array<vec3<f32>, 7>(
+        vec3<f32>(0.01, 0.01, 0.06),
+        vec3<f32>(0.02, 0.08, 0.6),
+        vec3<f32>(0.0, 0.5, 0.6),
+        vec3<f32>(0.05, 0.6, 0.05),
+        vec3<f32>(0.8, 0.7, 0.02),
+        vec3<f32>(0.9, 0.3, 0.01),
+        vec3<f32>(0.8, 0.01, 0.01),
+    );
+    let at = min(count, 8u);
+    // 5 to 7 lights stay orange; 8 or more are red.
+    return ramp[select(min(at, 5u), 6u, at >= 8u)];
+}
+
+// What a shading view other than Shaded draws at a fragment (parts/shading.rs, #478), before transparency: the
+// part's own colour (unlit), the light alone on a grey surface, or the light-density heat map over the surface's
+// sunlit shape. `albedo` is sampled by the caller, in uniform control flow.
+fn view_color(in: VertexOut, albedo: vec3<f32>, view: u32) -> vec3<f32> {
+    if view == 1u {
+        return albedo;
+    }
+    if view == 2u {
+        let s = shade(in, vec3<f32>(0.5));
+        return s.body + s.specular;
+    }
+    let n = normalize(in.normal);
+    let count = local_light_count(in.clip.xy, in.position);
+    let sunlit = 0.45 + 0.55 * max(dot(n, frame.light_direction.xyz), 0.0);
+    return density_heat(count) * sunlit;
+}
+
 @fragment
 fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
     // Sampled first, in uniform control flow.
-    let s = shade(in, albedo_of(in));
+    let albedo = albedo_of(in);
+    let view = u32(frame.view.x);
+    if view != 0u {
+        return vec4<f32>(encode(view_color(in, albedo, view)), 1.0);
+    }
+    let s = shade(in, albedo);
     return vec4<f32>(encode(s.body + s.specular), 1.0);
 }
 
 // Premultiplied alpha. Glass keeps its reflections at full strength while its body fades.
 @fragment
 fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
-    let s = shade(in, albedo_of(in));
+    let albedo = albedo_of(in);
     let alpha = in.color.a;
+    let view = u32(frame.view.x);
+    if view != 0u {
+        return vec4<f32>(encode(view_color(in, albedo, view) * alpha), alpha);
+    }
+    let s = shade(in, albedo);
     let glass = material_row(in.material).surface.w > 0.5;
     let specular = select(s.specular * alpha, s.specular, glass);
     return vec4<f32>(encode(s.body * alpha + specular), alpha);
+}
+
+// The wireframe view's lines (#478): each part's colour, lifted a little so dark parts still show on the sky.
+@fragment
+fn fs_wireframe(in: VertexOut) -> @location(0) vec4<f32> {
+    let albedo = albedo_of(in);
+    return vec4<f32>(encode(mix(albedo, vec3<f32>(1.0), 0.3)), 1.0);
 }

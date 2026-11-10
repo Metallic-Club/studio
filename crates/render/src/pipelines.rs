@@ -81,11 +81,16 @@ pub(crate) enum PartPipeline {
     Tested(u8),
     /// See-through parts, likewise.
     Transparent(u8),
+    /// The wireframe view's opaque parts (#478): their triangles as lines, without local lights. Made only when the
+    /// view is first chosen, on devices with line drawing.
+    Wireframe,
+    /// The wireframe view's see-through parts, likewise.
+    WireframeTransparent,
 }
 
 impl PartPipeline {
     /// How many there are for one format and MSAA count.
-    pub(crate) const COUNT: usize = 11;
+    pub(crate) const COUNT: usize = 13;
 
     /// What a frame without local lights draws with, those with shader stages of their own first.
     pub(crate) const BASE: [PartPipeline; 5] = [
@@ -109,13 +114,20 @@ impl PartPipeline {
     /// Every lit variant a frame may switch to after its first: [`PartPipeline::LIT`].
     pub(crate) const ALL_LIT: [PartPipeline; 6] = PartPipeline::LIT;
 
+    /// The wireframe view's pipelines (#478), made when the view is first chosen.
+    pub(crate) const WIREFRAME: [PartPipeline; 2] = [PartPipeline::Wireframe, PartPipeline::WireframeTransparent];
+
     /// The pipeline of the same target whose shader stages this one reuses entirely: its compile waits for that
     /// one's (see the [module documentation](self)).
     pub(crate) fn shares_stages_of(self) -> Option<PartPipeline> {
         match self {
             PartPipeline::Prepass => Some(PartPipeline::Opaque(0)),
             PartPipeline::Tested(lights) => Some(PartPipeline::Opaque(lights)),
-            PartPipeline::Sky | PartPipeline::Opaque(_) | PartPipeline::Transparent(_) => None,
+            PartPipeline::Sky
+            | PartPipeline::Opaque(_)
+            | PartPipeline::Transparent(_)
+            | PartPipeline::Wireframe
+            | PartPipeline::WireframeTransparent => None,
         }
     }
 
@@ -127,6 +139,8 @@ impl PartPipeline {
             PartPipeline::Opaque(lights) => 2 + 3 * usize::from(lights.min(2)),
             PartPipeline::Tested(lights) => 3 + 3 * usize::from(lights.min(2)),
             PartPipeline::Transparent(lights) => 4 + 3 * usize::from(lights.min(2)),
+            PartPipeline::Wireframe => 11,
+            PartPipeline::WireframeTransparent => 12,
         }
     }
 }
@@ -601,6 +615,7 @@ mod tests {
         let mut slots: Vec<usize> = PartPipeline::BASE
             .iter()
             .chain(PartPipeline::ALL_LIT.iter())
+            .chain(PartPipeline::WIREFRAME.iter())
             .map(|p| p.index())
             .collect();
         slots.sort_unstable();

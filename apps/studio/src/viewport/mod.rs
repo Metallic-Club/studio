@@ -94,6 +94,9 @@ pub struct ViewportState {
     pub mode_note: Option<Instant>,
     /// The walk of Alt+clicks through the parts behind one another (#482).
     pub pick_cycle: pick::PickCycle,
+    /// The viewport's device draws lines, so the wireframe shading view can be chosen (#478). False until the viewport
+    /// draws.
+    pub wireframe: bool,
 }
 
 impl ViewportState {
@@ -113,6 +116,7 @@ impl ViewportState {
             speed_note: None,
             mode_note: None,
             pick_cycle: pick::PickCycle::default(),
+            wireframe: false,
         }
     }
 

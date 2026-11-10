@@ -534,6 +534,54 @@ pub fn checkbox(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response
     response
 }
 
+/// One choice of several (#478), drawn as [`checkbox`] is but round: a ring, filled with the primary action's colour
+/// and a dot when `chosen`, then `label`. Greyed and inert when `enabled` is false. Returns the response; clicked
+/// means chosen.
+pub fn radio(ui: &mut egui::Ui, chosen: bool, enabled: bool, label: &str) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let strength = if enabled { 1.0 } else { 0.48 };
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        FontId::proportional(text::BODY),
+        p.text.gamma_multiply(strength),
+    );
+    let side = 16.0;
+    let size = vec2(side + space::S3 + galley.size().x, side.max(galley.size().y));
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, chosen, label));
+    if ui.is_rect_visible(rect) {
+        let centre = pos2(rect.left() + side / 2.0, rect.center().y);
+        let edge = if chosen {
+            p.action
+        } else if response.hovered() && enabled {
+            p.subtle
+        } else {
+            p.border
+        };
+        ui.painter().circle(
+            centre,
+            side / 2.0 - size::BORDER / 2.0,
+            (if chosen { p.action } else { p.input }).gamma_multiply(strength),
+            Stroke::new(size::BORDER, edge.gamma_multiply(strength)),
+        );
+        if chosen {
+            ui.painter()
+                .circle_filled(centre, 3.5, p.action_text.gamma_multiply(strength));
+        }
+        ui.painter().galley(
+            pos2(rect.left() + side + space::S3, rect.center().y - galley.size().y / 2.0),
+            galley,
+            p.text,
+        );
+    }
+    response
+}
+
 fn button_of_width(ui: &mut egui::Ui, kind: ButtonKind, label: &str, width: f32) -> egui::Response {
     let p = current_colors(ui.ctx()).palette;
     let (fill, hover, ink) = match kind {

@@ -205,7 +205,9 @@ const WANTED_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
     // MSAA counts (and other format features) beyond WebGPU's guaranteed minimum, such as 2x and 8x.
     .union(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
     // Compiled pipelines kept on disk between runs (Vulkan; `crate::pipeline_cache`).
-    .union(wgpu::Features::PIPELINE_CACHE);
+    .union(wgpu::Features::PIPELINE_CACHE)
+    // The wireframe shading view (`crate::parts::ShadingView::Wireframe`, #478).
+    .union(wgpu::Features::POLYGON_MODE_LINE);
 
 /// The device memory blocks wgpu suballocates from on DX12 and Vulkan: 128 MiB each. Its default
 /// (`MemoryHints::Performance`) starts there and grows to 256 MiB. A new block is cleared by the OS on the thread that
@@ -343,6 +345,8 @@ pub struct Capabilities {
     pub msaa: MsaaSampleCounts,
     /// Transient (memoryless) attachments save memory here (tile-based GPUs: mobile, Apple).
     pub transient_attachments: bool,
+    /// Triangles can be drawn as lines: the wireframe shading view ([`crate::parts::ShadingView::Wireframe`]).
+    pub polygon_mode_line: bool,
 }
 
 impl Capabilities {
@@ -373,6 +377,7 @@ impl Capabilities {
             max_texture_size: limits.max_texture_dimension_2d,
             msaa: msaa(wgpu::TextureFormat::Rgba8UnormSrgb).intersect(msaa(crate::depth::DEPTH_FORMAT)),
             transient_attachments: info.transient_saves_memory.unwrap_or(false),
+            polygon_mode_line: features.contains(wgpu::Features::POLYGON_MODE_LINE),
         }
     }
 }

@@ -1283,6 +1283,7 @@ mod tests {
     use crate::settings::{Category, SETTINGS_FILE};
     use crate::theme::tokens;
     use crate::theme::{ThemeMode, fonts};
+    use metallic_engine::metallic_render::ShadingView;
 
     /// A settings file of its own for `test`, holding `text` (none when `None`).
     fn settings_file(test: &str, text: Option<&str>) -> PathBuf {
@@ -4744,6 +4745,21 @@ mod tests {
         assert_eq!(section(&harness), 1, "the header stays");
         click_section(&mut harness);
         assert!(harness.query_by_role_and_label(Role::CheckBox, "Axis gizmo").is_some());
+        // Shading (#478): one view at a time, kept in the settings. The wireframe waits for a device that draws
+        // lines, which a test's viewport never has.
+        let shading = |harness: &Harness<'static, Test>| harness.state().studio.settings().viewport.shading;
+        assert_eq!(shading(&harness), ShadingView::Shaded);
+        harness.get_by_role_and_label(Role::RadioButton, "Unlit").click();
+        settle(&mut harness);
+        assert_eq!(shading(&harness), ShadingView::Unlit);
+        harness
+            .get_by_role_and_label(Role::RadioButton, "Light density")
+            .click();
+        settle(&mut harness);
+        assert_eq!(shading(&harness), ShadingView::LightDensity);
+        harness.get_by_role_and_label(Role::RadioButton, "Wireframe").click();
+        settle(&mut harness);
+        assert_eq!(shading(&harness), ShadingView::LightDensity, "no lines here");
         // A click outside it closes it.
         harness.get_by_role_and_label(Role::Tab, "Viewport").click();
         settle(&mut harness);
