@@ -244,7 +244,7 @@ impl Grid {
         }
         let (center, radius) = bounding_sphere(instance);
         let class = lod::lod_class(instance.mesh());
-        let caster = list != TRANSPARENT_LIST && super::is_shadow_caster(instance);
+        let caster = super::is_shadow_caster(instance);
         let mut item = Item {
             center,
             radius,
@@ -420,19 +420,22 @@ impl Grid {
         self.cull_filtered::<VIEW>(view, capacities, transparent, out)
     }
 
-    /// Like [`Grid::cull`], for a shadow view: only the opaque instances that cast shadows, of both regions or of
-    /// the static region alone (see [`Casters`]). The see-through list stays empty. A shadow view's levels need no
-    /// memory ([`crate::lod`]), so it changes none.
+    /// Like [`Grid::cull`], for a shadow view: only the instances that cast shadows, of both regions or of the
+    /// static region alone (see [`Casters`]). The see-through casters go to the see-through list where the view keeps
+    /// them ([`CullView::see_through`], #122; `transparent` is the scene's see-through list's length), and it stays
+    /// empty otherwise. A shadow view's levels need no memory ([`crate::lod`]), so it changes none.
     pub(crate) fn cull_casters(
         &mut self,
         view: &CullView,
         casters: Casters,
         capacities: impl ExactSizeIterator<Item = usize>,
+        transparent: usize,
         out: &mut VisibleSet,
     ) -> CullStats {
+        let transparent = if view.see_through { transparent } else { 0 };
         match casters {
-            Casters::All => self.cull_filtered::<ALL_CASTERS>(view, capacities, 0, out),
-            Casters::Static => self.cull_filtered::<STATIC_CASTERS>(view, capacities, 0, out),
+            Casters::All => self.cull_filtered::<ALL_CASTERS>(view, capacities, transparent, out),
+            Casters::Static => self.cull_filtered::<STATIC_CASTERS>(view, capacities, transparent, out),
         }
     }
 
@@ -494,7 +497,7 @@ impl Grid {
                 stats.outside_frustum += 1;
             } else if !view.sphere_large_and_near(item.center, item.radius) {
                 stats.too_far_or_small += 1;
-            } else if keeps::<MODE>(item) {
+            } else if keeps::<MODE>(item, view.see_through) {
                 let with_levels = if levels && item.class() != 0 { WITH_LEVELS } else { 0 };
                 // By the box's nearest point, so a wall is ordered by its near face.
                 out.order
@@ -527,7 +530,7 @@ impl Grid {
             }
             // A cell that has held no round part: exactly the cull without levels.
             for item in &cell.items {
-                if !keeps::<MODE>(item) {
+                if !keeps::<MODE>(item, view.see_through) {
                     continue;
                 }
                 if test_planes && !view.frustum.contains_sphere(item.center, item.radius) {
@@ -557,7 +560,7 @@ fn cull_cell_with_levels<const MODE: u8>(
 ) {
     let remember = remembers(view);
     for item in &mut cell.items {
-        if !keeps::<MODE>(item) {
+        if !keeps::<MODE>(item, view.see_through) {
             continue;
         }
         if test_planes && !view.frustum.contains_sphere(item.center, item.radius) {
@@ -610,13 +613,15 @@ const VIEW: u8 = 0;
 const ALL_CASTERS: u8 = 1;
 const STATIC_CASTERS: u8 = 2;
 
-/// Whether a cull in `MODE` considers `item` at all.
+/// Whether a cull in `MODE` considers `item` at all: a shadow view keeps a see-through caster only with
+/// `see_through` (#122).
 #[inline(always)]
-fn keeps<const MODE: u8>(item: &Item) -> bool {
+fn keeps<const MODE: u8>(item: &Item, see_through: bool) -> bool {
+    let caster = item.caster() && (see_through || item.list != TRANSPARENT_LIST);
     match MODE {
         VIEW => true,
-        ALL_CASTERS => item.caster(),
-        _ => item.caster() && item.entry & DYNAMIC_ENTRY == 0,
+        ALL_CASTERS => caster,
+        _ => caster && item.entry & DYNAMIC_ENTRY == 0,
     }
 }
 

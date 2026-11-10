@@ -172,19 +172,22 @@ const FRAME_UNIFORM_SIZE: u64 = 848;
 /// The shadow cascades the shadowed parts frames draw, all of them every frame.
 const CASCADES: usize = 3;
 /// What the shadowed parts frames draw: three cascades, each holding every caster, so a sun that moves every
-/// frame draws all three every frame.
+/// frame draws all three every frame. Solid casters only: the hand-written frame draws no see-through casters (#122),
+/// whose path the frames that check that nothing accumulates cover with the default settings.
 const EVERY_CASCADE: ShadowSettings = ShadowSettings {
     enabled: true,
     cascades: CASCADES as u32,
     dynamic_cascades: CASCADES as u32,
+    see_through: false,
     ..ShadowSettings::OFF
 };
 /// The default cascades: the far one cached, so its static map is drawn (every frame, the sun moving) and its map
-/// built from it and the moving casters (#121).
+/// built from it and the moving casters (#121). Solid casters only, as [`EVERY_CASCADE`].
 const CACHED_CASCADE: ShadowSettings = ShadowSettings {
     enabled: true,
     cascades: CASCADES as u32,
     dynamic_cascades: CASCADES as u32 - 1,
+    see_through: false,
     ..ShadowSettings::OFF
 };
 
@@ -2884,6 +2887,11 @@ fn expected_shadows(
                 *n = set.opaque(metallic_render::scene::MeshKind(kind as u16), level).len() as u32;
             }
         }
+        // The see-through casters (#122), drawn by their kind and level too.
+        for (&entry, &level) in set.transparent().iter().zip(set.transparent_levels()) {
+            let kind = scene.entry_instance(entry).map_or(0, |i| usize::from(i.mesh().0));
+            kinds[kind][usize::from(level)] += 1;
+        }
     }
     let far = views[CASCADES - 1].0;
     let restoring = matches!(work, ShadowWork::Restored(_));
@@ -2892,7 +2900,11 @@ fn expected_shadows(
     let moving = (work.movers() > 0).then(|| {
         let mut kinds = [[0u32; MAX_LOD_LEVELS]; 4];
         let dynamic = scene.instances(metallic_render::scene::Region::Dynamic);
-        for instance in dynamic.iter().filter(|i| metallic_render::scene::is_shadow_caster(i)) {
+        let casts = |i: &&metallic_render::scene::GpuInstance| {
+            metallic_render::scene::is_shadow_caster(i)
+                && (settings.see_through || !metallic_render::scene::is_see_through(i))
+        };
+        for instance in dynamic.iter().filter(casts) {
             let level = metallic_render::lod::caster_level(&far, instance.mesh(), bounding_radius(instance));
             kinds[usize::from(instance.mesh().0)][level] += 1;
         }

@@ -24,8 +24,12 @@
 //! from its own segment of a shadow list buffer, like the camera's draws ([`crate::parts`]). Its round casters take
 //! the coarsest level the camera could draw them at anywhere the cascade is looked up (its slice's far corner): never
 //! finer than the surface receiving the shadow, so levels cause no acne, and independent of where the camera stands,
-//! so a cached cascade stays valid (the reasoning is in [`crate::lod`]). A caster is an opaque part with `CastShadow`
-//! on ([`crate::scene::is_shadow_caster`]). See-through parts cast no shadow yet. Sun shadows as a whole follow
+//! so a cached cascade stays valid (the reasoning is in [`crate::lod`]). A caster is a drawn part with `CastShadow`
+//! on ([`crate::scene::is_shadow_caster`]). A partly see-through part casts a shadow that lets light through by its
+//! Transparency (#122, [`ShadowSettings::see_through`]; off at Low, where it casts none): its casters are drawn after
+//! the solid ones, sorted into one draw per mesh kind and level, by a pipeline whose fragment stage leaves out that
+//! share of its texels (spread by interleaved gradient noise), so the comparison filter averages them into a partial
+//! shadow. Solid casters keep a pipeline without a fragment stage. Sun shadows as a whole follow
 //! `Lighting.GlobalShadows` ([`crate::SceneLighting::global_shadows`]); `Light.Shadows` is the switch of local
 //! lights' shadows, which are drawn into a shadow atlas ([`crate::lights`]).
 //!
@@ -80,6 +84,7 @@
 
 pub(crate) mod cascade;
 mod maps;
+mod see_through;
 
 use std::time::Duration;
 
@@ -87,6 +92,7 @@ use metallic_core::glam::Vec3;
 
 pub use cascade::{CACHED_STEP_DIVISOR, CASTER_REACH};
 pub(crate) use maps::{FrameShadow, SHADOW_FORMAT, ShadowMaps, caster_pipeline};
+pub(crate) use see_through::SeeThroughCasters;
 
 #[cfg(doc)]
 use crate::VisibleSet;
@@ -126,7 +132,7 @@ pub fn cascade_views(
     let mut views = [(fits[0].cull_view(), Casters::All); MAX_CASCADES];
     for (i, (view, fit)) in views.iter_mut().zip(&fits).enumerate() {
         let casters = if i < dynamic { Casters::All } else { Casters::Static };
-        *view = (fit.cull_view(), casters);
+        *view = (fit.cull_view().with_see_through(settings.see_through), casters);
     }
     (views, count)
 }
@@ -173,6 +179,9 @@ pub struct ShadowSettings {
     /// `1 − N·L` (against acne on surfaces at a grazing angle to the light). See [`ShadowSettings::depth_bias`] for
     /// the values.
     pub normal_offset: f32,
+    /// Partly see-through parts cast shadows that let light through by their Transparency (#122). Off at Low, where
+    /// they cast none (the see-through casters cost a fragment stage in the maps).
+    pub see_through: bool,
 }
 
 impl ShadowSettings {
@@ -187,6 +196,7 @@ impl ShadowSettings {
         filter_radius: 1,
         depth_bias: 0.5,
         normal_offset: 1.5,
+        see_through: true,
     };
 
     /// How many cascades are drawn: 0 when off.

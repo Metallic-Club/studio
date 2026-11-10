@@ -163,6 +163,9 @@ pub struct LightSettings {
     /// scaled by `1 − N·L` (a surface facing the light needs none, a grazing one all of it) and at most
     /// [`crate::shadow::MAX_RECEIVER_OFFSET`] metres. See [`LightSettings::depth_bias`] for the values.
     pub normal_offset: f32,
+    /// Partly see-through parts cast shadows that let light through by their Transparency (#122). Off at Low, where
+    /// they cast none.
+    pub see_through_shadows: bool,
 }
 
 impl LightSettings {
@@ -180,6 +183,7 @@ impl LightSettings {
         filter_radius: 1,
         depth_bias: 0.5,
         normal_offset: 1.0,
+        see_through_shadows: false,
     };
 
     /// Medium (GTX 1650 / RX 6500 class at 60 fps, the Mid tier of ADR 0008): 128 lights a frame, at most 48 per
@@ -189,6 +193,7 @@ impl LightSettings {
         per_cluster: 48,
         shadowed_lights: 8,
         atlas_resolution: 2048,
+        see_through_shadows: true,
         ..Self::LOW
     };
 

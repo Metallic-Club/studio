@@ -14,7 +14,8 @@ use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::slots::RegionSlots;
 use super::{
     DEMOTE_REST, MAX_SHADOW_CHANGES, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED,
-    PROMOTE_WINDOW, REST_CHECKS_PER_FRAME, Region, SHADOW_FLAGS, SlotRef, SyncStats, UploadRange, is_shadow_caster,
+    PROMOTE_WINDOW, REST_CHECKS_PER_FRAME, Region, SHADOW_FLAGS, SlotRef, SyncStats, UploadRange, is_see_through,
+    is_shadow_caster,
 };
 use crate::lights::LightRuntime;
 
@@ -346,15 +347,17 @@ impl InstanceScene {
         stats
     }
 
-    /// Like [`InstanceScene::cull`], for a shadow view (a cascade, [`crate::shadow`]): writes the opaque shadow
+    /// Like [`InstanceScene::cull`], for a shadow view (a cascade, [`crate::shadow`]): writes the solid shadow
     /// casters `view` holds ([`super::is_shadow_caster`]), of both regions or the static one only, into `out`'s
-    /// opaque lists, roughly nearest the light first when `view` looks along the light. The see-through list stays
-    /// empty. Allocates nothing once `out` has grown to the scene's lists.
+    /// opaque lists, roughly nearest the light first when `view` looks along the light. Its see-through casters go
+    /// to the see-through list where the view keeps them ([`CullView::see_through`], #122); otherwise it stays empty.
+    /// Allocates nothing once `out` has grown to the scene's lists.
     pub fn cull_casters(&mut self, view: &CullView, casters: Casters, out: &mut VisibleSet) -> CullStats {
         let start = std::time::Instant::now();
         self.apply_moves();
         let capacities = self.lists.opaque.iter().map(|list| list.entries.len());
-        let mut stats = self.grid.cull_casters(view, casters, capacities, out);
+        let transparent = self.lists.transparent.entries.len();
+        let mut stats = self.grid.cull_casters(view, casters, capacities, transparent, out);
         stats.cpu_time = start.elapsed();
         out.stats = stats;
         stats
@@ -786,8 +789,11 @@ impl InstanceScene {
             // says whether it casts a shadow, so `CastShadow` updates it too.
             moved |= target.mesh_material >> 16 != instance.mesh_material >> 16;
             let shadow_flags = (target.flags ^ instance.flags) & SHADOW_FLAGS;
-            moved |= shadow_flags & GpuInstance::CAST_SHADOW != 0;
-            if slot.region == Region::Static && (moved || shadow_flags != 0) {
+            // Turning see-through, or solid again, moves its item between the solid and see-through casters (#122).
+            moved |= shadow_flags & (GpuInstance::CAST_SHADOW | GpuInstance::TRANSLUCENT) != 0;
+            // A see-through caster's shadow lets through as much light as its Transparency says (#122).
+            let see_through = is_see_through(&instance) && target.transparency != instance.transparency;
+            if slot.region == Region::Static && (moved || shadow_flags != 0 || see_through) {
                 // Its shadow may have changed: where it was and where it is now (see the module documentation).
                 self.shadow.note(target);
                 self.shadow.note(&instance);

@@ -16,15 +16,27 @@ struct Instance {
 @group(1) @binding(1) var<storage, read> dynamics: array<Instance>;
 @group(1) @binding(2) var<storage, read> entries: array<u32>;
 
-@vertex
-fn vs_shadow(@location(0) position: vec3<f32>, @builtin(instance_index) index: u32) -> @builtin(position) vec4<f32> {
+fn shadow_instance(index: u32) -> Instance {
     let entry = entries[index];
     let slot = entry & 0x7fffffffu;
-    var instance: Instance;
     if (entry >> 31u) == 0u {
-        instance = statics[slot];
-    } else {
-        instance = dynamics[slot];
+        return statics[slot];
     }
+    return dynamics[slot];
+}
+
+@vertex
+fn vs_shadow(@location(0) position: vec3<f32>, @builtin(instance_index) index: u32) -> @builtin(position) vec4<f32> {
+    let instance = shadow_instance(index);
     return shadow_place(position, instance.r0, instance.r1, instance.r2);
+}
+
+@vertex
+fn vs_see_through(@location(0) position: vec3<f32>, @builtin(instance_index) index: u32) -> SeeThrough {
+    let instance = shadow_instance(index);
+    var out: SeeThrough;
+    out.position = shadow_place(position, instance.r0, instance.r1, instance.r2);
+    out.transparency = instance.transparency;
+    out.seed = see_through_seed(instance.r0, instance.r1, instance.r2);
+    return out;
 }

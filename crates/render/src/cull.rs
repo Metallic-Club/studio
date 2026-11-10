@@ -75,8 +75,9 @@ impl Default for CullSettings {
     }
 }
 
-/// Which shadow casters a shadow view keeps ([`crate::InstanceScene::cull_casters`]): opaque instances with
-/// `CastShadow` on, from both regions or from the static region only. See [`crate::shadow`] for why a cached
+/// Which shadow casters a shadow view keeps ([`crate::InstanceScene::cull_casters`]): instances with `CastShadow` on
+/// (the partly see-through ones only where the view says, [`CullView::see_through`]), from both regions or from the
+/// static region only. See [`crate::shadow`] for why a cached
 /// cascade holds only the static ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Casters {
@@ -180,6 +181,9 @@ pub struct CullView {
     /// remembering the level it drew it at; a shadow view as the camera would at the farthest point that looks it up;
     /// [`LodView::OFF`] at full detail.
     pub lod: LodView,
+    /// A shadow view also keeps the partly see-through casters (#122), into its see-through list; a camera's view
+    /// ignores it (it keeps every instance).
+    pub see_through: bool,
 }
 
 impl CullView {
@@ -208,6 +212,7 @@ impl CullView {
             size_scale,
             min_screen_size: settings.min_screen_size.max(0.0),
             lod: LodView::for_camera(size_scale, &LodSettings::default()),
+            see_through: false,
         }
     }
 
@@ -230,6 +235,7 @@ impl CullView {
             size_scale: 0.0,
             min_screen_size: 0.0,
             lod: LodView::OFF,
+            see_through: false,
         }
     }
 
@@ -241,6 +247,11 @@ impl CullView {
             lod: camera.for_shadow(distance),
             ..self
         }
+    }
+
+    /// The same shadow view keeping the partly see-through casters too, or not (#122).
+    pub fn with_see_through(self, see_through: bool) -> Self {
+        Self { see_through, ..self }
     }
 
     /// Whether a bounding sphere passes the distance and screen-size tests (not the frustum).
