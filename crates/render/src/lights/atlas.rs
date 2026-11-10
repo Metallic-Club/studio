@@ -24,8 +24,9 @@ use crate::textures::{Made, TextureMaker, TextureSpec, Ticket};
 const BORDER: f32 = 2.0;
 /// The near plane of every tile's projection, in metres.
 const NEAR: f32 = 0.05;
-/// A spot light's one tile covers at most this half-angle (a 150° cone); a wider spot is shadowed with a cube (#437).
-pub(crate) const MAX_SPOT_SHADOW_HALF_DEGREES: f32 = crate::scene::SPOT_TILE_HALF_DEGREES;
+/// A spot light's one tile always covers this half-angle (a 90° cone, a cube's face), whatever the spot's Angle
+/// (#480); a wider spot is shadowed with a cube (#437).
+pub(crate) const SPOT_SHADOW_HALF_DEGREES: f32 = crate::scene::SPOT_TILE_HALF_DEGREES;
 /// Each tile's caster uniform sits at a multiple of this (the strictest dynamic offset alignment there is).
 const UNIFORM_STRIDE: u64 = 256;
 /// The bytes of a tile's caster uniform the shader reads: one matrix.
@@ -91,7 +92,10 @@ pub(crate) fn tile_views(light: &SceneLight, origin: Vec3, resolution: u32, out:
         }
         return 6;
     }
-    let half = (light.angle * 0.5).min(MAX_SPOT_SHADOW_HALF_DEGREES).to_radians();
+    // A cube face's view whatever the cone (#480): a narrower spot uses the middle of it. Its texels per degree
+    // then never change with the Angle, so neither does how sharp its shadow is, nor does a turn across the cube's
+    // angle (#451) change it.
+    let half = SPOT_SHADOW_HALF_DEGREES.to_radians();
     let forward = light.direction.normalize_or(Vec3::NEG_Z);
     let up = if forward.y.abs() < 0.99 { Vec3::Y } else { Vec3::Z };
     out[0] = view(forward, up, half.tan() * widen);
@@ -1158,8 +1162,29 @@ mod tests {
                 "{ndc}"
             );
         }
-        // The texel's size grows with the cone.
-        let wide = SceneLight { angle: 120.0, ..spot };
-        assert!(self::views(&wide, origin).0[0].texel_angle > views[0].texel_angle);
+    }
+
+    /// #480: a spot's shadow has a cube face's texels per degree at any Angle, through the switch to a cube.
+    #[test]
+    fn a_spot_shadow_s_texels_do_not_change_with_its_angle() {
+        let origin = Vec3::ZERO;
+        let light = point(Vec3::new(1.0, 9.0, 2.0));
+        let face = views(&light, origin).0[0].texel_angle;
+        for angle in [1.0, 30.0, 60.0, 90.0, 91.0, 120.0, 149.0, 150.0, 151.0, 180.0] {
+            let spot = SceneLight {
+                kind: LightKind::Spot,
+                angle,
+                direction: Vec3::new(0.0, -1.0, 0.3).normalize(),
+                ..light
+            };
+            let (tiles, n) = views(&spot, origin);
+            for tile in &tiles[..n] {
+                assert!(
+                    (tile.texel_angle - face).abs() < 1e-7,
+                    "{angle}°: {} against {face}",
+                    tile.texel_angle
+                );
+            }
+        }
     }
 }
