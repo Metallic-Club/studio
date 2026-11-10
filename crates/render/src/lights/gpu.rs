@@ -562,11 +562,18 @@ mod tests {
 
     #[test]
     fn a_spot_wider_than_one_tile_is_shadowed_with_a_cube() {
-        // 150° and under: one tile; wider, the six faces a point light has, so its sides cannot light through walls.
-        assert_eq!((spot(150.0).shadow_tiles(), spot(150.0).cube_shadow()), (1, false));
-        assert_eq!((spot(180.0).shadow_tiles(), spot(180.0).cube_shadow()), (6, true));
-        assert_eq!(GpuLight::new(&spot(150.0), Vec3::ZERO, 1.0, 1.0).params[1], 0.0);
-        assert_eq!(GpuLight::new(&spot(180.0), Vec3::ZERO, 1.0, 1.0).params[1], 1.0);
+        // 90° and under: one tile, a cube's face (#480); wider, the six faces a point light has, so the shadow is as
+        // sharp at any Angle and its sides cannot light through walls.
+        assert_eq!((spot(90.0).shadow_tiles(), spot(90.0).cube_shadow()), (1, false));
+        for wide in [91.0, 150.0, 180.0] {
+            assert_eq!(
+                (spot(wide).shadow_tiles(), spot(wide).cube_shadow()),
+                (6, true),
+                "{wide}"
+            );
+        }
+        assert_eq!(GpuLight::new(&spot(90.0), Vec3::ZERO, 1.0, 1.0).params[1], 0.0);
+        assert_eq!(GpuLight::new(&spot(150.0), Vec3::ZERO, 1.0, 1.0).params[1], 1.0);
     }
 
     #[test]

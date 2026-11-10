@@ -405,16 +405,17 @@ fn a_wide_shadowed_spot_does_not_light_through_walls() {
         );
     }
     let pixels = render(&context, &mut game, LightSettings::default());
-    // The point on each block's side facing the light is 82° off the axis, past the 75° one tile covers; the wall
-    // hangs from 5.6 m, under the light's ray to it but over its 75° one.
+    // The point on each block's side facing the light is 82° off the axis, past the 75° one tile covered before
+    // #480 (45° now); the wall hangs from 5.6 m, under the light's ray to it but over its 75° one.
     let behind = level(&pixels, project(&game, Vec3::new(5.0, 5.3, 0.0)));
     let open = level(&pixels, project(&game, Vec3::new(-5.0, 5.3, 0.0)));
     eprintln!("a block beyond the wall {behind:.1}, on the open side {open:.1}");
     assert!(open > behind + 15.0, "the wide spot lights through the wall");
 }
 
-/// A shadowed spot turned past 150°, from one shadow tile to a cube (#437), keeps its shadow on the very next frame
-/// (#451): it used to start its shadow again from nothing, so turning it across that angle made the shadow flicker.
+/// A shadowed spot turned past 90°, from one shadow tile to a cube (#437, #480), keeps its shadow on the very next
+/// frame (#451): it used to start its shadow again from nothing, so turning it across that angle made the shadow
+/// flicker.
 #[test]
 fn a_spot_turned_across_the_cube_angle_keeps_its_shadow() {
     let Some(context) = gpu() else { return };
@@ -426,21 +427,22 @@ fn a_spot_turned_across_the_cube_angle_keeps_its_shadow() {
         CFrame::new(Vec3::new(0.5, 2.0, 0.0)),
     );
     let down = CFrame::from_parts(
-        Vec3::new(-2.0, 4.0, 0.0),
+        Vec3::new(-2.0, 8.0, 0.0),
         Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
     );
     let id = light(&mut game, "SpotLight", ws, down, [255, 230, 190], 30.0, 20.0);
     game.dm.set_by_name(id, "Shadows", Value::Bool(true)).expect("Shadows");
     let mut frames = Frames::new(&context, &mut game, LightSettings::default());
     let mut levels = Vec::new();
-    for angle in [150.0, 151.0, 150.0] {
+    for angle in [90.0, 91.0, 90.0] {
         game.dm.set_by_name(id, "Angle", Value::Number(angle)).expect("Angle");
         for _ in 0..3 {
             frames.frame(&context, &mut game);
             let pixels = frames.pixels(&context);
-            // Behind the pillar, 60° off the spot's axis, and as far on the open side.
-            let behind = floor_level(&game, &pixels, 4.9, 0.0);
-            let open = floor_level(&game, &pixels, -8.9, 0.0);
+            // Behind the pillar (its shadow reaches from 1 m to 4 m), 29° off the spot's axis, and as far on the
+            // open side.
+            let behind = floor_level(&game, &pixels, 2.5, 0.0);
+            let open = floor_level(&game, &pixels, -6.5, 0.0);
             levels.push((angle, behind, open));
         }
     }

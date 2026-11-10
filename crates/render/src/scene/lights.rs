@@ -24,9 +24,10 @@ pub enum LightKind {
     Spot,
 }
 
-/// The widest half-angle one shadow tile covers for a spot light (a 150° cone, #437): a wider spot is shadowed with a
-/// cube of six tiles, as a point light is, so its sides cannot light through walls.
-pub const SPOT_TILE_HALF_DEGREES: f32 = 75.0;
+/// The widest half-angle one shadow tile covers for a spot light: a 90° cone, a cube's face (#480). A wider spot is
+/// shadowed with a cube of six tiles, as a point light is (#437), so every spot's shadow has a cube face's texels per
+/// degree whatever its Angle, and its sides cannot light through walls.
+pub const SPOT_TILE_HALF_DEGREES: f32 = 45.0;
 
 /// One light as the renderer reads it: its `Light` properties and its place in the world.
 #[derive(Clone, Copy, Debug, PartialEq)]
