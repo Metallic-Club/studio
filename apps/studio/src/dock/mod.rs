@@ -634,7 +634,10 @@ fn panel_menu(ui: &mut Ui, panel: &dyn Panel, cx: &mut PanelContext<'_>) {
     for offset in [-5.0, 0.0, 5.0] {
         ui.painter().circle_filled(rect.center() + vec2(offset, 0.0), 1.6, ink);
     }
-    egui::Popup::menu(&response).show(|ui| panel.menu(ui, cx));
+    // Open until a click outside it (#476): a panel's menu holds settings to turn one after another, not commands.
+    egui::Popup::menu(&response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| panel.menu(ui, cx));
     response.on_hover_text(label);
 }
 
