@@ -390,6 +390,15 @@ impl StudioSettings {
                 |v| v.as_str().and_then(Accent::parse),
                 &mut a.accent,
             );
+            // A custom accent (#509): `accent = "custom"` and its colour.
+            if appearance.get("accent").and_then(Value::as_str) == Some("custom")
+                && let Some(custom) = appearance
+                    .get("accent_color")
+                    .and_then(Value::as_str)
+                    .and_then(Accent::from_hex)
+            {
+                a.accent = custom;
+            }
             read(appearance, "high_contrast", Value::as_bool, &mut a.high_contrast);
             read(appearance, "ui_scale", number, &mut a.ui_scale);
             read(
@@ -462,6 +471,14 @@ impl StudioSettings {
         with_section(&mut document, "appearance", |appearance| {
             appearance.insert("mode".into(), Value::String(a.mode.as_str().into()));
             appearance.insert("accent".into(), Value::String(a.accent.as_str().into()));
+            match a.accent.custom_hex() {
+                Some(hex) => {
+                    appearance.insert("accent_color".into(), Value::String(hex));
+                }
+                None => {
+                    appearance.remove("accent_color");
+                }
+            }
             appearance.insert("high_contrast".into(), Value::Boolean(a.high_contrast));
             // In hundredths, so 1.1 is written as 1.1 and not as the f32's 1.100000023841858.
             let scale = (f64::from(a.ui_scale) * 100.0).round() / 100.0;
@@ -777,6 +794,28 @@ insert_view = \"grid\"
             assert_eq!(StudioSettings::from_document(&document).window, None, "{broken}");
         }
         assert_eq!(StudioSettings::default().window, None);
+    }
+
+    /// #509: a custom accent is kept as `custom` and its colour; a bad colour leaves the preset there was.
+    #[test]
+    fn a_custom_accent_round_trips() {
+        let document: Table =
+            toml::from_str("[appearance]\naccent = \"custom\"\naccent_color = \"#3bc9a0\"\n").unwrap();
+        let settings = StudioSettings::from_document(&document);
+        assert_eq!(settings.appearance.accent, Accent::Custom([0x3B, 0xC9, 0xA0]));
+        let written = settings.to_document(&Table::new());
+        assert_eq!(written["appearance"]["accent_color"].as_str(), Some("#3BC9A0"));
+        assert_eq!(
+            StudioSettings::from_document(&written).appearance.accent,
+            settings.appearance.accent
+        );
+        let bad: Table = toml::from_str("[appearance]\naccent = \"custom\"\naccent_color = \"#zz\"\n").unwrap();
+        assert_eq!(StudioSettings::from_document(&bad).appearance.accent, Accent::default());
+        // A preset leaves no colour behind.
+        let mut preset = settings.clone();
+        preset.appearance.accent = Accent::Mint;
+        let written = preset.to_document(&written);
+        assert!(written["appearance"].get("accent_color").is_none());
     }
 
     #[test]

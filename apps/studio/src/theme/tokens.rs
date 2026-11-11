@@ -185,6 +185,8 @@ pub enum Accent {
     Mint,
     /// Rose.
     Rose,
+    /// A colour of the user's own, picked with the colour picker (#509): sRGB.
+    Custom([u8; 3]),
 }
 
 /// One accent's colours.
@@ -210,6 +212,7 @@ impl Accent {
             Accent::Violet => "violet",
             Accent::Mint => "mint",
             Accent::Rose => "rose",
+            Accent::Custom(_) => "custom",
         }
     }
 
@@ -228,17 +231,45 @@ impl Accent {
             Accent::Violet => "Electric violet",
             Accent::Mint => "Fresh mint",
             Accent::Rose => "Rose",
+            Accent::Custom(_) => "Custom colour",
         }
     }
 
-    /// Its colours.
+    /// A custom accent's colour as `#RRGGBB`, as the settings store it; `None` for a preset.
+    pub fn custom_hex(self) -> Option<String> {
+        match self {
+            Accent::Custom([r, g, b]) => Some(format!("#{r:02X}{g:02X}{b:02X}")),
+            _ => None,
+        }
+    }
+
+    /// The custom accent of a `#RRGGBB` colour (the `#` optional, any letter case); `None` for anything else.
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let digits = text.trim().trim_start_matches('#');
+        if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+        Some(Accent::Custom([channel(0)?, channel(2)?, channel(4)?]))
+    }
+
+    /// Its colours. A custom one is its colour on the dark mode, a step lighter under the pointer, and on the light
+    /// mode darkened by half so it reads on white.
     pub const fn colors(self) -> AccentColors {
+        if let Accent::Custom([r, g, b]) = self {
+            return AccentColors {
+                color: Color32::from_rgb(r, g, b),
+                hover: Color32::from_rgb(lighter(r), lighter(g), lighter(b)),
+                light: Color32::from_rgb(r / 2, g / 2, b / 2),
+            };
+        }
         let (color, hover, light) = match self {
             Accent::Orange => (0xFF9B54, 0xFFB47F, 0xA34506),
             Accent::Blue => (0x82B5FF, 0xA9CDFF, 0x225DA8),
             Accent::Violet => (0xBA9AFF, 0xD0BAFF, 0x7141AE),
             Accent::Mint => (0x72D9B1, 0xA0EBCE, 0x1D7152),
             Accent::Rose => (0xFF9BB5, 0xFFBED0, 0xA13959),
+            Accent::Custom(_) => (0, 0, 0),
         };
         AccentColors {
             color: hex(color),
@@ -252,6 +283,11 @@ impl Accent {
         let colors = self.colors();
         if dark { colors.color } else { colors.light }
     }
+}
+
+/// A channel a third of the way to white: a custom accent's colour under the pointer (#509).
+const fn lighter(c: u8) -> u8 {
+    c + (255 - c) / 3
 }
 
 /// The hues icons are coloured in, one per icon group (`theme::icons::Group`; #290: the owner's groups). Moderately
