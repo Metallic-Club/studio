@@ -3434,7 +3434,7 @@ mod tests {
         harness.set_size(egui::vec2(1280.0, 900.0));
         settle(&mut harness);
         let spawn = on_screen(&harness, "SpawnLocation");
-        // A lamp a little above the spawn, in Workspace.
+        // A lamp above the spawn, far enough that their icon and box do not overlap, in Workspace.
         {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
             let dm = &mut editor.dm;
@@ -3444,7 +3444,7 @@ mod tests {
                 dm.find_first_child(workspace, "SpawnLocation", false).unwrap().unwrap(),
             )
             .unwrap()
-                + metallic_engine::metallic_core::glam::Vec3::new(0.0, 3.0, 0.0);
+                + metallic_engine::metallic_core::glam::Vec3::new(0.0, 6.0, 0.0);
             let lamp = dm.create(dm.registry().class_id("PointLight").unwrap()).unwrap();
             dm.set_name(lamp, "Lamp".into()).unwrap();
             dm.set_by_name(
