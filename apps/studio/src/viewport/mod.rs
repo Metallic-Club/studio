@@ -19,6 +19,7 @@ pub mod camera;
 pub mod gizmo;
 pub mod pick;
 pub mod select;
+pub mod shapes;
 pub mod tools;
 pub mod view;
 

@@ -76,6 +76,8 @@ impl EditorState {
         } = opened;
         let explorer = ExplorerState::new(&dm);
         let viewport = ViewportState::new(&dm);
+        // Picking meets a MeshPart by its triangles once they are read (#494).
+        crate::viewport::shapes::register_meshes(dm.uid(), project.asset_reader());
         Self {
             project,
             dm,
