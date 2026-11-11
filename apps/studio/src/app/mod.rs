@@ -903,6 +903,7 @@ impl Studio {
     /// user why if it cannot start.
     fn play(&mut self) {
         let graphics = self.settings.settings().rendering.clone();
+        let clear_output = self.settings.settings().output.clear_on_play;
         let log = Arc::clone(&self.log);
         self.sessions += 1;
         let number = self.sessions;
@@ -912,7 +913,7 @@ impl Studio {
         if editor.is_playing() {
             return;
         }
-        match editor.play(graphics, log, number) {
+        match editor.play(graphics, log, number, clear_output) {
             Ok(()) => {
                 self.dock.open(panels::ids::GAME);
                 self.dock.set_focused(Some(panels::ids::GAME));
@@ -4724,6 +4725,59 @@ mod tests {
         settle(&mut harness);
         assert!(harness.query_by_label("opened the test game").is_none());
         harness.get_by_label("attempt to index nil");
+
+        // A line's text is selected by a drag and copied with Ctrl+C (#510).
+        let line = harness.get_by_label("attempt to index nil").rect();
+        let (from, to) = (
+            line.left_center() + egui::vec2(2.0, 0.0),
+            line.right_center() - egui::vec2(2.0, 0.0),
+        );
+        harness.event(egui::Event::PointerMoved(from));
+        harness.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        harness.step();
+        for i in 1..=6 {
+            harness.event(egui::Event::PointerMoved(from.lerp(to, i as f32 / 6.0)));
+            harness.step();
+        }
+        harness.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        harness.step();
+        harness.event(egui::Event::Copy);
+        harness.step();
+        let copied: Vec<String> = harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            copied.iter().any(|text| text.contains("attempt to index nil")),
+            "{copied:?}"
+        );
+
+        // The three dots choose what a line shows (#502).
+        assert!(harness.state().studio.settings().output.show_time);
+        harness.get_by_role_and_label(Role::Button, "Output options").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::CheckBox, "Time").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.settings().output.show_time);
+        harness.get_by_role_and_label(Role::CheckBox, "Clear on Play");
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
 
         click_label(&mut harness, "Clear");
         assert!(harness.query_by_label("attempt to index nil").is_none());

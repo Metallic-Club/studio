@@ -22,6 +22,8 @@ log.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 rfd.workspace = true
+# The Output's time of day (#502).
+chrono.workspace = true
 # The custom icon folder's SVGs and PNGs (src/theme/icons/custom.rs).
 resvg.workspace = true
 png.workspace = true

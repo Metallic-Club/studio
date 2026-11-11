@@ -1,6 +1,11 @@
 //! The Output panel: what the engine, Studio and the game's scripts logged ([`crate::logging`]), with a level
 //! filter, a search and Clear.
 //!
+//! Each line (#502) is its time of day, where it came from and what it says, coloured by its level: errors red,
+//! warnings amber, the engine's messages blue, a script's prints in the text's own colour, debug lines faint. The
+//! three dots on its tab bar choose whether the time and the source show, and whether Play empties it first (#503).
+//! The lines are text that can be selected, across lines, and copied (#510).
+//!
 //! The panel copies the lines logged since its last frame from the shared buffer into its own list, so it never holds
 //! the buffer's lock while it draws. Clear empties its list; the lines do not come back.
 
@@ -25,6 +30,12 @@ use crate::theme::{ButtonKind, button, current_colors, fonts};
 const ERROR: Color32 = Color32::from_rgb(0xFF, 0x7A, 0x7A);
 /// An error's colour on the light theme.
 const ERROR_LIGHT: Color32 = Color32::from_rgb(0xB4, 0x23, 0x23);
+/// A warning's colour, on the dark and the light theme (#502).
+const WARNING: Color32 = Color32::from_rgb(0xFF, 0xC0, 0x57);
+const WARNING_LIGHT: Color32 = Color32::from_rgb(0x9A, 0x5B, 0x00);
+/// The engine's messages, on the dark and the light theme (#502): a script's prints keep the text's colour.
+const ENGINE: Color32 = Color32::from_rgb(0x86, 0xB8, 0xFF);
+const ENGINE_LIGHT: Color32 = Color32::from_rgb(0x1F, 0x5F, 0xB8);
 
 /// The levels the filter offers, most serious first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -178,7 +189,26 @@ impl Panel for Output {
         Context::Output
     }
 
+    fn has_menu(&self) -> bool {
+        true
+    }
+
+    /// What the lines show (#502), and whether Play empties the Output (#503).
+    fn menu(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        ui.set_min_width(crate::theme::MENU_WIDTH);
+        ui.spacing_mut().item_spacing.y = space::S2;
+        let output = &mut cx.settings.output;
+        crate::theme::section(ui, "metallic.output.menu.lines", "Lines", |ui| {
+            crate::theme::checkbox(ui, &mut output.show_time, "Time");
+            crate::theme::checkbox(ui, &mut output.show_source, "Source");
+        });
+        crate::theme::section(ui, "metallic.output.menu.play", "Play", |ui| {
+            crate::theme::checkbox(ui, &mut output.clear_on_play, "Clear on Play");
+        });
+    }
+
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        let shown = cx.settings.output;
         let state = &mut cx.editor.output;
         state.update();
         // One row of a fixed height, everything centred in it (#275): the toggles, the search box and Clear on a line.
@@ -222,7 +252,7 @@ impl Panel for Output {
             .stick_to_bottom(true)
             .show_rows(ui, row, visible.len(), |ui, range| {
                 for line in &visible[range] {
-                    line_ui(ui, line, row);
+                    line_ui(ui, line, row, shown);
                 }
             });
     }
@@ -253,58 +283,98 @@ fn chip(ui: &mut Ui, filter: Filter, count: usize, on: &mut bool) -> bool {
     false
 }
 
-/// One line: the level's icon, where it came from, and what it says, in the code font.
-fn line_ui(ui: &mut Ui, line: &LogLine, height: f32) {
-    let colors = current_colors(ui.ctx());
+/// A line's colour by its level and origin (#502): errors red, warnings amber, the engine's messages blue, a script's
+/// prints the text's colour, debug faint.
+fn line_colour(line: &LogLine, colors: &crate::theme::Colors) -> Color32 {
     let p = colors.palette;
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-    response.widget_info(|| WidgetInfo::labeled(Role::ListItem, true, &line.message));
+    let pick = |dark: Color32, light: Color32| if colors.dark { dark } else { light };
+    match (line.level, line.origin) {
+        (Level::Error, _) => pick(ERROR, ERROR_LIGHT),
+        (Level::Warn, _) => pick(WARNING, WARNING_LIGHT),
+        (Level::Info, Origin::Script) => p.text,
+        (Level::Info, Origin::Engine) => pick(ENGINE, ENGINE_LIGHT),
+        (Level::Debug | Level::Trace, _) => p.subtle,
+    }
+}
+
+/// When `line` was logged, as the local time of day: `14:03:27.512`.
+pub fn time_of_day(line: &LogLine) -> String {
+    chrono::DateTime::<chrono::Local>::from(line.time)
+        .format("%H:%M:%S%.3f")
+        .to_string()
+}
+
+/// The text of `line` as it shows (#502): its time and its source when `shown` says, then what it says (its first
+/// line; the rest on hover).
+fn line_text(line: &LogLine, shown: crate::settings::Output, colors: &crate::theme::Colors) -> egui::text::LayoutJob {
+    let p = colors.palette;
+    let mono = FontId::monospace(text::MONO);
+    let format = |color: Color32| egui::TextFormat {
+        font_id: mono.clone(),
+        color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    if shown.show_time {
+        job.append(&time_of_day(line), 0.0, format(p.subtle));
+        job.append("  ", 0.0, format(p.subtle));
+    }
+    if shown.show_source {
+        let source = match line.origin {
+            Origin::Script => line.source.as_str(),
+            Origin::Engine => line.source.split("::").next().unwrap_or(&line.source),
+        };
+        job.append(source, 0.0, format(p.muted));
+        job.append("  ", 0.0, format(p.muted));
+    }
+    let message = line.message.lines().next().unwrap_or_default();
+    job.append(message, 0.0, format(line_colour(line, colors)));
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job
+}
+
+/// One line: the level's icon, then its text in the code font, coloured by level (#502) and selectable (#510).
+fn line_ui(ui: &mut Ui, line: &LogLine, height: f32, shown: crate::settings::Output) {
+    let colors = current_colors(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
-    let (glyph, tint) = match line.level {
-        Level::Error => (Icon::UiError, if colors.dark { ERROR } else { ERROR_LIGHT }),
-        Level::Warn => (Icon::UiWarning, colors.accent),
-        Level::Info => (Icon::UiInfo, p.subtle),
-        Level::Debug | Level::Trace => (Icon::UiInfo, p.border),
+    let glyph = match line.level {
+        Level::Error => Icon::UiError,
+        Level::Warn => Icon::UiWarning,
+        Level::Info | Level::Debug | Level::Trace => Icon::UiInfo,
     };
-    let mut x = rect.left() + space::S2;
+    let x = rect.left() + space::S2;
     icons::paint_at(
         ui.painter(),
         pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         glyph,
         text::SMALL + 1.0,
-        tint,
+        line_colour(line, &colors),
     );
-    x += text::BODY + space::S2;
-    let mono = FontId::monospace(text::MONO);
-    let source = match line.origin {
-        Origin::Script => line.source.clone(),
-        Origin::Engine => line.source.split("::").next().unwrap_or(&line.source).to_owned(),
-    };
-    let at = ui.painter().text(
-        pos2(x, rect.center().y),
-        Align2::LEFT_CENTER,
-        &source,
-        mono.clone(),
-        p.subtle,
-    );
-    x = at.right() + space::S4;
-    let message = line.message.lines().next().unwrap_or_default();
-    let clip = Rect::from_min_max(pos2(x, rect.top()), rect.right_bottom());
-    let ink = match line.level {
-        Level::Error => tint,
-        _ => p.text,
-    };
-    ui.painter().with_clip_rect(clip.intersect(ui.clip_rect())).text(
-        pos2(x, rect.center().y),
-        Align2::LEFT_CENTER,
-        message,
-        mono,
-        ink,
-    );
-    if line.message.contains('\n') || response.hovered() {
+    let words = Rect::from_min_max(pos2(x + text::BODY + space::S2, rect.top()), rect.right_bottom());
+    let mut job = line_text(line, shown, &colors);
+    job.wrap.max_width = words.width();
+    // A label that can be selected, across lines, and copied with Ctrl+C or its menu (#510).
+    let response = ui
+        .scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(words)
+                .layout(Layout::left_to_right(Align::Center)),
+            |ui| {
+                ui.add(
+                    egui::Label::new(job)
+                        .selectable(true)
+                        .wrap_mode(egui::TextWrapMode::Truncate),
+                )
+            },
+        )
+        .inner;
+    response.widget_info(|| WidgetInfo::labeled(Role::ListItem, true, &line.message));
+    if line.message.contains('\n') {
         response.on_hover_text(format!("{}\n{}", line.source, line.message));
     }
 }
@@ -356,6 +426,69 @@ mod tests {
         assert_eq!(messages(&state), ["attempt to index nil"]);
         state.set_query("ROCK missing");
         assert_eq!(messages(&state), ["Meshes/Rock.glb is missing"]);
+    }
+
+    /// #502: a line is its time of day, its source and its message, as the menu says, coloured by level.
+    #[test]
+    fn a_line_shows_its_time_and_source_as_chosen_and_is_coloured_by_level() {
+        let state = state();
+        let colors = crate::theme::Colors::default();
+        let error = state.lines().iter().find(|line| line.level == Level::Error).unwrap();
+        let time = time_of_day(error);
+        // hh:mm:ss.mmm
+        assert_eq!(time.len(), 12, "{time}");
+        assert!(
+            time.chars().enumerate().all(|(i, c)| if [2, 5].contains(&i) {
+                c == ':'
+            } else if i == 8 {
+                c == '.'
+            } else {
+                c.is_ascii_digit()
+            }),
+            "{time}"
+        );
+        let all = crate::settings::Output::default();
+        let text = line_text(error, all, &colors).text;
+        assert!(text.starts_with(&time), "{text}");
+        assert!(
+            text.contains("Workspace.Door.Script:3") && text.ends_with("attempt to index nil"),
+            "{text}"
+        );
+        let bare = crate::settings::Output {
+            show_time: false,
+            show_source: false,
+            clear_on_play: true,
+        };
+        assert_eq!(line_text(error, bare, &colors).text, "attempt to index nil");
+        // The engine's module only, not its path.
+        let warning = state.lines().iter().find(|line| line.level == Level::Warn).unwrap();
+        let text = line_text(warning, all, &colors).text;
+        assert!(
+            text.contains("metallic_engine  ") && !text.contains("mesh_assets"),
+            "{text}"
+        );
+        // Each level its own colour; a script's print the text's.
+        let colour = |level: Level, origin: Origin| {
+            let line = LogLine {
+                level,
+                origin,
+                ..error.clone()
+            };
+            line_colour(&line, &colors)
+        };
+        let colours = [
+            colour(Level::Error, Origin::Engine),
+            colour(Level::Warn, Origin::Engine),
+            colour(Level::Info, Origin::Engine),
+            colour(Level::Info, Origin::Script),
+            colour(Level::Debug, Origin::Engine),
+        ];
+        for (i, a) in colours.iter().enumerate() {
+            for b in &colours[i + 1..] {
+                assert_ne!(a, b, "{colours:?}");
+            }
+        }
+        assert_eq!(colour(Level::Info, Origin::Script), colors.palette.text);
     }
 
     #[test]
