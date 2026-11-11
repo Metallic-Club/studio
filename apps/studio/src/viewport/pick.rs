@@ -1,5 +1,5 @@
-//! What a click in the viewport selects (#354): the nearest part the pointer's ray meets, each part taken as its box
-//! (every shape, for now), and of that part what is selectable: the outermost model it is in under Workspace, as in
+//! What a click in the viewport selects (#354): the nearest part the pointer's ray meets, each by its actual shape
+//! (#494, [`super::shapes`]), and of that part what is selectable: the outermost model it is in under Workspace, as in
 //! Roblox Studio, or the part. The outlines are these boxes too: a part's own, a model's around its parts.
 
 use metallic_engine::metallic_classes::base::world_object;
@@ -149,12 +149,20 @@ pub fn workspace(dm: &DataModel) -> Option<Id> {
     dm.registry().class_id("Workspace").and_then(|class| dm.service(class))
 }
 
-/// The nearest part `ray` meets in Workspace, and how far along it.
+/// Where `ray` first meets part `id`'s actual shape (#494, [`super::shapes`]): its box first, the shape only when that
+/// is met.
+pub fn part_hit(dm: &DataModel, id: Id, ray: Ray) -> Option<f32> {
+    let bounds = part_box(dm, id)?;
+    bounds.hit(ray)?;
+    super::shapes::hit(&bounds, &super::shapes::shape_of(dm, id), ray)
+}
+
+/// The nearest part `ray` meets in Workspace, by its actual shape (#494), and how far along it.
 pub fn nearest_part(dm: &DataModel, ray: Ray) -> Option<(Id, f32)> {
     let world = workspace(dm)?;
     dm.descendants(world)
         .ok()?
-        .filter_map(|id| part_box(dm, id).and_then(|bounds| bounds.hit(ray)).map(|t| (id, t)))
+        .filter_map(|id| part_hit(dm, id, ray).map(|t| (id, t)))
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
@@ -198,7 +206,7 @@ pub fn parts_along(dm: &DataModel, ray: Ray) -> Vec<Id> {
         return Vec::new();
     };
     let mut hits: Vec<(Id, f32)> = descendants
-        .filter_map(|id| part_box(dm, id).and_then(|bounds| bounds.hit(ray)).map(|t| (id, t)))
+        .filter_map(|id| part_hit(dm, id, ray).map(|t| (id, t)))
         .collect();
     hits.sort_by(|a, b| a.1.total_cmp(&b.1));
     hits.into_iter().map(|(id, _)| id).collect()
