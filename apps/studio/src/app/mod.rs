@@ -3357,6 +3357,54 @@ mod tests {
         assert!(!stats(&harness).contains(StatsViewer::Draws), "and hides it again");
     }
 
+    /// #506: a light shows as its icon; a click on the icon selects it, and the View menu hides the icons.
+    #[test]
+    fn a_light_s_icon_shows_in_the_viewport_and_a_click_selects_it() {
+        let mut harness = editing(settings_file("editor-light-icons", None), "Light Icons Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let spawn = on_screen(&harness, "SpawnLocation");
+        // A lamp a little above the spawn, in Workspace.
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let dm = &mut editor.dm;
+            let workspace = crate::viewport::pick::workspace(dm).unwrap();
+            let at = crate::viewport::position_of(
+                dm,
+                dm.find_first_child(workspace, "SpawnLocation", false).unwrap().unwrap(),
+            )
+            .unwrap()
+                + metallic_engine::metallic_core::glam::Vec3::new(0.0, 3.0, 0.0);
+            let lamp = dm.create(dm.registry().class_id("PointLight").unwrap()).unwrap();
+            dm.set_name(lamp, "Lamp".into()).unwrap();
+            dm.set_by_name(
+                lamp,
+                "CFrame",
+                Value::CFrame(metallic_engine::metallic_core::CFrame::new(at)),
+            )
+            .unwrap();
+            dm.set_parent(lamp, Some(workspace)).unwrap();
+        }
+        settle(&mut harness);
+        let lamp = on_screen(&harness, "Lamp");
+        assert!(
+            (lamp - spawn).length() > crate::viewport::light_icons::SIZE,
+            "apart on screen"
+        );
+        click_with(&mut harness, lamp, Modifiers::NONE);
+        assert_eq!(selected_names(&harness), ["Lamp"]);
+        // Hidden, its place picks what is behind it, if anything.
+        harness.get_by_role_and_label(Role::Button, "Viewport options").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::CheckBox, "Light icons").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.settings().viewport.show_light_icons);
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        click_with(&mut harness, lamp, Modifiers::NONE);
+        assert_ne!(selected_names(&harness), ["Lamp"]);
+    }
+
     /// A click of the left button at `at` with `modifiers` held.
     fn click_with(harness: &mut Harness<'_, Test>, at: egui::Pos2, modifiers: Modifiers) {
         harness.event(egui::Event::PointerMoved(at));
