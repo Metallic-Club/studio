@@ -167,18 +167,21 @@ pub fn nearest_face(dm: &DataModel, ray: Ray) -> Option<(f32, Vec3)> {
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
 
-/// What a click on `part` selects: the outermost model it is in under Workspace, or the part itself.
+/// What a click on `part` selects: the outermost model it is in under Workspace; else the outermost part it is in
+/// (a part inside another part is a group with it, #493); else the part itself.
 pub fn selectable(dm: &DataModel, part: Id) -> Id {
     let world = workspace(dm);
-    let mut chosen = part;
+    let (mut model, mut outer_part) = (None, part);
     let mut at = dm.parent(part).ok().flatten();
     while let Some(parent) = at.filter(|&parent| Some(parent) != world) {
         if is_a(dm, parent, "Model") {
-            chosen = parent;
+            model = Some(parent);
+        } else if is_a(dm, parent, "BasePart") {
+            outer_part = parent;
         }
         at = dm.parent(parent).ok().flatten();
     }
-    chosen
+    model.unwrap_or(outer_part)
 }
 
 /// What a click along `ray` selects, if anything.
@@ -314,5 +317,30 @@ mod tests {
         assert!((outline.half - Vec3::new(0.5, 0.5, 3.0)).length() < 1e-5);
         let folder = dm.create(dm.registry().class_id("Folder").unwrap()).unwrap();
         assert!(outline_box(&dm, folder).is_none());
+    }
+
+    /// #493: a part inside another part is a group with it; a model round them still wins.
+    #[test]
+    fn a_click_on_a_part_inside_a_part_selects_the_outermost_part() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let world = workspace(&dm).unwrap();
+        let base = part_at(&mut dm, world, Vec3::ZERO, Vec3::ONE);
+        let child = part_at(&mut dm, base, Vec3::new(3.0, 0.0, 0.0), Vec3::ONE);
+        let grandchild = part_at(&mut dm, child, Vec3::new(6.0, 0.0, 0.0), Vec3::ONE);
+        // Through a folder inside a part too.
+        let folder = dm.create(dm.registry().class_id("Folder").unwrap()).unwrap();
+        dm.set_parent(folder, Some(child)).unwrap();
+        let foldered = part_at(&mut dm, folder, Vec3::new(9.0, 0.0, 0.0), Vec3::ONE);
+        for part in [base, child, grandchild, foldered] {
+            assert_eq!(selectable(&dm, part), base, "{part:?}");
+        }
+        let at = |x: f32| (Vec3::new(x, 0.0, 20.0), Vec3::NEG_Z);
+        assert_eq!(pick(&dm, at(6.0)), Some(base));
+        // Alt+click's walk still meets the part itself (#482).
+        assert_eq!(parts_along(&dm, at(6.0)), [grandchild]);
+        let model = dm.create(dm.registry().class_id("Model").unwrap()).unwrap();
+        dm.set_parent(model, Some(world)).unwrap();
+        dm.set_parent(base, Some(model)).unwrap();
+        assert_eq!(selectable(&dm, grandchild), model, "a model round them wins");
     }
 }
