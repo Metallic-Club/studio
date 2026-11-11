@@ -3,10 +3,11 @@
 //! there is one it shows the project's name.
 //!
 //! A left click selects what is under the pointer (#354, [`crate::viewport::pick`]): Ctrl (Cmd) or Shift adds or
-//! removes it, a click on nothing clears the selection, and Alt is left to the camera's orbit. The selection is
-//! outlined in the accent colour, and the part under the pointer faintly. A drag selects too, as the Select tool's
-//! mode says (#467, [`crate::viewport::select`]). Not while a game runs: the viewport shows the editor's scene, and
-//! the panels the game's.
+//! removes it, a click on nothing clears the selection. Alt+click picks the part itself, even inside a model, and
+//! on the same spot again the part behind it; Shift+Alt adds each (#482, [`crate::viewport::pick::PickCycle`]). The
+//! selection is outlined in the accent colour, and the part under the pointer faintly. A drag selects too, as the
+//! Select tool's mode says (#467, [`crate::viewport::select`]). Not while a game runs: the viewport shows the
+//! editor's scene, and the panels the game's.
 
 use std::time::Duration;
 
@@ -196,13 +197,34 @@ impl Panel for Viewport {
             let under = |at| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray));
             let hovered = response.hover_pos().filter(|_| !on_gizmo).and_then(under);
             let modifiers = ui.input(|input| input.modifiers);
-            if response.clicked() && !modifiers.alt && !on_gizmo {
-                let picked = response.interact_pointer_pos().and_then(under);
-                match picked {
-                    Some(id) if modifiers.command || modifiers.shift => editor.selection.toggle(id),
-                    Some(id) => editor.select(Some(id)),
-                    None if modifiers.command || modifiers.shift => {}
-                    None => editor.selection.clear(),
+            // Alt means "select": it passes through a gizmo's handle to what is behind (#482).
+            if response.clicked() && (modifiers.alt || !on_gizmo) {
+                let adding = modifiers.command || modifiers.shift;
+                let at = response.interact_pointer_pos();
+                if modifiers.alt {
+                    // The part itself, even inside a model, and on the same spot again the one behind it (#482).
+                    let hits = at
+                        .and_then(|at| view.ray(at))
+                        .map(|ray| pick::parts_along(&editor.dm, ray))
+                        .unwrap_or_default();
+                    let at = at.map_or([0.0; 2], |at| [at.x, at.y]);
+                    match editor.viewport.pick_cycle.advance(at, &hits, pick::CYCLE_TOLERANCE) {
+                        Some(id) if adding => {
+                            editor.selection.add(id);
+                            editor.explorer.reveal(&editor.dm, id);
+                        }
+                        Some(id) => editor.select(Some(id)),
+                        None if adding => {}
+                        None => editor.selection.clear(),
+                    }
+                } else {
+                    editor.viewport.pick_cycle.reset();
+                    match at.and_then(under) {
+                        Some(id) if adding => editor.selection.toggle(id),
+                        Some(id) => editor.select(Some(id)),
+                        None if adding => {}
+                        None => editor.selection.clear(),
+                    }
                 }
             }
             let painter = ui.painter().with_clip_rect(rect);
