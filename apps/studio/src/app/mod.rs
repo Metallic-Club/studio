@@ -3069,12 +3069,19 @@ mod tests {
         let mut harness = editing(settings_file("editor-insert", None), "Insert Game");
         harness.set_size(egui::vec2(1280.0, 1000.0));
         settle(&mut harness);
-        // A row's + opens the window for that row.
-        harness
+        // A row's + opens the window for that row, at the pointer (#504).
+        let plus = harness
             .get_by_role_and_label(Role::Button, "Insert into Workspace")
-            .click();
+            .rect()
+            .center();
+        left_click(&mut harness, egui::Rect::from_center_size(plus, egui::Vec2::ZERO));
         settle(&mut harness);
-        harness.get_by_label(crate::panels::insert::TITLE);
+        let title = harness.get_by_label(crate::panels::insert::TITLE).rect();
+        assert!(
+            // At the pointer, or as near as the screen allows: the Explorer's + is near its right edge.
+            (title.left() >= plus.x - 1.0 || title.right() >= 1280.0 - 1.0) && (title.top() - plus.y).abs() < 40.0,
+            "{title:?} against the pointer at {plus:?}"
+        );
         // Part is in Frequently Used and in Parts (#500).
         assert_eq!(harness.query_all_by_label("Insert Part").count(), 2);
         // The button at the top right switches to the grid and back, kept in the settings (#500).

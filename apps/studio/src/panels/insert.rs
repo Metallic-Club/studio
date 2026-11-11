@@ -45,12 +45,24 @@ const ORDER: [&str; 7] = ["Parts", "Containers", "Lights", "Scripts", "Events", 
 const OTHER: &str = "Other";
 
 /// What the window is open for: the instance it inserts into, and the search.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Inserting {
     /// Where the new instance goes.
     pub parent: metallic_engine::metallic_core::Id,
     /// The search.
     pub query: String,
+    /// Where the window's top-left corner goes on its next frame: the pointer when it opens (#504), its corner when
+    /// the view switches. `None` leaves it where it is.
+    pub place: Option<Place>,
+}
+
+/// Where Insert Object's window goes on its next frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Place {
+    /// At the pointer (where it was clicked open), kept on screen.
+    Pointer,
+    /// With its top-left corner here.
+    At(egui::Pos2),
 }
 
 /// One class the window offers.
@@ -178,16 +190,28 @@ pub fn show(
 ) -> (Option<ClassId>, bool) {
     let mut open = true;
     let mut chosen = None;
+    let mut switched = false;
     // Each view keeps its own size: a narrow list, a wide grid.
     let (id, size, min_width) = if *grid {
         ("metallic.explorer.insert.grid", [980.0, 600.0], 480.0)
     } else {
         ("metallic.explorer.insert", [320.0, 520.0], 260.0)
     };
-    egui::Window::new(TITLE)
+    let mut window = egui::Window::new(TITLE)
         .id(Id::unique(id))
-        .pivot(Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center())
+        .pivot(Align2::LEFT_TOP)
+        .default_pos(ctx.content_rect().center() - vec2(size[0], size[1]) / 2.0)
+        .constrain(true);
+    // At the pointer when it opens (#504), not where it was last; where its corner was when the view switches.
+    let place = match inserting.place.take() {
+        Some(Place::Pointer) => ctx.pointer_latest_pos(),
+        Some(Place::At(at)) => Some(at),
+        None => None,
+    };
+    if let Some(at) = place {
+        window = window.current_pos(at);
+    }
+    let shown = window
         .title_bar(false)
         .collapsible(false)
         .resizable(true)
@@ -209,6 +233,7 @@ pub fn show(
                     );
                     if view_toggle(ui, *grid).clicked() {
                         *grid = !*grid;
+                        switched = true;
                     }
                     field
                 })
@@ -250,6 +275,10 @@ pub fn show(
                     chosen = chosen.or(picked);
                 });
         });
+    // The other view's window opens where this one is.
+    if switched && let Some(shown) = shown {
+        inserting.place = Some(Place::At(shown.response.rect.min));
+    }
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         open = false;
     }
@@ -474,6 +503,7 @@ mod view_tests {
                 Inserting {
                     parent,
                     query: String::new(),
+                    place: None,
                 },
                 start_grid,
             );
