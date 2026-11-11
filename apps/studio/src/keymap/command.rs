@@ -249,7 +249,8 @@ const FLY: &str = "Viewport/Fly camera";
 const MOUSE: &str = "Viewport/Mouse";
 const STATS: &str = "Viewport/Stats";
 
-/// A stats viewer's command (#479): with a project open, its key shows or hides it in the viewport.
+/// A stats viewer's command (#479): with a project open, its key shows or hides it in the viewport, and over the
+/// Game tab while a game runs (#492).
 const fn stats(
     id: &'static str,
     title: &'static str,
@@ -259,6 +260,7 @@ const fn stats(
     Command {
         contexts: &[Context::Editor],
         defaults: key,
+        during_play: true,
         ..Command::new(id, title, STATS, description)
     }
 }

@@ -49,6 +49,22 @@ fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Strok
     }
 }
 
+/// The Debug section of the Viewport's menu and the Game tab's (#492): the performance overlay's viewers (#479), as
+/// the Player draws them, over the viewport and over a running game alike; Shift+F1 to F4 by default.
+pub(super) fn debug_section(ui: &mut Ui, cx: &mut PanelContext<'_>) {
+    crate::theme::section(ui, "metallic.viewport.menu.debug", "Debug", |ui| {
+        indented(ui, |ui| {
+            let stats = &mut cx.editor.viewport.stats;
+            for viewer in StatsViewer::ALL {
+                let mut on = stats.contains(viewer);
+                if crate::theme::checkbox(ui, &mut on, viewer.name()).changed() {
+                    stats.set(viewer, on);
+                }
+            }
+        });
+    });
+}
+
 /// A section's rows in the Viewport's menu (#477), in line with its label, past the chevron.
 fn indented(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
@@ -157,18 +173,7 @@ impl Panel for Viewport {
                 }
             });
         });
-        // The performance overlay's viewers (#479), as the Player draws them; Shift+F1 to F4 by default.
-        crate::theme::section(ui, "metallic.viewport.menu.debug", "Debug", |ui| {
-            indented(ui, |ui| {
-                let stats = &mut cx.editor.viewport.stats;
-                for viewer in StatsViewer::ALL {
-                    let mut on = stats.contains(viewer);
-                    if crate::theme::checkbox(ui, &mut on, viewer.name()).changed() {
-                        stats.set(viewer, on);
-                    }
-                }
-            });
-        });
+        debug_section(ui, cx);
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {

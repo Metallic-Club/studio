@@ -34,6 +34,17 @@ impl Panel for Game {
         Zone::Centre
     }
 
+    fn has_menu(&self) -> bool {
+        true
+    }
+
+    /// The stats viewers over the running game (#492), as the Viewport's menu has them.
+    fn menu(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        ui.set_min_width(crate::theme::MENU_WIDTH);
+        ui.spacing_mut().item_spacing.y = crate::theme::tokens::space::S2;
+        super::viewport::debug_section(ui, cx);
+    }
+
     fn context(&self) -> Context {
         Context::Editor
     }

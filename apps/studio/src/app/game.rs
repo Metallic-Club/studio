@@ -29,6 +29,8 @@ impl GameRenderer {
     /// (re)registered with `painter`. A texture of an ended session is freed. Returns whether another frame is wanted
     /// soon even without input (a resize under way).
     pub fn frame(&mut self, context: &RenderContext, painter: &mut egui_wgpu::Renderer, studio: &mut Studio) -> bool {
+        // The stats viewers the viewport shows (#479) show over the game too (#492).
+        let stats = studio.editor().map(|editor| editor.viewport.stats).unwrap_or_default();
         let session = studio.editor_mut().and_then(|editor| editor.play.as_mut());
         let Some(session) = session else {
             if let Some((id, ..)) = self.texture.take() {
@@ -61,6 +63,12 @@ impl GameRenderer {
             }
         }
         player.resize_viewport(width, height);
+        {
+            let mut renderer = player.renderer().borrow_mut();
+            if renderer.stats_viewers() != stats {
+                renderer.set_stats_viewers(stats);
+            }
+        }
         player.render_viewport();
 
         let renderer = player.renderer().borrow();
