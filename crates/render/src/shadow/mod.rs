@@ -26,10 +26,11 @@
 //! finer than the surface receiving the shadow, so levels cause no acne, and independent of where the camera stands,
 //! so a cached cascade stays valid (the reasoning is in [`crate::lod`]). A caster is a drawn part with `CastShadow`
 //! on ([`crate::scene::is_shadow_caster`]). A partly see-through part casts a shadow that lets light through by its
-//! Transparency (#122, [`ShadowSettings::see_through`]; off at Low, where it casts none): its casters are drawn after
-//! the solid ones, sorted into one draw per mesh kind and level, by a pipeline whose fragment stage leaves out that
-//! share of its texels (spread by interleaved gradient noise), so the comparison filter averages them into a partial
-//! shadow. Solid casters keep a pipeline without a fragment stage. Sun shadows as a whole follow
+//! Transparency (#122, #491, [`ShadowSettings::see_through`]; off at Low, where it casts none): see-through casters
+//! are drawn into maps of their own at half the cascade's resolution, their nearest depth and the light they let
+//! through (`see_through.rs`), which a receiver behind them reads filtered, so the shadow fades smoothly with the
+//! Transparency. A cascade with no see-through caster never reads them, and they are made only once the scene has a
+//! see-through part. Solid casters keep a pipeline without a fragment stage. Sun shadows as a whole follow
 //! `Lighting.GlobalShadows` ([`crate::SceneLighting::global_shadows`]); `Light.Shadows` is the switch of local
 //! lights' shadows, which are drawn into a shadow atlas ([`crate::lights`]).
 //!
@@ -92,7 +93,7 @@ use metallic_core::glam::Vec3;
 
 pub use cascade::{CACHED_STEP_DIVISOR, CASTER_REACH};
 pub(crate) use maps::{FrameShadow, SHADOW_FORMAT, ShadowMaps, caster_pipeline};
-pub(crate) use see_through::SeeThroughCasters;
+pub(crate) use see_through::{SeeThroughCasters, SeeThroughMaps, SeeThroughPlaceholder, clear_light_pipeline};
 
 #[cfg(doc)]
 use crate::VisibleSet;

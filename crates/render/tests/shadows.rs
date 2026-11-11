@@ -343,37 +343,71 @@ fn cast_shadow_and_global_shadows_turn_shadows_off() {
     assert_eq!(scenes::compare(&global_off, &off, 0).max, 0);
 }
 
-/// #122: a see-through part's shadow lets light through by its Transparency (a little see-through, a little light;
-/// half, about half), above Low; at Low it casts none, as before.
+/// #122, #491: a see-through part's shadow lets light through by its Transparency, getting lighter smoothly as it
+/// grows, with no pattern inside it (#122's dithering left a grid of holes), above Low; at Low it casts none, as
+/// before. A part over the see-through one, nearer the sun, is not dimmed by it.
 #[test]
 fn a_see_through_part_lets_light_through_its_shadow() {
     let Some(context) = gpu() else { return };
     let mut built = shadow_game();
+    // A block resting on the pillar's top: nearer the sun than the pillar, in the same place on its map.
+    let _cap = built.game.part(
+        Look::new("Block", "Plastic", [230, 230, 230]),
+        Vec3::new(1.0, 0.4, 1.0),
+        CFrame::new(Vec3::new(0.0, PILLAR_HEIGHT + 0.2, 0.0)),
+    );
+    let cap_top = project(&built.game, Vec3::new(0.0, PILLAR_HEIGHT + 0.4, 0.0));
     let (shadowed, _) = floor_points(&built.game);
-    let off = level(&render(&context, &mut built.game, ShadowSettings::OFF), shadowed);
+    let off_pixels = render(&context, &mut built.game, ShadowSettings::OFF);
+    let off = level(&off_pixels, shadowed);
     let solid = level(&render(&context, &mut built.game, ShadowSettings::default()), shadowed);
-    let at = |game: &mut Game, transparency: f64, shadows: ShadowSettings| {
+    let set = |game: &mut Game, transparency: f64| {
         game.dm
             .set_by_name(built.pillar, "Transparency", Value::Number(transparency))
             .expect("Transparency");
-        level(&render(&context, game, shadows), shadowed)
     };
-    let faint = at(&mut built.game, 0.01, ShadowSettings::default());
-    let half = at(&mut built.game, 0.5, ShadowSettings::default());
-    let mostly = at(&mut built.game, 0.9, ShadowSettings::default());
-    let low = at(&mut built.game, 0.5, Quality::LOW.shadows);
-    eprintln!(
-        "no shadow {off:.1}, solid {solid:.1}; 0.01 {faint:.1}, 0.5 {half:.1}, 0.9 {mostly:.1}; Low at 0.5 {low:.1}"
-    );
+    let mut levels = Vec::new();
+    for transparency in [0.01, 0.25, 0.5, 0.75, 0.99] {
+        set(&mut built.game, transparency);
+        let pixels = render(&context, &mut built.game, ShadowSettings::default());
+        // Even inside: no pixel of a 9 × 9 block of the shadow stands out from the rest.
+        let (x0, y0) = shadowed;
+        let block: Vec<f32> = (0..9)
+            .flat_map(|dy| (0..9).map(move |dx| (x0 + dx - 4, y0 + dy - 4)))
+            .map(|(x, y)| {
+                let p = pixels[(y * SIZE + x) as usize];
+                (f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])) / 3.0
+            })
+            .collect();
+        let spread = block.iter().cloned().fold(f32::MIN, f32::max) - block.iter().cloned().fold(f32::MAX, f32::min);
+        let cap = level(&pixels, cap_top);
+        levels.push((transparency, level(&pixels, shadowed), spread, cap));
+    }
+    set(&mut built.game, 0.5);
+    let low = level(&render(&context, &mut built.game, Quality::LOW.shadows), shadowed);
+    let cap_lit = level(&off_pixels, cap_top);
+    eprintln!("no shadow {off:.1}, solid {solid:.1}; (transparency, level, spread, cap) {levels:.1?}; Low {low:.1}");
     let depth = off - solid;
     assert!(depth > 10.0, "the solid pillar casts a shadow");
-    // 0.01 is still nearly all of the shadow; 0.5 about half of it; 0.9 little of it.
-    assert!(faint < solid + depth * 0.1, "0.01 lets too much through ({faint})");
-    assert!(
-        half > solid + depth * 0.25 && half < off - depth * 0.25,
-        "0.5 is not about half the shadow ({half})"
-    );
-    assert!(mostly > off - depth * 0.3, "0.9 lets too little through ({mostly})");
+    // Lighter with every step, from nearly all of the shadow to nearly none, about in proportion.
+    for pair in levels.windows(2) {
+        assert!(pair[1].1 > pair[0].1 + depth * 0.1, "not lighter: {levels:.1?}");
+    }
+    for &(transparency, level, spread, cap) in &levels {
+        let expected = solid + depth * transparency as f32;
+        assert!(
+            (level - expected).abs() < depth * 0.2,
+            "{transparency}: {level} against {expected}"
+        );
+        assert!(
+            spread < 6.0,
+            "{transparency}: the shadow has a pattern ({spread} levels)"
+        );
+        assert!(
+            (cap - cap_lit).abs() < 3.0,
+            "{transparency}: the block over it is dimmed ({cap} against {cap_lit})"
+        );
+    }
     // Low draws no see-through casters (and the pillar is the only one here).
     assert!((low - off).abs() < 3.0, "Low drew the see-through shadow ({low})");
 }

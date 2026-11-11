@@ -23,6 +23,5 @@ fn vs_see_through(
     var out: SeeThrough;
     out.position = shadow_place(position, r0, r1, r2);
     out.transparency = transparency;
-    out.seed = see_through_seed(r0, r1, r2);
     return out;
 }

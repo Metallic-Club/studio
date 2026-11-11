@@ -2511,6 +2511,36 @@ impl HandParts {
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
         let shadows = HandShadows::new(device, &regions, instances, live);
+        // The see-through maps' placeholders the renderer binds while none are made (#491): a depth and a light
+        // array of one texel, and the sampler that filters them.
+        let placeholder = |format: wgpu::TextureFormat| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("hand see-through"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    ..wgpu::TextureViewDescriptor::default()
+                })
+        };
+        let see_depth = placeholder(wgpu::TextureFormat::Depth32Float);
+        let see_light = placeholder(wgpu::TextureFormat::R8Unorm);
+        let see_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
         let groups = |pipeline: &wgpu::RenderPipeline, instances: &[(u32, &wgpu::Buffer)]| {
             let group = |index: u32, buffers: &[(u32, &wgpu::Buffer)]| {
                 let mut entries: Vec<_> = buffers
@@ -2529,6 +2559,18 @@ impl HandParts {
                     entries.push(wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::Sampler(&shadows.sampler),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&see_depth),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(&see_light),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::Sampler(&see_sampler),
                     });
                 }
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3878,8 +3920,11 @@ fn a_lit_frame_allocates_only_its_writes() {
         stats.drawn > 8 && stats.shadowed > 0 && stats.cluster_entries > 0,
         "{stats:?}"
     );
+    // The lit frame also binds the atlas's see-through maps (#491), real ones here (the grid has see-through parts):
+    // two texture views the unlit frame does not bind, which wgpu tracks in the passes that bind them.
+    const SEE_THROUGH_VIEWS: u64 = 2;
     assert!(
-        lit <= unlit + hand + WGPU_DATA_JITTER,
+        lit <= unlit + hand + SEE_THROUGH_VIEWS + WGPU_DATA_JITTER,
         "a lit frame allocates {lit} against {unlit} unlit and {hand} for its writes"
     );
 }

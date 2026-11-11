@@ -231,13 +231,15 @@ struct FrameUniforms {
     lights_clusters: [f32; 4],
     lights_local: [f32; 4],
     lights_atlas: [f32; 4],
+    /// Per cascade: 1 when its see-through maps hold see-through casters (#491).
+    shadow_see_through: [f32; 4],
     /// x: the shading view ([`ShadingView`], #478) the fragment shader draws.
     view: [f32; 4],
 }
 
 /// The frame group's entries a frame without local lights binds: the frame uniform, the materials, the sun's shadow
 /// maps and their sampler.
-const SUN_ENTRIES: usize = 4;
+const SUN_ENTRIES: usize = 7;
 
 /// The local lights' uniform array (`local_lights` in lights.wgsl).
 const LIGHTS_SIZE: u64 = 64 * MAX_GPU_LIGHTS as u64;
@@ -319,6 +321,7 @@ impl FrameUniforms {
             lights_clusters: local.clusters,
             lights_local: local.local,
             lights_atlas: local.atlas,
+            shadow_see_through: shadow.see_through,
             view: [0.0; 4],
         }
     }
@@ -614,6 +617,34 @@ impl PartRenderer {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
+            // The cascades' see-through maps (#491): the nearest see-through casters' depth, the light they let
+            // through, and the sampler that filters it.
+            wgpu::BindGroupLayoutEntry {
+                binding: 8,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 9,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 10,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
             // The local lights (`crate::lights`): their uniform array, the cluster texture, the shadow tiles and
             // the shadow atlas.
             uniform(4, wgpu::ShaderStages::FRAGMENT, LIGHTS_SIZE),
@@ -638,9 +669,30 @@ impl PartRenderer {
                 },
                 count: None,
             },
+            // The atlas's see-through maps (#491), filtered with the cascades' sampler.
+            wgpu::BindGroupLayoutEntry {
+                binding: 11,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 12,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ];
         // The pipelines of frames with local lights bind all of it; the sky and the pipelines of frames without
-        // (lights_off.wgsl) bind the first four entries alone, so such a frame binds what it did before local lights.
+        // (lights_off.wgsl) bind the sun's entries alone (the first seven), so such a frame binds nothing of the lights'.
         let layouts_turn = DescriptorHeapTurn::take();
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic parts frame"),
@@ -776,13 +828,22 @@ impl PartRenderer {
         debug_assert_eq!(materials.buffer().size(), MATERIAL_TABLE_SIZE);
         // Their pipelines are made here, in the device's turn with the workers' compiles (Direct3D 12 with FXC).
         let turn = compiler.turn().take();
-        let shadows = ShadowMaps::new((device, queue, maker), binding, instance_layout.as_ref(), cache);
+        // One pair of placeholders for the cascades' and the atlas's see-through maps (#491).
+        let see_placeholder = crate::shadow::SeeThroughPlaceholder::new(device);
+        let shadows = ShadowMaps::new(
+            (device, queue, maker),
+            binding,
+            instance_layout.as_ref(),
+            cache,
+            &see_placeholder,
+        );
         let lights = LocalLights::new(
             (device, queue, maker),
             binding,
             instance_layout.as_ref(),
             LightSettings::default(),
             cache,
+            &see_placeholder,
         );
         drop(turn);
         let sun_group = frame_group_without_lights(device, &sun_layout, &frame_buffer, &materials, &shadows);
@@ -1122,6 +1183,20 @@ impl PartRenderer {
         self.lights.atlas_target()
     }
 
+    /// The atlas's see-through maps to draw into this frame (depth, light), when it draws them (#491).
+    pub(crate) fn light_see_through_targets(&self) -> Option<(&wgpu::TextureView, &wgpu::TextureView)> {
+        self.lights.see_through_targets()
+    }
+
+    /// Records the atlas's see-through casters into `render_pass`: their depth, or with `light` the light they let
+    /// through (#491).
+    pub(crate) fn draw_light_see_through(&mut self, light: bool, render_pass: &mut wgpu::RenderPass<'_>) {
+        let (draws, instances, triangles) = self.lights.draw_see_through(light, &self.meshes, render_pass);
+        self.stats.light_shadow_draws += draws;
+        self.stats.light_shadow_instances += instances;
+        self.stats.light_shadow_triangles += triangles;
+    }
+
     /// Records the atlas's tiles into `render_pass`, a depth pass into [`PartRenderer::light_shadow_target`] that
     /// loads it.
     pub(crate) fn draw_light_shadows(&mut self, render_pass: &mut wgpu::RenderPass<'_>) {
@@ -1150,6 +1225,20 @@ impl PartRenderer {
             // A settings change's new maps took over this frame.
             self.rebuild_frame_group();
         }
+    }
+
+    /// Cascade `cascade`'s see-through maps to draw into this frame (depth, light), when it draws them (#491).
+    pub(crate) fn see_through_targets(&self, cascade: usize) -> Option<(&wgpu::TextureView, &wgpu::TextureView)> {
+        self.shadows.see_through_targets(cascade)
+    }
+
+    /// Records cascade `cascade`'s see-through casters into `render_pass`: their depth, or with `light` the light
+    /// they let through (#491).
+    pub(crate) fn draw_see_through(&mut self, cascade: usize, light: bool, render_pass: &mut wgpu::RenderPass<'_>) {
+        let (draws, instances, triangles) = self.shadows.draw_see_through(cascade, light, &self.meshes, render_pass);
+        self.stats.shadow_draws += draws;
+        self.stats.shadow_instances += instances;
+        self.stats.shadow_triangles += triangles;
     }
 
     /// Where shadow cascade `cascade`'s casters are drawn when they are this frame: its map, or a cached cascade's
@@ -1505,6 +1594,7 @@ fn frame_group(
     shadows: &ShadowMaps,
     lights: Option<LightBindings<'_>>,
 ) -> wgpu::BindGroup {
+    let (see_depth, see_light, see_sampler) = shadows.see_through_views();
     let sun = [
         wgpu::BindGroupEntry {
             binding: 0,
@@ -1522,6 +1612,18 @@ fn frame_group(
             binding: 3,
             resource: wgpu::BindingResource::Sampler(shadows.sampler()),
         },
+        wgpu::BindGroupEntry {
+            binding: 8,
+            resource: wgpu::BindingResource::TextureView(see_depth),
+        },
+        wgpu::BindGroupEntry {
+            binding: 9,
+            resource: wgpu::BindingResource::TextureView(see_light),
+        },
+        wgpu::BindGroupEntry {
+            binding: 10,
+            resource: wgpu::BindingResource::Sampler(see_sampler),
+        },
     ];
     let Some(lights) = lights else {
         return device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1530,7 +1632,7 @@ fn frame_group(
             entries: &sun,
         });
     };
-    let [e0, e1, e2, e3] = sun;
+    let [e0, e1, e2, e3, e8, e9, e10] = sun;
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic parts frame"),
         layout,
@@ -1539,6 +1641,9 @@ fn frame_group(
             e1,
             e2,
             e3,
+            e8,
+            e9,
+            e10,
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: lights.lights.as_entire_binding(),
@@ -1554,6 +1659,14 @@ fn frame_group(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: wgpu::BindingResource::TextureView(lights.atlas),
+            },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: wgpu::BindingResource::TextureView(lights.see_depth),
+            },
+            wgpu::BindGroupEntry {
+                binding: 12,
+                resource: wgpu::BindingResource::TextureView(lights.see_light),
             },
         ],
     })
