@@ -37,8 +37,14 @@ const SPEED_NOTE: Duration = Duration::from_millis(900);
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport;
 
-/// Draws `id`'s outline box (a part's own, a model's round its parts) with `stroke`.
+/// Draws `id`'s outline box (a part's own, a model's round its parts), or a light's reach (#523), with `stroke`.
 fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Stroke) {
+    // A light's reach (#523): it has no box of its own.
+    for [a, b] in light_icons::range_lines(dm, id) {
+        if let Some(line) = view.segment(a, b) {
+            painter.line_segment(line, stroke);
+        }
+    }
     let Some(bounds) = pick::outline_box(dm, id) else {
         return;
     };
