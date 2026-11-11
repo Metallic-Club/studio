@@ -16,3 +16,7 @@ fn local_lighting(
     out.specular = vec3<f32>(0.0);
     return out;
 }
+
+fn local_light_count(frag: vec2<f32>, p: vec3<f32>) -> u32 {
+    return 0u;
+}

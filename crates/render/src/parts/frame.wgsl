@@ -54,6 +54,8 @@ struct Frame {
     // x: one shadow-atlas texel in atlas coordinates, y: the filter's reach in texels, z: 1 when any drawn light has
     // a shadow.
     lights_atlas: vec4<f32>,
+    // x: the shading view (parts/shading.rs, #478): 0 shaded, 1 unlit, 2 lighting only, 3 light density.
+    view: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

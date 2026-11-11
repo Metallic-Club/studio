@@ -89,11 +89,13 @@ mod assets;
 mod camera;
 mod material;
 mod mesh;
+mod shading;
 mod transparent;
 
 pub use camera::{Camera, CameraReader};
 pub use material::{MAX_MATERIAL_ROWS, MaterialParams, MaterialTable};
 pub use mesh::{MeshData, MeshPool, MeshRange, MeshVertex};
+pub use shading::ShadingView;
 
 use std::sync::Arc;
 
@@ -229,6 +231,8 @@ struct FrameUniforms {
     lights_clusters: [f32; 4],
     lights_local: [f32; 4],
     lights_atlas: [f32; 4],
+    /// x: the shading view ([`ShadingView`], #478) the fragment shader draws.
+    view: [f32; 4],
 }
 
 /// The frame group's entries a frame without local lights binds: the frame uniform, the materials, the sun's shadow
@@ -315,6 +319,7 @@ impl FrameUniforms {
             lights_clusters: local.clusters,
             lights_local: local.local,
             lights_atlas: local.atlas,
+            view: [0.0; 4],
         }
     }
 }
@@ -514,6 +519,8 @@ pub struct PartRenderer {
     visible: bool,
     /// Colour parts by level of detail (a debug view).
     lod_tint: bool,
+    /// How the parts are drawn (#478).
+    shading: ShadingView,
     /// A frame had local lights to draw while their pipelines were compiling: they fade in once they exist.
     lights_held: bool,
     stats: DrawStats,
@@ -813,6 +820,7 @@ impl PartRenderer {
             draws: Vec::new(),
             visible: false,
             lod_tint: false,
+            shading: ShadingView::Shaded,
             lights_held: false,
             stats: DrawStats::default(),
         }
@@ -827,6 +835,24 @@ impl PartRenderer {
     /// Whether parts are coloured by level of detail.
     pub(crate) fn lod_tint(&self) -> bool {
         self.lod_tint
+    }
+
+    /// Draws the parts as `view` says, from the next frame (see [`crate::Renderer::set_shading_view`]).
+    pub(crate) fn set_shading_view(&mut self, view: ShadingView) {
+        self.shading = view;
+    }
+
+    /// How the parts are drawn.
+    pub(crate) fn shading_view(&self) -> ShadingView {
+        self.shading
+    }
+
+    /// Whether this frame draws the wireframe: chosen, and its pipelines compiled for the current target.
+    fn wireframe(&self) -> bool {
+        self.shading == ShadingView::Wireframe
+            && PartPipeline::WIREFRAME
+                .iter()
+                .all(|&pipeline| self.targets[self.current].get(pipeline).is_some())
     }
 
     /// The instance path the pipelines were made for.
@@ -1189,15 +1215,24 @@ impl PartRenderer {
         self.materials.fill_from_names(instances.material_names());
         self.materials.upload(&self.queue);
         let aspect = width as f32 / height.max(1) as f32;
-        let uniforms = FrameUniforms::new(
-            camera,
-            aspect,
-            offset,
-            &self.resolved,
-            self.shadows.frame(),
-            self.lights.frame(),
-            Output::new(srgb, self.lod_tint.then(|| self.meshes.level_starts())),
-        );
+        // The wireframe draws with pipelines of its own; the other views are the shader's (#478). A wireframe still
+        // compiling is drawn shaded.
+        let view = match self.shading {
+            ShadingView::Wireframe => ShadingView::Shaded,
+            view => view,
+        };
+        let uniforms = FrameUniforms {
+            view: [view.number(), 0.0, 0.0, 0.0],
+            ..FrameUniforms::new(
+                camera,
+                aspect,
+                offset,
+                &self.resolved,
+                self.shadows.frame(),
+                self.lights.frame(),
+                Output::new(srgb, self.lod_tint.then(|| self.meshes.level_starts())),
+            )
+        };
         self.stats.lights = self.lights.stats();
         let shadow = self.shadows.stats();
         self.stats.shadow_cascades = shadow.cascades;
@@ -1305,9 +1340,13 @@ impl PartRenderer {
                 }
                 let variant = self.variant();
                 let l = variant.number();
-                // The prepass writes depth only, with the pipeline made without local lights.
+                let wireframe = self.wireframe();
+                // The prepass writes depth only, with the pipeline made without local lights. The wireframe has none
+                // (its lines would be hidden by the faces' depth) and draws its lines without local lights (#478).
                 let (pipeline, variant) = match (pass, prepass) {
+                    (PassId::DepthPrepass, _) if wireframe => return,
                     (PassId::DepthPrepass, _) => (PartPipeline::Prepass, Variant::BASE),
+                    _ if wireframe => (PartPipeline::Wireframe, Variant::BASE),
                     (_, true) => (PartPipeline::Tested(l), variant),
                     (_, false) => (PartPipeline::Opaque(l), variant),
                 };
@@ -1336,8 +1375,13 @@ impl PartRenderer {
                 if self.transparent.is_empty() {
                     return;
                 }
-                let variant = self.variant();
-                let Some(pipeline) = target.get(PartPipeline::Transparent(variant.number())) else {
+                let (pipeline, variant) = if self.wireframe() {
+                    (PartPipeline::WireframeTransparent, Variant::BASE)
+                } else {
+                    let variant = self.variant();
+                    (PartPipeline::Transparent(variant.number()), variant)
+                };
+                let Some(pipeline) = target.get(pipeline) else {
                     return;
                 };
                 render_pass.set_pipeline(pipeline);
@@ -1579,7 +1623,8 @@ fn create_pipeline(
                    depth: wgpu::DepthStencilState,
                    fragment: Option<(&str, Option<wgpu::BlendState>)>,
                    variant: Variant,
-                   pulled: Option<&[wgpu::PipelineLayout; 2]>| {
+                   pulled: Option<&[wgpu::PipelineLayout; 2]>,
+                   lines: bool| {
         let constants = variant.constants();
         let lights = variant.lights;
         // Frames without local lights draw with the module and layout that have none of their bindings.
@@ -1607,10 +1652,16 @@ fn create_pipeline(
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers,
             },
+            // The wireframe view (#478) draws every triangle's edges, its back faces' too.
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: if lines { None } else { Some(wgpu::Face::Back) },
+                polygon_mode: if lines {
+                    wgpu::PolygonMode::Line
+                } else {
+                    wgpu::PolygonMode::Fill
+                },
                 ..wgpu::PrimitiveState::default()
             },
             depth_stencil: Some(depth),
@@ -1641,6 +1692,7 @@ fn create_pipeline(
             None,
             Variant::BASE,
             None,
+            false,
         ),
         PartPipeline::Sky => sky_pipeline(device, cache, shaders, format, samples),
         PartPipeline::Opaque(lights) => {
@@ -1651,6 +1703,7 @@ fn create_pipeline(
                 Some(("fs_opaque", None)),
                 lights,
                 None,
+                false,
             )
         }
         PartPipeline::Tested(lights) => {
@@ -1666,6 +1719,7 @@ fn create_pipeline(
                 Some(("fs_opaque", None)),
                 lights,
                 None,
+                false,
             )
         }
         PartPipeline::Transparent(lights) => {
@@ -1676,8 +1730,25 @@ fn create_pipeline(
                 transparent_blend,
                 lights,
                 shaders.pulled_layouts.as_ref(),
+                false,
             )
         }
+        PartPipeline::Wireframe => variant(
+            "metallic parts wireframe",
+            depth_stencil_state(true),
+            Some(("fs_wireframe", None)),
+            Variant::BASE,
+            None,
+            true,
+        ),
+        PartPipeline::WireframeTransparent => variant(
+            "metallic parts wireframe, see-through",
+            depth_stencil_state(true),
+            Some(("fs_wireframe", None)),
+            Variant::BASE,
+            shaders.pulled_layouts.as_ref(),
+            true,
+        ),
     }
 }
 

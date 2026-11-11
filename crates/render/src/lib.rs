@@ -88,7 +88,7 @@ pub use lighting::{LightingReader, SceneLighting};
 pub use lights::{LightSettings, LightStats};
 pub use lod::{LodSettings, MAX_LOD_LEVELS};
 pub use overlay::Overlay;
-pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer};
+pub use parts::{Camera, CameraReader, DrawStats, MaterialParams, MaterialTable, PartRenderer, ShadingView};
 pub use pipelines::PipelineStats;
 pub use post::{AntiAliasing, PostSettings, PostStats};
 pub use renderer::{Renderer, RendererSettings};

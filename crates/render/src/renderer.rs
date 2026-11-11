@@ -8,7 +8,7 @@ use crate::lighting::SceneLighting;
 use crate::lights::{LightSettings, LightStats};
 use crate::lod::{LodSettings, LodView};
 use crate::overlay::{Overlay, OverlayPass, overlay_recipe};
-use crate::parts::{Camera, DrawStats, MeshData, PartRenderer};
+use crate::parts::{Camera, DrawStats, MeshData, PartRenderer, ShadingView};
 use crate::pipeline_cache::PipelineCacheStore;
 use crate::pipelines::{Compiler, PartPipeline, Pipeline, PipelineKey, PipelineStats, Recipe};
 use crate::post::{AntiAliasing, FinishParams, Post, PostSettings, PostStats};
@@ -198,6 +198,8 @@ pub struct Renderer {
     msaa_counts: MsaaSampleCounts,
     max_texture_size: u32,
     transient_attachments: bool,
+    /// The device draws triangles as lines: the wireframe shading view can be made (#478).
+    polygon_mode_line: bool,
     depth: Option<Attachment>,
     msaa_color: Option<Attachment>,
     /// The scene colour, while the scene is drawn into one ([`FramePlan::uses_scene_color`]): the HDR target the
@@ -312,6 +314,7 @@ impl Renderer {
             msaa_counts,
             max_texture_size: context.capabilities().max_texture_size,
             transient_attachments: context.capabilities().transient_attachments,
+            polygon_mode_line: context.capabilities().polygon_mode_line,
             depth: None,
             msaa_color: None,
             scene_color: None,
@@ -1116,6 +1119,40 @@ impl Renderer {
         self.parts.lod_tint()
     }
 
+    /// Draws the parts as `view` says from the next frame (#478, [`ShadingView`]). The wireframe's pipelines are
+    /// compiled in the background the first time it is chosen; until they exist, and on a device that cannot draw
+    /// lines ([`crate::Capabilities::polygon_mode_line`]), the parts are drawn shaded.
+    pub fn set_shading_view(&mut self, view: ShadingView) {
+        self.parts.set_shading_view(view);
+        self.queue_wireframe();
+    }
+
+    /// How the parts are drawn ([`Renderer::set_shading_view`]).
+    pub fn shading_view(&self) -> ShadingView {
+        self.parts.shading_view()
+    }
+
+    /// Whether the wireframe view can be drawn on this device.
+    pub fn supports_wireframe(&self) -> bool {
+        self.polygon_mode_line
+    }
+
+    /// Queues the wireframe's pipelines for the scene's target while the wireframe view is chosen (nothing when they
+    /// are compiled or queued already).
+    fn queue_wireframe(&mut self) {
+        if self.parts.shading_view() != ShadingView::Wireframe || !self.polygon_mode_line {
+            return;
+        }
+        let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
+        for pipeline in PartPipeline::WIREFRAME {
+            self.queue(PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            });
+        }
+    }
+
     /// Changes how the sun's shadows are drawn ([`crate::shadow`]). A settings change, not for every frame: a new
     /// size or cascade count makes the maps again (off the frame once a scene's first frame is drawn, see
     /// [`Renderer`]), and every map is drawn again once they exist.
@@ -1171,6 +1208,8 @@ impl Renderer {
         target: &wgpu::TextureView,
         prepare: impl FnOnce(&mut wgpu::CommandEncoder),
     ) -> wgpu::SubmissionIndex {
+        // A new MSAA count or format needs the wireframe's pipelines again.
+        self.queue_wireframe();
         let (mut encoder, slot) = self.begin_frame(false);
         prepare(&mut encoder);
         self.prepare_overlay();

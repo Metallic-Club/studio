@@ -14,7 +14,7 @@ use metallic_render::settings::{Calibration, Calibrator, GraphicsSettings, Quali
 use metallic_render::{
     AntiAliasing, Camera, CameraReader, Capabilities, ContextOptions, CullSettings, DrawStats, GpuScene, LightSettings,
     LightingReader, LodSettings, PassId, PassSet, RenderContext, RenderError, RenderSurface, Renderer,
-    RendererSettings, SceneLighting, ShadowSettings, SurfaceFrame, ViewportTarget, wgpu,
+    RendererSettings, SceneLighting, ShadingView, ShadowSettings, SurfaceFrame, ViewportTarget, wgpu,
 };
 
 use crate::calibration::{AutoCalibration, CALIBRATION_SIZE, CALIBRATION_WORKLOAD, CalibrationOutcome, GameFrame};
@@ -88,6 +88,8 @@ pub struct SceneRenderer {
     post_chain: bool,
     bloom_compute: bool,
     lod_tint: bool,
+    /// How the parts are drawn (#478).
+    shading: ShadingView,
     present_mode: Option<wgpu::PresentMode>,
     /// The player's graphics settings, once set ([`SceneRenderer::set_graphics`]).
     graphics: Option<GraphicsSettings>,
@@ -160,6 +162,7 @@ impl SceneRenderer {
             post_chain: true,
             bloom_compute: true,
             lod_tint: false,
+            shading: ShadingView::Shaded,
             present_mode: None,
             graphics: None,
             tier: None,
@@ -295,6 +298,20 @@ impl SceneRenderer {
         if let Some(device) = self.device.as_mut() {
             device.renderer.set_lod_tint(on);
         }
+    }
+
+    /// Draws the parts as `view` says, a debug view of Studio's viewport ([`metallic_render::Renderer::set_shading_view`],
+    /// #478). Shaded by default. Applies now and to every later renderer.
+    pub fn set_shading_view(&mut self, view: ShadingView) {
+        self.shading = view;
+        if let Some(device) = self.device.as_mut() {
+            device.renderer.set_shading_view(view);
+        }
+    }
+
+    /// How the parts are drawn ([`SceneRenderer::set_shading_view`]).
+    pub fn shading_view(&self) -> ShadingView {
+        self.shading
     }
 
     /// Changes the scene's resolution: a render scale, or dynamic resolution holding a GPU frame time (see
@@ -782,6 +799,7 @@ impl SceneRenderer {
         renderer.set_lighting(self.lighting);
         renderer.set_overlay_enabled(self.overlay);
         renderer.set_lod_tint(self.lod_tint);
+        renderer.set_shading_view(self.shading);
         // A renderer is made without MSAA (its sample counts are known once it exists), then given its own.
         apply_anti_aliasing(&mut renderer, self.anti_aliasing);
         let old = self.device.replace(Device {
@@ -911,6 +929,7 @@ impl RenderHook for SceneRenderer {
             }
             device.renderer.set_overlay_enabled(self.overlay);
             device.renderer.set_lod_tint(self.lod_tint);
+            device.renderer.set_shading_view(self.shading);
             // A renderer is made without MSAA (its sample counts are known once it exists), then given its own.
             apply_anti_aliasing(&mut device.renderer, self.anti_aliasing);
             if let Some(mode) = self.present_mode {

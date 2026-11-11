@@ -9,6 +9,7 @@ pub mod keybinds;
 pub mod store;
 pub mod window;
 
+use metallic_engine::metallic_render::ShadingView;
 use metallic_engine::metallic_render::lights::MAX_GPU_LIGHTS;
 use metallic_engine::metallic_render::resolution::{MAX_SCALE, MIN_SCALE};
 use metallic_engine::metallic_render::settings::GraphicsSettings;
@@ -90,6 +91,8 @@ pub struct Viewport {
     pub secondary_speed: f32,
     /// Whether the axis gizmo shows in the corner (#386).
     pub show_axes: bool,
+    /// How the viewport draws the parts (#478): shaded, unlit, lighting only, light density or wireframe.
+    pub shading: ShadingView,
 }
 
 impl Default for Viewport {
@@ -98,6 +101,7 @@ impl Default for Viewport {
             fly_speed: 40.0,
             secondary_speed: 3.0,
             show_axes: true,
+            shading: ShadingView::Shaded,
         }
     }
 }
@@ -283,6 +287,12 @@ impl StudioSettings {
             read(viewport, "fly_speed", number, &mut v.fly_speed);
             read(viewport, "secondary_speed", number, &mut v.secondary_speed);
             read(viewport, "show_axes", Value::as_bool, &mut v.show_axes);
+            read(
+                viewport,
+                "shading",
+                |v| v.as_str().and_then(ShadingView::parse),
+                &mut v.shading,
+            );
         }
         if let Some(appearance) = section("appearance") {
             let a = &mut settings.appearance;
@@ -346,6 +356,7 @@ impl StudioSettings {
             viewport.insert("fly_speed".into(), round(v.fly_speed));
             viewport.insert("secondary_speed".into(), round(v.secondary_speed));
             viewport.insert("show_axes".into(), Value::Boolean(v.show_axes));
+            viewport.insert("shading".into(), Value::String(v.shading.as_str().into()));
         });
         let a = &self.appearance;
         with_section(&mut document, "appearance", |appearance| {
@@ -641,8 +652,10 @@ turn_step = 999
 
     #[test]
     fn the_camera_speeds_round_trip_and_stay_in_range() {
-        let document: Table =
-            toml::from_str("[viewport]\nfly_speed = 12.5\nsecondary_speed = 0.01\nshow_axes = false\n").unwrap();
+        let document: Table = toml::from_str(
+            "[viewport]\nfly_speed = 12.5\nsecondary_speed = 0.01\nshow_axes = false\nshading = \"wireframe\"\n",
+        )
+        .unwrap();
         let settings = StudioSettings::from_document(&document);
         assert_eq!(
             settings.viewport,
@@ -650,6 +663,7 @@ turn_step = 999
                 fly_speed: 12.5,
                 secondary_speed: SECONDARY_SPEED.0,
                 show_axes: false,
+                shading: ShadingView::Wireframe,
             }
         );
         let written = settings.to_document(&Table::new());
