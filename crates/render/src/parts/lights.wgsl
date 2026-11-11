@@ -39,7 +39,8 @@ struct ShadowTile {
     clip: mat4x4<f32>,
     // xy: the tile's corner in the atlas; z: its size.
     rect: vec4<f32>,
-    // x: near × far / (far − near); y: a texel's width per metre of depth.
+    // x: near × far / (far − near); y: a texel's width per metre of depth; z: 1 when its see-through maps hold
+    // see-through casters (#491).
     params: vec4<f32>,
 }
 
@@ -47,6 +48,9 @@ struct ShadowTile {
 @group(0) @binding(5) var light_clusters: texture_2d<u32>;
 @group(0) @binding(6) var<uniform> shadow_tiles: array<ShadowTile, 64>;
 @group(0) @binding(7) var shadow_atlas: texture_depth_2d;
+// The atlas's see-through maps (#491): the nearest see-through casters' depth and the light they let through.
+@group(0) @binding(11) var see_through_atlas_depth: texture_depth_2d_array;
+@group(0) @binding(12) var see_through_atlas_light: texture_2d_array<f32>;
 
 fn cluster_texel(i: u32) -> u32 {
     return textureLoad(light_clusters, vec2<i32>(i32(i % CLUSTER_TEXTURE_WIDTH), i32(i / CLUSTER_TEXTURE_WIDTH)), 0).r;
@@ -102,7 +106,17 @@ fn local_visibility(light: LocalLight, p: vec3<f32>, n: vec3<f32>, n_dot_l: f32,
     lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, clamp(uv + vec2<f32>(spread, -spread), low, high), reference);
     lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, clamp(uv + vec2<f32>(-spread, spread), low, high), reference);
     lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, clamp(uv + vec2<f32>(spread, spread), low, high), reference);
-    return lit * 0.25;
+    var visible = lit * 0.25;
+    // Behind a see-through caster, as much light as it lets through (#491); the part itself and what is in front of
+    // it are not dimmed. The maps are half the atlas's resolution, so their bias is twice as large.
+    if tile.params.z > 0.5 {
+        let at = clamp(uv, low, high);
+        let see_reference = reference - bias * tile.params.x / (clip.w * clip.w);
+        let front = textureSampleCompareLevel(see_through_atlas_depth, shadow_sampler, at, 0, see_reference);
+        let through = textureSampleLevel(see_through_atlas_light, see_through_sampler, at, 0, 0.0).r;
+        visible *= mix(through, 1.0, front);
+    }
+    return visible;
 }
 
 // The light the local lights reflect at a point: camera-relative `p`, unit normal `n`, towards the camera `v`, seen

@@ -37,6 +37,5 @@ fn vs_see_through(@location(0) position: vec3<f32>, @builtin(instance_index) ind
     var out: SeeThrough;
     out.position = shadow_place(position, instance.r0, instance.r1, instance.r2);
     out.transparency = instance.transparency;
-    out.seed = see_through_seed(instance.r0, instance.r1, instance.r2);
     return out;
 }

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use metallic_core::glam::{Mat4, Vec3};
 
 use super::cascade::{CascadeCache, CascadeFit, SceneState, fit_cascades};
-use super::see_through::SeeThroughCasters;
+use super::see_through::{SeeThroughCasters, SeeThroughMaps, SeeThroughPlaceholder};
 use super::{CascadeStats, MAX_CASCADES, MAX_RECEIVER_OFFSET, ShadowSettings, ShadowStats};
 use crate::context::{DescriptorHeapTurn, in_heap_turn};
 use crate::cull::{Casters, VisibleSet};
@@ -72,6 +72,8 @@ pub(crate) struct FrameShadow {
     /// Cascades in use (0: no shadows), the filter's reach in texels, one texel in map coordinates, and the view
     /// depth the shadows start fading out at.
     pub(crate) params: [f32; 4],
+    /// Per cascade, 1 when its see-through maps hold see-through casters (#491): receivers read them only then.
+    pub(crate) see_through: [f32; MAX_CASCADES],
 }
 
 /// One cascade: where it is, what its map was drawn for, and its casters.
@@ -282,8 +284,15 @@ pub(crate) struct ShadowMaps {
     instance_layout: Option<wgpu::BindGroupLayout>,
     instance_group: Option<InstanceGroup>,
     pipeline: wgpu::RenderPipeline,
-    /// The see-through casters' pipeline (#122).
+    /// The pipeline that draws the light see-through casters let through (#491).
     see_through_pipeline: wgpu::RenderPipeline,
+    /// The see-through casters' maps, a layer per cascade (#491), and the sampler that filters them.
+    see: SeeThroughMaps,
+    see_sampler: wgpu::Sampler,
+    /// Per cascade: its see-through maps hold see-through casters (as of the last time it was drawn), and they are
+    /// drawn this frame.
+    see_held: [bool; MAX_CASCADES],
+    see_drawn: [bool; MAX_CASCADES],
     /// The cached cascades' static maps, the first cached cascade's first (empty when every cascade is dynamic).
     static_maps: Vec<StaticMap>,
     copy_layout: wgpu::BindGroupLayout,
@@ -313,6 +322,7 @@ impl ShadowMaps {
         binding: InstanceBinding,
         instance_layout: Option<&wgpu::BindGroupLayout>,
         cache: Option<&wgpu::PipelineCache>,
+        see_placeholder: &SeeThroughPlaceholder,
     ) -> Self {
         let cascade_layout = in_heap_turn(|| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -413,6 +423,15 @@ impl ShadowMaps {
             instance_group: None,
             pipeline,
             see_through_pipeline,
+            see: SeeThroughMaps::new(device, maker, see_placeholder),
+            see_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("metallic see-through shadow"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..wgpu::SamplerDescriptor::default()
+            }),
+            see_held: [false; MAX_CASCADES],
+            see_drawn: [false; MAX_CASCADES],
             static_maps: Vec::new(),
             copy_layout,
             copy_pipeline,
@@ -598,9 +617,112 @@ impl ShadowMaps {
         light: Option<Vec3>,
         lod: &LodView,
     ) -> bool {
-        let replaced = self.incoming.is_some() && self.poll_incoming();
+        let mut replaced = self.incoming.is_some() && self.poll_incoming();
+        // The see-through maps (#491), made once the scene has a see-through part while see-through shadows are drawn,
+        // at the maps' size.
+        if self.settings.see_through && self.count > 0 && !scene.scene().transparent_list().is_empty() {
+            self.see.want(self.resolution, self.count as u32);
+        }
+        if self.see.poll() {
+            // Every cascade is drawn again into them.
+            for cascade in &mut self.cascades {
+                cascade.cache = CascadeCache::default();
+            }
+            self.see_held = [false; MAX_CASCADES];
+            replaced = true;
+        }
         self.prepare_cascades(encoder, scene, (camera, aspect, light), lod);
+        self.place_see_through();
         replaced
+    }
+
+    /// Decides which cascades draw their see-through maps this frame (#491): those drawn (or built) this frame that
+    /// have see-through casters, once the maps exist. A cascade drawn without any no longer reads them; one not drawn
+    /// keeps what they hold.
+    fn place_see_through(&mut self) {
+        let dynamic = self.settings.dynamic_count();
+        let ready = self.see.ready() && self.settings.see_through;
+        for (index, cascade) in self.cascades.iter().enumerate() {
+            let drawn = index < self.active && (cascade.redraw || cascade.build);
+            let holds = !cascade.see_through.is_empty() || (index >= dynamic && !cascade.moving_see_through.is_empty());
+            self.see_drawn[index] = drawn && ready && holds;
+            if drawn || index >= self.active || !ready {
+                self.see_held[index] = self.see_drawn[index];
+            }
+            self.frame.see_through[index] = if self.see_held[index] { 1.0 } else { 0.0 };
+        }
+    }
+
+    /// Cascade `cascade`'s see-through maps to draw into this frame (depth, light), when it draws them (#491).
+    pub(crate) fn see_through_targets(&self, cascade: usize) -> Option<(&wgpu::TextureView, &wgpu::TextureView)> {
+        if self.see_drawn.get(cascade).copied().unwrap_or(false) {
+            self.see.targets(cascade)
+        } else {
+            None
+        }
+    }
+
+    /// The see-through maps' views and sampler, as the parts read them: the nearest see-through casters' depth, the
+    /// light they let through, and a filtering sampler.
+    pub(crate) fn see_through_views(&self) -> (&wgpu::TextureView, &wgpu::TextureView, &wgpu::Sampler) {
+        (self.see.depth_view(), self.see.light_view(), &self.see_sampler)
+    }
+
+    /// Records cascade `cascade`'s see-through casters into `pass` (#491): their depth (`light` false, a depth pass
+    /// into its see-through depth map) or the light they let through (`light` true, a colour pass into its
+    /// see-through light map, cleared to 1). A cached cascade's moving see-through casters are drawn too. Returns the
+    /// draws, instances and triangles.
+    pub(crate) fn draw_see_through(
+        &self,
+        cascade: usize,
+        light: bool,
+        meshes: &MeshPool,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> (u32, u32, u64) {
+        let (Some(state), Some(group)) = (self.cascades.get(cascade), self.cascade_groups.get(cascade)) else {
+            return (0, 0, 0);
+        };
+        pass.set_pipeline(if light {
+            &self.see_through_pipeline
+        } else {
+            &self.pipeline
+        });
+        pass.set_bind_group(0, group, &[]);
+        pass.set_vertex_buffer(0, meshes.vertices().slice(..));
+        pass.set_index_buffer(meshes.indices().slice(..), wgpu::IndexFormat::Uint32);
+        match self.binding {
+            InstanceBinding::Storage => {
+                if let Some(group) = self.instance_group.as_ref() {
+                    pass.set_bind_group(1, &group.group, &[]);
+                }
+            }
+            InstanceBinding::Vertex => pass.set_vertex_buffer(1, self.lists.buffer.slice(..)),
+        }
+        let moving = cascade >= self.settings.dynamic_count();
+        let lists = [
+            Some((cascade, &state.see_through)),
+            moving.then(|| (self.moving_block(cascade), &state.moving_see_through)),
+        ];
+        let (mut draws, mut instances, mut triangles) = (0, 0, 0);
+        for (block, casters) in lists.into_iter().flatten() {
+            let first = block as u32 * self.lists.stride + self.lists.see_through_offset;
+            for run in casters.runs() {
+                let mesh = meshes.range(run.kind, usize::from(run.level));
+                if mesh.index_count == 0 {
+                    continue;
+                }
+                let start = first + run.first;
+                pass.draw_indexed(
+                    mesh.first_index..mesh.first_index + mesh.index_count,
+                    0,
+                    start..start + run.count,
+                );
+                draws += 1;
+                instances += run.count;
+                triangles += u64::from(run.count) * u64::from(mesh.index_count / 3);
+            }
+        }
+        (draws, instances, triangles)
     }
 
     fn prepare_cascades(
@@ -1069,7 +1191,7 @@ impl ShadowMaps {
         let Some(state) = self.cascades.get(cascade) else {
             return (0, 0, 0);
         };
-        self.draw_list(cascade, cascade, (&state.visible, &state.see_through), meshes, pass)
+        self.draw_list(cascade, cascade, &state.visible, meshes, pass)
     }
 
     /// Whether cached cascade `cascade`'s build this frame keeps what its map holds and restores only the footprints
@@ -1108,22 +1230,15 @@ impl ShadowMaps {
         if state.moving_count == 0 {
             return (0, 0, 0);
         }
-        self.draw_list(
-            cascade,
-            self.moving_block(cascade),
-            (&state.moving, &state.moving_see_through),
-            meshes,
-            pass,
-        )
+        self.draw_list(cascade, self.moving_block(cascade), &state.moving, meshes, pass)
     }
 
-    /// Records the casters `set` holds, and its see-through casters as gathered (#122), uploaded to list block
-    /// `block`, seen from cascade `cascade`.
+    /// Records the solid casters `set` holds, uploaded to list block `block`, seen from cascade `cascade`.
     fn draw_list(
         &self,
         cascade: usize,
         block: usize,
-        (set, see_through): (&VisibleSet, &SeeThroughCasters),
+        set: &VisibleSet,
         meshes: &MeshPool,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> (u32, u32, u64) {
@@ -1164,26 +1279,7 @@ impl ShadowMaps {
                 triangles += u64::from(count) * u64::from(mesh.index_count / 3);
             }
         }
-        if !see_through.is_empty() {
-            // The same bind groups and buffers: the see-through pipeline's layout is the solid one's.
-            pass.set_pipeline(&self.see_through_pipeline);
-            let first = block + self.lists.see_through_offset;
-            for run in see_through.runs() {
-                let mesh = meshes.range(run.kind, usize::from(run.level));
-                if mesh.index_count == 0 {
-                    continue;
-                }
-                let start = first + run.first;
-                pass.draw_indexed(
-                    mesh.first_index..mesh.first_index + mesh.index_count,
-                    0,
-                    start..start + run.count,
-                );
-                draws += 1;
-                instances += run.count;
-                triangles += u64::from(run.count) * u64::from(mesh.index_count / 3);
-            }
-        }
+        // See-through casters are not in the solid map: they draw into the see-through maps (#491).
         (draws, instances, triangles)
     }
 }
@@ -1395,8 +1491,9 @@ fn staging_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
 /// a whole part's thickness nearer the light than anything it shades. Parts are closed solids, so every caster has
 /// front faces.
 ///
-/// With `see_through`, the pipeline of see-through casters (#122): a fragment stage leaves out a share of each
-/// caster's texels as large as its Transparency (shadow.wgsl).
+/// With `see_through`, the pipeline that draws the light see-through casters let through into a see-through light
+/// map (#491, [`super::see_through::SeeThroughMaps`]): no depth, a colour target each caster multiplies by
+/// its Transparency. Their depth is drawn with the solid casters' pipeline into the see-through depth map.
 pub(crate) fn caster_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -1450,7 +1547,7 @@ pub(crate) fn caster_pipeline(
             cull_mode: Some(wgpu::Face::Back),
             ..wgpu::PrimitiveState::default()
         },
-        depth_stencil: Some(wgpu::DepthStencilState {
+        depth_stencil: (!see_through).then_some(wgpu::DepthStencilState {
             format: SHADOW_FORMAT,
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::Less),
@@ -1458,13 +1555,24 @@ pub(crate) fn caster_pipeline(
             bias,
         }),
         multisample: wgpu::MultisampleState::default(),
-        // Solid casters have no fragment stage, which keeps early depth testing; see-through ones leave out texels
-        // by their Transparency (#122).
+        // Casters have no fragment stage, which keeps early depth testing; the see-through light multiplies what is
+        // there by what each caster lets through (#491).
         fragment: see_through.then_some(wgpu::FragmentState {
             module: &module,
             entry_point: Some("fs_see_through"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: super::see_through::SEE_THROUGH_LIGHT_FORMAT,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::Src,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
         multiview_mask: None,
         cache,

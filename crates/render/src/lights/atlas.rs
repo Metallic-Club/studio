@@ -17,7 +17,9 @@ use crate::scene::{
     DYNAMIC_ENTRY, GpuInstance, InstanceBinding, InstanceScene, MeshKind, Region, SceneLight, bounding_sphere, entry,
     is_shadow_caster,
 };
-use crate::shadow::{SHADOW_FORMAT, SeeThroughCasters, caster_pipeline};
+use crate::shadow::{
+    SHADOW_FORMAT, SeeThroughCasters, SeeThroughMaps, SeeThroughPlaceholder, caster_pipeline, clear_light_pipeline,
+};
 use crate::textures::{Made, TextureMaker, TextureSpec, Ticket};
 
 /// Texels kept clear around a tile's face, so the filter's taps near its edge stay inside the tile.
@@ -301,8 +303,15 @@ pub(crate) struct ShadowAtlas {
     dynamic_revision: Option<u64>,
     caster_data: Vec<[f32; (UNIFORM_STRIDE / 4) as usize]>,
     caster: wgpu::RenderPipeline,
-    /// The see-through casters' pipeline (#122).
+    /// The pipeline that draws the light see-through casters let through (#491).
     see_through_pipeline: wgpu::RenderPipeline,
+    /// The see-through casters' maps beside the atlas (#491), and the pipeline that clears a tile of the light map.
+    see: SeeThroughMaps,
+    see_clear: wgpu::RenderPipeline,
+    /// Per tile: its see-through maps hold see-through casters, as of when it was last drawn.
+    see_tiles: Vec<bool>,
+    /// The tile of each entry of `table`, this frame.
+    table_tiles: Vec<u16>,
     clear: wgpu::RenderPipeline,
     instance_layout: Option<wgpu::BindGroupLayout>,
     instance_group: Option<InstanceGroup>,
@@ -321,6 +330,7 @@ impl ShadowAtlas {
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: &LightSettings,
         cache: Option<&wgpu::PipelineCache>,
+        see_placeholder: &SeeThroughPlaceholder,
     ) -> Self {
         let caster_layout = in_heap_turn(|| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -388,6 +398,10 @@ impl ShadowAtlas {
             caster_data: Vec::new(),
             caster,
             see_through_pipeline,
+            see: SeeThroughMaps::new(device, maker, see_placeholder),
+            see_clear: clear_light_pipeline(device, cache),
+            see_tiles: vec![false; capacity],
+            table_tiles: Vec::new(),
             clear: clear_pipeline(device, cache),
             instance_layout: instance_layout.cloned(),
             instance_group: None,
@@ -474,7 +488,8 @@ impl ShadowAtlas {
     /// Cuts the atlas as `layout` says. Lights keep their tiles (a tile's number stays its own, wherever it now
     /// sits), but for tiles past a smaller count, which are given back; tiles that moved are drawn again.
     fn apply_layout(&mut self, (resolution, tile, per_row, capacity): Layout) {
-        if (resolution, tile, per_row) != (self.resolution, self.tile, self.per_row) {
+        let layout_changed = (resolution, tile, per_row) != (self.resolution, self.tile, self.per_row);
+        if layout_changed {
             for cache in &mut self.caches {
                 cache.valid = false;
             }
@@ -487,6 +502,11 @@ impl ShadowAtlas {
         self.holder.resize(capacity, FREE);
         self.active.resize(capacity, false);
         self.caches.resize(capacity, TileCache::default());
+        // Tiles that moved hold nothing in the see-through maps until drawn again (#491).
+        self.see_tiles.resize(capacity, false);
+        if layout_changed {
+            self.see_tiles.fill(false);
+        }
     }
 
     /// Applies `settings`' atlas and tile size (a settings change, never per frame). A new atlas size, once the atlas
@@ -531,12 +551,24 @@ impl ShadowAtlas {
         let texture = self.gpu.as_ref().map_or(0, |_| {
             u64::from(self.resolution) * u64::from(self.resolution) * 4 + UNIFORM_STRIDE * MAX_SHADOW_TILES as u64
         });
-        texture + self.list_buffer.as_ref().map_or(0, wgpu::Buffer::size)
+        texture + self.see.gpu_bytes() + self.list_buffer.as_ref().map_or(0, wgpu::Buffer::size)
     }
 
     /// Changes whenever [`ShadowAtlas::sample_view`] does.
     pub(crate) fn revision(&self) -> u64 {
-        self.revision
+        self.revision ^ (self.see.revision() << 32)
+    }
+
+    /// The see-through maps' views (#491): the nearest see-through casters' depth and the light they let through.
+    pub(crate) fn see_through_views(&self) -> (&wgpu::TextureView, &wgpu::TextureView) {
+        (self.see.depth_view(), self.see.light_view())
+    }
+
+    /// The see-through maps to draw into this frame (depth, light), when a tile drawn this frame has see-through
+    /// casters (#491).
+    pub(crate) fn see_through_targets(&self) -> Option<(&wgpu::TextureView, &wgpu::TextureView)> {
+        let any = self.ranges.iter().any(|range| range.5);
+        (any && self.see.ready()).then(|| self.see.targets(0)).flatten()
     }
 
     /// One texel in atlas coordinates.
@@ -726,7 +758,19 @@ impl ShadowAtlas {
         self.list.clear();
         self.ranges.clear();
         self.stats = AtlasStats::default();
+        self.table_tiles.clear();
         self.poll_incoming();
+        // The see-through maps (#491), at the atlas's size, once the scene has a see-through part while see-through
+        // shadows are drawn. When they arrive every tile is drawn again into them.
+        if self.see_through && self.gpu.is_some() && !scene.scene().transparent_list().is_empty() {
+            self.see.want(self.resolution, 1);
+        }
+        if self.see.poll() {
+            for cache in &mut self.caches {
+                cache.valid = false;
+            }
+            self.see_tiles.fill(false);
+        }
         if !shadowed.is_empty() && !self.ensure_gpu() {
             // The atlas is still being made: its lights are drawn without shadows this frame.
             bases.fill(-1.0);
@@ -790,6 +834,7 @@ impl ShadowAtlas {
                         ],
                         params: [view.depth_scale, view.texel_angle, 0.0, 0.0],
                     });
+                    self.table_tiles.push(tile);
                     self.stats.tiles += 1;
                     let key = TileKey::new(light.id, face, view, &tile_lod);
                     let Some(cache) = self.caches.get(usize::from(tile)) else {
@@ -822,6 +867,11 @@ impl ShadowAtlas {
         if !self.jobs.is_empty() {
             self.cull_jobs(scene);
             self.upload_lists(scene);
+        }
+        // Which tiles' see-through maps the parts read (#491): what each tile held when it was last drawn.
+        for (entry, &tile) in self.table.iter_mut().zip(&self.table_tiles) {
+            let held = self.see_tiles.get(usize::from(tile)).copied().unwrap_or(false);
+            entry.params[2] = if held { 1.0 } else { 0.0 };
         }
         if let Some(table_buffer) = table_buffer
             && self.table != self.uploaded_table
@@ -889,6 +939,10 @@ impl ShadowAtlas {
             for run in self.see_through_casters.runs() {
                 self.ranges
                     .push((index as u16, run.kind.0, run.level, base + run.first, run.count, true));
+            }
+            let holds = !self.see_through_casters.is_empty() && self.see.ready();
+            if let Some(held) = self.see_tiles.get_mut(usize::from(job.tile)) {
+                *held = holds;
             }
             if let Some(cache) = self.caches.get_mut(usize::from(job.tile)) {
                 *cache = TileCache {
@@ -977,19 +1031,54 @@ impl ShadowAtlas {
     /// tile is cleared and its casters drawn, one instanced draw per mesh kind and level of detail. Returns the draws,
     /// instances and triangles.
     pub(crate) fn draw(&self, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>) -> (u32, u32, u64) {
+        self.draw_tiles(meshes, pass, TilePass::Solid)
+    }
+
+    /// Records the tiles drawn this frame that have see-through casters into the see-through maps (#491): their depth
+    /// (`light` false, a depth pass into the see-through depth map that loads it) or the light they let through
+    /// (`light` true, a colour pass into the see-through light map that loads it). Each tile is cleared first.
+    pub(crate) fn draw_see_through(
+        &self,
+        light: bool,
+        meshes: &MeshPool,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> (u32, u32, u64) {
+        self.draw_tiles(meshes, pass, if light { TilePass::Light } else { TilePass::Depth })
+    }
+
+    fn draw_tiles(&self, meshes: &MeshPool, pass: &mut wgpu::RenderPass<'_>, which: TilePass) -> (u32, u32, u64) {
         let (mut draws, mut instances, mut triangles) = (0, 0, 0u64);
         let (Some(gpu), Some(list)) = (self.gpu.as_ref(), self.list_buffer.as_ref()) else {
             return (draws, instances, triangles);
         };
+        let see_through = which != TilePass::Solid;
+        // The see-through maps are smaller than the atlas by a whole factor: a tile is the same share of them.
+        let scale = |v: u32| {
+            if see_through {
+                (u64::from(v) * u64::from(self.see_resolution()) / u64::from(self.resolution.max(1))) as u32
+            } else {
+                v
+            }
+        };
+        let (clear, caster) = match which {
+            TilePass::Solid | TilePass::Depth => (&self.clear, &self.caster),
+            TilePass::Light => (&self.see_clear, &self.see_through_pipeline),
+        };
         let mut ranges = self.ranges.iter().peekable();
         for (index, job) in self.jobs.iter().enumerate() {
             let tile = u32::from(job.tile);
+            let mine = |range: &&(u16, u16, u8, u32, u32, bool)| usize::from(range.0) == index;
+            if see_through && !self.ranges.iter().any(|range| mine(&range) && range.5) {
+                while ranges.next_if(mine).is_some() {}
+                continue;
+            }
             let (x, y) = ((tile % self.per_row) * self.tile, (tile / self.per_row) * self.tile);
-            pass.set_viewport(x as f32, y as f32, self.tile as f32, self.tile as f32, 0.0, 1.0);
-            pass.set_scissor_rect(x, y, self.tile, self.tile);
-            pass.set_pipeline(&self.clear);
+            let (x, y, side) = (scale(x), scale(y), scale(self.tile));
+            pass.set_viewport(x as f32, y as f32, side as f32, side as f32, 0.0, 1.0);
+            pass.set_scissor_rect(x, y, side, side);
+            pass.set_pipeline(clear);
             pass.draw(0..3, 0..1);
-            pass.set_pipeline(&self.caster);
+            pass.set_pipeline(caster);
             pass.set_bind_group(0, &gpu.caster_group, &[(u64::from(tile) * UNIFORM_STRIDE) as u32]);
             pass.set_vertex_buffer(0, meshes.vertices().slice(..));
             pass.set_index_buffer(meshes.indices().slice(..), wgpu::IndexFormat::Uint32);
@@ -1001,16 +1090,14 @@ impl ShadowAtlas {
                 }
                 InstanceBinding::Vertex => pass.set_vertex_buffer(1, list.slice(..)),
             }
-            let mut see_through = false;
             while let Some(&&(job_index, kind, level, first, count, see)) = ranges.peek() {
                 if usize::from(job_index) != index {
                     break;
                 }
                 ranges.next();
+                // The atlas holds the solid casters; the see-through maps the see-through ones (#491).
                 if see != see_through {
-                    // The same bind groups and buffers: the see-through pipeline's layout is the solid one's.
-                    see_through = see;
-                    pass.set_pipeline(if see { &self.see_through_pipeline } else { &self.caster });
+                    continue;
                 }
                 let mesh = meshes.range(MeshKind(kind), usize::from(level));
                 if mesh.index_count == 0 {
@@ -1027,6 +1114,24 @@ impl ShadowAtlas {
             }
         }
         (draws, instances, triangles)
+    }
+}
+
+/// Which maps [`ShadowAtlas::draw_tiles`] draws into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TilePass {
+    /// The atlas: the solid casters' depth.
+    Solid,
+    /// The see-through depth map (#491).
+    Depth,
+    /// The see-through light map (#491).
+    Light,
+}
+
+impl ShadowAtlas {
+    /// The see-through maps' resolution: half the atlas's ([`SeeThroughMaps::want`]).
+    fn see_resolution(&self) -> u32 {
+        (self.resolution / 2).max(16)
     }
 }
 

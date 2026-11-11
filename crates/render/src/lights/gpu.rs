@@ -164,6 +164,9 @@ pub(crate) struct LightBindings<'a> {
     pub(crate) clusters: &'a wgpu::TextureView,
     pub(crate) tiles: &'a wgpu::Buffer,
     pub(crate) atlas: &'a wgpu::TextureView,
+    /// The atlas's see-through maps (#491): the nearest see-through casters' depth and the light they let through.
+    pub(crate) see_depth: &'a wgpu::TextureView,
+    pub(crate) see_light: &'a wgpu::TextureView,
 }
 
 /// Local lights on the GPU. [`crate::parts::PartRenderer`] owns one and binds its resources in the parts' frame
@@ -201,6 +204,7 @@ impl LocalLights {
         instance_layout: Option<&wgpu::BindGroupLayout>,
         settings: LightSettings,
         cache: Option<&wgpu::PipelineCache>,
+        see_placeholder: &crate::shadow::SeeThroughPlaceholder,
     ) -> Self {
         Self {
             device: device.clone(),
@@ -209,7 +213,14 @@ impl LocalLights {
             buffers: None,
             lights: Vec::with_capacity(MAX_GPU_LIGHTS),
             uploaded: Vec::with_capacity(MAX_GPU_LIGHTS),
-            atlas: ShadowAtlas::new((device, queue, maker), binding, instance_layout, &settings, cache),
+            atlas: ShadowAtlas::new(
+                (device, queue, maker),
+                binding,
+                instance_layout,
+                &settings,
+                cache,
+                see_placeholder,
+            ),
             ranked: Vec::with_capacity(MAX_GPU_LIGHTS),
             drawn: Vec::with_capacity(MAX_GPU_LIGHTS),
             spheres: Vec::with_capacity(MAX_GPU_LIGHTS),
@@ -252,7 +263,10 @@ impl LocalLights {
     /// What the frame group binds for local lights, once a frame has drawn one.
     pub(crate) fn bindings(&self) -> Option<LightBindings<'_>> {
         let buffers = self.buffers.as_ref()?;
+        let (see_depth, see_light) = self.atlas.see_through_views();
         Some(LightBindings {
+            see_depth,
+            see_light,
             lights: &buffers.light_buffer,
             clusters: &buffers.cluster_view,
             tiles: &buffers.tile_buffer,
@@ -281,6 +295,23 @@ impl LocalLights {
     /// The atlas's render target when tiles are drawn this frame.
     pub(crate) fn atlas_target(&self) -> Option<&wgpu::TextureView> {
         self.atlas.target()
+    }
+
+    /// The atlas's see-through maps to draw into this frame (depth, light), when any tile drawn has see-through
+    /// casters (#491).
+    pub(crate) fn see_through_targets(&self) -> Option<(&wgpu::TextureView, &wgpu::TextureView)> {
+        self.atlas.see_through_targets()
+    }
+
+    /// Records the see-through casters of the tiles drawn this frame into `pass`: their depth, or with `light` the
+    /// light they let through (#491, [`ShadowAtlas::draw_see_through`]).
+    pub(crate) fn draw_see_through(
+        &self,
+        light: bool,
+        meshes: &MeshPool,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> (u32, u32, u64) {
+        self.atlas.draw_see_through(light, meshes, pass)
     }
 
     /// Records the atlas's tiles into `pass` (see [`ShadowAtlas::draw`]).

@@ -54,6 +54,8 @@ struct Frame {
     // x: one shadow-atlas texel in atlas coordinates, y: the filter's reach in texels, z: 1 when any drawn light has
     // a shadow.
     lights_atlas: vec4<f32>,
+    // Per cascade: 1 when its see-through maps hold see-through casters (shadow/see_through.rs, #491).
+    shadow_see_through: vec4<f32>,
     // x: the shading view (parts/shading.rs, #478): 0 shaded, 1 unlit, 2 lighting only, 3 light density.
     view: vec4<f32>,
 }

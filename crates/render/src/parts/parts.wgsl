@@ -26,6 +26,10 @@ const MATERIAL_ROWS: u32 = 256u;
 // The sun's shadow cascades, one layer each, and a comparison sampler that filters four depth tests bilinearly.
 @group(0) @binding(2) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(3) var shadow_sampler: sampler_comparison;
+// The cascades' see-through maps (#491): the nearest see-through casters' depth and the light they let through.
+@group(0) @binding(8) var see_through_depth: texture_depth_2d_array;
+@group(0) @binding(9) var see_through_light: texture_2d_array<f32>;
+@group(0) @binding(10) var see_through_sampler: sampler;
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
@@ -167,8 +171,23 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
     }
     let side = f32(max(reach, 0) + 1);
     let total = side * side * side * side;
+    var visible = lit / total;
+    // Behind a see-through caster, as much light as it lets through (#491): its light map filtered, where the point is
+    // farther from the light than the nearest see-through caster (the part itself and what is in front of it are
+    // not dimmed). The maps are half the cascade's resolution, so their bias is twice as large.
+    if frame.shadow_see_through[cascade] > 0.5 {
+        let front = textureSampleCompareLevel(
+            see_through_depth,
+            shadow_sampler,
+            uv,
+            cascade,
+            reference - frame.shadow_biases[cascade],
+        );
+        let through = textureSampleLevel(see_through_light, see_through_sampler, uv, cascade, 0.0).r;
+        visible *= mix(through, 1.0, front);
+    }
     let fade = smoothstep(frame.shadow_params.w, frame.shadow_splits[count - 1u], depth);
-    return mix(lit / total, 1.0, fade);
+    return mix(visible, 1.0, fade);
 }
 
 // `v` scaled to unit length, or 0 when it has none (where `normalize` divides 0 by 0).

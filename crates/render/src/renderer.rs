@@ -1350,6 +1350,50 @@ impl Renderer {
         self.parts.draw_light_shadows(&mut render_pass);
         drop(render_pass);
         self.atlas_recorded = true;
+        self.record_light_see_through_passes(encoder);
+    }
+
+    /// Records the atlas's see-through passes when a tile drawn this frame has see-through casters (#491): their depth
+    /// and the light they let through, each pass loading its map and clearing the tiles it draws.
+    fn record_light_see_through_passes(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let Some((depth, light)) = self.parts.light_see_through_targets() else {
+            return;
+        };
+        let (depth, light) = (depth.clone(), light.clone());
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("light see-through depth"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.parts.draw_light_see_through(false, &mut render_pass);
+        drop(render_pass);
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("light see-through light"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &light,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.parts.draw_light_see_through(true, &mut render_pass);
     }
 
     /// Records the shadow passes of this frame, before the frame's passes that sample the maps: a depth pass for
@@ -1359,7 +1403,52 @@ impl Renderer {
         for cascade in 0..MAX_CASCADES {
             self.record_shadow_pass(encoder, slot, cascade, false);
             self.record_shadow_pass(encoder, slot, cascade, true);
+            self.record_see_through_passes(encoder, cascade);
         }
+    }
+
+    /// Records cascade `cascade`'s see-through passes when it draws them this frame (#491): its see-through casters'
+    /// depth, cleared to the far plane, then the light they let through, cleared to all of it. Untimed: they belong to
+    /// the cascade's own time.
+    fn record_see_through_passes(&mut self, encoder: &mut wgpu::CommandEncoder, cascade: usize) {
+        let Some((depth, light)) = self.parts.see_through_targets(cascade) else {
+            return;
+        };
+        let (depth, light) = (depth.clone(), light.clone());
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("see-through shadow depth"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.parts.draw_see_through(cascade, false, &mut render_pass);
+        drop(render_pass);
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("see-through shadow light"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &light,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.parts.draw_see_through(cascade, true, &mut render_pass);
     }
 
     /// Records cascade `cascade`'s shadow pass when there is one this frame, cleared, then its casters drawn, or
