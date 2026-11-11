@@ -18,6 +18,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("BindableEvent", Some("Instance"))
         "A signal that scripts fire themselves: one script calls Fire, and every function connected to Event \
          runs with the same arguments. It works between scripts on the same side (server or client).",
     )
+    .category("Events")
     .creatable()
     .methods(&[MethodDesc::new("Fire", fire)
         .params(ARGS)

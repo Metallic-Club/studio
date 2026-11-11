@@ -88,6 +88,7 @@ fn scale_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError
 /// A group of world objects, such as a car or a building.
 pub static CLASS: ClassDesc = ClassDesc::new("Model", Some("WorldObject"))
     .describe("A group of world objects that belong together, such as a car or a house, moved and copied as one.")
+    .category("Containers")
     .creatable()
     .props(&[
         PropMeta::reference("PrimaryPart", "BasePart")
