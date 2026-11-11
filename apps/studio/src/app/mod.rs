@@ -4419,6 +4419,19 @@ mod tests {
         hold(&mut harness, Key::D);
         settle(&mut harness);
         assert!(game_prints(&log).contains(&"began D".to_owned()));
+        // The stats viewers' keys work while the game has the keys (#492), and the Game tab's menu has them too.
+        let stats = |harness: &Harness<'_, Test>| harness.state().studio.editor().unwrap().viewport.stats;
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F1);
+        settle(&mut harness);
+        assert!(stats(&harness).contains(StatsViewer::FrameRate));
+        assert!(harness.state().studio.game_has_input(&harness.ctx));
+        harness.get_by_role_and_label(Role::Button, "Game options").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::CheckBox, "Frame rate").click();
+        settle(&mut harness);
+        assert!(stats(&harness).is_empty());
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
         harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
         settle(&mut harness);
         assert!(!harness.state().studio.is_playing());
