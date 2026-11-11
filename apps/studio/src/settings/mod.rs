@@ -34,6 +34,8 @@ pub struct StudioSettings {
     pub editing: Editing,
     /// The viewport's camera (#385).
     pub viewport: Viewport,
+    /// What the Output panel shows (#502), from its own menu.
+    pub output: Output,
     /// The look of the interface.
     pub appearance: Appearance,
     /// The viewport's graphics: the engine's own settings type (#84), so the viewport applies them as the player
@@ -41,6 +43,27 @@ pub struct StudioSettings {
     pub rendering: GraphicsSettings,
     /// The keymap's overrides (#214).
     pub keybinds: Keybinds,
+}
+
+/// What the Output panel shows (#502, #503), saved in `[output]`; its menu (the three dots on its tab bar) edits it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Output {
+    /// Each line shows the time it was logged.
+    pub show_time: bool,
+    /// Each line shows where it came from (the engine's module, the script and line).
+    pub show_source: bool,
+    /// Play empties the Output first, so it shows the new session alone.
+    pub clear_on_play: bool,
+}
+
+impl Default for Output {
+    fn default() -> Self {
+        Self {
+            show_time: true,
+            show_source: true,
+            clear_on_play: true,
+        }
+    }
 }
 
 /// The General category.
@@ -291,6 +314,12 @@ impl StudioSettings {
                 &mut e.insert_grid,
             );
         }
+        if let Some(output) = section("output") {
+            let o = &mut settings.output;
+            read(output, "show_time", Value::as_bool, &mut o.show_time);
+            read(output, "show_source", Value::as_bool, &mut o.show_source);
+            read(output, "clear_on_play", Value::as_bool, &mut o.clear_on_play);
+        }
         if let Some(viewport) = section("viewport") {
             let v = &mut settings.viewport;
             read(viewport, "fly_speed", number, &mut v.fly_speed);
@@ -360,6 +389,12 @@ impl StudioSettings {
             editing.insert("turn_step".into(), round(e.turn_step));
             let view = if e.insert_grid { "grid" } else { "list" };
             editing.insert("insert_view".into(), Value::String(view.into()));
+        });
+        let o = &self.output;
+        with_section(&mut document, "output", |output| {
+            output.insert("show_time".into(), Value::Boolean(o.show_time));
+            output.insert("show_source".into(), Value::Boolean(o.show_source));
+            output.insert("clear_on_play".into(), Value::Boolean(o.clear_on_play));
         });
         let v = &self.viewport;
         with_section(&mut document, "viewport", |viewport| {
@@ -661,6 +696,23 @@ insert_view = \"grid\"
         let written = settings.to_document(&Table::new());
         assert_eq!(StudioSettings::from_document(&written).editing, settings.editing);
         assert_eq!(StudioSettings::default().editing.move_step, 1.0);
+    }
+
+    #[test]
+    fn the_output_s_choices_round_trip() {
+        let document: Table = toml::from_str("[output]\nshow_time = false\nclear_on_play = false\n").unwrap();
+        let settings = StudioSettings::from_document(&document);
+        assert_eq!(
+            settings.output,
+            Output {
+                show_time: false,
+                show_source: true,
+                clear_on_play: false,
+            }
+        );
+        let written = settings.to_document(&Table::new());
+        assert_eq!(StudioSettings::from_document(&written).output, settings.output);
+        assert!(StudioSettings::default().output.show_time);
     }
 
     #[test]

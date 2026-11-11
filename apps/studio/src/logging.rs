@@ -39,6 +39,8 @@ pub struct LogLine {
     pub message: String,
     /// The engine or a script.
     pub origin: Origin,
+    /// When it was logged (#502).
+    pub time: std::time::SystemTime,
 }
 
 /// The last lines logged, shared by every thread that logs and every panel that reads them.
@@ -74,6 +76,7 @@ impl LogBuffer {
             source: source.into(),
             message: message.into(),
             origin,
+            time: std::time::SystemTime::now(),
         };
         if ring.lines.len() == Self::CAPACITY {
             ring.lines.pop_front();
