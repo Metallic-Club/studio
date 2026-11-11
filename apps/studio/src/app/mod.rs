@@ -1673,6 +1673,20 @@ mod tests {
         window.set_open(true);
         window.show_category(Category::Appearance);
         settle(&mut harness);
+        // Down the page, past the descriptions under each setting (#521).
+        let page = harness
+            .get_by_role_and_label(Role::Button, "Custom colour")
+            .rect()
+            .center();
+        harness.event(egui::Event::PointerMoved(page));
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        settle(&mut harness);
         harness.get_by_role_and_label(Role::Button, "Browse\u{2026}").click();
         settle(&mut harness);
         assert_eq!(dialog.asked(), ["folder"]);
@@ -1689,26 +1703,18 @@ mod tests {
         );
     }
 
-    /// #501: a setting's description is not a line under it but shows on hover.
+    /// #521: a setting's description is a line under its name, there without hovering.
     #[test]
-    fn a_setting_s_description_shows_on_hover() {
-        let mut harness = past_the_splash(settings_file("hover-descriptions", None));
+    fn a_setting_s_description_shows_under_it() {
+        let mut harness = past_the_splash(settings_file("descriptions", None));
         harness.state_mut().studio.settings_window().set_open(true);
         settle(&mut harness);
-        let description = "Go straight to your projects when Studio starts, without the sign-in screen.";
-        assert!(
-            harness.query_by_label(description).is_none(),
-            "no line under the setting"
-        );
         let name = harness.get_by_role_and_label(Role::Label, "Skip sign-in").rect();
-        harness.event(egui::Event::PointerMoved(name.center()));
-        // Tooltips wait for the pointer to rest.
-        for _ in 0..10 {
-            harness.step();
-            harness.input_mut().time = Some(harness.ctx.input(|input| input.time) + 0.2);
-        }
-        harness.input_mut().time = None;
-        harness.get_by_label(description);
+        let description = harness
+            .get_by_label("Go straight to your projects when Studio starts, without the sign-in screen.")
+            .rect();
+        assert!(description.top() >= name.bottom() - 1.0, "under the name");
+        assert!((description.left() - name.left()).abs() < 1.0, "lined up with it");
     }
 
     #[test]
