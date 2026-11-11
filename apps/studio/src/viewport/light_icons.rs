@@ -2,7 +2,7 @@
 //! so a light (which draws nothing of its own) can be seen and clicked. A click on an icon selects its light, as a
 //! click on a part does; the nearest icon wins where they overlap. Viewport options → View shows or hides them.
 
-use egui::{Painter, Pos2, Rect, Stroke, vec2};
+use egui::{Color32, Painter, Pos2, Rect, vec2};
 use metallic_engine::metallic_classes::world::lights::light::world_cframe;
 use metallic_engine::metallic_core::{DataModel, Id};
 
@@ -11,8 +11,8 @@ use super::pick::{is_a, workspace};
 use crate::panels::class_icon;
 use crate::theme::icons::{self, Icon};
 
-/// An icon's size on screen, in points.
-pub const SIZE: f32 = 22.0;
+/// An icon's size on screen, in points: large enough to see and click at once (#522).
+pub const SIZE: f32 = 32.0;
 
 /// One light's icon on screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,8 +64,8 @@ pub fn icon_at(icons: &[LightIcon], at: Pos2) -> Option<Id> {
         .map(|icon| icon.id)
 }
 
-/// Draws `icons`, the farthest first: each on a faint disc so it reads on any background, ringed in the accent when
-/// its light is selected and faintly when `hovered`.
+/// Draws `icons`, the farthest first: the icon alone, with nothing behind it (#522), in its class's colour, lighter
+/// when `hovered` and in the accent when its light is selected.
 pub fn paint(
     painter: &Painter,
     icons: &[LightIcon],
@@ -73,16 +73,20 @@ pub fn paint(
     hovered: Option<Id>,
     colors: &crate::theme::Colors,
 ) {
-    let p = colors.palette;
     for icon in icons {
-        let centre = icon.rect.center();
-        painter.circle_filled(centre, SIZE * 0.62, p.bg.gamma_multiply(0.7));
-        if selected.contains(&icon.id) {
-            painter.circle_stroke(centre, SIZE * 0.62, Stroke::new(2.0, colors.accent));
-        } else if hovered == Some(icon.id) {
-            painter.circle_stroke(centre, SIZE * 0.62, Stroke::new(1.0, colors.accent.gamma_multiply(0.6)));
-        }
-        icons::paint(painter, icon.icon, icon.rect.shrink(3.0), icon.icon.color(colors));
+        icons::paint(painter, icon.icon, icon.rect, ink(icon, selected, hovered, colors));
+    }
+}
+
+/// An icon's colour: the accent when its light is selected, its class's colour lightened under the pointer, and its
+/// class's colour otherwise.
+fn ink(icon: &LightIcon, selected: &[Id], hovered: Option<Id>, colors: &crate::theme::Colors) -> Color32 {
+    if selected.contains(&icon.id) {
+        colors.accent
+    } else if hovered == Some(icon.id) {
+        icon.icon.color(colors).lerp_to_gamma(Color32::WHITE, 0.4)
+    } else {
+        icon.icon.color(colors)
     }
 }
 
@@ -123,5 +127,22 @@ mod tests {
         let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, -40.0), Vec3::new(0.0, 5.0, -80.0));
         let behind = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
         assert!(light_icons(&dm, &behind).is_empty());
+    }
+
+    /// #522: the icon alone, its colour telling selected and hovered apart.
+    #[test]
+    fn an_icon_s_colour_tells_selected_and_hovered() {
+        let colors = crate::theme::Colors::default();
+        let icon = LightIcon {
+            id: Id::new(7, 0),
+            rect: Rect::from_center_size(Pos2::ZERO, vec2(SIZE, SIZE)),
+            icon: Icon::ExplorerInstance,
+            depth: 1.0,
+        };
+        let plain = ink(&icon, &[], None, &colors);
+        assert_eq!(plain, icon.icon.color(&colors));
+        assert_eq!(ink(&icon, &[icon.id], Some(icon.id), &colors), colors.accent);
+        assert_ne!(ink(&icon, &[], Some(icon.id), &colors), plain);
+        assert_eq!(ink(&icon, &[Id::new(8, 0)], Some(Id::new(8, 0)), &colors), plain);
     }
 }
