@@ -1149,6 +1149,14 @@ impl Studio {
     fn settings_ui(&mut self, ctx: &egui::Context, before: &StudioSettings) {
         self.settings_window
             .show(ctx, self.settings.settings_mut(), &mut self.keymap);
+        // The icon folder's Browse (#508): the system's folder dialog, starting in the folder there is.
+        if crate::settings::window::take_icon_folder_request(ctx) {
+            let current = PathBuf::from(&self.settings.settings().appearance.icon_folder);
+            let start = current.is_dir().then_some(current.as_path());
+            if let Some(folder) = self.projects.pick_folder(start) {
+                self.settings.settings_mut().appearance.icon_folder = folder.display().to_string();
+            }
+        }
         if self.keymap.take_changed() {
             self.settings.settings_mut().keybinds.overrides = self.keymap.overrides().clone();
         }
@@ -1623,6 +1631,35 @@ mod tests {
         settle(&mut harness);
         assert!(!harness.state().studio.is_settings_open());
         assert!(harness.query_by_role_and_label(Role::Tab, "General").is_none());
+    }
+
+    /// #508: the icon folder's Browse opens the system's folder dialog, and the folder chosen is used.
+    #[test]
+    fn browse_chooses_the_icon_folder_with_the_folder_dialog() {
+        let path = settings_file("icon-browse", None);
+        let folder = path.parent().unwrap().join("Icons");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut harness = past_the_splash(path);
+        let dialog = ScriptedDialog::new([Some(folder.clone()), None]);
+        harness.state_mut().studio.set_file_dialog(Box::new(dialog.clone()));
+        let window = harness.state_mut().studio.settings_window();
+        window.set_open(true);
+        window.show_category(Category::Appearance);
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Browse\u{2026}").click();
+        settle(&mut harness);
+        assert_eq!(dialog.asked(), ["folder"]);
+        assert_eq!(
+            harness.state().studio.settings().appearance.icon_folder,
+            folder.display().to_string()
+        );
+        // Cancelled: the folder stays.
+        harness.get_by_role_and_label(Role::Button, "Browse\u{2026}").click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.settings().appearance.icon_folder,
+            folder.display().to_string()
+        );
     }
 
     /// #501: a setting's description is not a line under it but shows on hover.

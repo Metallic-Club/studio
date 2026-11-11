@@ -184,12 +184,19 @@ pub static ENTRIES: &[Entry] = &[
         description: "SVG or PNG files named after icon ids (such as explorer.part.svg) replace Studio's icons. \
                       The ids are listed in docs/studio-icons.md.",
         control: |ui, s| {
-            // Right to left: Reload, then the path filling the rest.
+            // Right to left: Reload, Browse, then the path filling the rest.
             if button(ui, ButtonKind::Secondary, "Reload")
                 .on_hover_text("Read the folder again")
                 .clicked()
             {
                 icons::custom::request_reload(ui.ctx());
+            }
+            if button(ui, ButtonKind::Secondary, "Browse\u{2026}")
+                .on_hover_text("Choose the folder")
+                .clicked()
+            {
+                // Studio opens the system's folder dialog once the window is drawn (#508).
+                request_icon_folder(ui.ctx());
             }
             ui.add(
                 TextEdit::singleline(&mut s.appearance.icon_folder)
@@ -706,6 +713,22 @@ fn page(ui: &mut Ui, category: Category, settings: &mut StudioSettings) {
     for entry in ENTRIES.iter().filter(|entry| entry.category == category) {
         row(ui, entry, settings);
     }
+}
+
+/// Where the request for the icon folder's dialog waits for Studio ([`take_icon_folder_request`]).
+fn icon_folder_request() -> egui::Id {
+    egui::Id::unique("metallic.settings.icon_folder.browse")
+}
+
+/// Asks Studio to open the system's folder dialog for the icon folder (#508): Settings' controls cannot open it.
+fn request_icon_folder(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.insert_temp(icon_folder_request(), true));
+}
+
+/// Whether the icon folder's Browse was clicked since the last call.
+pub(crate) fn take_icon_folder_request(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|data| data.remove_temp::<bool>(icon_folder_request()))
+        .unwrap_or(false)
 }
 
 /// An uppercase section label, as the website's.
