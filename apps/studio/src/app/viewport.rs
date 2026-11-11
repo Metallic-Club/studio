@@ -61,6 +61,12 @@ impl ViewportRenderer {
         if self.scene.shading_view() != shading {
             self.scene.set_shading_view(shading);
         }
+        // The performance overlay's viewers (#479), drawn into the viewport's frame as the Player draws them.
+        if let Some(stats) = studio.editor().map(|editor| editor.viewport.stats)
+            && self.scene.stats_viewers() != stats
+        {
+            self.scene.set_stats_viewers(stats);
+        }
         if !self.attached && self.error.is_none() {
             self.attach(context, studio);
         }

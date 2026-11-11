@@ -20,7 +20,7 @@ use metallic_render::{
 use crate::calibration::{AutoCalibration, CALIBRATION_SIZE, CALIBRATION_WORKLOAD, CalibrationOutcome, GameFrame};
 use crate::hooks::{FrameStats, RenderFrame, RenderHook, RenderHookError};
 use crate::mesh_assets::MeshAssets;
-use crate::perf::{FrameSample, GraphicsStatus, PerfStats, PerfSummary, draw_overlay};
+use crate::perf::{FrameSample, GraphicsStatus, PerfStats, PerfSummary, StatsViewers, draw_viewers};
 use metallic_project::AssetReader;
 
 /// Frames between two refreshes of the overlay's percentiles: about four times a second at 60 fps.
@@ -129,7 +129,8 @@ pub struct SceneRenderer {
     /// The overlay's percentiles, refreshed every [`SUMMARY_EVERY`] frames.
     summary: PerfSummary,
     since_summary: u32,
-    overlay: bool,
+    /// The performance overlay's viewers shown (#479); none when it is off.
+    viewers: StatsViewers,
     /// When the previous frame's render started: frame time is the time between two.
     frame_start: Option<Instant>,
     /// When the device was being made (the first attach), until the first frame is presented.
@@ -187,7 +188,7 @@ impl SceneRenderer {
             perf: PerfStats::default(),
             summary: PerfSummary::default(),
             since_summary: 0,
-            overlay: false,
+            viewers: StatsViewers::NONE,
             frame_start: None,
             attached_at: None,
             first_frame_ms: None,
@@ -654,18 +655,29 @@ impl SceneRenderer {
         self.surface.as_ref().map(RenderSurface::present_mode)
     }
 
-    /// Shows or hides the performance overlay (frame-time graph, percentiles, CPU and GPU time, draws; see
-    /// [`crate::perf`]). Off by default. The statistics are kept either way.
+    /// Shows or hides the whole performance overlay (frame-time graph, percentiles, CPU and GPU time, draws; see
+    /// [`crate::perf`]): every viewer, or none. Off by default. The statistics are kept either way.
     pub fn set_overlay(&mut self, on: bool) {
-        self.overlay = on;
+        self.set_stats_viewers(if on { StatsViewers::ALL } else { StatsViewers::NONE });
+    }
+
+    /// Whether the performance overlay is shown: any of its viewers.
+    pub fn overlay(&self) -> bool {
+        !self.viewers.is_empty()
+    }
+
+    /// Shows the performance overlay's `viewers` (#479, [`crate::perf::StatsViewer`]), stacked from the top-left
+    /// corner; none turns it off. The statistics are kept either way.
+    pub fn set_stats_viewers(&mut self, viewers: StatsViewers) {
+        self.viewers = viewers;
         if let Some(device) = self.device.as_mut() {
-            device.renderer.set_overlay_enabled(on);
+            device.renderer.set_overlay_enabled(!viewers.is_empty());
         }
     }
 
-    /// Whether the performance overlay is shown.
-    pub fn overlay(&self) -> bool {
-        self.overlay
+    /// The performance overlay's viewers shown.
+    pub fn stats_viewers(&self) -> StatsViewers {
+        self.viewers
     }
 
     /// The frame statistics.
@@ -797,7 +809,7 @@ impl SceneRenderer {
     /// Draws with `renderer` into `target` from now on (see [`SceneRenderer::attach_viewport`]).
     fn adopt_viewport(&mut self, context: &RenderContext, mut renderer: Renderer, target: ViewportTarget) {
         renderer.set_lighting(self.lighting);
-        renderer.set_overlay_enabled(self.overlay);
+        renderer.set_overlay_enabled(!self.viewers.is_empty());
         renderer.set_lod_tint(self.lod_tint);
         renderer.set_shading_view(self.shading);
         // A renderer is made without MSAA (its sample counts are known once it exists), then given its own.
@@ -892,7 +904,7 @@ impl std::fmt::Debug for SceneRenderer {
             .field("viewport", &self.viewport.as_ref().map(ViewportTarget::size))
             .field("last_sync", &self.last_sync)
             .field("last_upload", &self.last_upload)
-            .field("overlay", &self.overlay)
+            .field("viewers", &self.viewers)
             .finish_non_exhaustive()
     }
 }
@@ -927,7 +939,7 @@ impl RenderHook for SceneRenderer {
                     assets.reload();
                 }
             }
-            device.renderer.set_overlay_enabled(self.overlay);
+            device.renderer.set_overlay_enabled(!self.viewers.is_empty());
             device.renderer.set_lod_tint(self.lod_tint);
             device.renderer.set_shading_view(self.shading);
             // A renderer is made without MSAA (its sample counts are known once it exists), then given its own.
@@ -988,7 +1000,7 @@ impl SceneRenderer {
             log::error!("render: {error}");
             return;
         }
-        let status = self.overlay.then(|| self.graphics_status());
+        let status = (!self.viewers.is_empty()).then(|| self.graphics_status());
         let camera = match self.camera_override {
             Some(camera) => Some(camera),
             None => self.world.and_then(|world| self.camera.read(dm, world)),
@@ -1014,7 +1026,13 @@ impl SceneRenderer {
                 self.summary = self.perf.summary();
             }
             self.since_summary = (self.since_summary + 1) % SUMMARY_EVERY;
-            draw_overlay(device.renderer.overlay_mut(), &self.perf, &self.summary, &status);
+            draw_viewers(
+                device.renderer.overlay_mut(),
+                &self.perf,
+                &self.summary,
+                &status,
+                self.viewers,
+            );
         }
         let acquire_start = Instant::now();
         let output = match (self.viewport.as_mut(), self.surface.as_mut()) {

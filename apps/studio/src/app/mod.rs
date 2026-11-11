@@ -1284,6 +1284,7 @@ mod tests {
     use crate::theme::tokens;
     use crate::theme::{ThemeMode, fonts};
     use metallic_engine::metallic_render::ShadingView;
+    use metallic_engine::perf::StatsViewer;
 
     /// A settings file of its own for `test`, holding `text` (none when `None`).
     fn settings_file(test: &str, text: Option<&str>) -> PathBuf {
@@ -3282,6 +3283,22 @@ mod tests {
         assert!(selected_names(&harness).is_empty());
     }
 
+    #[test]
+    fn shift_and_f1_to_f4_show_and_hide_the_stats_viewers() {
+        let mut harness = editing(settings_file("editor-stats-keys", None), "Stats Keys Game");
+        settle(&mut harness);
+        let stats = |harness: &Harness<'_, Test>| harness.state().studio.editor().unwrap().viewport.stats;
+        for (key, viewer) in [Key::F1, Key::F2, Key::F3, Key::F4].into_iter().zip(StatsViewer::ALL) {
+            harness.key_press_modifiers(Modifiers::SHIFT, key);
+            settle(&mut harness);
+            assert!(stats(&harness).contains(viewer), "{key:?} shows {viewer:?}");
+        }
+        assert_eq!(stats(&harness), metallic_engine::perf::StatsViewers::ALL);
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F2);
+        settle(&mut harness);
+        assert!(!stats(&harness).contains(StatsViewer::Draws), "and hides it again");
+    }
+
     /// A click of the left button at `at` with `modifiers` held.
     fn click_with(harness: &mut Harness<'_, Test>, at: egui::Pos2, modifiers: Modifiers) {
         harness.event(egui::Event::PointerMoved(at));
@@ -4760,6 +4777,13 @@ mod tests {
         harness.get_by_role_and_label(Role::RadioButton, "Wireframe").click();
         settle(&mut harness);
         assert_eq!(shading(&harness), ShadingView::LightDensity, "no lines here");
+        // Debug (#479): each stats viewer on its own.
+        let stats = |harness: &Harness<'static, Test>| harness.state().studio.editor().unwrap().viewport.stats;
+        assert!(stats(&harness).is_empty());
+        harness.get_by_role_and_label(Role::CheckBox, "Draw calls").click();
+        settle(&mut harness);
+        assert!(stats(&harness).contains(StatsViewer::Draws));
+        assert_eq!(stats(&harness).iter().count(), 1);
         // A click outside it closes it.
         harness.get_by_role_and_label(Role::Tab, "Viewport").click();
         settle(&mut harness);

@@ -196,6 +196,14 @@ pub mod ids {
     pub const SECONDARY_SPEED: &str = "viewport.secondary_speed";
     /// Frames the selection, then orbits it (#385).
     pub const FOCUS: &str = "viewport.focus";
+    /// Shows or hides the viewport's frame-rate viewer (#479).
+    pub const STATS_FRAME_RATE: &str = "viewport.stats_frame_rate";
+    /// Shows or hides the viewport's draw-call viewer (#479).
+    pub const STATS_DRAWS: &str = "viewport.stats_draws";
+    /// Shows or hides the viewport's lights-and-shadows viewer (#479).
+    pub const STATS_LIGHTING: &str = "viewport.stats_lighting";
+    /// Shows or hides the viewport's graphics viewer (#479).
+    pub const STATS_GRAPHICS: &str = "viewport.stats_graphics";
     /// Select every instance the Explorer shows (#347).
     pub const EDIT_SELECT_ALL: &str = "edit.select_all";
     /// Undo the last step (#348).
@@ -239,6 +247,21 @@ pub mod ids {
 /// The viewport's keyboard flying and its mouse navigation: two sections inside Viewport.
 const FLY: &str = "Viewport/Fly camera";
 const MOUSE: &str = "Viewport/Mouse";
+const STATS: &str = "Viewport/Stats";
+
+/// A stats viewer's command (#479): with a project open, its key shows or hides it in the viewport.
+const fn stats(
+    id: &'static str,
+    title: &'static str,
+    description: &'static str,
+    key: &'static [&'static str],
+) -> Command {
+    Command {
+        contexts: &[Context::Editor],
+        defaults: key,
+        ..Command::new(id, title, STATS, description)
+    }
+}
 
 /// A fly command: a physical key, held, repeating, in the viewport; Shift held as well flies at the secondary speed.
 const fn fly(
@@ -582,6 +605,30 @@ pub const STUDIO_COMMANDS: &[Command] = &[
             "Frames the selection; until the camera is flown or the selection changes, right drags orbit it.",
         )
     },
+    stats(
+        ids::STATS_FRAME_RATE,
+        "Frame rate",
+        "Shows or hides the frame rate, frame times and their graph over the viewport.",
+        &["Shift+F1"],
+    ),
+    stats(
+        ids::STATS_DRAWS,
+        "Draw calls",
+        "Shows or hides the draw calls, instances and triangles over the viewport.",
+        &["Shift+F2"],
+    ),
+    stats(
+        ids::STATS_LIGHTING,
+        "Lights and shadows",
+        "Shows or hides the lights, shadow cascades and their cost over the viewport.",
+        &["Shift+F3"],
+    ),
+    stats(
+        ids::STATS_GRAPHICS,
+        "Graphics",
+        "Shows or hides the graphics settings, pipelines and CPU and GPU time over the viewport.",
+        &["Shift+F4"],
+    ),
 ];
 
 /// The registered commands, with their parsed defaults and an index by id. Built once.
