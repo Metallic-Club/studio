@@ -158,6 +158,11 @@ impl Projects {
         self.dialog = dialog;
     }
 
+    /// Asks for a folder with the file dialog, starting in `start` when there is one (Settings' icon folder, #508).
+    pub fn pick_folder(&mut self, start: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+        self.dialog.pick_folder(start)
+    }
+
     /// The list the page shows.
     pub fn view(&self) -> View {
         self.view
