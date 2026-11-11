@@ -46,6 +46,14 @@ fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Strok
     }
 }
 
+/// A section's rows in the Viewport's menu (#477), in line with its label, past the chevron.
+fn indented(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.add_space(crate::theme::tokens::text::BODY + crate::theme::tokens::space::S5);
+        ui.vertical(add_contents);
+    });
+}
+
 /// What the speed note says for `change` (#385).
 fn speed_text(change: SpeedChange, speeds: &crate::settings::Viewport) -> String {
     let fly = crate::panels::properties::number(f64::from(speeds.fly_speed));
@@ -120,9 +128,15 @@ impl Panel for Viewport {
         true
     }
 
-    /// What the viewport shows (#387): for now, whether the axis gizmo does.
+    /// What the viewport shows (#387), in sections that fold (#477).
     fn menu(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
-        crate::theme::checkbox(ui, &mut cx.settings.viewport.show_axes, "Axis gizmo");
+        ui.set_min_width(crate::theme::MENU_WIDTH);
+        ui.spacing_mut().item_spacing.y = crate::theme::tokens::space::S2;
+        crate::theme::section(ui, "metallic.viewport.menu.view", "View", |ui| {
+            indented(ui, |ui| {
+                crate::theme::checkbox(ui, &mut cx.settings.viewport.show_axes, "Axis gizmo");
+            });
+        });
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {

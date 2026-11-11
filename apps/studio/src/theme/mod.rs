@@ -424,6 +424,70 @@ pub fn checkbox_only(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Res
     response.on_hover_text(label)
 }
 
+/// The width of a panel's options menu (#477), so its section headers have a line to fill.
+pub const MENU_WIDTH: f32 = 220.0;
+
+/// A collapsible section of a menu (#477): a chevron and an uppercase label, as Properties labels its groups, which
+/// fold `add_contents` away or show it. Open at first; egui's memory keeps it as it was left, by `id_salt`. Returns
+/// the header's response.
+pub fn section(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    label: &str,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let id = ui.make_persistent_id(id_salt);
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+    let open = state.is_open();
+    let width = ui.available_width().min(MENU_WIDTH).max(ui.min_rect().width());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, size::ROW), egui::Sense::click());
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label);
+        info.selected = Some(open);
+        info
+    });
+    if response.clicked() {
+        state.toggle(ui);
+    }
+    if ui.is_rect_visible(rect) {
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(radius::ITEM / 2), p.border.gamma_multiply(0.5));
+        }
+        let ink = if response.hovered() { p.text } else { p.subtle };
+        let chevron = if open {
+            icons::Icon::UiCollapse
+        } else {
+            icons::Icon::UiExpand
+        };
+        let at = pos2(rect.left() + space::S2, rect.center().y);
+        icons::paint_at(ui.painter(), at, egui::Align2::LEFT_CENTER, chevron, text::BODY, ink);
+        // Spaced like `section_label`'s, the uppercase labels of Properties and Settings.
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &label.to_uppercase(),
+            0.0,
+            egui::TextFormat {
+                font_id: fonts::named(fonts::STRONG, text::LABEL),
+                extra_letter_spacing: text::LABEL_TRACKING,
+                color: ink,
+                ..Default::default()
+            },
+        );
+        let galley = ui.painter().layout_job(job);
+        let at = pos2(at.x + text::BODY + space::S3, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(at, galley, ink);
+    }
+    state.show_body_unindented(ui, |ui| {
+        ui.add_space(space::S1);
+        add_contents(ui);
+        ui.add_space(space::S3);
+    });
+    state.store(ui.ctx());
+    response
+}
+
 /// A checkbox (#278): a rounded box, filled with the primary action's colour and Lucide's check when `on`, then
 /// `label`. Clicking either toggles it.
 pub fn checkbox(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
