@@ -172,6 +172,7 @@ impl ExplorerState {
         self.inserting = Some(Inserting {
             parent,
             query: String::new(),
+            place: Some(super::insert::Place::Pointer),
         });
     }
 
