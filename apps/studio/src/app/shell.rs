@@ -125,6 +125,8 @@ struct StudioWindow {
     cursor: GameCursor,
     /// The title last given to the window.
     title: String,
+    /// The window's place as it was last not maximised nor minimised (#505): what Studio keeps when it closes.
+    normal_place: Option<crate::settings::WindowPlace>,
 }
 
 impl ApplicationHandler for Shell {
@@ -153,11 +155,16 @@ impl ApplicationHandler for Shell {
             window.window.request_redraw();
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                window.keep_place();
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 window.surface.resize(&window.context, size.width, size.height);
+                window.note_place();
                 window.window.request_redraw();
             }
+            WindowEvent::Moved(_) => window.note_place(),
             WindowEvent::RedrawRequested => {
                 if let Err(error) = window.frame(event_loop) {
                     self.error = Some(error);
@@ -271,6 +278,7 @@ impl StudioWindow {
             repaint_at: None,
             cursor: GameCursor::default(),
             title: super::APP_TITLE.to_owned(),
+            normal_place: None,
         };
         // Shown once there is a frame to show, so it never flashes empty.
         this.frame(event_loop)?;
@@ -401,9 +409,70 @@ impl StudioWindow {
         self.surface.set_present_mode(&self.context, mode);
     }
 
-    /// Turns the splash into Studio's main window: decorated, resizable, [`MAIN_SIZE`], centred where the splash was
-    /// and kept on its monitor.
-    fn become_main_window(&self) {
+    /// Notes the window's place while it is neither maximised nor minimised, and is Studio's main window (not the
+    /// splash): the place Studio keeps when it closes (#505).
+    fn note_place(&mut self) {
+        let window = &self.window;
+        if !window.is_resizable() || window.is_maximized() || window.is_minimized() == Some(true) {
+            return;
+        }
+        let (Ok(at), size) = (window.outer_position(), window.inner_size()) else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        self.normal_place = Some(crate::settings::WindowPlace {
+            x: at.x,
+            y: at.y,
+            width: size.width,
+            height: size.height,
+            maximized: false,
+        });
+    }
+
+    /// Keeps the window's place in the settings as Studio closes (#505): where it last was, not maximised, and whether
+    /// it is maximised now. Nothing before the splash became the main window.
+    fn keep_place(&mut self) {
+        self.note_place();
+        if let Some(place) = self.normal_place {
+            let maximized = self.window.is_maximized();
+            self.studio
+                .close_with_window_at(crate::settings::WindowPlace { maximized, ..place });
+        }
+    }
+
+    /// Turns the splash into Studio's main window: decorated, resizable, where it was when Studio last closed (#505),
+    /// or else [`MAIN_SIZE`] centred where the splash was and kept on its monitor.
+    fn become_main_window(&mut self) {
+        if let Some(place) = self.studio.settings().window
+            && on_a_monitor(&place, &monitor_rects(&self.window))
+        {
+            let window = &self.window;
+            native::set_window_shape(window, None);
+            window.set_transparent(false);
+            window.set_decorations(true);
+            window.set_resizable(true);
+            window.set_min_inner_size(Some(MAIN_MIN_SIZE));
+            let _ = window.request_inner_size(PhysicalSize::new(place.width, place.height));
+            window.set_outer_position(PhysicalPosition::new(place.x, place.y));
+            self.normal_place = Some(crate::settings::WindowPlace {
+                maximized: false,
+                ..place
+            });
+            if place.maximized {
+                window.set_maximized(true);
+            }
+            window.focus_window();
+            window.request_redraw();
+            return;
+        }
+        self.become_main_window_centred();
+    }
+
+    /// [`StudioWindow::become_main_window`] with no place kept, or one off every monitor: [`MAIN_SIZE`], centred
+    /// where the splash was and kept on its monitor.
+    fn become_main_window_centred(&self) {
         let window = &self.window;
         let centre = window.outer_position().ok().map(|at| {
             let size = window.outer_size();
@@ -778,6 +847,31 @@ impl FileDialog for NativeDialog {
     }
 }
 
+/// Every monitor's area, in physical pixels: (left, top, width, height).
+fn monitor_rects(window: &Window) -> Vec<(i32, i32, u32, u32)> {
+    window
+        .available_monitors()
+        .map(|monitor| {
+            let (at, size) = (monitor.position(), monitor.size());
+            (at.x, at.y, size.width, size.height)
+        })
+        .collect()
+}
+
+/// Whether a window at `place` can be reached: its title bar's middle (the top 32 pixels, inset 100 from each side)
+/// is on one of `monitors` (#505). A place kept for a monitor since unplugged is not used.
+fn on_a_monitor(place: &crate::settings::WindowPlace, monitors: &[(i32, i32, u32, u32)]) -> bool {
+    let (left, right) = (
+        i64::from(place.x) + 100,
+        i64::from(place.x) + i64::from(place.width) - 100,
+    );
+    let (top, bottom) = (i64::from(place.y), i64::from(place.y) + 32);
+    monitors.iter().any(|&(x, y, width, height)| {
+        let (x, y) = (i64::from(x), i64::from(y));
+        left.max(x) < right.min(x + i64::from(width)) && top.max(y) < bottom.min(y + i64::from(height))
+    })
+}
+
 /// The splash's window: [`splash::SIZE`], borderless, fixed, see-through around its shape, centred on `monitor`,
 /// hidden until drawn, with the Metallic mark as its icon.
 fn splash_attributes(monitor: Option<&MonitorHandle>) -> WindowAttributes {
@@ -818,6 +912,24 @@ fn shape_as_splash(window: &Window) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #505: a kept place is used only while its title bar is on a monitor.
+    #[test]
+    fn a_kept_window_place_is_used_only_on_a_monitor() {
+        let place = |x, y| crate::settings::WindowPlace {
+            x,
+            y,
+            width: 1280,
+            height: 800,
+            maximized: false,
+        };
+        let two = [(0, 0, 1920, 1080), (-2560, -200, 2560, 1440)];
+        assert!(on_a_monitor(&place(100, 100), &two));
+        assert!(on_a_monitor(&place(-2000, 0), &two), "on the left monitor");
+        assert!(!on_a_monitor(&place(4000, 100), &two), "past every monitor");
+        assert!(!on_a_monitor(&place(100, 1090), &two), "its title bar below the screen");
+        assert!(!on_a_monitor(&place(-2000, 0), &two[..1]), "that monitor is gone");
+    }
 
     #[test]
     fn an_unseen_pass_runs_at_the_main_window_s_scale() {
