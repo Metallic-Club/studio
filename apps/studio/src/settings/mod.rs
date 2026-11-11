@@ -138,6 +138,8 @@ pub struct Viewport {
     pub secondary_speed: f32,
     /// Whether the axis gizmo shows in the corner (#386).
     pub show_axes: bool,
+    /// Whether lights show as their icons, which can be clicked (#506).
+    pub show_light_icons: bool,
     /// How the viewport draws the parts (#478): shaded, unlit, lighting only, light density or wireframe.
     pub shading: ShadingView,
 }
@@ -148,6 +150,7 @@ impl Default for Viewport {
             fly_speed: 40.0,
             secondary_speed: 3.0,
             show_axes: true,
+            show_light_icons: true,
             shading: ShadingView::Shaded,
         }
     }
@@ -365,6 +368,7 @@ impl StudioSettings {
             read(viewport, "fly_speed", number, &mut v.fly_speed);
             read(viewport, "secondary_speed", number, &mut v.secondary_speed);
             read(viewport, "show_axes", Value::as_bool, &mut v.show_axes);
+            read(viewport, "light_icons", Value::as_bool, &mut v.show_light_icons);
             read(
                 viewport,
                 "shading",
@@ -451,6 +455,7 @@ impl StudioSettings {
             viewport.insert("fly_speed".into(), round(v.fly_speed));
             viewport.insert("secondary_speed".into(), round(v.secondary_speed));
             viewport.insert("show_axes".into(), Value::Boolean(v.show_axes));
+            viewport.insert("light_icons".into(), Value::Boolean(v.show_light_icons));
             viewport.insert("shading".into(), Value::String(v.shading.as_str().into()));
         });
         let a = &self.appearance;
@@ -804,6 +809,7 @@ insert_view = \"grid\"
                 fly_speed: 12.5,
                 secondary_speed: SECONDARY_SPEED.0,
                 show_axes: false,
+                show_light_icons: true,
                 shading: ShadingView::Wireframe,
             }
         );

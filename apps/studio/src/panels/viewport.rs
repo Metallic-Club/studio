@@ -23,6 +23,7 @@ use crate::keymap::Context;
 use crate::theme::icons::Icon;
 use crate::theme::tokens::text;
 use crate::theme::{current_colors, fonts};
+use crate::viewport::light_icons;
 use crate::viewport::pick::{self, EDGES};
 use crate::viewport::tools;
 use crate::viewport::{SpeedChange, View, ViewportState};
@@ -154,6 +155,7 @@ impl Panel for Viewport {
         crate::theme::section(ui, "metallic.viewport.menu.view", "View", |ui| {
             indented(ui, |ui| {
                 crate::theme::checkbox(ui, &mut cx.settings.viewport.show_axes, "Axis gizmo");
+                crate::theme::checkbox(ui, &mut cx.settings.viewport.show_light_icons, "Light icons");
             });
         });
         // How the parts are drawn (#478). The wireframe needs a device that draws lines.
@@ -230,14 +232,30 @@ impl Panel for Viewport {
             };
             let on_gizmo = tools::interact(ui, &response, &view, &mut cx.editor.scene(), &mut gizmo, snap);
             let editor = &mut *cx.editor;
-            let under = |at| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray));
+            // The lights' icons (#506), clicked before what is behind them.
+            let lights = if cx.settings.viewport.show_light_icons {
+                light_icons::light_icons(&editor.dm, &view)
+            } else {
+                Vec::new()
+            };
+            let under = |at: egui::Pos2| {
+                light_icons::icon_at(&lights, at).or_else(|| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray)))
+            };
             let hovered = response.hover_pos().filter(|_| !on_gizmo).and_then(under);
             let modifiers = ui.input(|input| input.modifiers);
             // Alt means "select": it passes through a gizmo's handle to what is behind (#482).
             if response.clicked() && (modifiers.alt || !on_gizmo) {
                 let adding = modifiers.command || modifiers.shift;
                 let at = response.interact_pointer_pos();
-                if modifiers.alt {
+                if let Some(light) = at.and_then(|at| light_icons::icon_at(&lights, at)) {
+                    // A light's icon (#506).
+                    editor.viewport.pick_cycle.reset();
+                    if adding {
+                        editor.selection.toggle(light);
+                    } else {
+                        editor.select(Some(light));
+                    }
+                } else if modifiers.alt {
                     // The part itself, even inside a model, and on the same spot again the one behind it (#482).
                     let hits = at
                         .and_then(|at| view.ray(at))
@@ -278,6 +296,13 @@ impl Panel for Viewport {
             for &id in editor.selection.ids() {
                 outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent));
             }
+            light_icons::paint(
+                &painter,
+                &lights,
+                editor.selection.ids(),
+                hovered,
+                &current_colors(ui.ctx()),
+            );
             tools::paint(&painter, &view, &editor.scene(), &gizmo, snap);
             let gizmo_mode = gizmo.select_mode;
             editor.viewport.gizmo = gizmo;

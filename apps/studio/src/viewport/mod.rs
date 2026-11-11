@@ -17,6 +17,7 @@
 pub mod axes;
 pub mod camera;
 pub mod gizmo;
+pub mod light_icons;
 pub mod pick;
 pub mod select;
 pub mod shapes;
