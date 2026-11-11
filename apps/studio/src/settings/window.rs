@@ -898,7 +898,7 @@ fn accent_swatches(ui: &mut Ui, accent: &mut Accent) {
     let p = colors.palette;
     ui.spacing_mut().item_spacing.x = space::S3;
     // Right to left: the custom colour first, so it reads last.
-    custom_accent(ui);
+    custom_accent(ui, accent);
     for choice in Accent::ALL.into_iter().rev() {
         let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
         let chosen = *accent == choice;
@@ -925,33 +925,56 @@ fn accent_swatches(ui: &mut Ui, accent: &mut Accent) {
     }
 }
 
-/// What the custom colour button says while there is no colour picker.
-pub(crate) const CUSTOM_ACCENT_SOON: &str = "A colour of your own. Coming with the colour picker.";
-
-/// The custom accent colour (#263): a round button with Lucide's palette, the swatches' size. Disabled until Studio
-/// has a colour picker, so it changes nothing yet.
-fn custom_accent(ui: &mut Ui) -> Response {
-    let p = current_colors(ui.ctx()).palette;
-    ui.add_enabled_ui(false, |ui| {
-        let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
-        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), "Custom colour"));
-        if ui.is_rect_visible(rect) {
-            let centre = rect.center();
-            // Drawn a step stronger than a live control: egui fades it as disabled.
-            ui.painter()
-                .circle(centre, 11.0, p.input, Stroke::new(size::BORDER, p.subtle));
-            icons::paint_at(
-                ui.painter(),
-                centre,
-                egui::Align2::CENTER_CENTER,
-                Icon::UiPalette,
-                text::BODY,
-                p.text,
-            );
+/// The custom accent colour (#263, #509): a round button the swatches' size, Lucide's palette on it until a colour is
+/// picked and that colour after; it opens Properties' colour picker (#416), and the colour picked is the accent.
+fn custom_accent(ui: &mut Ui, accent: &mut Accent) -> Response {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+    let custom = match *accent {
+        Accent::Custom(rgb) => Some(rgb),
+        _ => None,
+    };
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, custom.is_some(), "Custom colour"));
+    if ui.is_rect_visible(rect) {
+        let centre = rect.center();
+        match custom {
+            Some([r, g, b]) => {
+                ui.painter()
+                    .circle_filled(centre, 9.0, egui::Color32::from_rgb(r, g, b));
+                ui.painter().circle_stroke(centre, 12.0, Stroke::new(2.0, p.text));
+            }
+            None => {
+                ui.painter().circle(
+                    centre,
+                    11.0,
+                    p.input,
+                    Stroke::new(size::BORDER, if response.hovered() { p.text } else { p.subtle }),
+                );
+                icons::paint_at(
+                    ui.painter(),
+                    centre,
+                    egui::Align2::CENTER_CENTER,
+                    Icon::UiPalette,
+                    text::BODY,
+                    p.text,
+                );
+            }
         }
-        response.on_disabled_hover_text(CUSTOM_ACCENT_SOON)
-    })
-    .inner
+    }
+    let id = ui.make_persistent_id("settings.accent.picker");
+    egui::Popup::menu(&response)
+        .id(id)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            // From the accent there is: a preset's own colour the first time.
+            let [r, g, b, _] = accent.on(true).to_array();
+            let mut rgb = [r, g, b];
+            if crate::panels::color_picker::picker(ui, id.with("picker"), &mut rgb) {
+                *accent = Accent::Custom(rgb);
+            }
+        });
+    response.on_hover_text("A colour of your own")
 }
 
 /// Gives a drop-down `name` for screen readers (#464): the setting it changes, which its row shows beside it.

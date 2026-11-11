@@ -1582,14 +1582,41 @@ mod tests {
             Accent::Blue.colors().light
         );
 
-        // #263: the custom colour, after the swatches, shows the palette and does nothing until there is a picker.
+        // #263, #509: the custom colour, after the swatches, opens Properties' colour picker; a colour picked is the
+        // accent, and Escape leaves it.
         let custom = harness.get_by_role_and_label(Role::Button, "Custom colour");
-        assert!(egui_kittest::kittest::NodeT::accesskit_node(&custom).is_disabled());
         let blue = harness
             .get_by_role_and_label(Role::RadioButton, Accent::Blue.label())
             .rect();
         assert!(custom.rect().left() > blue.right(), "after the swatches");
         custom.click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.settings().appearance.accent,
+            Accent::Blue,
+            "opening changes nothing"
+        );
+        harness.get_by_role_and_label(Role::TextInput, "Hex").click();
+        settle(&mut harness);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness
+            .get_by_role_and_label(Role::TextInput, "Hex")
+            .type_text("#3BC9A0");
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().studio.settings().appearance.accent,
+            Accent::Custom([0x3B, 0xC9, 0xA0])
+        );
+        assert_eq!(
+            harness.state().studio.theme.colors().accent,
+            Accent::Custom([0x3B, 0xC9, 0xA0]).colors().light
+        );
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::RadioButton, Accent::Blue.label())
+            .click();
         settle(&mut harness);
         assert_eq!(harness.state().studio.settings().appearance.accent, Accent::Blue);
 
