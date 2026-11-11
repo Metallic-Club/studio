@@ -726,17 +726,27 @@ fn row(ui: &mut Ui, entry: &Entry, settings: &mut StudioSettings) {
     ui.push_id(entry.name, |ui| {
         ui.horizontal(|ui| {
             let words = (ui.available_width() - CONTROL_WIDTH - space::S6).max(160.0);
-            ui.allocate_ui_with_layout(vec2(words, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(words);
-                ui.add_space(space::S3);
-                ui.label(
-                    RichText::new(entry.name)
-                        .font(fonts::named(fonts::STRONG, text::BODY))
-                        .color(p.text),
-                );
-                ui.add(Label::new(RichText::new(entry.description).size(text::SMALL).color(p.muted)).wrap());
-                ui.add_space(space::S3);
-            });
+            // The name alone, its description on hover over it or its column (#501): compact pages.
+            let words_area =
+                ui.allocate_ui_with_layout(vec2(words, size::CONTROL), Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_width(words);
+                    ui.set_min_height(size::CONTROL);
+                    ui.add(
+                        Label::new(
+                            RichText::new(entry.name)
+                                .font(fonts::named(fonts::STRONG, text::BODY))
+                                .color(p.text),
+                        )
+                        .sense(Sense::hover()),
+                    )
+                    .on_hover_text(entry.description);
+                });
+            ui.interact(
+                words_area.response.rect,
+                ui.scope_id().with("description"),
+                Sense::hover(),
+            )
+            .on_hover_text(entry.description);
             // A column of fixed width, so a row never asks for more than the window has: a resizable window grows
             // to what its content takes, and content sized from the window's width would grow it every frame.
             ui.allocate_ui_with_layout(

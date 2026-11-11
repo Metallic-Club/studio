@@ -1616,6 +1616,28 @@ mod tests {
         assert!(harness.query_by_role_and_label(Role::Tab, "General").is_none());
     }
 
+    /// #501: a setting's description is not a line under it but shows on hover.
+    #[test]
+    fn a_setting_s_description_shows_on_hover() {
+        let mut harness = past_the_splash(settings_file("hover-descriptions", None));
+        harness.state_mut().studio.settings_window().set_open(true);
+        settle(&mut harness);
+        let description = "Go straight to your projects when Studio starts, without the sign-in screen.";
+        assert!(
+            harness.query_by_label(description).is_none(),
+            "no line under the setting"
+        );
+        let name = harness.get_by_role_and_label(Role::Label, "Skip sign-in").rect();
+        harness.event(egui::Event::PointerMoved(name.center()));
+        // Tooltips wait for the pointer to rest.
+        for _ in 0..10 {
+            harness.step();
+            harness.input_mut().time = Some(harness.ctx.input(|input| input.time) + 0.2);
+        }
+        harness.input_mut().time = None;
+        harness.get_by_label(description);
+    }
+
     #[test]
     fn the_search_box_filters_every_page() {
         let mut harness = past_the_splash(settings_file("search", None));
