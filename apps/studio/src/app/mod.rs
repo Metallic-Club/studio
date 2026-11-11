@@ -538,7 +538,7 @@ impl Studio {
         ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
             self.dock.ui(ui, &mut cx);
         });
-        crate::panels::insert::frame(&ctx, cx.editor);
+        crate::panels::insert::frame(&ctx, cx.editor, &mut cx.settings.editing.insert_grid);
         if let Some(action) = action {
             self.menu_action(action);
         }
@@ -3075,7 +3075,25 @@ mod tests {
             .click();
         settle(&mut harness);
         harness.get_by_label(crate::panels::insert::TITLE);
-        harness.get_by_role_and_label(Role::Button, "Insert Part");
+        // Part is in Frequently Used and in Parts (#500).
+        assert_eq!(harness.query_all_by_label("Insert Part").count(), 2);
+        // The button at the top right switches to the grid and back, kept in the settings (#500).
+        let grid = |harness: &Harness<'static, Test>| harness.state().studio.settings().editing.insert_grid;
+        assert!(!grid(&harness));
+        harness.get_by_role_and_label(Role::Button, "Show as a grid").click();
+        // Each view is a window of its own, sized in a first, unseen pass.
+        settle(&mut harness);
+        settle(&mut harness);
+        assert!(grid(&harness));
+        assert_eq!(
+            harness.query_all_by_label("Insert Folder").count(),
+            2,
+            "Frequently Used and Containers"
+        );
+        harness.get_by_role_and_label(Role::Button, "Show as a list").click();
+        settle(&mut harness);
+        settle(&mut harness);
+        assert!(!grid(&harness));
         // Its search keeps what matches; choosing inserts, selects, and closes the window.
         harness.event(egui::Event::Text("fold".to_owned()));
         settle(&mut harness);
@@ -3108,7 +3126,9 @@ mod tests {
         };
         // Below the fold of the list: the screen reader's click.
         harness
-            .get_by_role_and_label(Role::Button, "Insert Part")
+            .query_all_by_label("Insert Part")
+            .next()
+            .expect("Insert Part")
             .click_accesskit();
         settle(&mut harness);
         let editor = harness.state().studio.editor().unwrap();

@@ -20,6 +20,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("BindableFunction", Some("Instance"
         "A function that one script exposes and others call: a script assigns a function to OnInvoke, and Invoke \
          calls it and returns what it returns. It works between scripts on the same side (server or client).",
     )
+    .category("Events")
     .creatable()
     .methods(&[MethodDesc::new("Invoke", invoke)
         .params(ARGS)

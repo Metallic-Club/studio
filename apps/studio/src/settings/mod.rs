@@ -62,6 +62,8 @@ pub struct Editing {
     pub snap_turns: bool,
     /// The rotate increment, in degrees.
     pub turn_step: f32,
+    /// Insert Object shows its classes as a grid rather than a list (#500).
+    pub insert_grid: bool,
 }
 
 impl Default for Editing {
@@ -71,6 +73,7 @@ impl Default for Editing {
             move_step: 1.0,
             snap_turns: true,
             turn_step: 15.0,
+            insert_grid: false,
         }
     }
 }
@@ -281,6 +284,12 @@ impl StudioSettings {
             read(editing, "move_step", number, &mut e.move_step);
             read(editing, "snap_turns", Value::as_bool, &mut e.snap_turns);
             read(editing, "turn_step", number, &mut e.turn_step);
+            read(
+                editing,
+                "insert_view",
+                |v| v.as_str().map(|view| view == "grid"),
+                &mut e.insert_grid,
+            );
         }
         if let Some(viewport) = section("viewport") {
             let v = &mut settings.viewport;
@@ -349,6 +358,8 @@ impl StudioSettings {
             editing.insert("move_step".into(), round(e.move_step));
             editing.insert("snap_turns".into(), Value::Boolean(e.snap_turns));
             editing.insert("turn_step".into(), round(e.turn_step));
+            let view = if e.insert_grid { "grid" } else { "list" };
+            editing.insert("insert_view".into(), Value::String(view.into()));
         });
         let v = &self.viewport;
         with_section(&mut document, "viewport", |viewport| {
@@ -632,6 +643,7 @@ mod tests {
 move_step = 0.5
 snap_turns = false
 turn_step = 999
+insert_view = \"grid\"
 ",
         )
         .unwrap();
@@ -643,6 +655,7 @@ turn_step = 999
                 move_step: 0.5,
                 snap_turns: false,
                 turn_step: TURN_STEP.1,
+                insert_grid: true,
             }
         );
         let written = settings.to_document(&Table::new());
