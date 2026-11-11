@@ -383,6 +383,14 @@ impl Studio {
         self.settings.settings()
     }
 
+    /// Keeps where the window is, to open there next time (#505), and saves the settings now: Studio is closing.
+    pub fn close_with_window_at(&mut self, place: crate::settings::WindowPlace) {
+        self.settings.settings_mut().window = Some(place);
+        if let Err(error) = self.settings.save_if_changed() {
+            log::warn!("settings: could not save them: {error}");
+        }
+    }
+
     /// The Settings pages' state.
     pub fn settings_window(&mut self) -> &mut SettingsWindow {
         &mut self.settings_window

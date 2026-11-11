@@ -43,7 +43,28 @@ pub struct StudioSettings {
     pub rendering: GraphicsSettings,
     /// The keymap's overrides (#214).
     pub keybinds: Keybinds,
+    /// Where Studio's window was when it last closed (#505); `None` the first time.
+    pub window: Option<WindowPlace>,
 }
+
+/// Where Studio's window was (#505), saved in `[window]`: its frame's top-left corner and its inside's size, in
+/// physical pixels, as it was before it was maximised, and whether it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowPlace {
+    /// The frame's left edge.
+    pub x: i32,
+    /// The frame's top edge.
+    pub y: i32,
+    /// The inside's width.
+    pub width: u32,
+    /// The inside's height.
+    pub height: u32,
+    /// Whether it was maximised.
+    pub maximized: bool,
+}
+
+/// The sizes a saved window may have, in physical pixels: anything else is not used.
+pub const WINDOW_SIZE: (u32, u32) = (320, 16384);
 
 /// What the Output panel shows (#502, #503), saved in `[output]`; its menu (the three dots on its tab bar) edits it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,6 +335,25 @@ impl StudioSettings {
                 &mut e.insert_grid,
             );
         }
+        if let Some(window) = section("window") {
+            let int = |key: &str| window.get(key).and_then(Value::as_integer);
+            let size = |key: &str| {
+                int(key)
+                    .and_then(|v| u32::try_from(v).ok())
+                    .filter(|v| (WINDOW_SIZE.0..=WINDOW_SIZE.1).contains(v))
+            };
+            let at = |key: &str| int(key).and_then(|v| i32::try_from(v).ok());
+            settings.window = match (at("x"), at("y"), size("width"), size("height")) {
+                (Some(x), Some(y), Some(width), Some(height)) => Some(WindowPlace {
+                    x,
+                    y,
+                    width,
+                    height,
+                    maximized: window.get("maximized").and_then(Value::as_bool).unwrap_or(false),
+                }),
+                _ => None,
+            };
+        }
         if let Some(output) = section("output") {
             let o = &mut settings.output;
             read(output, "show_time", Value::as_bool, &mut o.show_time);
@@ -390,6 +430,15 @@ impl StudioSettings {
             let view = if e.insert_grid { "grid" } else { "list" };
             editing.insert("insert_view".into(), Value::String(view.into()));
         });
+        if let Some(place) = self.window {
+            with_section(&mut document, "window", |window| {
+                window.insert("x".into(), Value::Integer(i64::from(place.x)));
+                window.insert("y".into(), Value::Integer(i64::from(place.y)));
+                window.insert("width".into(), Value::Integer(i64::from(place.width)));
+                window.insert("height".into(), Value::Integer(i64::from(place.height)));
+                window.insert("maximized".into(), Value::Boolean(place.maximized));
+            });
+        }
         let o = &self.output;
         with_section(&mut document, "output", |output| {
             output.insert("show_time".into(), Value::Boolean(o.show_time));
@@ -696,6 +745,33 @@ insert_view = \"grid\"
         let written = settings.to_document(&Table::new());
         assert_eq!(StudioSettings::from_document(&written).editing, settings.editing);
         assert_eq!(StudioSettings::default().editing.move_step, 1.0);
+    }
+
+    /// #505: the window's place round-trips; a size out of range or a missing key is not used.
+    #[test]
+    fn the_window_s_place_round_trips() {
+        let document: Table =
+            toml::from_str("[window]\nx = -1500\ny = 40\nwidth = 1600\nheight = 900\nmaximized = true\n").unwrap();
+        let settings = StudioSettings::from_document(&document);
+        let place = WindowPlace {
+            x: -1500,
+            y: 40,
+            width: 1600,
+            height: 900,
+            maximized: true,
+        };
+        assert_eq!(settings.window, Some(place));
+        let written = settings.to_document(&Table::new());
+        assert_eq!(StudioSettings::from_document(&written).window, Some(place));
+        for broken in [
+            "x = 1\ny = 1\nwidth = 10\nheight = 900",
+            "x = 1\nwidth = 900\nheight = 900",
+            "",
+        ] {
+            let document: Table = toml::from_str(&format!("[window]\n{broken}\n")).unwrap();
+            assert_eq!(StudioSettings::from_document(&document).window, None, "{broken}");
+        }
+        assert_eq!(StudioSettings::default().window, None);
     }
 
     #[test]
