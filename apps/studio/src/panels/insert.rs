@@ -224,11 +224,13 @@ pub fn show(
             let search = ui
                 .horizontal(|ui| {
                     icons::show(ui, Icon::UiSearch, text::BODY_LG, p.subtle);
-                    let toggle_width = size::CONTROL;
+                    // What the toggle takes, with the gap the layout puts before it (#520): a field a pixel too wide
+                    // pushes the toggle past the window's edge, and a resizable window grows to fit it, every frame.
+                    let toggle_width = size::CONTROL + ui.spacing().item_spacing.x;
                     let field = ui.add(
                         TextEdit::singleline(&mut inserting.query)
                             .hint_text("Search classes")
-                            .desired_width((ui.available_width() - toggle_width - space::S3).max(80.0))
+                            .desired_width((ui.available_width() - toggle_width).max(80.0))
                             .margin(vec2(space::S4, space::S3)),
                     );
                     if view_toggle(ui, *grid).clicked() {
@@ -534,6 +536,41 @@ mod view_tests {
             assert_eq!(harness.state().1, !start_grid);
             harness.get_by_label("Insert SpotLight");
             state.1 = start_grid;
+        }
+    }
+
+    /// #520: the window keeps its width while it is open, in both views (it grew a little every frame).
+    #[test]
+    fn the_window_keeps_its_width() {
+        let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
+        let parent = metallic_engine::metallic_core::Id::new(1, 0);
+        for grid in [false, true] {
+            let state = (
+                Inserting {
+                    parent,
+                    query: String::new(),
+                    place: None,
+                },
+                grid,
+            );
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1400.0, 1000.0))
+                .with_context_setup(crate::theme::fonts::install)
+                .build_ui_state(
+                    |ui, (inserting, grid): &mut (Inserting, bool)| {
+                        show(ui.ctx(), &registry, inserting, grid);
+                    },
+                    state,
+                );
+            let width = |harness: &Harness<'_, (Inserting, bool)>| harness.get_by_role(Role::TextInput).rect().width();
+            for _ in 0..4 {
+                harness.step();
+            }
+            let first = width(&harness);
+            for _ in 0..40 {
+                harness.step();
+            }
+            assert_eq!(width(&harness), first, "grid {grid}");
         }
     }
 }
