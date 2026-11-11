@@ -23,8 +23,9 @@ use crate::mesh_assets::MeshAssets;
 use crate::perf::{FrameSample, GraphicsStatus, PerfStats, PerfSummary, StatsViewers, draw_viewers};
 use metallic_project::AssetReader;
 
-/// Frames between two refreshes of the overlay's percentiles: about four times a second at 60 fps.
-const SUMMARY_EVERY: u32 = 15;
+/// The time between two refreshes of the overlay's figures (#507): four times a second whatever the frame rate, slow
+/// enough to read.
+const SUMMARY_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// The device and the frame loop, kept while the window comes and goes.
 struct Device {
@@ -126,9 +127,10 @@ pub struct SceneRenderer {
     last_sync: SyncStats,
     last_upload: UploadStats,
     perf: PerfStats,
-    /// The overlay's percentiles, refreshed every [`SUMMARY_EVERY`] frames.
+    /// The overlay's percentiles, refreshed every [`SUMMARY_PERIOD`] (#507).
     summary: PerfSummary,
-    since_summary: u32,
+    /// When the summary was last refreshed.
+    summary_at: Option<Instant>,
     /// The performance overlay's viewers shown (#479); none when it is off.
     viewers: StatsViewers,
     /// When the previous frame's render started: frame time is the time between two.
@@ -187,7 +189,7 @@ impl SceneRenderer {
             last_upload: UploadStats::default(),
             perf: PerfStats::default(),
             summary: PerfSummary::default(),
-            since_summary: 0,
+            summary_at: None,
             viewers: StatsViewers::NONE,
             frame_start: None,
             attached_at: None,
@@ -1022,10 +1024,11 @@ impl SceneRenderer {
             device.renderer.set_lighting(self.lighting);
         }
         if let Some(status) = status {
-            if self.since_summary == 0 {
+            // A few times a second, whatever the frame rate (#507): the figures stay long enough to be read.
+            if self.summary_at.is_none_or(|at| at.elapsed() >= SUMMARY_PERIOD) {
                 self.summary = self.perf.summary();
+                self.summary_at = Some(Instant::now());
             }
-            self.since_summary = (self.since_summary + 1) % SUMMARY_EVERY;
             draw_viewers(
                 device.renderer.overlay_mut(),
                 &self.perf,

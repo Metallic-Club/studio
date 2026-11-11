@@ -219,6 +219,9 @@ pub struct Distribution {
 pub struct PerfSummary {
     /// Frames summarised.
     pub frames: usize,
+    /// The mean frame time of the last [`RECENT_MS`] of frames: the frame-rate viewer's large figure (#507), steady
+    /// enough to read since a summary is refreshed only a few times a second.
+    pub recent_ms: f32,
     /// Frame time.
     pub frame_ms: Distribution,
     /// The mean frame time of the slowest 1% of frames (at least one frame).
@@ -496,7 +499,7 @@ impl<T: Copy> Ring<T> {
     }
 
     /// Oldest first.
-    fn iter(&self) -> impl Iterator<Item = &T> {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
         let (newer, older) = self.items.split_at(self.next.min(self.items.len()));
         older.iter().chain(newer)
     }
@@ -707,6 +710,16 @@ impl PerfStats {
             summary.light_shadow_frames += u32::from(frame.light_tiles_redrawn > 0);
             summary.light_tiles_redrawn += frame.light_tiles_redrawn;
         }
+        // The last half-second's mean (#507): newest first, until the frames span it.
+        let (mut total, mut counted) = (0.0f32, 0u32);
+        for frame in self.frames.iter().rev() {
+            total += frame.frame_ms;
+            counted += 1;
+            if total >= RECENT_MS {
+                break;
+            }
+        }
+        summary.recent_ms = if counted > 0 { total / counted as f32 } else { 0.0 };
         let (frames, gpu, scratch) = (&self.frames, &self.gpu, &mut self.scratch);
         summary.frame_ms = distribution(scratch, frames.iter().map(|f| f.frame_ms));
         // The slowest 1% are the end of the sorted frame times left in the scratch buffer.
@@ -755,6 +768,9 @@ fn distribution(scratch: &mut Vec<f32>, values: impl Iterator<Item = f32>) -> Di
         max: scratch[scratch.len() - 1],
     }
 }
+
+/// How far back the frame-rate viewer's large figure averages, in milliseconds (#507).
+pub const RECENT_MS: f32 = 500.0;
 
 /// Overlay colours (sRGB, straight alpha).
 const PANEL: [u8; 4] = [8, 10, 14, 200];
@@ -953,7 +969,8 @@ pub fn draw_viewers(
     let mut y = 12.0;
     for viewer in viewers.iter() {
         let lines = match viewer {
-            StatsViewer::FrameRate => 3.0,
+            // The large figure takes two lines.
+            StatsViewer::FrameRate => 5.0,
             StatsViewer::Draws => 4.0 + f32::from(u8::from(summary.draws.prepass_draws > 0)),
             StatsViewer::Lighting => 4.0,
             StatsViewer::Graphics => 5.0,
@@ -989,19 +1006,35 @@ const VIEWER_GAP: f32 = 12.0;
 /// The frame-rate viewer from `(x0, y)`: the frame time, the spikes, the frames summarised and the graph.
 fn draw_frame_rate(overlay: &mut Overlay, x0: f32, mut y: f32, stats: &PerfStats, summary: &PerfSummary) {
     let line = metallic_render::overlay::LINE_HEIGHT * SCALE;
-    let now = stats.last().copied().unwrap_or_default();
+    // Large, and the mean of the last half-second, refreshed with the summary a few times a second (#507): a figure
+    // that can be read, where the last frame's changed every frame.
+    let recent = summary.recent_ms;
+    let (x, _) = overlay.text_fmt(
+        x0,
+        y,
+        SCALE * 2.0,
+        bar_color(recent),
+        format_args!("{:.0} FPS", fps(recent)),
+    );
+    overlay.text_fmt(
+        x + 4.0 * metallic_render::overlay::GLYPH_ADVANCE,
+        y + metallic_render::overlay::LINE_HEIGHT * SCALE,
+        SCALE,
+        DIM,
+        format_args!("{recent:.2} MS"),
+    );
+    y += 2.0 * line;
     overlay.text_fmt(
         x0,
         y,
         SCALE,
         bar_color(summary.frame_ms.p50),
         format_args!(
-            "FRAME {:.2} MS ({:.0} FPS)  P50 {:.2}  P99 {:.2}  1% LOW {:.2}",
-            now.frame_ms,
-            fps(now.frame_ms),
+            "FRAME P50 {:.2}  P99 {:.2}  1% LOW {:.2} MS ({:.0} FPS)",
             summary.frame_ms.p50,
             summary.frame_ms.p99,
             summary.low_1pct_ms,
+            fps(summary.low_1pct_ms),
         ),
     );
     y += line;
@@ -1304,6 +1337,30 @@ mod tests {
         assert!(viewers.contains(StatsViewer::Lighting) && !viewers.is_empty());
         viewers.toggle(StatsViewer::Lighting);
         assert!(viewers.is_empty());
+    }
+
+    /// #507: the large figure is the mean of the last half-second, not the last frame.
+    #[test]
+    fn the_recent_frame_time_is_the_last_half_second_s_mean() {
+        let mut stats = PerfStats::new(1000);
+        for _ in 0..200 {
+            stats.record(sample(20.0), None, DrawStats::default());
+        }
+        // The last half-second at 10 ms, then one slow frame.
+        for _ in 0..50 {
+            stats.record(sample(10.0), None, DrawStats::default());
+        }
+        let summary = stats.summary();
+        assert!((summary.recent_ms - 10.0).abs() < 1e-3, "{}", summary.recent_ms);
+        stats.record(sample(40.0), None, DrawStats::default());
+        let summary = stats.summary();
+        // One frame moves it a little, not to 40.
+        assert!(
+            summary.recent_ms > 10.0 && summary.recent_ms < 11.5,
+            "{}",
+            summary.recent_ms
+        );
+        assert_eq!(PerfStats::new(10).summary().recent_ms, 0.0);
     }
 
     #[test]
