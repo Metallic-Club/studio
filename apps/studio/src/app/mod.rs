@@ -4267,6 +4267,44 @@ mod tests {
         );
     }
 
+    /// #543: Enter on the last line in view scrolls the code, so the cursor's line stays in view.
+    #[test]
+    fn enter_at_the_bottom_of_the_view_scrolls_to_the_cursor() {
+        let mut harness = editing(settings_file("editor-script-follow", None), "Script Follow Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let script = add_bare_script(&mut harness, "Follow");
+        two_clicks(&mut harness, "Follow", 0.05);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("print(1)".to_owned()));
+        settle(&mut harness);
+        let settings = harness.state().studio.settings().code.clone();
+        let row = settings.size * settings.line_spacing;
+        let lines = 80;
+        for _ in 1..lines {
+            harness.key_press(Key::Enter);
+            settle(&mut harness);
+        }
+        let field = crate::panels::script::field_id(script);
+        let cursor = crate::code::view::cursor(&harness.ctx, field).unwrap();
+        let text = harness
+            .state_mut()
+            .studio
+            .editor_mut()
+            .unwrap()
+            .project
+            .read_text("Scripts/Follow.luau")
+            .unwrap();
+        assert_eq!(text.chars().take(cursor).filter(|c| *c == '\n').count(), lines - 1);
+        // The field is as tall as the code; scrolled, its top is above the view.
+        let top = harness.get_by_role(Role::MultilineTextInput).rect().top();
+        let line_top = top + (lines - 1) as f32 * row;
+        assert!(
+            line_top > 0.0 && line_top + row <= 1000.0,
+            "the cursor's line at {line_top}, the field's top at {top}"
+        );
+    }
+
     /// #529: with spaces chosen, Tab puts in the tab width's spaces; Enter keeps the line's indentation; and the Code
     /// Editor page's changes reach the open script.
     #[test]

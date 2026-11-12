@@ -111,6 +111,12 @@ pub fn show(
     let row_height = settings.size * settings.line_spacing;
     let digit = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0'));
     let mut changed = keys(ui, id, text, settings);
+    // An edit made for the field (Enter, Tab, an end put in, a suggestion taken) moves its cursor without the field
+    // knowing, so it would not scroll there itself: the view follows the cursor (#543).
+    let follow = ui
+        .ctx()
+        .data_mut(|data| data.remove_temp::<bool>(id.with("follow")))
+        .unwrap_or(false);
     let lines = text.split('\n').count();
     let digits = lines.to_string().len().max(2);
     let gutter_width = digits as f32 * digit + 2.0 * space::S4;
@@ -171,6 +177,10 @@ pub fn show(
         let current = cursor.map(|cursor| output.galley.layout_from_cursor(cursor).row);
         let galley = Arc::clone(&output.galley);
         let galley_pos = output.galley_pos;
+        if follow && let Some(cursor) = cursor {
+            let at = galley.pos_from_cursor(cursor).translate(galley_pos.to_vec2());
+            ui.scroll_to_rect(at.expand2(vec2(2.0 * digit, row_height / 2.0)), None);
+        }
         let painter = ui.painter().clone();
         if settings.highlight_line
             && let Some(row) = current.and_then(|row| galley.rows.get(row))
@@ -511,7 +521,8 @@ pub fn replace_selection(ctx: &egui::Context, id: Id, text: &mut String, with: &
     true
 }
 
-/// Puts `with` in place of the characters `range` of `text` in the field `id`, the cursor after it.
+/// Puts `with` in place of the characters `range` of `text` in the field `id`, the cursor after it, and has the view
+/// follow the cursor there on its next frame.
 pub fn replace_chars(
     ctx: &egui::Context,
     id: Id,
@@ -525,6 +536,7 @@ pub fn replace_chars(
     let at = range.start + with.chars().count();
     state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
     state.clone().store(ctx, id);
+    ctx.data_mut(|data| data.insert_temp(id.with("follow"), true));
 }
 
 #[cfg(test)]
