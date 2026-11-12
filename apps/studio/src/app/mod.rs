@@ -4289,13 +4289,13 @@ mod tests {
         harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
         harness.event(egui::Event::Text("if x then".to_owned()));
         settle(&mut harness);
-        // Tabs, the default.
+        // Tabs, the default. Enter after `then` steps in and puts in the `end` (#542); Tab steps in once more.
         harness.key_press(Key::Enter);
         harness.key_press(Key::Tab);
         harness.event(egui::Event::Text("a()".to_owned()));
         harness.key_press(Key::Enter);
         settle(&mut harness);
-        assert_eq!(text(&mut harness), "if x then\n\ta()\n\t");
+        assert_eq!(text(&mut harness), "if x then\n\t\ta()\n\t\t\nend");
         // Spaces, two wide: the Code Editor page's.
         harness.state_mut().studio.settings_window().set_open(true);
         harness
@@ -4343,7 +4343,11 @@ mod tests {
         harness.key_press(Key::Tab);
         harness.event(egui::Event::Text("b()".to_owned()));
         settle(&mut harness);
-        assert!(text(&mut harness).ends_with("\n\t  b()"), "{:?}", text(&mut harness));
+        assert!(
+            text(&mut harness).ends_with("\n\t\t  b()\nend"),
+            "{:?}",
+            text(&mut harness)
+        );
     }
 
     /// #530: an open script's syntax error and warnings are found as it is typed, and a click on a scroll bar mark puts
