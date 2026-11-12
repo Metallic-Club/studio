@@ -2,6 +2,8 @@
 //! left (striped by line, #540), the cursor's line lit, whitespace shown if asked, and Tab and Enter as a code editor
 //! has them. It scrolls both ways: code is not wrapped.
 //!
+//! A click under the last line puts the cursor at the end of the code, as VS Code does (#557).
+//!
 //! Enter after a line that opens a block steps in and, when the block is not closed, puts in its `end` (#542,
 //! [`super::blocks`]).
 //!
@@ -171,8 +173,8 @@ pub fn show(
         // Behind the text: the cursor's line and the matches found, filled in once the field is laid out.
         let line_light = ui.painter().add(Shape::Noop);
         let found_light = ui.painter().add(Shape::Noop);
-        // Every row the view holds is the field's, so a click under the last line puts the cursor at the end.
-        let rows = ((height / row_height).floor() as usize).max(lines);
+        // The field is as tall as its lines; the view under them is `below_last_line`'s (#557).
+        let rows = lines;
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(field), |ui| {
                 TextEdit::multiline(text)
@@ -193,6 +195,7 @@ pub fn show(
                     .show(ui)
             })
             .inner;
+        below_last_line(ui, id, field, &output.galley, output.galley_pos, text);
         let response = output.response.response.clone();
         let focused = response.has_focus();
         let cursor = output.cursor_range.filter(|_| focused).map(|range| range.primary);
@@ -406,6 +409,58 @@ pub fn show(
         hovered,
         view,
         code,
+    }
+}
+
+/// The view under the code's last line, in the field `field` of the field `id` showing `text` laid out as `galley` at
+/// `galley_pos` (#557): a click there puts the cursor at the end of the code, as VS Code does (Shift+click selects to
+/// there), and a drag from there selects back from the end to the pointer.
+fn below_last_line(ui: &Ui, id: Id, field: Rect, galley: &Galley, galley_pos: Pos2, text: &str) {
+    let bottom = galley_pos.y + galley.rect.bottom();
+    let below = Rect::from_min_max(pos2(field.left(), bottom), field.max);
+    if below.height() < 1.0 {
+        return;
+    }
+    let response = ui
+        .interact(below, id.with("below"), Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::Text);
+    let anchor_id = id.with("below-anchor");
+    let end = CCursor::new(text.chars().count());
+    let pressed = response.hovered() && ui.input(|input| input.pointer.primary_pressed());
+    let range = if pressed {
+        let shift = ui.input(|input| input.modifiers.shift);
+        let anchor = TextEditState::load(ui.ctx(), id)
+            .and_then(|state| state.cursor.char_range())
+            .filter(|_| shift)
+            .map_or(end, |range| range.secondary);
+        ui.ctx().data_mut(|data| data.insert_temp(anchor_id, anchor.index.0));
+        Some(CCursorRange::two(anchor, end))
+    } else if response.dragged()
+        && let Some(at) = response.interact_pointer_pos()
+    {
+        let anchor = ui
+            .ctx()
+            .data(|data| data.get_temp::<usize>(anchor_id))
+            .map_or(end, CCursor::new);
+        let to = if at.y >= bottom {
+            end
+        } else {
+            galley.cursor_from_pos(at - galley_pos)
+        };
+        Some(CCursorRange::two(anchor, to))
+    } else {
+        None
+    };
+    // The field gives up the keyboard when a click ends on another widget: it is given it back.
+    if response.clicked() || response.drag_stopped() {
+        ui.memory_mut(|memory| memory.request_focus(id));
+    }
+    if let Some(range) = range {
+        let mut state = TextEditState::load(ui.ctx(), id).unwrap_or_default();
+        state.cursor.set_char_range(Some(range));
+        state.store(ui.ctx(), id);
+        ui.memory_mut(|memory| memory.request_focus(id));
+        ui.ctx().request_repaint();
     }
 }
 
