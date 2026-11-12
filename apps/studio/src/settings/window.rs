@@ -522,6 +522,14 @@ pub static ENTRIES: &[Entry] = &[
             toggle(ui, &mut s.code.highlight_line, "Highlight the current line");
         },
     },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Show the minimap",
+        description: "The code in small down the right of the script editor, the part in view shaded; click or drag it to scroll.",
+        control: |ui, s| {
+            toggle(ui, &mut s.code.minimap, "Show the minimap");
+        },
+    },
     code_colour_entry!(Text, "The colour of names and anything else."),
     code_colour_entry!(Keyword, "local, function, if, end and Luau's other reserved words."),
     code_colour_entry!(Constant, "The values true, false and nil."),

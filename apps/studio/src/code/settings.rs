@@ -10,6 +10,7 @@
 //! indent = "tabs"           # or "spaces"
 //! show_whitespace = false
 //! highlight_line = true
+//! minimap = true
 //!
 //! [colors.dark]
 //! keyword = "#F86D7C"
@@ -203,6 +204,8 @@ pub struct CodeEditor {
     pub show_whitespace: bool,
     /// Whether the cursor's line is lit.
     pub highlight_line: bool,
+    /// Whether the code's minimap shows down its right (#556).
+    pub minimap: bool,
     /// The dark theme's colours.
     pub dark: Palette,
     /// The light theme's colours.
@@ -220,6 +223,7 @@ impl Default for CodeEditor {
             insert_spaces: false,
             show_whitespace: false,
             highlight_line: true,
+            minimap: true,
             dark: Palette::DARK,
             light: Palette::LIGHT,
         }
@@ -295,6 +299,7 @@ impl CodeEditor {
             settings.insert_spaces = editor.get("indent").and_then(Value::as_str) == Some("spaces");
             settings.show_whitespace = flag("show_whitespace").unwrap_or(settings.show_whitespace);
             settings.highlight_line = flag("highlight_line").unwrap_or(settings.highlight_line);
+            settings.minimap = flag("minimap").unwrap_or(settings.minimap);
         }
         if let Some(colors) = document.get("colors").and_then(Value::as_table) {
             for (theme, palette) in [("dark", &mut settings.dark), ("light", &mut settings.light)] {
@@ -338,6 +343,7 @@ impl CodeEditor {
             editor.insert("indent".into(), Value::String(indent.into()));
             editor.insert("show_whitespace".into(), Value::Boolean(self.show_whitespace));
             editor.insert("highlight_line".into(), Value::Boolean(self.highlight_line));
+            editor.insert("minimap".into(), Value::Boolean(self.minimap));
         });
         with_section(&mut document, "colors", |colors| {
             for (theme, palette) in [("dark", &self.dark), ("light", &self.light)] {
@@ -392,6 +398,7 @@ mod tests {
             insert_spaces: true,
             show_whitespace: true,
             highlight_line: false,
+            minimap: false,
             ..CodeEditor::default()
         };
         settings.dark.set(Kind::Keyword, [1, 2, 3]);

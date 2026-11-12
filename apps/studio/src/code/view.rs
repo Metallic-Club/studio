@@ -24,7 +24,7 @@ use egui::{
 use super::analysis::{Diagnostic, Severity};
 use super::find::Finder;
 use super::settings::{CodeEditor, Kind, SIZE};
-use super::{highlight, swatch};
+use super::{highlight, minimap, swatch};
 use crate::theme::tokens::space;
 use crate::theme::{current_colors, fonts};
 
@@ -44,6 +44,8 @@ pub struct ViewOutput {
     pub hovered: Option<usize>,
     /// The area the code is shown in, on the screen.
     pub view: Rect,
+    /// The part of `view` left of the minimap and the scroll bar, which the code is not under (#556).
+    pub code: Rect,
 }
 
 /// The width of the scroll bar's marks.
@@ -134,6 +136,16 @@ pub fn show(
     let mut scroll = ScrollArea::both()
         .id_salt(id.with("scroll"))
         .auto_shrink([false, false]);
+    // An offset the minimap asked for last frame (#556).
+    if let Some(offset) = ui
+        .ctx()
+        .data_mut(|data| data.remove_temp::<f32>(id.with("minimap-offset")))
+    {
+        scroll = scroll.vertical_scroll_offset(offset);
+    }
+    // The minimap, and the scroll bar right of it, cover the code's right: the code can scroll out from under them.
+    let bar = ui.spacing().scroll.bar_width + ui.spacing().scroll.bar_outer_margin + 2.0;
+    let reserve = if settings.minimap { minimap::WIDTH + bar } else { 0.0 };
     if let Some(at) = revealed {
         let at = at.min(text.chars().count());
         if let Some(mut state) = TextEditState::load(ui.ctx(), id).or_else(|| Some(TextEditState::default())) {
@@ -150,7 +162,7 @@ pub fn show(
     let shown = scroll.show(ui, |ui| {
         let widest = layouter(ui, text, f32::INFINITY).size().x;
         let view = ui.available_size();
-        let width = (widest + 4.0 * digit).max(view.x - gutter_width - MARK_WIDTH);
+        let width = (widest + 4.0 * digit + reserve).max(view.x - gutter_width - MARK_WIDTH);
         let height = (lines as f32 * row_height).max(view.y);
         let top_left = ui.cursor().min;
         let gutter = Rect::from_min_size(top_left, vec2(gutter_width, height));
@@ -331,8 +343,46 @@ pub fn show(
         )
     });
     let view = shown.inner_rect;
+    let offset = shown.state.clamped_offset().y;
+    let content_height = shown.content_size.y;
     let (response, galley, galley_pos, cursor, hovered, picked) = shown.inner;
     changed |= response.changed() || picked;
+    let mut code = view;
+    if settings.minimap && view.width() > 2.0 * minimap::WIDTH {
+        let rect = Rect::from_min_max(
+            pos2(view.right() - bar - minimap::WIDTH, view.top()),
+            pos2(view.right() - bar, view.bottom()),
+        );
+        code.max.x = rect.left();
+        let map = minimap::Map {
+            rect,
+            lines,
+            row_height,
+            view_height: view.height(),
+            offset,
+            max_offset: content_height - view.height(),
+        };
+        let (minimap_response, asked) = minimap::interact(ui, id.with("minimap"), &map);
+        let active = minimap_response.hovered() || minimap_response.dragged();
+        minimap::paint(
+            ui.painter(),
+            &map,
+            &galley.job,
+            usize::from(settings.tab_width),
+            (p.panel, p.text),
+            active,
+        );
+        ui.painter().vline(
+            rect.left(),
+            view.y_range(),
+            Stroke::new(1.0, p.border.gamma_multiply(0.5)),
+        );
+        if let Some(asked) = asked {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(id.with("minimap-offset"), asked));
+            ui.ctx().request_repaint();
+        }
+    }
     marks(ui, id, view, lines, text, diagnostics, dark);
     // What is wrong under the pointer.
     if let Some(at) = hovered {
@@ -355,6 +405,7 @@ pub fn show(
         cursor,
         hovered,
         view,
+        code,
     }
 }
 
