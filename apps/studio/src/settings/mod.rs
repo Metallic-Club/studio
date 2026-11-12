@@ -45,6 +45,8 @@ pub struct StudioSettings {
     pub keybinds: Keybinds,
     /// Where Studio's window was when it last closed (#505); `None` the first time.
     pub window: Option<WindowPlace>,
+    /// The script editor's settings (#529), kept in a file of their own (`code_editor.toml`), not in `settings.toml`.
+    pub code: crate::code::settings::CodeEditor,
 }
 
 /// Where Studio's window was (#505), saved in `[window]`: its frame's top-left corner and its inside's size, in
@@ -501,6 +503,7 @@ impl StudioSettings {
 
     /// Brings every value into its range.
     pub fn clamp(&mut self) {
+        self.code.clamp();
         let e = &mut self.editing;
         let within = |value: f32, (min, max): (f32, f32), default: f32| {
             if value.is_finite() {

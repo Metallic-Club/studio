@@ -110,6 +110,9 @@ egui_kittest = { version = "0.37.0", default-features = false }
 egui_tiles = { version = "0.18.0", features = ["serde"] }
 # The local time of day on Studio's Output lines (#502). Only its clock: no serde, no formatting locales. MIT or Apache-2.0.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Checks a font file the user picks for the script editor (#529) before egui loads it: egui reads fonts with it already
+# (the same version and features), so it adds nothing to the build. MIT OR Apache-2.0, pure Rust.
+skrifa = { version = "0.44.0", default-features = false, features = ["std", "autohint_shaping"] }
 # Studio's native file dialogs (pick a `.mtproj`, pick a folder). Desktop only, like egui. On Linux it asks the XDG
 # desktop portal over D-Bus (no GTK); on Windows and macOS it shows the system's own dialogs. MIT.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }

@@ -9,6 +9,11 @@
 //!   file's text ([`Scripts`]) once it is read.
 //! - **Renaming a script** takes a slow double click in the Explorer, the double click being the editor's.
 
+pub mod highlight;
+pub mod lexer;
+pub mod settings;
+pub mod view;
+
 use std::collections::HashMap;
 
 use metallic_engine::metallic_core::{DataModel, Id, Value};
@@ -16,6 +21,9 @@ use metallic_engine::metallic_project::Project;
 
 use crate::editor::EditorState;
 use crate::viewport::pick::is_a;
+
+/// An instance that is a script.
+pub type ScriptId = Id;
 
 /// The script editor's panel id, the first part of a script tab's id.
 pub const PANEL: &str = "script";

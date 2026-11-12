@@ -23,6 +23,8 @@ const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-V
 pub const STRONG: &str = "strong";
 /// Headings, titles and the wordmark.
 pub const HEADING: &str = "heading";
+/// The script editor's code (#529): JetBrains Mono unless Settings' Code Editor page chooses another ([`with_code`]).
+pub const CODE: &str = "code";
 
 /// Inter's weights, on its `wght` axis.
 pub mod weight {
@@ -73,6 +75,57 @@ pub fn definitions() -> FontDefinitions {
     }
     defs.families
         .insert(FontFamily::Monospace, vec!["jetbrains-mono".into(), "inter".into()]);
+    defs.families.insert(
+        FontFamily::Name(CODE.into()),
+        vec!["jetbrains-mono".into(), "inter".into()],
+    );
+    defs
+}
+
+/// `defs` with the script editor's family ([`CODE`]) in `font` (#529). A font file that cannot be read, or is not a
+/// font, is logged and JetBrains Mono is used: egui must never be given a file it cannot read.
+pub fn with_code(mut defs: FontDefinitions, font: &crate::code::settings::CodeFont, tab_width: u8) -> FontDefinitions {
+    use crate::code::settings::CodeFont;
+    // The code family's own copies of the bundled fonts, so a tab is as wide as Settings says (#529).
+    let tab = |data: &'static [u8], coords: &[(&[u8; 4], f32)]| {
+        Arc::new(FontData::from_static(data).tweak(FontTweak {
+            coords: VariationCoords::new(coords.iter().copied()),
+            tab_size: f32::from(tab_width),
+            ..FontTweak::default()
+        }))
+    };
+    defs.font_data
+        .insert("code-jetbrains-mono".into(), tab(JETBRAINS_MONO, &[(b"wght", 400.0)]));
+    defs.font_data
+        .insert("code-inter".into(), tab(INTER, &[(b"wght", weight::BODY)]));
+    let fallback = vec!["code-jetbrains-mono".to_owned(), "code-inter".to_owned()];
+    let family = match font {
+        CodeFont::JetBrainsMono => fallback,
+        CodeFont::Inter => vec!["code-inter".to_owned(), "code-jetbrains-mono".to_owned()],
+        CodeFont::File(path) => match std::fs::read(path) {
+            Ok(bytes) if skrifa::FontRef::new(&bytes).is_ok() => {
+                let file = FontData::from_owned(bytes).tweak(FontTweak {
+                    tab_size: f32::from(tab_width),
+                    ..FontTweak::default()
+                });
+                defs.font_data.insert("code-file".into(), Arc::new(file));
+                vec![
+                    "code-file".to_owned(),
+                    "code-jetbrains-mono".to_owned(),
+                    "code-inter".to_owned(),
+                ]
+            }
+            Ok(_) => {
+                log::warn!("fonts: {path} is not a font Studio can read; scripts use JetBrains Mono");
+                fallback
+            }
+            Err(error) => {
+                log::warn!("fonts: could not read {path}: {error}; scripts use JetBrains Mono");
+                fallback
+            }
+        },
+    };
+    defs.families.insert(FontFamily::Name(CODE.into()), family);
     defs
 }
 
@@ -89,6 +142,23 @@ pub fn named(name: &str, size: f32) -> FontId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #529: the code family is JetBrains Mono, Inter or a font file; a file that is not a font is not loaded.
+    #[test]
+    fn the_code_family_is_the_font_chosen_and_never_a_file_that_is_not_one() {
+        use crate::code::settings::CodeFont;
+        let code = FontFamily::Name(CODE.into());
+        assert_eq!(definitions().families[&code][0], "jetbrains-mono");
+        let inter = with_code(definitions(), &CodeFont::Inter, 2);
+        assert_eq!(inter.families[&code][0], "code-inter");
+        let not_a_font = std::env::temp_dir().join(format!("metallic-not-a-font-{}.ttf", std::process::id()));
+        std::fs::write(&not_a_font, b"hello").unwrap();
+        let file = with_code(definitions(), &CodeFont::File(not_a_font.display().to_string()), 4);
+        assert_eq!(file.families[&code][0], "code-jetbrains-mono");
+        assert!(!file.font_data.contains_key("code-file"));
+        let missing = with_code(definitions(), &CodeFont::File("Z:/no/such/font.ttf".into()), 4);
+        assert_eq!(missing.families[&code][0], "code-jetbrains-mono");
+    }
 
     #[test]
     fn only_bundled_fonts_are_loaded() {

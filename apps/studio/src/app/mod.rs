@@ -142,6 +142,8 @@ pub struct Studio {
     system_reduces_motion: bool,
     /// The interface scale last applied.
     applied_scale: Option<f32>,
+    /// The script editor's font and tab width as last given to egui (#529).
+    applied_code_font: Option<(crate::code::settings::CodeFont, u8)>,
     /// The custom icon folder's icons (#231).
     icons: CustomIcons,
     /// The emblem, until the first frame uploads it.
@@ -203,6 +205,7 @@ impl Studio {
             notices: Vec::new(),
             system_reduces_motion: reduce_motion,
             applied_scale: None,
+            applied_code_font: None,
             icons: CustomIcons::default(),
             emblem_image: emblem,
             emblem: None,
@@ -998,6 +1001,18 @@ impl Studio {
             ctx.set_zoom_factor(appearance.ui_scale);
             self.applied_scale = Some(appearance.ui_scale);
         }
+        // The script editor's font (#529): Studio starts with JetBrains Mono in it.
+        let code = &self.settings.settings().code;
+        let wanted = (code.font.clone(), code.tab_width);
+        // Studio starts with JetBrains Mono and tabs of 4 in it.
+        let installed = self
+            .applied_code_font
+            .clone()
+            .unwrap_or((crate::code::settings::CodeFont::JetBrainsMono, 4));
+        if installed != wanted {
+            ctx.set_fonts(fonts::with_code(fonts::definitions(), &wanted.0, wanted.1));
+        }
+        self.applied_code_font = Some(wanted);
     }
 
     /// The gear in the screen's top-right corner, which opens and closes Settings. The editor has its own, in its
@@ -1165,6 +1180,12 @@ impl Studio {
             if let Some(folder) = self.projects.pick_folder(start) {
                 self.settings.settings_mut().appearance.icon_folder = folder.display().to_string();
             }
+        }
+        // The script editor's font file (#529).
+        if crate::settings::window::take_font_request(ctx)
+            && let Some(file) = self.projects.pick_font()
+        {
+            self.settings.settings_mut().code.font = crate::code::settings::CodeFont::File(file.display().to_string());
         }
         if self.keymap.take_changed() {
             self.settings.settings_mut().keybinds.overrides = self.keymap.overrides().clone();
@@ -4155,6 +4176,85 @@ mod tests {
         settle(&mut harness);
         assert!(harness.query_by_role_and_label(Role::Tab, "Gate").is_none());
         assert!(!harness.state().studio.dock().is_open(&pane));
+    }
+
+    /// #529: with spaces chosen, Tab puts in the tab width's spaces; Enter keeps the line's indentation; and the Code
+    /// Editor page's changes reach the open script.
+    #[test]
+    fn tab_and_enter_type_as_the_code_editor_s_settings_say() {
+        let mut harness = editing(settings_file("editor-script-keys", None), "Script Keys Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        add_bare_script(&mut harness, "Keys");
+        two_clicks(&mut harness, "Keys", 0.05);
+        let text = |harness: &mut Harness<'static, Test>| {
+            harness
+                .state_mut()
+                .studio
+                .editor_mut()
+                .unwrap()
+                .project
+                .read_text("Scripts/Keys.luau")
+                .unwrap()
+        };
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("if x then".to_owned()));
+        settle(&mut harness);
+        // Tabs, the default.
+        harness.key_press(Key::Enter);
+        harness.key_press(Key::Tab);
+        harness.event(egui::Event::Text("a()".to_owned()));
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "if x then\n\ta()\n\t");
+        // Spaces, two wide: the Code Editor page's.
+        harness.state_mut().studio.settings_window().set_open(true);
+        harness
+            .state_mut()
+            .studio
+            .settings_window()
+            .show_category(Category::CodeEditor);
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "2").click();
+        settle(&mut harness);
+        // Down the page to Indent with.
+        let page = harness.get_by_role_and_label(Role::Button, "2").rect().center();
+        harness.event(egui::Event::PointerMoved(page));
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -300.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        settle(&mut harness);
+        // Until the scroll has come to rest: a moving page takes no clicks.
+        for _ in 0..30 {
+            harness.step();
+        }
+        harness.get_by_role_and_label(Role::Button, "Spaces").click();
+        settle(&mut harness);
+        let code = &harness.state().studio.settings().code;
+        assert!(code.insert_spaces && code.tab_width == 2);
+        harness.state_mut().studio.settings_window().set_open(false);
+        settle(&mut harness);
+        let field =
+            crate::panels::script::field_id(harness.state().studio.editor().unwrap().scripts.focused.unwrap_or_else(
+                || {
+                    let editor = harness.state().studio.editor().unwrap();
+                    let dm = &editor.dm;
+                    dm.descendants(dm.root().unwrap())
+                        .unwrap()
+                        .find(|&id| dm.name(id).is_ok_and(|name| name == "Keys"))
+                        .unwrap()
+                },
+            ));
+        harness.ctx.memory_mut(|memory| memory.request_focus(field));
+        settle(&mut harness);
+        harness.key_press(Key::Tab);
+        harness.event(egui::Event::Text("b()".to_owned()));
+        settle(&mut harness);
+        assert!(text(&mut harness).ends_with("\n\t  b()"), "{:?}", text(&mut harness));
     }
 
     /// #528: a script opens in the tab bar the last script tab was docked in, even once that tab is closed.

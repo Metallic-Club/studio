@@ -502,6 +502,15 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Renaming a script** takes a slow double click: a second plain click on its selected row after the double-click
   time and within 1.5 s (`explorer::SLOW_CLICK`). F2 and the row's menu still rename it, and other instances keep the
   double click (#436).
+- **Luau's colours and the Code Editor page (#529)**: `code::lexer` reads Luau's tokens without ever failing, since
+  code being typed is unfinished. `code::highlight` gives each token a kind by its place: keywords, `true`/`false`/`nil`,
+  built-in globals, functions (called or made), members (after `.` or `:`), strings, numbers, comments, operators,
+  and text. Settings' **Code Editor** page sets each kind's colour (Properties' colour picker), separately for the dark
+  and the light theme. It also sets the font (JetBrains Mono, Inter, or a font file, which is checked with `skrifa`
+  before egui is given it), its size, the line and letter spacing, the tab width (the code font's own `tab_size`),
+  tabs or spaces for Tab, whitespace shown, and the current line lit. Enter keeps the line's indentation. These are
+  kept in `code_editor.toml` beside `settings.toml` (`code::settings`), and each file is written only when its own
+  settings change.
 
 ## Not in this slice
 
