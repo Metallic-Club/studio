@@ -4,7 +4,8 @@
 //!
 //! A click under the last line puts the cursor at the end of the code, as VS Code does (#557).
 //!
-//! Alt+click adds a cursor, and the keys act at every one (#558, [`super::cursors`]).
+//! Alt+click adds a cursor, and the keys act at every one (#558, [`super::cursors`]); Shift+Alt with a click or a drag
+//! selects a column, a cursor on each line (#559).
 //!
 //! Enter after a line that opens a block steps in and, when the block is not closed, puts in its `end` (#542,
 //! [`super::blocks`]).
@@ -206,6 +207,7 @@ pub fn show(
         below_last_line(ui, id, field, &output.galley, output.galley_pos, text);
         let response = output.response.response.clone();
         alt_click(ui, id, &response, &output.galley, output.galley_pos, before);
+        column_select(ui, id, field, &output.galley, output.galley_pos, before);
         if response.has_focus() {
             let (selections, carets) = extra_shapes(ui, id, &output.galley, output.galley_pos);
             ui.painter().set(extra_light, Shape::Vec(selections));
@@ -805,6 +807,91 @@ fn alt_click(ui: &Ui, id: Id, response: &Response, galley: &Galley, galley_pos: 
     all.extend(extras(ui.ctx(), id));
     cursors::merge(&mut all);
     set_carets(ui.ctx(), id, &all);
+}
+
+/// Shift+Alt with a click or a drag in the field `field` (#559), its code laid out as `galley` at `galley_pos`: a
+/// cursor on each line of the box, each selecting the box's part of its line, as VS Code's column selection. A click's
+/// box is from the field's cursor `before` it to the click; a drag's, from where it started to the pointer. While
+/// Shift+Alt is held this takes the pointer from the field.
+fn column_select(ui: &Ui, id: Id, field: Rect, galley: &Galley, galley_pos: Pos2, before: Option<CCursorRange>) {
+    let from_id = id.with("column-from");
+    let press_id = id.with("column-press");
+    let held = ui.input(|input| input.modifiers.alt && input.modifiers.shift);
+    let from: Option<Pos2> = ui.ctx().data(|data| data.get_temp(from_id));
+    if !held && from.is_none() {
+        return;
+    }
+    let response = ui
+        .interact(field, id.with("column"), Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::Text);
+    let (pressed, released, at) = ui.input(|input| {
+        (
+            input.pointer.primary_pressed(),
+            input.pointer.primary_released(),
+            input.pointer.interact_pos(),
+        )
+    });
+    let mut from = from;
+    if pressed && response.hovered() {
+        // From the cursor there was; where the press is, when there was none.
+        let start = before.map_or_else(
+            || at.map_or(Pos2::ZERO, |at| (at - galley_pos).to_pos2()),
+            |range| galley.pos_from_cursor(range.primary).left_center(),
+        );
+        let press = at.map_or(start, |at| (at - galley_pos).to_pos2());
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(from_id, start);
+            data.insert_temp(press_id, press);
+        });
+        from = Some(start);
+    }
+    // Dragged, the box is from where the drag started.
+    let dragging = response.dragged() || response.drag_stopped();
+    if dragging && let Some(press) = ui.ctx().data(|data| data.get_temp::<Pos2>(press_id)) {
+        from = Some(press);
+    }
+    if let (Some(from), Some(at)) = (from, at)
+        && ((pressed && response.hovered()) || dragging || released)
+    {
+        let carets = column(galley, from, (at - galley_pos).to_pos2());
+        set_carets(ui.ctx(), id, &carets);
+        ui.ctx().request_repaint();
+    }
+    if released {
+        ui.ctx().data_mut(|data| {
+            data.remove::<Pos2>(from_id);
+            data.remove::<Pos2>(press_id);
+        });
+        // The field gives up the keyboard when a click ends on another widget: it is given it back.
+        ui.memory_mut(|memory| memory.request_focus(id));
+    }
+}
+
+/// The cursors of a column selection in the code `galley` from `from` to `to` (both in the galley's space): one per
+/// line between them, selecting from `from`'s side to `to`'s, the line `to` is on first (the field's own).
+pub fn column(galley: &Galley, from: Pos2, to: Pos2) -> Vec<Caret> {
+    let row_at = |y: f32| {
+        galley
+            .rows
+            .iter()
+            .position(|row| y < row.rect().bottom())
+            .unwrap_or(galley.rows.len().saturating_sub(1))
+    };
+    let (first, last) = (row_at(from.y), row_at(to.y));
+    let rows: Vec<usize> = if first <= last {
+        (first..=last).rev().collect()
+    } else {
+        (last..=first).collect()
+    };
+    rows.into_iter()
+        .filter_map(|row| {
+            let y = galley.rows.get(row)?.rect().center().y;
+            Some(Caret {
+                anchor: galley.cursor_from_pos(vec2(from.x, y)).index.0,
+                head: galley.cursor_from_pos(vec2(to.x, y)).index.0,
+            })
+        })
+        .collect()
 }
 
 /// The field `id`'s other cursors as shapes, laid out as `galley` at `galley_pos`: their selections, to go behind the

@@ -4623,6 +4623,87 @@ mod tests {
         assert_eq!(crate::code::view::carets(&harness.ctx, field).len(), 1);
     }
 
+    /// Holds `modifiers` down from the next frame, as a person does before clicking.
+    fn hold_modifiers(harness: &mut Harness<'static, Test>, modifiers: Modifiers) {
+        harness.event(egui::Event::ModifiersChanged(modifiers));
+        harness.step();
+    }
+
+    /// #559: with Shift+Alt held, a click selects the box from the cursor to it, a cursor on each line (a short line's
+    /// at its end), which type together; a drag selects the box dragged over.
+    #[test]
+    fn shift_alt_selects_a_column() {
+        let mut harness = editing(settings_file("editor-script-column", None), "Script Column Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let code = "abcd\nefgh\nij\nklmn";
+        let (_, field) = open_with_code(&mut harness, "Column", code);
+        let text = |harness: &mut Harness<'static, Test>| {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.project.read_text("Scripts/Column.luau").unwrap()
+        };
+        let at = char_pos(&harness, field, code, 1);
+        click_with(&mut harness, at, Modifiers::NONE);
+        let corner = char_pos(&harness, field, code, 16);
+        let both = Modifiers::SHIFT | Modifiers::ALT;
+        hold_modifiers(&mut harness, both);
+        harness.event(egui::Event::PointerMoved(corner));
+        harness.step();
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: corner,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: both,
+            });
+            harness.step();
+        }
+        hold_modifiers(&mut harness, Modifiers::NONE);
+        settle(&mut harness);
+        let mut ranges: Vec<std::ops::Range<usize>> = crate::code::view::carets(&harness.ctx, field)
+            .iter()
+            .map(crate::code::cursors::Caret::range)
+            .collect();
+        ranges.sort_by_key(|range| range.start);
+        assert_eq!(ranges, [1..3, 6..8, 11..12, 14..16]);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(field)));
+        harness.event(egui::Event::Text("X".to_owned()));
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "aXd\neXh\niX\nkXn");
+        // A drag: the box from where it starts.
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        let code = text(&mut harness);
+        let (from, to) = (char_pos(&harness, field, &code, 0), char_pos(&harness, field, &code, 6));
+        hold_modifiers(&mut harness, both);
+        harness.event(egui::Event::PointerMoved(from));
+        harness.step();
+        harness.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: both,
+        });
+        harness.step();
+        harness.event(egui::Event::PointerMoved(egui::pos2((from.x + to.x) / 2.0, to.y)));
+        harness.step();
+        harness.event(egui::Event::PointerMoved(to));
+        harness.step();
+        harness.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: both,
+        });
+        harness.step();
+        hold_modifiers(&mut harness, Modifiers::NONE);
+        settle(&mut harness);
+        assert_eq!(crate::code::view::carets(&harness.ctx, field).len(), 2);
+        harness.event(egui::Event::Text("-".to_owned()));
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "-d\n-h\niX\nkXn");
+    }
+
     /// #556: the minimap down the code's right scrolls it: a click near its bottom shows the code's end, and dragging
     /// its shaded part back up shows the start. The setting hides it.
     #[test]
