@@ -166,6 +166,10 @@ pub mod ids {
     pub const SCRIPT_FIND_NEXT: &str = "script.find_next";
     /// Goes to the match before in the script being edited (#554).
     pub const SCRIPT_FIND_PREVIOUS: &str = "script.find_previous";
+    /// Opens the Search panel, looking across every script (#555).
+    pub const SCRIPT_FIND_IN_SCRIPTS: &str = "script.find_in_scripts";
+    /// Opens the Search panel with its replace field (#555).
+    pub const SCRIPT_REPLACE_IN_SCRIPTS: &str = "script.replace_in_scripts";
     /// Starts a game session in the Game tab (Play in Studio).
     pub const TEST_PLAY: &str = "test.play";
     /// Pauses or resumes the game session.
@@ -387,6 +391,18 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         "Selects the match before in the script being edited.",
         // Not Shift+F3: that shows the Lighting stats.
         &["Primary+Shift+G"],
+    ),
+    script(
+        ids::SCRIPT_FIND_IN_SCRIPTS,
+        "Find in scripts",
+        "Opens the Search panel to look for text in every script.",
+        &["Primary+Shift+F"],
+    ),
+    script(
+        ids::SCRIPT_REPLACE_IN_SCRIPTS,
+        "Replace in scripts",
+        "Opens the Search panel with its replace field, to replace text in every script.",
+        &["Primary+Shift+H"],
     ),
     Command {
         contexts: &[Context::Editor],

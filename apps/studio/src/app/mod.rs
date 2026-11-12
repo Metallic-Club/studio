@@ -1063,6 +1063,34 @@ impl Studio {
         (typing || self.dock.focus().focused == Some(crate::code::PANEL)).then_some(script)
     }
 
+    /// Opens the Search panel (#555), with its replace field for `replace`, its query taking the keyboard: the
+    /// selection of the script being edited, when that is on one line.
+    fn open_search(&mut self, ctx: &egui::Context, replace: bool) {
+        let in_focus = self.script_in_focus(ctx);
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        if let Some(script) = in_focus
+            && let Some(chars) = crate::code::view::selection(ctx, crate::panels::script::field_id(script))
+            && !chars.is_empty()
+        {
+            let member = crate::code::source(&editor.dm, script);
+            let text = editor.scripts.text(&mut editor.project, &member);
+            let (start, end) = (
+                crate::code::view::byte_of(text, chars.start),
+                crate::code::view::byte_of(text, chars.end),
+            );
+            if !text[start..end].contains('\n') {
+                editor.scripts.search.query.text = text[start..end].to_owned();
+            }
+        }
+        let search = &mut editor.scripts.search;
+        search.asked = true;
+        search.show_replace |= replace;
+        self.dock.open(crate::panels::ids::SEARCH);
+        ctx.request_repaint();
+    }
+
     /// Opens or closes the Settings window, on any screen.
     fn toggle_settings(&mut self) {
         let open = self.settings_window.is_open();
@@ -1144,6 +1172,10 @@ impl Studio {
                         editor.scripts.find.open(script, replace);
                         ctx.request_repaint();
                     }
+                }
+                ids::SCRIPT_FIND_IN_SCRIPTS | ids::SCRIPT_REPLACE_IN_SCRIPTS if editing => {
+                    let replace = activation.command == ids::SCRIPT_REPLACE_IN_SCRIPTS;
+                    self.open_search(ctx, replace);
                 }
                 ids::SCRIPT_FIND_NEXT | ids::SCRIPT_FIND_PREVIOUS if editing => {
                     let forward = activation.command == ids::SCRIPT_FIND_NEXT;
@@ -4346,6 +4378,128 @@ mod tests {
     /// The match the find bar of `script` went to, as bytes.
     fn found_at(harness: &Harness<'_, Test>, script: metallic_engine::metallic_core::Id) -> std::ops::Range<usize> {
         harness.state().studio.editor().unwrap().scripts.find.at[&script].clone()
+    }
+
+    /// A Script called `name` in ServerScriptService whose file `Scripts/<name>.luau` holds `code`.
+    fn script_with_code(
+        harness: &mut Harness<'static, Test>,
+        name: &str,
+        code: &str,
+    ) -> metallic_engine::metallic_core::Id {
+        let script = add_bare_script(harness, name);
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let member = format!("Scripts/{name}.luau");
+        editor
+            .dm
+            .set_by_name(script, "Source", Value::String(member.clone().into()))
+            .unwrap();
+        editor.project.write(&member, code).unwrap();
+        settle(harness);
+        script
+    }
+
+    /// #555: Ctrl+Shift+F opens the Search panel on the left; it lists every script file's matching lines, a click opens
+    /// the script at the match, a file folds, and Ctrl+Shift+H's field replaces every match, a file's, or one.
+    #[test]
+    fn ctrl_shift_f_searches_and_replaces_across_scripts() {
+        let mut harness = editing(settings_file("editor-script-search", None), "Script Search Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        script_with_code(&mut harness, "Alpha", "local light = 1\nprint(light)");
+        let beta = script_with_code(&mut harness, "Beta", "light = light + 1");
+        let text = |harness: &mut Harness<'static, Test>, member: &str| {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.scripts.text(&mut editor.project, member).clone()
+        };
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::F);
+        settle(&mut harness);
+        assert!(harness.state().studio.dock().is_open(crate::panels::ids::SEARCH));
+        // The panel is left of the rest.
+        let panel = harness.get_by_role_and_label(Role::TextInput, "Search scripts").rect();
+        assert!(panel.left() < 400.0, "{panel:?}");
+        harness.event(egui::Event::Text("light".to_owned()));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau");
+        harness.get_by_role_and_label(Role::TreeItem, "Scripts/Beta.luau");
+        let line =
+            |harness: &Harness<'static, Test>, label: &str| harness.get_by_role_and_label(Role::Button, label).rect();
+        line(&harness, "Scripts/Alpha.luau line 1 column 7: local light = 1");
+        line(&harness, "Scripts/Alpha.luau line 2 column 7: print(light)");
+        line(&harness, "Scripts/Beta.luau line 1 column 1: light = light + 1");
+        // A click opens the script with the match selected.
+        let second = line(&harness, "Scripts/Beta.luau line 1 column 9: light = light + 1");
+        left_click(&mut harness, second);
+        settle(&mut harness);
+        let field = crate::panels::script::field_id(beta);
+        assert!(harness.state().studio.dock().is_open(&crate::code::pane(beta)));
+        assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(8..13));
+        // Folded, a file's lines go.
+        harness
+            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau")
+            .click();
+        settle(&mut harness);
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, "Scripts/Alpha.luau line 1 column 7: local light = 1")
+                .is_none()
+        );
+        harness
+            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau")
+            .click();
+        settle(&mut harness);
+        // Replace all, from Ctrl+Shift+H's field.
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::H);
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::TextInput, "Replace in scripts")
+            .click();
+        settle(&mut harness);
+        harness.event(egui::Event::Text("lamp".to_owned()));
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::Button, "Replace all in scripts")
+            .click();
+        settle(&mut harness);
+        assert_eq!(text(&mut harness, "Scripts/Alpha.luau"), "local lamp = 1\nprint(lamp)");
+        assert_eq!(text(&mut harness, "Scripts/Beta.luau"), "lamp = lamp + 1");
+        let saved = harness
+            .state_mut()
+            .studio
+            .editor_mut()
+            .unwrap()
+            .project
+            .read_text("Scripts/Beta.luau")
+            .unwrap();
+        assert_eq!(saved, "lamp = lamp + 1");
+        // One match, from the button over its line.
+        harness.get_by_role_and_label(Role::TextInput, "Search scripts").click();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("lamp".to_owned()));
+        harness
+            .get_by_role_and_label(Role::TextInput, "Replace in scripts")
+            .click();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("x".to_owned()));
+        settle(&mut harness);
+        let row = line(&harness, "Scripts/Beta.luau line 1 column 1: lamp = lamp + 1");
+        harness.hover_at(row.center());
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::Button, "Replace line 1 column 1 of Scripts/Beta.luau")
+            .click();
+        settle(&mut harness);
+        assert_eq!(text(&mut harness, "Scripts/Beta.luau"), "x = lamp + 1");
+        // A file's, from the button over its row.
+        let row = harness
+            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau")
+            .rect();
+        harness.hover_at(row.center());
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::Button, "Replace in Scripts/Alpha.luau")
+            .click();
+        settle(&mut harness);
+        assert_eq!(text(&mut harness, "Scripts/Alpha.luau"), "local x = 1\nprint(x)");
     }
 
     /// #554: Ctrl+F opens the find bar on the selection; typing goes to the first match, Enter to the next, the toggles

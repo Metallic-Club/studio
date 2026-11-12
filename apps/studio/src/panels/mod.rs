@@ -11,6 +11,7 @@ pub mod insert;
 pub mod output;
 pub mod properties;
 pub mod script;
+pub mod search;
 pub mod values;
 pub mod viewport;
 
@@ -34,6 +35,8 @@ pub static PANELS: &[&dyn Panel] = &[
     &game::Game,
     // A tab per script, opened from the Explorer (#528).
     &script::ScriptEditor,
+    // Text across every script (#555), on the left.
+    &search::Search,
 ];
 
 /// The panels' ids.
@@ -50,6 +53,8 @@ pub mod ids {
     pub const OUTPUT: &str = "output";
     /// The running game (Play in Studio).
     pub const GAME: &str = "game";
+    /// The search across every script (#555).
+    pub const SEARCH: &str = "search";
 }
 
 /// The icon of `class`: its own, or its nearest ancestor's.

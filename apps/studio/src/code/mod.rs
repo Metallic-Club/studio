@@ -63,6 +63,8 @@ pub struct Scripts {
     edits: u64,
     /// The scripts' find bar (#554).
     pub find: find::FindBar,
+    /// The search across every script (#555).
+    pub search: find::Search,
 }
 
 /// A file's analysis and diagnostics, and what they were made from.
@@ -83,6 +85,40 @@ impl Scripts {
     /// The text of `member` (as [`Scripts::text`]) and the find bar, together.
     pub fn text_and_find(&mut self, project: &mut Project, member: &str) -> (&mut String, &mut find::FindBar) {
         (read_text(&mut self.texts, project, member), &mut self.find)
+    }
+
+    /// The matches of `finder` in every script file of the game `dm` (#555), each file once, in the game's order.
+    pub fn search(&mut self, project: &mut Project, dm: &DataModel, finder: &find::Finder) -> Vec<find::FileMatches> {
+        let mut out: Vec<find::FileMatches> = Vec::new();
+        for (script, member) in script_files(dm) {
+            if out.iter().any(|file| file.member == member) {
+                continue;
+            }
+            let text = read_text(&mut self.texts, project, &member);
+            let matches: Vec<find::LineMatch> = finder
+                .matches(text)
+                .into_iter()
+                .map(|range| find::line_match(text, range))
+                .collect();
+            if !matches.is_empty() {
+                out.push(find::FileMatches {
+                    name: dm.full_name(script).unwrap_or_default(),
+                    member,
+                    script,
+                    matches,
+                });
+            }
+        }
+        out
+    }
+
+    /// Puts `text` in `member`'s place, keeping it in `project` as typed text is, and notes the edit.
+    pub fn replace_text(&mut self, project: &mut Project, member: &str, text: String) {
+        if let Err(error) = project.write(member, text.clone().into_bytes()) {
+            log::warn!("scripts: could not keep {member}: {error}");
+        }
+        self.texts.insert(member.to_owned(), text);
+        self.edited();
     }
 
     /// Notes that a file was edited: every file is checked again (#530).
@@ -319,6 +355,20 @@ pub fn new_member(name: &str, taken: impl Fn(&str) -> bool) -> String {
         .map(|n| format!("{FOLDER}/{stem}{n}{EXTENSION}"))
         .find(|member| !taken(member))
         .unwrap_or(first)
+}
+
+/// Every script of the game `dm` that has a file, with its file, in the game's order.
+pub fn script_files(dm: &DataModel) -> Vec<(Id, String)> {
+    let Some(root) = dm.root() else {
+        return Vec::new();
+    };
+    let Ok(all) = dm.descendants(root) else {
+        return Vec::new();
+    };
+    all.filter(|&id| is_script(dm, id))
+        .map(|id| (id, source(dm, id)))
+        .filter(|(_, member)| !member.is_empty())
+        .collect()
 }
 
 /// The editor's script a line of the Output was written from (#544): the one with its file, the one of its full name
