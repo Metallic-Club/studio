@@ -9,6 +9,8 @@ pub trait FileDialog {
     fn pick_project(&mut self) -> Option<PathBuf>;
     /// A folder for a new project, starting in `start` when there is one.
     fn pick_folder(&mut self, start: Option<&Path>) -> Option<PathBuf>;
+    /// A TrueType or OpenType font file, for the script editor (#529).
+    fn pick_font(&mut self) -> Option<PathBuf>;
 }
 
 /// A dialog that never shows and always answers "cancelled": Studio's until the shell gives it the system's.
@@ -21,6 +23,10 @@ impl FileDialog for NoDialog {
     }
 
     fn pick_folder(&mut self, _start: Option<&Path>) -> Option<PathBuf> {
+        None
+    }
+
+    fn pick_font(&mut self) -> Option<PathBuf> {
         None
     }
 }
@@ -37,7 +43,7 @@ pub(crate) struct ScriptedDialog {
 pub(crate) struct ScriptState {
     /// The answers still to give.
     pub answers: std::collections::VecDeque<Option<PathBuf>>,
-    /// What it was asked, in order: "project" or "folder".
+    /// What it was asked, in order: "project", "folder" or "font".
     pub asked: Vec<&'static str>,
 }
 
@@ -70,5 +76,9 @@ impl FileDialog for ScriptedDialog {
 
     fn pick_folder(&mut self, _start: Option<&Path>) -> Option<PathBuf> {
         self.answer("folder")
+    }
+
+    fn pick_font(&mut self) -> Option<PathBuf> {
+        self.answer("font")
     }
 }

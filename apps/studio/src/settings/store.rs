@@ -15,6 +15,11 @@ use metallic_engine::metallic_platform::{AppId, PlatformError, UserPaths};
 use toml::Table;
 
 use super::StudioSettings;
+use crate::code::settings::{CODE_EDITOR_FILE, CodeEditor};
+
+/// The first lines of `code_editor.toml` (#529).
+const CODE_HEADER: &str = "# Metallic Studio's script editor settings (Settings, Code Editor). Studio rewrites this file when one \
+                           changes; keys it does not know are kept.\n\n";
 
 /// The settings file's name in Studio's config folder.
 pub const SETTINGS_FILE: &str = "settings.toml";
@@ -43,6 +48,10 @@ pub struct SettingsStore {
     settings: StudioSettings,
     /// What the user should be told about the file, until it is taken.
     notice: Option<String>,
+    /// The script editor's file (`code_editor.toml`, #529) as last read or written: its other keys are kept.
+    code_document: Table,
+    /// Whether the script editor's file may be written: not when it could not be read.
+    code_writable: bool,
 }
 
 impl SettingsStore {
@@ -57,8 +66,10 @@ impl SettingsStore {
         let mut store = Self {
             path: Some(path.clone()),
             writable: true,
+            code_writable: true,
             ..Self::default()
         };
+        store.load_code(&path.with_file_name(CODE_EDITOR_FILE));
         let text = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return store,
@@ -78,7 +89,11 @@ impl SettingsStore {
             .and_then(|text| text.parse::<Table>().map_err(|error| error.message().to_owned()));
         match parsed {
             Ok(document) => {
-                store.settings = StudioSettings::from_document(&document);
+                let code = std::mem::take(&mut store.settings.code);
+                store.settings = StudioSettings {
+                    code,
+                    ..StudioSettings::from_document(&document)
+                };
                 store.saved = store.settings.clone();
                 store.document = document;
             }
@@ -96,6 +111,35 @@ impl SettingsStore {
             .map_or_else(StudioSettings::default, |document| {
                 StudioSettings::from_document(&document)
             })
+    }
+
+    /// Reads the script editor's settings at `path` (#529): the defaults when there is no file; a file that cannot be
+    /// read or parsed is logged and left alone, and not written over.
+    fn load_code(&mut self, path: &Path) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error) => {
+                log::warn!("settings: could not read {}: {error}", path.display());
+                self.code_writable = false;
+                return;
+            }
+        };
+        match text.parse::<Table>() {
+            Ok(document) => {
+                self.settings.code = CodeEditor::from_document(&document);
+                self.saved.code = self.settings.code.clone();
+                self.code_document = document;
+            }
+            Err(error) => {
+                log::warn!(
+                    "settings: {} is not valid ({}); the script editor uses its defaults and will not write over it",
+                    path.display(),
+                    error.message()
+                );
+                self.code_writable = false;
+            }
+        }
     }
 
     /// Moves a damaged file aside, so writing the settings never overwrites it.
@@ -170,14 +214,33 @@ impl SettingsStore {
             return Ok(false);
         }
         self.settings.clamp();
+        // Each file is written only when its own settings changed (#529).
+        let code_changed = self.settings.code != self.saved.code;
+        let main_changed = StudioSettings {
+            code: self.saved.code.clone(),
+            ..self.settings.clone()
+        } != self.saved;
         self.saved = self.settings.clone();
-        let Some(path) = self.path.as_deref().filter(|_| self.writable) else {
+        let Some(path) = self.path.clone() else {
             return Ok(false);
         };
-        let document = self.settings.to_document(&self.document);
-        write_atomically(path, &format!("{HEADER}{document}"))?;
-        self.document = document;
-        Ok(true)
+        let mut wrote = false;
+        if code_changed && self.code_writable {
+            let document = self.settings.code.to_document(&self.code_document);
+            write_atomically(
+                &path.with_file_name(CODE_EDITOR_FILE),
+                &format!("{CODE_HEADER}{document}"),
+            )?;
+            self.code_document = document;
+            wrote = true;
+        }
+        if main_changed && self.writable {
+            let document = self.settings.to_document(&self.document);
+            write_atomically(&path, &format!("{HEADER}{document}"))?;
+            self.document = document;
+            wrote = true;
+        }
+        Ok(wrote)
     }
 }
 
@@ -220,6 +283,40 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("metallic-studio-settings-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir.join("config").join(SETTINGS_FILE)
+    }
+
+    /// #529: the script editor's settings are in `code_editor.toml`, not `settings.toml`, and each file is written only
+    /// when its own settings change.
+    #[test]
+    fn the_code_editor_s_settings_have_a_file_of_their_own() {
+        let path = file("code-editor");
+        let code = path.with_file_name(CODE_EDITOR_FILE);
+        let mut store = SettingsStore::load(path.clone());
+        store.settings_mut().code.size = 16.0;
+        store.settings_mut().code.insert_spaces = true;
+        assert!(store.save_if_changed().unwrap());
+        assert!(code.is_file());
+        assert!(!path.exists(), "settings.toml did not change");
+        let text = std::fs::read_to_string(&code).unwrap();
+        assert!(
+            text.contains("size = 16.0") && text.contains("indent = \"spaces\""),
+            "{text}"
+        );
+
+        store.settings_mut().appearance.accent = Accent::Blue;
+        std::fs::remove_file(&code).unwrap();
+        assert!(store.save_if_changed().unwrap());
+        assert!(path.is_file());
+        assert!(!code.exists(), "the script editor's did not change");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("indent"));
+
+        // Read back, both.
+        store.settings_mut().code.tab_width = 2;
+        assert!(store.save_if_changed().unwrap());
+        let read = SettingsStore::load(path);
+        assert_eq!(read.settings().code.size, 16.0);
+        assert_eq!(read.settings().code.tab_width, 2);
+        assert_eq!(read.settings().appearance.accent, Accent::Blue);
     }
 
     #[test]

@@ -163,6 +163,11 @@ impl Projects {
         self.dialog.pick_folder(start)
     }
 
+    /// Asks for a font file with the file dialog (the script editor's, #529).
+    pub fn pick_font(&mut self) -> Option<std::path::PathBuf> {
+        self.dialog.pick_font()
+    }
+
     /// The list the page shows.
     pub fn view(&self) -> View {
         self.view

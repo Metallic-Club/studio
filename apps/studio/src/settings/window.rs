@@ -23,6 +23,7 @@ use super::{
     LOD_BIAS, MAX_FRAME_CAP, MAX_VIEW_DISTANCE, MotionPreference, SHADOW_DISTANCE, StudioSettings, TARGET_FRAME_MS,
     ui_scale,
 };
+use crate::code;
 use crate::keymap::{Command, Keymap};
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{Accent, radius, size, space, text};
@@ -38,16 +39,19 @@ pub enum Category {
     Appearance,
     /// The viewport's graphics.
     Rendering,
+    /// The script editor (#529): its font, spacing and colours, kept in `code_editor.toml`.
+    CodeEditor,
     /// The keymap: its own page ([`KeybindsPage`]), not [`ENTRIES`].
     Keybinds,
 }
 
 impl Category {
     /// Every category, in the order the window lists them.
-    pub const ALL: [Category; 4] = [
+    pub const ALL: [Category; 5] = [
         Category::General,
         Category::Appearance,
         Category::Rendering,
+        Category::CodeEditor,
         Category::Keybinds,
     ];
 
@@ -57,6 +61,7 @@ impl Category {
             Category::General => "General",
             Category::Appearance => "Appearance",
             Category::Rendering => "Rendering",
+            Category::CodeEditor => "Code Editor",
             Category::Keybinds => "Keybinds",
         }
     }
@@ -67,6 +72,9 @@ impl Category {
             Category::General => "How Studio starts and behaves.",
             Category::Appearance => "Changes apply at once.",
             Category::Rendering => "How the editor's viewport draws your scenes. The game's own look is never changed.",
+            Category::CodeEditor => {
+                "How scripts look and type. The colours are the current theme's; each theme keeps its own."
+            }
             Category::Keybinds => "Click a shortcut to change it, or + to add another. Right-click one to remove it.",
         }
     }
@@ -116,6 +124,18 @@ pub fn search(query: &str) -> Vec<&'static Entry> {
 /// What the presets give for a frame cap and vsync (the engine's own defaults, as `graphics.toml` lists them).
 const PRESET_FRAME_CAP: u32 = 240;
 const PRESET_VSYNC: bool = true;
+
+/// A Code Editor entry for the colour of one [`code::settings::Kind`] (#529).
+macro_rules! code_colour_entry {
+    ($kind:ident, $description:expr) => {
+        Entry {
+            category: Category::CodeEditor,
+            name: code::settings::Kind::$kind.label(),
+            description: $description,
+            control: |ui, s| code_colour(ui, s, code::settings::Kind::$kind),
+        }
+    };
+}
 
 /// Every setting, page by page.
 pub static ENTRIES: &[Entry] = &[
@@ -428,6 +448,109 @@ pub static ENTRIES: &[Entry] = &[
             );
         },
     },
+    // The script editor (#529).
+    Entry {
+        category: Category::CodeEditor,
+        name: "Font",
+        description: "The typeface of scripts: JetBrains Mono, Inter, or a font file of yours.",
+        control: |ui, s| code_font(ui, &mut s.code.font),
+    },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Font size",
+        description: "How large the code is.",
+        control: |ui, s| code_number(ui, "Font size", &mut s.code.size, code::settings::SIZE, 0.1, " pt"),
+    },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Line spacing",
+        description: "The space from one line to the next, as a multiple of the font size.",
+        control: |ui, s| {
+            code_number(
+                ui,
+                "Line spacing",
+                &mut s.code.line_spacing,
+                code::settings::LINE_SPACING,
+                0.01,
+                " \u{00D7}",
+            );
+        },
+    },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Letter spacing",
+        description: "Space added between letters.",
+        control: |ui, s| {
+            code_number(
+                ui,
+                "Letter spacing",
+                &mut s.code.letter_spacing,
+                code::settings::LETTER_SPACING,
+                0.05,
+                " pt",
+            );
+        },
+    },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Tab width",
+        description: "How many spaces wide a tab is.",
+        control: |ui, s| {
+            let choices = code::settings::TAB_WIDTHS.map(|width| (width, ["2", "4", "8"][usize::from(width / 4)]));
+            segmented(ui, &mut s.code.tab_width, &choices);
+        },
+    },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Indent with",
+        description: "What Tab puts in: a tab, or that many spaces.",
+        control: |ui, s| segmented(ui, &mut s.code.insert_spaces, &[(false, "Tabs"), (true, "Spaces")]),
+    },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Show whitespace",
+        description: "Spaces show as faint dots and tabs as faint arrows.",
+        control: |ui, s| {
+            toggle(ui, &mut s.code.show_whitespace, "Show whitespace");
+        },
+    },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Highlight the current line",
+        description: "Lights the line the cursor is on.",
+        control: |ui, s| {
+            toggle(ui, &mut s.code.highlight_line, "Highlight the current line");
+        },
+    },
+    code_colour_entry!(Text, "The colour of names and anything else."),
+    code_colour_entry!(Keyword, "local, function, if, end and Luau's other reserved words."),
+    code_colour_entry!(Constant, "The values true, false and nil."),
+    code_colour_entry!(
+        Builtin,
+        "The globals every script has: game, workspace, print, math, Vector3..."
+    ),
+    code_colour_entry!(Function, "A function's name, where it is made or called."),
+    code_colour_entry!(Member, "A property or field, after . or :."),
+    code_colour_entry!(String, "Text in quotes."),
+    code_colour_entry!(Number, "Numbers."),
+    code_colour_entry!(Comment, "Comments, after --."),
+    code_colour_entry!(Operator, "Operators and punctuation: + .. == ( ) , and the others."),
+    Entry {
+        category: Category::CodeEditor,
+        name: "Reset colours",
+        description: "Puts the current theme's colours back as Studio has them.",
+        control: |ui, s| {
+            let dark = current_colors(ui.ctx()).dark;
+            let defaults = if dark {
+                code::settings::Palette::DARK
+            } else {
+                code::settings::Palette::LIGHT
+            };
+            if button(ui, ButtonKind::Secondary, "Reset").clicked() {
+                *s.code.palette_mut(dark) = defaults;
+            }
+        },
+    },
 ];
 
 /// The Settings window's viewport (#331).
@@ -713,6 +836,92 @@ fn page(ui: &mut Ui, category: Category, settings: &mut StudioSettings) {
     for entry in ENTRIES.iter().filter(|entry| entry.category == category) {
         row(ui, entry, settings);
     }
+}
+
+/// The script editor's typeface (#529): a drop-down of the bundled two and a font file; choosing a file asks Studio
+/// for the system's file dialog ([`take_font_request`]).
+fn code_font(ui: &mut Ui, font: &mut code::settings::CodeFont) {
+    use code::settings::CodeFont;
+    let mut file = false;
+    let shown = egui::ComboBox::from_id_salt("settings.code.font")
+        .icon(crate::theme::combo_icon)
+        .selected_text(font.label())
+        .width(COMBO_WIDTH)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(font, CodeFont::JetBrainsMono, "JetBrains Mono");
+            ui.selectable_value(font, CodeFont::Inter, "Inter");
+            if ui
+                .selectable_label(matches!(font, CodeFont::File(_)), "A font file\u{2026}")
+                .clicked()
+            {
+                file = true;
+            }
+        });
+    named(&shown.response, "Font");
+    if file {
+        ui.ctx().data_mut(|data| data.insert_temp(font_request(), true));
+    }
+}
+
+/// Where the request for the font file's dialog waits for Studio ([`take_font_request`]).
+fn font_request() -> egui::Id {
+    egui::Id::unique("metallic.settings.code.font.browse")
+}
+
+/// Whether "A font file..." was chosen since the last call (#529).
+pub(crate) fn take_font_request(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|data| data.remove_temp::<bool>(font_request()))
+        .unwrap_or(false)
+}
+
+/// A number of the script editor's (#529), dragged or typed, in `range`.
+fn code_number(ui: &mut Ui, name: &str, value: &mut f32, range: RangeInclusive<f32>, speed: f64, suffix: &str) {
+    let response = ui.add(
+        DragValue::new(value)
+            .range(range)
+            .speed(speed)
+            .max_decimals(2)
+            .suffix(suffix.to_owned()),
+    );
+    response.widget_info(|| WidgetInfo::labeled(Role::SpinButton, response.enabled(), name));
+}
+
+/// The colour of `kind` in the theme showing (#529): a swatch that opens Properties' colour picker (#416), its hex
+/// beside it.
+fn code_colour(ui: &mut Ui, settings: &mut StudioSettings, kind: code::settings::Kind) {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let palette = settings.code.palette_mut(colors.dark);
+    let mut rgb = palette.get(kind);
+    let (rect, response) = ui.allocate_exact_size(vec2(36.0, 22.0), Sense::click());
+    let label = format!("{} colour", kind.label());
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
+    if ui.is_rect_visible(rect) {
+        let [r, g, b] = rgb;
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(radius::ITEM), Color32::from_rgb(r, g, b));
+        let ink = if response.hovered() { p.text } else { p.border };
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(radius::ITEM),
+            Stroke::new(size::BORDER, ink),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let id = ui.make_persistent_id(("settings.code.colour", kind.label()));
+    egui::Popup::menu(&response)
+        .id(id)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            if crate::panels::color_picker::picker(ui, id.with("picker"), &mut rgb) {
+                palette.set(kind, rgb);
+            }
+        });
+    ui.label(
+        RichText::new(code::settings::to_hex(rgb))
+            .font(egui::FontId::monospace(text::SMALL))
+            .color(p.muted),
+    );
 }
 
 /// Where the request for the icon folder's dialog waits for Studio ([`take_icon_folder_request`]).

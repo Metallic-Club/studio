@@ -845,6 +845,14 @@ impl FileDialog for NativeDialog {
         }
         dialog.pick_folder()
     }
+
+    fn pick_font(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Choose a font for scripts")
+            .add_filter("Font", &["ttf", "otf"])
+            .set_parent(&*self.window)
+            .pick_file()
+    }
 }
 
 /// Every monitor's area, in physical pixels: (left, top, width, height).
