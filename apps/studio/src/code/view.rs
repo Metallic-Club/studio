@@ -5,6 +5,9 @@
 //! Enter after a line that opens a block steps in and, when the block is not closed, puts in its `end` (#542,
 //! [`super::blocks`]).
 //!
+//! A colour written in the code (`Color3.fromRGB(...)` and the like) has a swatch before it that opens the colour
+//! picker (#545, [`super::swatch`]).
+//!
 //! Errors and warnings (#530) colour their line's number and draw a line beside it (#539), are underlined with a wave,
 //! and have a mark in the scroll bar, which goes to their line when clicked; each says what is wrong under the pointer.
 
@@ -18,8 +21,8 @@ use egui::{
 };
 
 use super::analysis::{Diagnostic, Severity};
-use super::highlight;
 use super::settings::{CodeEditor, Kind, SIZE};
+use super::{highlight, swatch};
 use crate::theme::tokens::space;
 use crate::theme::{current_colors, fonts};
 
@@ -254,6 +257,26 @@ pub fn show(
                 gutter_response.on_hover_text(messages.join("\n"));
             }
         }
+        // A swatch before each colour written (#545): a click opens the colour picker, which writes the colour back.
+        let mut picked = false;
+        let side = swatch_side(settings);
+        for found in swatch::find(text) {
+            let chars = text[..found.start].chars().count();
+            let at = galley
+                .pos_from_cursor(CCursor::new(chars))
+                .translate(galley_pos.to_vec2());
+            let rect = Rect::from_center_size(
+                pos2(at.left() - SWATCH_GAP - side / 2.0, at.center().y),
+                vec2(side, side),
+            );
+            if let Some(rgb) = swatch_ui(ui, id.with(("swatch", found.start)), rect, &found) {
+                let with = swatch::write(&found, &text[found.args.clone()], rgb);
+                text.replace_range(found.args.clone(), &with);
+                picked = true;
+                // The colours after it have moved; they show again next frame.
+                break;
+            }
+        }
         // The byte under the pointer, when it is over text.
         let hovered = response
             .hover_pos()
@@ -268,11 +291,12 @@ pub fn show(
             galley_pos,
             cursor.map(|cursor| cursor.index.0),
             hovered,
+            picked,
         )
     });
     let view = shown.inner_rect;
-    let (response, galley, galley_pos, cursor, hovered) = shown.inner;
-    changed |= response.changed();
+    let (response, galley, galley_pos, cursor, hovered, picked) = shown.inner;
+    changed |= response.changed() || picked;
     marks(ui, id, view, lines, text, diagnostics, dark);
     // What is wrong under the pointer.
     if let Some(at) = hovered {
@@ -309,6 +333,43 @@ fn stripes(gutter: Rect, rows: &[(f32, f32)], shades: crate::theme::tokens::RowS
             (rect, shades.fill(index))
         })
         .collect()
+}
+
+/// The space between a colour's swatch and the code on either side (#545).
+const SWATCH_GAP: f32 = 3.0;
+
+/// The side of a colour's swatch (#545) for code in `settings`: a little smaller than its letters.
+pub fn swatch_side(settings: &CodeEditor) -> f32 {
+    (settings.size * 0.8).round()
+}
+
+/// The room a colour's swatch takes before it in the code (#545).
+pub fn swatch_room(settings: &CodeEditor) -> f32 {
+    swatch_side(settings) + 2.0 * SWATCH_GAP
+}
+
+/// The swatch of the colour `found` at `rect`, interacting as `id` (#545): a click opens Studio's colour picker.
+/// Returns the colour picked, when it changed.
+fn swatch_ui(ui: &mut Ui, id: Id, rect: Rect, found: &swatch::Swatch) -> Option<[u8; 3]> {
+    let p = current_colors(ui.ctx()).palette;
+    let response = ui.interact(rect, id, Sense::click());
+    let label = format!("Colour {}", crate::panels::color_picker::hex(found.rgb));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    let [r, g, b] = found.rgb;
+    ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(r, g, b));
+    let ink = if response.hovered() { p.text } else { p.border };
+    ui.painter()
+        .rect_stroke(rect, 2.0, Stroke::new(1.0, ink), egui::StrokeKind::Inside);
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let mut rgb = found.rgb;
+    let mut changed = false;
+    egui::Popup::menu(&response)
+        .id(id.with("popup"))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            changed = crate::panels::color_picker::picker(ui, id.with("picker"), &mut rgb);
+        });
+    changed.then_some(rgb)
 }
 
 /// How thick the line beside the number of a line with a problem is (#539).

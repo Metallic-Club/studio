@@ -19,6 +19,7 @@ pub mod definition;
 pub mod highlight;
 pub mod lexer;
 pub mod settings;
+pub mod swatch;
 pub mod view;
 
 use std::cell::RefCell;
