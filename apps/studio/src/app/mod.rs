@@ -4227,6 +4227,46 @@ mod tests {
         assert!(size(&harness) <= *crate::code::settings::SIZE.end());
     }
 
+    /// #542: Enter after a line that opens a block steps in and puts in the block's end; after a closed one it only
+    /// steps in.
+    #[test]
+    fn enter_after_a_block_s_first_line_puts_in_its_end() {
+        let mut harness = editing(settings_file("editor-script-end", None), "Script End Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let script = add_bare_script(&mut harness, "Ends");
+        two_clicks(&mut harness, "Ends", 0.05);
+        let text = |harness: &mut Harness<'static, Test>| {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.project.read_text("Scripts/Ends.luau").unwrap()
+        };
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("function open(door)".to_owned()));
+        settle(&mut harness);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        harness.event(egui::Event::Text("if door then".to_owned()));
+        settle(&mut harness);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        harness.event(egui::Event::Text("print(door)".to_owned()));
+        settle(&mut harness);
+        assert_eq!(
+            text(&mut harness),
+            "function open(door)\n\tif door then\n\t\tprint(door)\n\tend\nend"
+        );
+        // Back on the `if` line's end: the block is closed, so Enter only steps in.
+        let at = "function open(door)\n\tif door then".chars().count();
+        crate::code::view::reveal(&harness.ctx, crate::panels::script::field_id(script), at);
+        settle(&mut harness);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(
+            text(&mut harness),
+            "function open(door)\n\tif door then\n\t\t\n\t\tprint(door)\n\tend\nend"
+        );
+    }
+
     /// #529: with spaces chosen, Tab puts in the tab width's spaces; Enter keeps the line's indentation; and the Code
     /// Editor page's changes reach the open script.
     #[test]
@@ -4249,13 +4289,13 @@ mod tests {
         harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
         harness.event(egui::Event::Text("if x then".to_owned()));
         settle(&mut harness);
-        // Tabs, the default.
+        // Tabs, the default. Enter after `then` steps in and puts in the `end` (#542); Tab steps in once more.
         harness.key_press(Key::Enter);
         harness.key_press(Key::Tab);
         harness.event(egui::Event::Text("a()".to_owned()));
         harness.key_press(Key::Enter);
         settle(&mut harness);
-        assert_eq!(text(&mut harness), "if x then\n\ta()\n\t");
+        assert_eq!(text(&mut harness), "if x then\n\t\ta()\n\t\t\nend");
         // Spaces, two wide: the Code Editor page's.
         harness.state_mut().studio.settings_window().set_open(true);
         harness
@@ -4303,7 +4343,11 @@ mod tests {
         harness.key_press(Key::Tab);
         harness.event(egui::Event::Text("b()".to_owned()));
         settle(&mut harness);
-        assert!(text(&mut harness).ends_with("\n\t  b()"), "{:?}", text(&mut harness));
+        assert!(
+            text(&mut harness).ends_with("\n\t\t  b()\nend"),
+            "{:?}",
+            text(&mut harness)
+        );
     }
 
     /// #530: an open script's syntax error and warnings are found as it is typed, and a click on a scroll bar mark puts

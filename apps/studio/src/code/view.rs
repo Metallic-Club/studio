@@ -2,6 +2,9 @@
 //! left (striped by line, #540), the cursor's line lit, whitespace shown if asked, and Tab and Enter as a code editor
 //! has them. It scrolls both ways: code is not wrapped.
 //!
+//! Enter after a line that opens a block steps in and, when the block is not closed, puts in its `end` (#542,
+//! [`super::blocks`]).
+//!
 //! Errors and warnings (#530) colour their line's number and draw a line beside it (#539), are underlined with a wave,
 //! and have a mark in the scroll bar, which goes to their line when clicked; each says what is wrong under the pointer.
 
@@ -439,10 +442,36 @@ fn keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
         changed |= replace_selection(ui.ctx(), id, text, &settings.indent());
     }
     if ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter)) {
-        let indent = cursor(ui.ctx(), id).map_or_else(String::new, |at| indentation(text, at));
-        changed |= replace_selection(ui.ctx(), id, text, &format!("\n{indent}"));
+        changed |= enter(ui.ctx(), id, text, settings);
     }
     changed
+}
+
+/// Enter in the field `id`: after a line that opens a block, a line indented one step more and the block's `end` when
+/// it is not closed (#542); otherwise a line with this one's indentation. Returns whether `text` changed.
+fn enter(ctx: &egui::Context, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
+    let Some(mut state) = TextEditState::load(ctx, id) else {
+        return false;
+    };
+    let Some(range) = state.cursor.char_range() else {
+        return false;
+    };
+    let at = range.primary.index.0;
+    if at == range.secondary.index.0
+        && let Some(enter) = super::blocks::enter(text, byte_of(text, at), &settings.indent())
+    {
+        let from = text[..enter.replace.start].chars().count();
+        let to = text[..enter.replace.end].chars().count();
+        replace_chars(ctx, id, &mut state, text, from..to, &enter.with);
+        let cursor = from + enter.with[..enter.cursor].chars().count();
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(cursor))));
+        state.store(ctx, id);
+        return true;
+    }
+    let indent = indentation(text, at);
+    replace_selection(ctx, id, text, &format!("\n{indent}"))
 }
 
 /// The cursor of the field `id`, as a character index.

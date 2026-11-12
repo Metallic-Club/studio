@@ -13,6 +13,7 @@
 
 pub mod analysis;
 pub mod api;
+pub mod blocks;
 pub mod complete;
 pub mod definition;
 pub mod highlight;
