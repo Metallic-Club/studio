@@ -14,6 +14,7 @@
 pub mod analysis;
 pub mod api;
 pub mod complete;
+pub mod definition;
 pub mod highlight;
 pub mod lexer;
 pub mod settings;

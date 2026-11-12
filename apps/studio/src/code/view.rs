@@ -286,6 +286,24 @@ fn marks(ui: &mut Ui, id: Id, view: Rect, lines: usize, text: &str, diagnostics:
     }
 }
 
+/// A line under the bytes `range` of `text` (on its first line), as the field `output` laid it out: the name Ctrl+click
+/// goes to the definition of (#532).
+pub fn underline(painter: &Painter, output: &ViewOutput, text: &str, range: std::ops::Range<usize>, color: Color32) {
+    let start = range.start.min(text.len());
+    let end = range.end.clamp(start, text.len());
+    let (from, to) = (text[..start].chars().count(), text[..end].chars().count());
+    let left = output.galley.pos_from_cursor(CCursor::new(from));
+    let right = output.galley.pos_from_cursor(CCursor::new(to));
+    let y = output.galley_pos.y + left.bottom() - 1.0;
+    painter.line_segment(
+        [
+            pos2(output.galley_pos.x + left.left(), y),
+            pos2(output.galley_pos.x + right.left(), y),
+        ],
+        Stroke::new(1.0, color),
+    );
+}
+
 /// A wave under the part of `diagnostic`'s range on its first line.
 fn wave(painter: &Painter, galley: &Galley, galley_pos: Pos2, text: &str, diagnostic: &Diagnostic, color: Color32) {
     let start = diagnostic.range.start.min(text.len());

@@ -4367,6 +4367,74 @@ mod tests {
         harness.get_by_label("Writes its arguments to the output, separated by spaces.");
     }
 
+    /// #532: Ctrl+click on a name goes to where it is declared: in the same script, or a ModuleScript's member in its
+    /// own tab.
+    #[test]
+    fn ctrl_click_goes_to_a_definition_across_scripts() {
+        let mut harness = editing(
+            settings_file("editor-script-definition", None),
+            "Script Definition Game",
+        );
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let module_code = "local Doors = {}\n\nfunction Doors.open(by)\n\treturn by\nend\n\nreturn Doors\n";
+        let main_code =
+            "local Doors = require(game:GetService(\"ReplicatedStorage\").Doors)\nlocal count = 1\nDoors.open(count)\n";
+        let (module, main) = {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let dm = &mut editor.dm;
+            let registry = dm.registry().clone();
+            let class = |name: &str| registry.class_id(name).unwrap();
+            let storage = dm.service(class("ReplicatedStorage")).unwrap();
+            let module = dm.create(class("ModuleScript")).unwrap();
+            dm.set_name(module, "Doors".into()).unwrap();
+            dm.set_by_name(module, "Source", Value::String("Scripts/Doors.luau".into()))
+                .unwrap();
+            dm.set_parent(module, Some(storage)).unwrap();
+            let service = dm.service(class("ServerScriptService")).unwrap();
+            let main = dm.create(class("Script")).unwrap();
+            dm.set_name(main, "Main".into()).unwrap();
+            dm.set_by_name(main, "Source", Value::String("Scripts/Main.luau".into()))
+                .unwrap();
+            dm.set_parent(main, Some(service)).unwrap();
+            editor.project.write("Scripts/Doors.luau", module_code).unwrap();
+            editor.project.write("Scripts/Main.luau", main_code).unwrap();
+            editor.explorer.reveal(&editor.dm, main);
+            (module, main)
+        };
+        settle(&mut harness);
+        two_clicks(&mut harness, "Main", 0.05);
+        let settings = harness.state().studio.settings().code.clone();
+        let glyph = harness
+            .ctx
+            .fonts_mut(|fonts| fonts.glyph_width(&crate::code::view::font(&settings), '0'));
+        let row = settings.size * settings.line_spacing;
+        // The middle of character `column` of line `line` (from 0) of the field showing.
+        let place = |harness: &Harness<'_, Test>, line: usize, column: usize| {
+            let field = harness.get_by_role(Role::MultilineTextInput).rect();
+            egui::pos2(
+                field.left() + crate::theme::tokens::space::S3 + (column as f32 + 0.5) * glyph,
+                field.top() + (line as f32 + 0.5) * row,
+            )
+        };
+        // `count`, used on line 3: its declaration on line 2.
+        let at = place(&harness, 2, "Doors.open(".len() + 2);
+        click_with(&mut harness, at, Modifiers::COMMAND);
+        settle(&mut harness);
+        let cursor = crate::code::view::cursor(&harness.ctx, crate::panels::script::field_id(main)).unwrap();
+        let declared = main_code[..main_code.find("count").unwrap()].chars().count();
+        assert_eq!(cursor, declared, "at count's declaration");
+        // `open`: the module's tab, at `function Doors.open`.
+        let at = place(&harness, 2, "Doors.".len() + 1);
+        click_with(&mut harness, at, Modifiers::COMMAND);
+        settle(&mut harness);
+        settle(&mut harness);
+        assert!(harness.state().studio.dock().is_open(&crate::code::pane(module)));
+        harness.get_by_role_and_label(Role::Tab, "Doors");
+        let cursor = crate::code::view::cursor(&harness.ctx, crate::panels::script::field_id(module)).unwrap();
+        assert_eq!(cursor, module_code[..module_code.find("open").unwrap()].chars().count());
+    }
+
     /// #528: a script opens in the tab bar the last script tab was docked in, even once that tab is closed.
     #[test]
     fn a_script_opens_where_the_last_script_tab_was_docked() {

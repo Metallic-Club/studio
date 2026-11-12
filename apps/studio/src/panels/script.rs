@@ -221,6 +221,23 @@ impl Panel for ScriptEditor {
             }
         }
         ui.ctx().data_mut(|data| data.insert_temp(popup_id, popup));
+        // Ctrl and the pointer over a name that is declared somewhere: underlined; clicked, it goes there (#532).
+        let ctrl = ui.input(|input| input.modifiers.command);
+        if ctrl && let Some(at) = output.hovered {
+            let target = editor.scripts.with_env(&mut editor.project, &editor.dm, script, |env| {
+                code::definition::definition(&analysis, at, env)
+            });
+            if let Some(target) = target
+                && let Some(token) = analysis.token_at(at).and_then(|index| analysis.tokens.get(index))
+            {
+                let accent = current_colors(ui.ctx()).accent;
+                code::view::underline(ui.painter(), &output, &analysis.source, token.start..token.end, accent);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                if output.response.clicked() {
+                    go_to(ui.ctx(), editor, script, target);
+                }
+            }
+        }
         // What a name of the API is, under the pointer (#531), where no problem is.
         if !popup.open
             && let Some(at) = output.hovered
@@ -247,6 +264,27 @@ impl Panel for ScriptEditor {
             }
         }
     }
+}
+
+/// Shows `target` (#532): the cursor there, in this script's field or, opening its tab, another's.
+fn go_to(
+    ctx: &egui::Context,
+    editor: &mut crate::editor::EditorState,
+    script: code::ScriptId,
+    target: code::definition::Target,
+) {
+    use code::definition::Target;
+    let (other, range) = match target {
+        Target::Here(range) => (script, range),
+        Target::Script(other, range) => (other, range),
+    };
+    if other != script {
+        editor.open_script(other);
+    }
+    let member = code::source(&editor.dm, other);
+    let text = editor.scripts.text(&mut editor.project, &member);
+    let at = text[..range.start.min(text.len())].chars().count();
+    code::view::reveal(ctx, field_id(other), at);
 }
 
 /// Whether byte `at` is in a problem's range: its message shows there instead.

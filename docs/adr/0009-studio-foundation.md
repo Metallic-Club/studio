@@ -528,6 +528,10 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   classes or the children. Up and Down choose, Tab or Enter take one (unless what is typed already is it), Escape
   closes the list (the field's event filter keeps Escape while it shows), and a click takes one. Under the pointer, a
   name of the API shows its signature and description, and a local shows its type.
+- **Go to definition (#532)**: with Ctrl (Cmd) held, a name that is declared somewhere is underlined under the pointer,
+  and a click goes there (`code::definition`). A local, a parameter or a function goes to where it is declared, and a
+  field of the file's table to where it is set. A member of what a ModuleScript returns (through `require`) opens that
+  script's tab at its declaration, and a child of the game that is a script opens that script.
 
 ## Not in this slice
 
