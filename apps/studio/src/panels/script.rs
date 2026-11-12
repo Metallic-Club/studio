@@ -4,6 +4,8 @@
 //! While typing a name, a `.` or `:`, or the string of `GetService("` and the like, a list of what fits opens under the
 //! cursor (#531): Up and Down choose, Tab or Enter takes, Escape closes, and a click takes one too. A name of the API
 //! under the pointer says what it is.
+//!
+//! Ctrl+wheel over it, and Ctrl+plus, minus and 0, change the code's size (#541): the Code Editor's font size.
 
 use egui::text::CCursor;
 use egui::text_edit::TextEditState;
@@ -133,6 +135,9 @@ impl Panel for ScriptEditor {
                 None => popup.open = false,
             }
         }
+        // Ctrl+wheel and Ctrl+plus or minus zoom the code (#541).
+        let over = ui.rect_contains_pointer(ui.max_rect());
+        code::view::zoom(ui, id, &mut cx.settings.code, over);
         let text = editor.scripts.text(&mut editor.project, &member);
         // While the list shows, Escape is its: the field keeps the keyboard.
         let output = code::view::show(ui, id, text, &cx.settings.code, &diagnostics, popup.open);
