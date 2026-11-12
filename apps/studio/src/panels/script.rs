@@ -98,6 +98,10 @@ impl Panel for ScriptEditor {
         }
         let popup_id = id.with("completion");
         let mut popup: Popup = ui.ctx().data(|data| data.get_temp(popup_id)).unwrap_or_default();
+        // With several cursors (#558) the keys are theirs: no list.
+        if !code::view::extras(ui.ctx(), id).is_empty() {
+            popup.open = false;
+        }
         let focused = ui.memory(|memory| memory.has_focus(id));
         if focused {
             editor.scripts.focused = Some(script);
@@ -227,8 +231,8 @@ impl Panel for ScriptEditor {
                 log::warn!("scripts: could not keep {member}: {error}");
             }
         }
-        // What was typed opens the list, or keeps it open (#531).
-        if output.changed {
+        // What was typed opens the list, or keeps it open (#531); not with several cursors.
+        if output.changed && code::view::extras(ui.ctx(), id).is_empty() {
             let typed = ui.input(|input| {
                 input.events.iter().rev().find_map(|event| match event {
                     egui::Event::Text(text) => text.chars().next_back(),

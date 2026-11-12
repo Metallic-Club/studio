@@ -4,6 +4,8 @@
 //!
 //! A click under the last line puts the cursor at the end of the code, as VS Code does (#557).
 //!
+//! Alt+click adds a cursor, and the keys act at every one (#558, [`super::cursors`]).
+//!
 //! Enter after a line that opens a block steps in and, when the block is not closed, puts in its `end` (#542,
 //! [`super::blocks`]).
 //!
@@ -24,6 +26,7 @@ use egui::{
 };
 
 use super::analysis::{Diagnostic, Severity};
+use super::cursors::{self, Caret, Motion};
 use super::find::Finder;
 use super::settings::{CodeEditor, Kind, SIZE};
 use super::{highlight, minimap, swatch};
@@ -122,6 +125,10 @@ pub fn show(
     let row_height = settings.size * settings.line_spacing;
     let digit = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0'));
     let mut changed = keys(ui, id, text, settings);
+    // Several cursors (#558): the field keeps Escape, which goes back to one.
+    let several = !extras(ui.ctx(), id).is_empty();
+    // The field's own cursor before it sees a click: Alt+click keeps it as another.
+    let before = TextEditState::load(ui.ctx(), id).and_then(|state| state.cursor.char_range());
     // An edit made for the field (Enter, Tab, an end put in, a suggestion taken) moves its cursor without the field
     // knowing, so it would not scroll there itself: the view follows the cursor (#543).
     let follow = ui
@@ -173,6 +180,7 @@ pub fn show(
         // Behind the text: the cursor's line and the matches found, filled in once the field is laid out.
         let line_light = ui.painter().add(Shape::Noop);
         let found_light = ui.painter().add(Shape::Noop);
+        let extra_light = ui.painter().add(Shape::Noop);
         // The field is as tall as its lines; the view under them is `below_last_line`'s (#557).
         let rows = lines;
         let output = ui
@@ -185,7 +193,7 @@ pub fn show(
                         tab: true,
                         horizontal_arrows: true,
                         vertical_arrows: true,
-                        escape,
+                        escape: escape || several,
                     })
                     .frame(egui::Frame::NONE)
                     .margin(vec2(space::S3, 0.0))
@@ -197,6 +205,12 @@ pub fn show(
             .inner;
         below_last_line(ui, id, field, &output.galley, output.galley_pos, text);
         let response = output.response.response.clone();
+        alt_click(ui, id, &response, &output.galley, output.galley_pos, before);
+        if response.has_focus() {
+            let (selections, carets) = extra_shapes(ui, id, &output.galley, output.galley_pos);
+            ui.painter().set(extra_light, Shape::Vec(selections));
+            ui.painter().extend(carets);
+        }
         let focused = response.has_focus();
         let cursor = output.cursor_range.filter(|_| focused).map(|range| range.primary);
         let current = cursor.map(|cursor| output.galley.layout_from_cursor(cursor).row);
@@ -706,6 +720,10 @@ fn keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
     if !ui.memory(|memory| memory.has_focus(id)) {
         return false;
     }
+    let several = !extras(ui.ctx(), id).is_empty();
+    if several {
+        return several_keys(ui, id, text, settings);
+    }
     let mut changed = false;
     if settings.insert_spaces && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Tab)) {
         changed |= replace_selection(ui.ctx(), id, text, &settings.indent());
@@ -714,6 +732,199 @@ fn keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
         changed |= enter(ui.ctx(), id, text, settings);
     }
     changed
+}
+
+/// The field `id`'s cursors besides its own (#558).
+pub fn extras(ctx: &egui::Context, id: Id) -> Vec<Caret> {
+    ctx.data(|data| data.get_temp::<Vec<Caret>>(id.with("cursors")))
+        .unwrap_or_default()
+}
+
+/// Keeps `extras` as the field `id`'s cursors besides its own.
+fn set_extras(ctx: &egui::Context, id: Id, extras: Vec<Caret>) {
+    ctx.data_mut(|data| data.insert_temp(id.with("cursors"), extras));
+}
+
+/// The field `id`'s cursors, its own first (#558).
+pub fn carets(ctx: &egui::Context, id: Id) -> Vec<Caret> {
+    let own = TextEditState::load(ctx, id)
+        .and_then(|state| state.cursor.char_range())
+        .map_or(Caret::default(), |range| Caret {
+            anchor: range.secondary.index.0,
+            head: range.primary.index.0,
+        });
+    let mut all = vec![own];
+    all.extend(extras(ctx, id));
+    all
+}
+
+/// Makes `carets` (the field's own first) the field `id`'s cursors.
+pub fn set_carets(ctx: &egui::Context, id: Id, carets: &[Caret]) {
+    let Some((own, extras)) = carets.split_first() else {
+        return;
+    };
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(CCursorRange::two(
+        CCursor::new(own.anchor),
+        CCursor::new(own.head),
+    )));
+    state.store(ctx, id);
+    set_extras(ctx, id, extras.to_vec());
+}
+
+/// A click in the field `response` (#558), its code laid out as `galley` at `galley_pos`: with Alt, its cursor `before`
+/// the click stays as another, and the field's own goes where the click is; without, the field goes back to one cursor.
+fn alt_click(ui: &Ui, id: Id, response: &Response, galley: &Galley, galley_pos: Pos2, before: Option<CCursorRange>) {
+    let (pressed, alt, shift, at) = ui.input(|input| {
+        (
+            input.pointer.primary_pressed(),
+            input.modifiers.alt,
+            input.modifiers.shift,
+            input.pointer.interact_pos(),
+        )
+    });
+    if !pressed || !response.hovered() || shift {
+        return;
+    }
+    if !alt {
+        set_extras(ui.ctx(), id, Vec::new());
+        return;
+    }
+    let (Some(before), Some(at)) = (before, at) else {
+        return;
+    };
+    // Where the field puts its cursor for the click, once it takes it.
+    let clicked = galley.cursor_from_pos(at - galley_pos).index.0;
+    let mut all = vec![
+        Caret::at(clicked),
+        Caret {
+            anchor: before.secondary.index.0,
+            head: before.primary.index.0,
+        },
+    ];
+    all.extend(extras(ui.ctx(), id));
+    cursors::merge(&mut all);
+    set_carets(ui.ctx(), id, &all);
+}
+
+/// The field `id`'s other cursors as shapes, laid out as `galley` at `galley_pos`: their selections, to go behind the
+/// text, and their carets, over it.
+fn extra_shapes(ui: &Ui, id: Id, galley: &Galley, galley_pos: Pos2) -> (Vec<Shape>, Vec<Shape>) {
+    let visuals = ui.visuals();
+    let mut selections = Vec::new();
+    let mut carets = Vec::new();
+    for caret in extras(ui.ctx(), id) {
+        let range = caret.range();
+        if !range.is_empty() {
+            for rect in char_rects(galley, galley_pos, range) {
+                selections.push(Shape::rect_filled(rect, 0.0, visuals.selection.bg_fill));
+            }
+        }
+        let at = galley
+            .pos_from_cursor(CCursor::new(caret.head))
+            .translate(galley_pos.to_vec2());
+        carets.push(Shape::line_segment(
+            [at.center_top(), at.center_bottom()],
+            visuals.text_cursor.stroke,
+        ));
+    }
+    (selections, carets)
+}
+
+/// The field `id`'s keys while it has several cursors (#558): typing, deleting, Enter, Tab, pasting, copying, cutting
+/// and the arrows at every cursor, before the field sees them; Escape goes back to one cursor, and so do undo, redo and
+/// select all, which the field does. Returns whether `text` changed.
+fn several_keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
+    let mut all = carets(ui.ctx(), id);
+    let events = ui.input(|input| input.events.clone());
+    let mut taken = vec![false; events.len()];
+    let mut changed = false;
+    let mut one = false;
+    for (index, event) in events.iter().enumerate() {
+        let edit = match event {
+            egui::Event::Text(typed) => Some(cursors::Edit::Insert(typed.clone())),
+            egui::Event::Paste(pasted) => Some(cursors::paste(pasted, all.len())),
+            egui::Event::Copy | egui::Event::Cut => {
+                ui.ctx().copy_text(cursors::selections(text, &all).join("\n"));
+                matches!(event, egui::Event::Cut).then(|| cursors::Edit::Insert(String::new()))
+            }
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                let word = modifiers.command;
+                let motion = match key {
+                    Key::ArrowLeft => Some(Motion::Left { word }),
+                    Key::ArrowRight => Some(Motion::Right { word }),
+                    Key::ArrowUp => Some(Motion::Up),
+                    Key::ArrowDown => Some(Motion::Down),
+                    Key::Home => Some(Motion::Home),
+                    Key::End => Some(Motion::End),
+                    _ => None,
+                };
+                if let Some(motion) = motion {
+                    cursors::motion(text, &mut all, motion, modifiers.shift);
+                    taken[index] = true;
+                    continue;
+                }
+                match key {
+                    Key::Backspace => Some(cursors::Edit::Backspace { word }),
+                    Key::Delete => Some(cursors::Edit::Delete { word }),
+                    Key::Enter => Some(cursors::Edit::Newline),
+                    Key::Tab if !modifiers.shift => Some(cursors::Edit::Insert(if settings.insert_spaces {
+                        settings.indent()
+                    } else {
+                        "\t".to_owned()
+                    })),
+                    Key::Escape => {
+                        one = true;
+                        taken[index] = true;
+                        continue;
+                    }
+                    // Undo, redo and select all are the field's, with one cursor.
+                    Key::Z | Key::Y | Key::A if modifiers.command => {
+                        one = true;
+                        continue;
+                    }
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+        if let Some(edit) = edit {
+            cursors::edit(text, &mut all, &edit);
+            changed = true;
+        }
+        taken[index] = true;
+    }
+    if one {
+        all.truncate(1);
+    }
+    set_carets(ui.ctx(), id, &all);
+    if taken.iter().any(|taken| *taken) {
+        ui.input_mut(|input| {
+            let mut at = 0;
+            input.events.retain(|_| {
+                let keep = !taken.get(at).copied().unwrap_or(false);
+                at += 1;
+                keep
+            });
+        });
+    }
+    if changed {
+        ui.ctx().data_mut(|data| data.insert_temp(id.with("follow"), true));
+    }
+    changed
+}
+
+/// The rectangles on the screen covering the characters `range` of the code `galley` lays out at `galley_pos`.
+fn char_rects(galley: &Galley, galley_pos: Pos2, range: Range<usize>) -> Vec<Rect> {
+    let text = galley.text();
+    let start = byte_of(text, range.start);
+    let end = byte_of(text, range.end);
+    range_rects(galley, galley_pos, text, start..end)
 }
 
 /// Enter in the field `id`: after a line that opens a block, a line indented one step more and the block's `end` when

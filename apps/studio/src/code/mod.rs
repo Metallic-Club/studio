@@ -15,6 +15,7 @@ pub mod analysis;
 pub mod api;
 pub mod blocks;
 pub mod complete;
+pub mod cursors;
 pub mod definition;
 pub mod find;
 pub mod find_bar;
