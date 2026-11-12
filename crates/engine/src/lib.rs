@@ -189,3 +189,6 @@ pub use metallic_project;
 #[cfg(feature = "render")]
 pub use metallic_render;
 pub use metallic_script;
+// The Luau backend, so Studio's script editor checks code with the compiler the game runs it with (#530).
+#[cfg(feature = "luau")]
+pub use metallic_luau;

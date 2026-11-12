@@ -390,6 +390,15 @@ fn resume_thread(thread: &Thread, args: MultiValue) -> mlua::Result<MultiValue> 
     thread.resume::<MultiValue>(args)
 }
 
+/// Compiles `source` as Studio's script editor checks it (#530), with the settings every chunk is compiled with: its
+/// syntax error, if it has one, named `chunk_name`. No VM is made.
+pub fn check(source: &str, chunk_name: &str) -> Result<(), CompileError> {
+    compiler()
+        .compile(source)
+        .map(|_| ())
+        .map_err(|error| compile_error(&error, chunk_name))
+}
+
 /// A compiler error (`:12: message`) as a [`CompileError`].
 fn compile_error(error: &mlua::Error, chunk: &str) -> CompileError {
     let text = match error {

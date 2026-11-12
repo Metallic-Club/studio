@@ -4257,6 +4257,50 @@ mod tests {
         assert!(text(&mut harness).ends_with("\n\t  b()"), "{:?}", text(&mut harness));
     }
 
+    /// #530: an open script's syntax error and warnings are found as it is typed, and a click on a scroll bar mark puts
+    /// the cursor on its line.
+    #[test]
+    fn a_script_s_errors_and_warnings_are_marked() {
+        let mut harness = editing(settings_file("editor-script-marks", None), "Script Marks Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let script = add_bare_script(&mut harness, "Marks");
+        two_clicks(&mut harness, "Marks", 0.05);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text(
+            "local unused = 1\nprint(workspace.Baseplate.Colr)\nif true then\nprint(typo)\n".to_owned(),
+        ));
+        settle(&mut harness);
+        let diagnostics = {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let crate::editor::EditorState {
+                scripts, project, dm, ..
+            } = editor;
+            scripts.check(project, dm, script, "Scripts/Marks.luau").1
+        };
+        let found: Vec<(crate::code::analysis::Severity, &str)> = diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.severity, diagnostic.message.as_str()))
+            .collect();
+        use crate::code::analysis::Severity::{Error, Warning};
+        assert!(found.iter().any(|(severity, _)| *severity == Error), "{found:?}");
+        for warning in [
+            "Variable 'unused' is never used; begin its name with _ if it is meant to be",
+            "'Colr' is not a member of Part 'Baseplate', nor one of its children",
+            "Unknown global 'typo'",
+        ] {
+            assert!(found.contains(&(Warning, warning)), "{warning}: {found:?}");
+        }
+        // The mark of line 4 (typo) puts the cursor there.
+        harness.get_by_role_and_label(Role::Button, "Go to line 4").click();
+        settle(&mut harness);
+        let field = crate::panels::script::field_id(script);
+        let cursor = crate::code::view::cursor(&harness.ctx, field).unwrap();
+        let text = "local unused = 1\nprint(workspace.Baseplate.Colr)\nif true then\nprint(typo)\n";
+        let line = text.chars().take(cursor).filter(|c| *c == '\n').count();
+        assert_eq!(line, 3, "on line 4");
+    }
+
     /// #528: a script opens in the tab bar the last script tab was docked in, even once that tab is closed.
     #[test]
     fn a_script_opens_where_the_last_script_tab_was_docked() {
