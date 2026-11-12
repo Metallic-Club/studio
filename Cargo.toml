@@ -110,6 +110,9 @@ egui_kittest = { version = "0.37.0", default-features = false }
 egui_tiles = { version = "0.18.0", features = ["serde"] }
 # The local time of day on Studio's Output lines (#502). Only its clock: no serde, no formatting locales. MIT or Apache-2.0.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# The script editor's find and replace (#554): regular expressions, with the `$1` of a replacement. Already in the
+# tree (via the build's tools), pure Rust, MIT OR Apache-2.0.
+regex = "1.12"
 # Checks a font file the user picks for the script editor (#529) before egui loads it: egui reads fonts with it already
 # (the same version and features), so it adds nothing to the build. MIT OR Apache-2.0, pure Rust.
 skrifa = { version = "0.44.0", default-features = false, features = ["std", "autohint_shaping"] }

@@ -1823,6 +1823,7 @@ dependencies = [
  "metallic_engine",
  "metallic_player",
  "png",
+ "regex",
  "resvg",
  "rfd",
  "serde",

@@ -11,6 +11,7 @@
 //! Errors and warnings (#530) colour their line's number and draw a line beside it (#539), are underlined with a wave,
 //! and have a mark in the scroll bar, which goes to their line when clicked; each says what is wrong under the pointer.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange};
@@ -21,6 +22,7 @@ use egui::{
 };
 
 use super::analysis::{Diagnostic, Severity};
+use super::find::Finder;
 use super::settings::{CodeEditor, Kind, SIZE};
 use super::{highlight, swatch};
 use crate::theme::tokens::space;
@@ -97,14 +99,16 @@ pub fn reveal(ctx: &egui::Context, id: Id, at: usize) {
     ctx.request_repaint();
 }
 
-/// Draws `text` as code filling `ui`, the field interacting as `id`, marking `diagnostics`. With `escape`, the field
-/// keeps the keyboard on Escape (a list over it closes instead).
+/// Draws `text` as code filling `ui`, the field interacting as `id`, marking `diagnostics` and lighting the matches
+/// `found` of the find bar (#554: its finder, and the match gone to, lit brighter). With `escape`, the field keeps the
+/// keyboard on Escape (a list over it closes instead).
 pub fn show(
     ui: &mut Ui,
     id: Id,
     text: &mut String,
     settings: &CodeEditor,
     diagnostics: &[Diagnostic],
+    found: Option<(&Finder, Option<Range<usize>>)>,
     escape: bool,
 ) -> ViewOutput {
     let colors = current_colors(ui.ctx());
@@ -125,6 +129,8 @@ pub fn show(
     let gutter_width = digits as f32 * digit + 2.0 * space::S4;
     // A place asked for: the cursor there, its line a third of the way down.
     let revealed = ui.ctx().data_mut(|data| data.remove_temp::<usize>(id.with("reveal")));
+    // A selection made for the field (a match found, #554): scrolled into view if it is out of it.
+    let selected = ui.ctx().data_mut(|data| data.remove_temp::<usize>(id.with("show")));
     let mut scroll = ScrollArea::both()
         .id_salt(id.with("scroll"))
         .auto_shrink([false, false]);
@@ -150,8 +156,9 @@ pub fn show(
         let gutter = Rect::from_min_size(top_left, vec2(gutter_width, height));
         let field = Rect::from_min_size(pos2(gutter.right(), top_left.y), vec2(width, height));
         ui.allocate_rect(gutter.union(field), Sense::hover());
-        // Behind the text: the cursor's line, filled in once the field is laid out.
+        // Behind the text: the cursor's line and the matches found, filled in once the field is laid out.
         let line_light = ui.painter().add(Shape::Noop);
+        let found_light = ui.painter().add(Shape::Noop);
         // Every row the view holds is the field's, so a click under the last line puts the cursor at the end.
         let rows = ((height / row_height).floor() as usize).max(lines);
         let output = ui
@@ -184,7 +191,36 @@ pub fn show(
             let at = galley.pos_from_cursor(cursor).translate(galley_pos.to_vec2());
             ui.scroll_to_rect(at.expand2(vec2(2.0 * digit, row_height / 2.0)), None);
         }
+        if let Some(at) = selected {
+            let at = galley.pos_from_cursor(CCursor::new(at)).translate(galley_pos.to_vec2());
+            if !ui.clip_rect().contains_rect(at) {
+                ui.scroll_to_rect(at.expand2(vec2(4.0 * digit, 0.0)), Some(egui::Align::Center));
+            }
+        }
         let painter = ui.painter().clone();
+        // Found in the text as it is now, after this frame's typing.
+        let (found, gone_to) = found.map_or((Vec::new(), None), |(finder, at)| (finder.matches(text), at));
+        if !found.is_empty() {
+            let ink = severity_color(Severity::Warning, dark);
+            let mut shapes = Vec::new();
+            for range in &found {
+                let current = gone_to.as_ref() == Some(range);
+                for rect in range_rects(&galley, galley_pos, text, range.clone()) {
+                    if current {
+                        shapes.push(Shape::rect_filled(rect, 2.0, ink.gamma_multiply(0.45)));
+                        shapes.push(Shape::rect_stroke(
+                            rect,
+                            2.0,
+                            Stroke::new(1.0, ink),
+                            egui::StrokeKind::Inside,
+                        ));
+                    } else {
+                        shapes.push(Shape::rect_filled(rect, 2.0, ink.gamma_multiply(0.22)));
+                    }
+                }
+            }
+            painter.set(found_light, Shape::Vec(shapes));
+        }
         if settings.highlight_line
             && let Some(row) = current.and_then(|row| galley.rows.get(row))
         {
@@ -320,6 +356,62 @@ pub fn show(
         hovered,
         view,
     }
+}
+
+/// The rectangles on the screen covering the bytes `range` of `text` as `galley` (at `galley_pos`) lays it out: one per
+/// row it spans, a line's end showing as a space's width.
+pub fn range_rects(galley: &Galley, galley_pos: Pos2, text: &str, range: Range<usize>) -> Vec<Rect> {
+    let start = range.start.min(text.len());
+    let end = range.end.clamp(start, text.len());
+    let (from, to) = (
+        CCursor::new(text[..start].chars().count()),
+        CCursor::new(text[..end].chars().count()),
+    );
+    let (first, last) = (galley.layout_from_cursor(from).row, galley.layout_from_cursor(to).row);
+    let a = galley.pos_from_cursor(from);
+    let b = galley.pos_from_cursor(to);
+    let space = galley
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first())
+        .map_or(4.0, |glyph| glyph.advance_width.max(4.0));
+    let mut rects = Vec::new();
+    for row in first..=last {
+        let Some(placed) = galley.rows.get(row) else {
+            break;
+        };
+        let line = placed.rect();
+        let left = if row == first { a.left() } else { line.left() };
+        let right = if row == last { b.left() } else { line.right() + space };
+        rects.push(Rect::from_min_max(
+            pos2(left, line.top()),
+            pos2(right.max(left), line.bottom()),
+        ));
+    }
+    rects
+        .into_iter()
+        .map(|rect| rect.translate(galley_pos.to_vec2()))
+        .collect()
+}
+
+/// Selects the characters `chars` in the field `id` without taking the keyboard, and scrolls them into view on its next
+/// frame (a match the find bar went to, #554).
+pub fn select(ctx: &egui::Context, id: Id, chars: Range<usize>) {
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(CCursorRange::two(
+        CCursor::new(chars.start),
+        CCursor::new(chars.end),
+    )));
+    state.store(ctx, id);
+    ctx.data_mut(|data| data.insert_temp(id.with("show"), chars.end));
+    ctx.request_repaint();
+}
+
+/// What is selected in the field `id`, as characters, first to last (empty at the cursor).
+pub fn selection(ctx: &egui::Context, id: Id) -> Option<Range<usize>> {
+    let range = TextEditState::load(ctx, id)?.cursor.char_range()?;
+    let (a, b) = (range.primary.index.0, range.secondary.index.0);
+    Some(a.min(b)..a.max(b))
 }
 
 /// The gutter's stripes (#540): each of its lines `rows` (top and height on the screen) across the gutter `gutter`,

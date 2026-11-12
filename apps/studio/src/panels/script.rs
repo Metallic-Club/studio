@@ -6,6 +6,9 @@
 //! under the pointer says what it is.
 //!
 //! Ctrl+wheel over it, and Ctrl+plus, minus and 0, change the code's size (#541): the Code Editor's font size.
+//!
+//! Ctrl+F opens its find bar and Ctrl+H the bar with its replace row (#554, [`crate::code::find_bar`]); F3 and
+//! Shift+F3 go to the next match and the one before.
 
 use egui::text::CCursor;
 use egui::text_edit::TextEditState;
@@ -13,6 +16,8 @@ use egui::{Align, Id, Key, Layout, Modifiers, Order, RichText, ScrollArea, Ui, v
 
 use crate::code::analysis::Diagnostic;
 use crate::code::complete::{self, Completion};
+use crate::code::find::{self, FindBar};
+use crate::code::find_bar::{self, Action, Count};
 use crate::theme::current_colors;
 use crate::theme::tokens::{space, text};
 
@@ -94,6 +99,9 @@ impl Panel for ScriptEditor {
         let popup_id = id.with("completion");
         let mut popup: Popup = ui.ctx().data(|data| data.get_temp(popup_id)).unwrap_or_default();
         let focused = ui.memory(|memory| memory.has_focus(id));
+        if focused {
+            editor.scripts.focused = Some(script);
+        }
         // The list's keys, before the field sees them (#531).
         let mut taken = false;
         if popup.open && focused {
@@ -138,11 +146,81 @@ impl Panel for ScriptEditor {
         // Ctrl+wheel and Ctrl+plus or minus zoom the code (#541).
         let over = ui.rect_contains_pointer(ui.max_rect());
         code::view::zoom(ui, id, &mut cx.settings.code, over);
+        // The find bar (#554): just asked for, its query is the selection when that is on one line.
+        let asked = editor.scripts.find.asked == Some(script);
+        if asked {
+            editor.scripts.find.asked = None;
+            let (text, find) = editor.scripts.text_and_find(&mut editor.project, &member);
+            if let Some(range) = selected_bytes(ui.ctx(), id, text) {
+                if !range.is_empty() && !text[range.clone()].contains('\n') {
+                    find.query.text = text[range.clone()].to_owned();
+                }
+                find.at.insert(script, range);
+            }
+        }
+        if editor.scripts.find.is_open(script)
+            && focused
+            && !popup.open
+            && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            editor.scripts.find.close(script);
+        }
+        let find_open = editor.scripts.find.is_open(script);
+        let finder = if find_open {
+            editor.scripts.find.finder()
+        } else {
+            Ok(None)
+        };
+        let find_at = editor.scripts.find.at.get(&script).cloned();
         let text = editor.scripts.text(&mut editor.project, &member);
-        // While the list shows, Escape is its: the field keeps the keyboard.
-        let output = code::view::show(ui, id, text, &cx.settings.code, &diagnostics, popup.open);
-        let changed = output.changed || taken;
+        // While the list or the find bar shows, Escape is theirs: the field keeps the keyboard.
+        let output = code::view::show(
+            ui,
+            id,
+            text,
+            &cx.settings.code,
+            &diagnostics,
+            finder
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .map(|finder| (finder, find_at.clone())),
+            popup.open || find_open,
+        );
+        let mut changed = output.changed || taken;
+        if find_open {
+            let step = editor
+                .scripts
+                .find
+                .step
+                .take_if(|(asked, _)| *asked == script)
+                .map(|(_, forward)| forward);
+            let (text, find) = editor.scripts.text_and_find(&mut editor.project, &member);
+            // While the code has the keyboard, the search is where its selection is.
+            if output.response.has_focus()
+                && let Some(range) = selected_bytes(ui.ctx(), id, text)
+            {
+                find.at.insert(script, range);
+            }
+            let mut at = find.at.get(&script).cloned().unwrap_or(0..0);
+            let count = count(text, &finder, &at);
+            let mut actions = find_bar::show(ui, id.with("find"), output.view, find, &count, asked);
+            match step {
+                Some(true) => actions.push(Action::Next),
+                Some(false) => actions.push(Action::Previous),
+                None => {}
+            }
+            changed |= find_actions(ui.ctx(), id, text, find, &actions, &mut at);
+            if actions.contains(&Action::Close) {
+                find.close(script);
+                // The code gets the keyboard with the match gone to selected.
+                select_bytes(ui.ctx(), id, text, at.clone());
+                ui.memory_mut(|memory| memory.request_focus(id));
+            }
+            find.at.insert(script, at);
+        }
         if changed {
+            let text = editor.scripts.text(&mut editor.project, &member);
             let bytes = text.clone().into_bytes();
             editor.scripts.edited();
             if let Err(error) = editor.project.write(&member, bytes) {
@@ -290,6 +368,96 @@ fn go_to(
     let text = editor.scripts.text(&mut editor.project, &member);
     let at = text[..range.start.min(text.len())].chars().count();
     code::view::reveal(ctx, field_id(other), at);
+}
+
+/// What is selected in the field `id` showing `text`, as bytes.
+fn selected_bytes(ctx: &egui::Context, id: Id, text: &str) -> Option<std::ops::Range<usize>> {
+    let chars = code::view::selection(ctx, id)?;
+    Some(code::view::byte_of(text, chars.start)..code::view::byte_of(text, chars.end))
+}
+
+/// Selects the bytes `range` of `text` in the field `id`, scrolling to them (#554).
+fn select_bytes(ctx: &egui::Context, id: Id, text: &str, range: std::ops::Range<usize>) {
+    let start = text[..range.start.min(text.len())].chars().count();
+    let end = text[..range.end.min(text.len())].chars().count();
+    code::view::select(ctx, id, start..end);
+}
+
+/// How many matches the find bar's query `finder` has in `text`, and which is the one at `at`.
+fn count(text: &str, finder: &Result<Option<find::Finder>, String>, at: &std::ops::Range<usize>) -> Count {
+    match finder {
+        Err(why) => Count::Error(why.clone()),
+        Ok(None) => Count::Empty,
+        Ok(Some(finder)) => {
+            let matches = finder.matches(text);
+            let current = find::current(&matches, at);
+            Count::Found {
+                current,
+                total: matches.len(),
+            }
+        }
+    }
+}
+
+/// Does what the find bar asked (#554) in the field `id` showing `text`, the search being `at` (bytes): goes to a
+/// match, or replaces one or all, `at` following. Returns whether `text` changed.
+fn find_actions(
+    ctx: &egui::Context,
+    id: Id,
+    text: &mut String,
+    find: &mut FindBar,
+    actions: &[Action],
+    at: &mut std::ops::Range<usize>,
+) -> bool {
+    let mut changed = false;
+    let go = |text: &str, range: std::ops::Range<usize>, at: &mut std::ops::Range<usize>| {
+        select_bytes(ctx, id, text, range.clone());
+        *at = range;
+    };
+    for action in actions {
+        // Made again after a toggle or the query changed.
+        let Ok(Some(finder)) = find.finder() else {
+            continue;
+        };
+        let matches = finder.matches(text);
+        let selection = at.clone();
+        let target = match action {
+            Action::Changed => find::next(&matches, &(selection.start..selection.start)),
+            Action::Next => find::next(&matches, &selection),
+            Action::Previous => find::previous(&matches, &selection),
+            Action::Replace => match find::current(&matches, &selection) {
+                Some(index) => {
+                    let range = matches[index].clone();
+                    let with = finder.replacement(text, range.clone(), &find.replace);
+                    text.replace_range(range.clone(), &with);
+                    changed = true;
+                    let after = range.start + with.len();
+                    let matches = finder.matches(text);
+                    match find::next(&matches, &(after..after)) {
+                        Some(next) => go(text, matches[next].clone(), at),
+                        None => go(text, after..after, at),
+                    }
+                    continue;
+                }
+                None => find::next(&matches, &selection),
+            },
+            Action::ReplaceAll => {
+                if !matches.is_empty() {
+                    *text = finder.replace_all(text, &matches, &find.replace);
+                    changed = true;
+                    let start = selection.start.min(text.len());
+                    let start = (0..=start).rev().find(|&byte| text.is_char_boundary(byte)).unwrap_or(0);
+                    go(text, start..start, at);
+                }
+                continue;
+            }
+            Action::Close => continue,
+        };
+        if let Some(index) = target {
+            go(text, matches[index].clone(), at);
+        }
+    }
+    changed
 }
 
 /// Whether byte `at` is in a problem's range: its message shows there instead.

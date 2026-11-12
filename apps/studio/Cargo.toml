@@ -24,6 +24,7 @@ thiserror.workspace = true
 rfd.workspace = true
 # The Output's time of day (#502).
 chrono.workspace = true
+regex.workspace = true
 # A font file of the user's is checked before it is loaded (#529).
 skrifa.workspace = true
 # The custom icon folder's SVGs and PNGs (src/theme/icons/custom.rs).
