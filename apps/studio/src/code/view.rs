@@ -1,6 +1,6 @@
 //! The code field (#528-#530): a script's text in the Code Editor's font and colours, with the line numbers down its
-//! left, the cursor's line lit, whitespace shown if asked, and Tab and Enter as a code editor has them. It scrolls both
-//! ways: code is not wrapped.
+//! left (striped by line, #540), the cursor's line lit, whitespace shown if asked, and Tab and Enter as a code editor
+//! has them. It scrolls both ways: code is not wrapped.
 //!
 //! Errors and warnings (#530) colour their line's number and draw a line beside it (#539), are underlined with a wave,
 //! and have a mark in the scroll bar, which goes to their line when clicked; each says what is wrong under the pointer.
@@ -184,6 +184,9 @@ pub fn show(
             .iter()
             .map(|row| (galley_pos.y + row.pos.y, row.rect().height()))
             .collect();
+        for (rect, color) in stripes(gutter, &row_spans, p.rows()) {
+            painter.rect_filled(rect, 0.0, color);
+        }
         for (rect, color) in problem_lines(gutter, &row_spans, &line_severity, dark) {
             painter.rect_filled(rect, 0.0, color);
         }
@@ -253,6 +256,19 @@ pub fn show(
         hovered,
         view,
     }
+}
+
+/// The gutter's stripes (#540): each of its lines `rows` (top and height on the screen) across the gutter `gutter`,
+/// alternately the two shades of the Explorer's and the Properties' rows, the first line darker. The code beside them
+/// keeps its own ground.
+fn stripes(gutter: Rect, rows: &[(f32, f32)], shades: crate::theme::tokens::RowShades) -> Vec<(Rect, Color32)> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, &(top, height))| {
+            let rect = Rect::from_min_max(pos2(gutter.left(), top), pos2(gutter.right(), top + height));
+            (rect, shades.fill(index))
+        })
+        .collect()
 }
 
 /// How thick the line beside the number of a line with a problem is (#539).
@@ -467,6 +483,22 @@ mod tests {
         assert_eq!(indentation(text, 12), "");
         assert_eq!(byte_of("héllo", 2), 3);
         assert_eq!(byte_of("hé", 9), 3);
+    }
+
+    /// #540: the line numbers are striped by line, as the Explorer's and the Properties' rows, across the gutter only.
+    #[test]
+    fn the_line_numbers_are_striped() {
+        let shades = crate::theme::Colors::default().palette.rows();
+        let gutter = Rect::from_min_size(pos2(10.0, 100.0), vec2(40.0, 300.0));
+        let rows = [(100.0, 20.0), (120.0, 20.0), (140.0, 20.0)];
+        let stripes = stripes(gutter, &rows, shades);
+        let fills: Vec<Color32> = stripes.iter().map(|(_, fill)| *fill).collect();
+        assert_eq!(fills, [shades.darker, shades.brighter, shades.darker]);
+        assert_ne!(shades.darker, shades.brighter);
+        for ((rect, _), (top, height)) in stripes.iter().zip(rows) {
+            assert_eq!((rect.left(), rect.right()), (gutter.left(), gutter.right()));
+            assert_eq!((rect.top(), rect.height()), (top, height));
+        }
     }
 
     /// #539: a line with an error or a warning has a line in its colour beside its number; the others none.
