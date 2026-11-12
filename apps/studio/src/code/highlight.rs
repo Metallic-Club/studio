@@ -154,7 +154,8 @@ pub fn spans(source: &str) -> Vec<(std::ops::Range<usize>, Kind)> {
     out
 }
 
-/// The layout of `source` in `settings`' font and the colours of the theme (`dark` or light), not wrapped.
+/// The layout of `source` in `settings`' font and the colours of the theme (`dark` or light), not wrapped, with room
+/// for a swatch before each colour written ([`super::swatch`], #545).
 pub fn layout_job(source: &str, settings: &CodeEditor, font: &FontId, dark: bool) -> LayoutJob {
     let palette = settings.palette(dark);
     let format = |color: Color32| TextFormat {
@@ -165,8 +166,11 @@ pub fn layout_job(source: &str, settings: &CodeEditor, font: &FontId, dark: bool
         ..TextFormat::default()
     };
     let mut job = LayoutJob::default();
+    let swatches: Vec<usize> = super::swatch::find(source).iter().map(|swatch| swatch.start).collect();
+    let room = super::view::swatch_room(settings);
     for (range, kind) in spans(source) {
-        job.append(&source[range], 0.0, format(palette.color(kind)));
+        let leading = if swatches.contains(&range.start) { room } else { 0.0 };
+        job.append(&source[range], leading, format(palette.color(kind)));
     }
     if source.is_empty() {
         job.append("", 0.0, format(palette.color(Kind::Text)));

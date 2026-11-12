@@ -533,6 +533,26 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   field of the file's table to where it is set. A member of what a ModuleScript returns (through `require`) opens that
   script's tab at its declaration, and a child of the game that is a script opens that script.
 
+### Script editor follow-ups (2026-11-12, #538-#545)
+
+- **The system clipboard (#538)**: egui-winit's `clipboard` feature (arboard, and smithay-clipboard on Wayland), so
+  text copies between Studio and other apps. `deny.toml` allows BSL-1.0 for arboard's Windows backend.
+- **The gutter (#539, #540)**: the line numbers are striped by line in the Explorer's and Properties' two shades
+  (`Palette::rows`), and a line with an error or warning has a line 2 points thick in its colour beside its number.
+- **Zoom (#541)**: Ctrl+wheel over the editor, and Ctrl+plus, minus and 0, change the Code Editor's font size, so the
+  zoom is kept in `code_editor.toml`. Studio's own interface zoom keys stay off.
+- **The end of a block (#542)**: Enter after a line that opens a block (`then` of an `if`, `do`, `repeat`, or a
+  function's parameters) steps in and, when the script has more openers than `end`s, puts the `end` (or `until`) under
+  it (`code::blocks`); an anonymous function in a call closes with `end)`.
+- **The view follows the cursor (#543)**: the edits the editor makes itself (Enter, Tab, an end, a suggestion) ask the
+  view to scroll to the cursor, as the field does for what is typed.
+- **From the Output to the line (#544)**: a script's lines keep their script's full name, file and line
+  (`logging::ScriptPlace`); `warn()` reports the line it was called from (`ScriptContext::warn_at`). An error or warning
+  is underlined under the pointer, and a click opens the editor's script with that file at that line.
+- **Colour swatches (#545)**: `Color3.new`, `fromRGB`, `fromHSV` and `fromHex` with literal arguments have a swatch
+  before them, in room the layout leaves (`code::swatch`). It opens the colour picker, and what is picked is written
+  back in the same form.
+
 ## Not in this slice
 
 Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in the viewport, undo

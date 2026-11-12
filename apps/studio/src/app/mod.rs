@@ -4498,6 +4498,57 @@ mod tests {
         harness.get_by_label("Writes its arguments to the output, separated by spaces.");
     }
 
+    /// #545: a colour written in a script has a swatch before it; picking a colour in its picker writes it back in the
+    /// same form.
+    #[test]
+    fn a_colour_in_a_script_has_a_swatch_that_picks_it() {
+        let mut harness = editing(settings_file("editor-script-swatch", None), "Script Swatch Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let script = add_bare_script(&mut harness, "Paint");
+        two_clicks(&mut harness, "Paint", 0.05);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text(
+            "local red = Color3.fromRGB(255, 0, 0)\nlocal blue = Color3.new(0, 0, 1)".to_owned(),
+        ));
+        settle(&mut harness);
+        let text = |harness: &mut Harness<'static, Test>| {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.project.read_text("Scripts/Paint.luau").unwrap()
+        };
+        // Before `Color3`, in the room the code leaves for it.
+        let settings = harness.state().studio.settings().code.clone();
+        let glyph = harness
+            .ctx
+            .fonts_mut(|fonts| fonts.glyph_width(&crate::code::view::font(&settings), '0'));
+        let field = harness.get_by_role(Role::MultilineTextInput).rect();
+        // The galley starts at the field's left; glyphs are placed on whole pixels.
+        let before = field.left() + "local red = ".len() as f32 * glyph;
+        let swatch = harness.get_by_role_and_label(Role::Button, "Colour #ff0000").rect();
+        assert!(
+            swatch.left() >= before - 1.0 && swatch.right() <= before + crate::code::view::swatch_room(&settings) + 1.0,
+            "{swatch:?} after {before}"
+        );
+        harness.get_by_role_and_label(Role::Button, "Colour #0000ff");
+        // Picked: written back as 0-255 channels.
+        harness.get_by_role_and_label(Role::Button, "Colour #ff0000").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TextInput, "Hex").click();
+        settle(&mut harness);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness
+            .get_by_role_and_label(Role::TextInput, "Hex")
+            .type_text("#3BC9A0");
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(
+            text(&mut harness),
+            "local red = Color3.fromRGB(59, 201, 160)\nlocal blue = Color3.new(0, 0, 1)"
+        );
+        harness.get_by_role_and_label(Role::Button, "Colour #3bc9a0");
+        let _ = script;
+    }
+
     /// #544: a script's error or warning in the Output is underlined under the pointer and, clicked, opens the script
     /// with the cursor on its line; a line from the engine is not.
     #[test]
