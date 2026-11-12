@@ -4704,6 +4704,67 @@ mod tests {
         assert_eq!(text(&mut harness), "-d\n-h\niX\nkXn");
     }
 
+    /// Drags with the primary button from `from` to `to`, a few frames apart, `modifiers` held.
+    fn drag_with(harness: &mut Harness<'static, Test>, from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers) {
+        hold_modifiers(harness, modifiers);
+        harness.event(egui::Event::PointerMoved(from));
+        harness.step();
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        harness.event(button(from, true));
+        harness.step();
+        for step in 1..=4 {
+            harness.event(egui::Event::PointerMoved(from + (to - from) * step as f32 / 4.0));
+            harness.step();
+        }
+        harness.event(button(to, false));
+        harness.step();
+        hold_modifiers(harness, Modifiers::NONE);
+        settle(harness);
+    }
+
+    /// #560: selected code dragged elsewhere moves there and stays selected; with Ctrl it is copied; a click on the
+    /// selection puts the cursor there.
+    #[test]
+    fn selected_code_drags_and_drops() {
+        let mut harness = editing(settings_file("editor-script-drag", None), "Script Drag Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let code = "local a = 1\nprint(a)";
+        let (_, field) = open_with_code(&mut harness, "Drag", code);
+        let text = |harness: &mut Harness<'static, Test>| {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.project.read_text("Scripts/Drag.luau").unwrap()
+        };
+        // `local ` dragged to the start of the second line.
+        crate::code::view::select(&harness.ctx, field, 0..6);
+        settle(&mut harness);
+        let (from, to) = (char_pos(&harness, field, code, 2), char_pos(&harness, field, code, 12));
+        drag_with(&mut harness, from, to, Modifiers::NONE);
+        assert_eq!(text(&mut harness), "a = 1\nlocal print(a)");
+        assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(6..12));
+        assert!(harness.ctx.memory(|memory| memory.has_focus(field)));
+        // With Ctrl, copied to the end.
+        let code = text(&mut harness);
+        let (from, to) = (
+            char_pos(&harness, field, &code, 8),
+            char_pos(&harness, field, &code, 20),
+        );
+        drag_with(&mut harness, from, to, Modifiers::COMMAND);
+        assert_eq!(text(&mut harness), "a = 1\nlocal print(a)local ");
+        assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(20..26));
+        // A click on the selection: the cursor there, nothing moved.
+        let code = text(&mut harness);
+        let at = char_pos(&harness, field, &code, 22);
+        drag_with(&mut harness, at, at, Modifiers::NONE);
+        assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(22..22));
+        assert_eq!(text(&mut harness), "a = 1\nlocal print(a)local ");
+    }
+
     /// #556: the minimap down the code's right scrolls it: a click near its bottom shows the code's end, and dragging
     /// its shaded part back up shows the start. The setting hides it.
     #[test]
