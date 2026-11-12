@@ -4178,6 +4178,55 @@ mod tests {
         assert!(!harness.state().studio.dock().is_open(&pane));
     }
 
+    /// #541: Ctrl+plus, minus and 0, and Ctrl+wheel over the script editor, change the code's size within its limits,
+    /// as the Code Editor's font size setting.
+    #[test]
+    fn ctrl_and_the_wheel_or_plus_and_minus_zoom_the_code() {
+        let mut harness = editing(settings_file("editor-script-zoom", None), "Script Zoom Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        add_bare_script(&mut harness, "Zoom");
+        two_clicks(&mut harness, "Zoom", 0.05);
+        let size = |harness: &Harness<'_, Test>| harness.state().studio.settings().code.size;
+        let start = crate::code::settings::CodeEditor::default().size;
+        assert_eq!(size(&harness), start);
+        let press = |harness: &mut Harness<'_, Test>, key: Key| {
+            harness.key_press_modifiers(Modifiers::COMMAND, key);
+            settle(harness);
+        };
+        press(&mut harness, Key::Equals);
+        assert_eq!(size(&harness), start + 1.0);
+        press(&mut harness, Key::Plus);
+        assert_eq!(size(&harness), start + 2.0);
+        press(&mut harness, Key::Minus);
+        assert_eq!(size(&harness), start + 1.0);
+        press(&mut harness, Key::Num0);
+        assert_eq!(size(&harness), start);
+        for _ in 0..40 {
+            press(&mut harness, Key::Minus);
+        }
+        assert_eq!(size(&harness), *crate::code::settings::SIZE.start());
+        press(&mut harness, Key::Num0);
+        // The wheel with Ctrl, over the code, zooms in; the field still has what was typed.
+        let field = harness.get_by_role(Role::MultilineTextInput).rect().center();
+        harness.event(egui::Event::PointerMoved(field));
+        harness.event_modifiers(
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 3.0),
+                modifiers: Modifiers::COMMAND,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+            },
+            Modifiers::COMMAND,
+        );
+        for _ in 0..30 {
+            harness.step();
+        }
+        assert!(size(&harness) > start, "{} after the wheel", size(&harness));
+        assert!(size(&harness) <= *crate::code::settings::SIZE.end());
+    }
+
     /// #529: with spaces chosen, Tab puts in the tab width's spaces; Enter keeps the line's indentation; and the Code
     /// Editor page's changes reach the open script.
     #[test]

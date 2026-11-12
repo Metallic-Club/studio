@@ -16,7 +16,7 @@ use egui::{
 
 use super::analysis::{Diagnostic, Severity};
 use super::highlight;
-use super::settings::{CodeEditor, Kind};
+use super::settings::{CodeEditor, Kind, SIZE};
 use crate::theme::tokens::space;
 use crate::theme::{current_colors, fonts};
 
@@ -44,6 +44,33 @@ const MARK_WIDTH: f32 = 4.0;
 /// The font of code in `settings`.
 pub fn font(settings: &CodeEditor) -> FontId {
     FontId::new(settings.size, FontFamily::Name(fonts::CODE.into()))
+}
+
+/// Zooms the code (#541): Ctrl+wheel with the pointer over the editor (`over`), and Ctrl+= (or Ctrl++), Ctrl+- and
+/// Ctrl+0 while the field `id` has the keyboard, change the font size of `settings` (Ctrl+0 back to the default),
+/// within [`SIZE`]. Being the setting, the size is kept with the Code Editor's settings. Returns whether it changed.
+pub fn zoom(ui: &Ui, id: Id, settings: &mut CodeEditor, over: bool) -> bool {
+    let before = settings.size;
+    let mut size = before;
+    if over {
+        // Smooth: the wheel's steps come in over a few frames.
+        size *= ui.input(|input| input.zoom_delta());
+    }
+    if ui.memory(|memory| memory.has_focus(id)) {
+        ui.input_mut(|input| {
+            if input.consume_key(Modifiers::COMMAND, Key::Equals) || input.consume_key(Modifiers::COMMAND, Key::Plus) {
+                size = size.round() + 1.0;
+            }
+            if input.consume_key(Modifiers::COMMAND, Key::Minus) {
+                size = size.round() - 1.0;
+            }
+            if input.consume_key(Modifiers::COMMAND, Key::Num0) {
+                size = CodeEditor::default().size;
+            }
+        });
+    }
+    settings.size = size.clamp(*SIZE.start(), *SIZE.end());
+    settings.size != before
 }
 
 /// The colour of `severity` on the theme (`dark` or light), as the Output's lines have it.
