@@ -4301,6 +4301,72 @@ mod tests {
         assert_eq!(line, 3, "on line 4");
     }
 
+    /// #531: typing opens the list of what fits, Enter or a click takes a suggestion and Escape closes it; a name of
+    /// the API says what it is under the pointer.
+    #[test]
+    fn typing_suggests_what_fits_and_hovering_explains_it() {
+        let mut harness = editing(settings_file("editor-script-complete", None), "Script Complete Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let script = add_bare_script(&mut harness, "Complete");
+        two_clicks(&mut harness, "Complete", 0.05);
+        let text = |harness: &mut Harness<'static, Test>| {
+            harness
+                .state_mut()
+                .studio
+                .editor_mut()
+                .unwrap()
+                .project
+                .read_text("Scripts/Complete.luau")
+                .unwrap()
+        };
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.key_press(Key::Delete);
+        settle(&mut harness);
+        for typed in ["workspace", ".", "Base"] {
+            harness.event(egui::Event::Text(typed.to_owned()));
+            settle(&mut harness);
+        }
+        harness.get_by_role_and_label(Role::ListItem, "Baseplate");
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "workspace.Baseplate");
+        assert!(
+            harness.query_by_role_and_label(Role::ListItem, "Baseplate").is_none(),
+            "taken, the list closes"
+        );
+        // `:` offers its methods; Escape closes the list and the next key types.
+        harness.event(egui::Event::Text(":".to_owned()));
+        settle(&mut harness);
+        harness.event(egui::Event::Text("Dest".to_owned()));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::ListItem, "Destroy");
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::ListItem, "Destroy").is_none());
+        harness.event(egui::Event::Text("roy()\npri".to_owned()));
+        settle(&mut harness);
+        // A click takes one.
+        harness.get_by_role_and_label(Role::ListItem, "print").click();
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "workspace.Baseplate:Destroy()\nprint");
+        // print says what it does under the pointer.
+        harness.event(egui::Event::Text("(1)".to_owned()));
+        settle(&mut harness);
+        let field = harness.get_by_role(Role::MultilineTextInput).rect();
+        let _ = script;
+        let row = harness.state().studio.settings().code.size * harness.state().studio.settings().code.line_spacing;
+        // Over `print`, on the second line, a few characters in.
+        let at = egui::pos2(field.left() + 20.0, field.top() + row * 1.5);
+        harness.event(egui::Event::PointerMoved(at));
+        for _ in 0..10 {
+            harness.step();
+            harness.input_mut().time = Some(harness.ctx.input(|input| input.time) + 0.2);
+        }
+        harness.input_mut().time = None;
+        harness.get_by_label("Writes its arguments to the output, separated by spaces.");
+    }
+
     /// #528: a script opens in the tab bar the last script tab was docked in, even once that tab is closed.
     #[test]
     fn a_script_opens_where_the_last_script_tab_was_docked() {
