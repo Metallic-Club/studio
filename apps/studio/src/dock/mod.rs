@@ -12,6 +12,9 @@
 //!   docks, and a drop anywhere but a square or a tab bar leaves the layout as it was ([`guides`]).
 //! - **Panel borders** (#262, #273): the groups sit flush, and with Settings → Appearance → Panel borders on, a 1 px
 //!   line parts each from the next; a side along the window's edge has none.
+//! - **A tab per instance** (#528): a panel can show one instance per tab, its pane id `<panel>:<instance>` (a
+//!   script's code, `script:12:0`). Such tabs are Studio's own ([`Panel::transient`]), each titled by its panel
+//!   ([`Panel::pane_title`]), and a new one opens where the last one was docked ([`Dock::open_instance`]).
 
 pub(crate) mod guides;
 pub mod layout;
@@ -90,6 +93,19 @@ pub trait Panel: Sync {
     }
     /// Draws its menu's items.
     fn menu(&self, _ui: &mut Ui, _cx: &mut PanelContext<'_>) {}
+    /// The title of its tab showing `pane`: a panel with a tab per instance names the instance (#528).
+    fn pane_title(&self, _pane: &str, _cx: &PanelContext<'_>) -> String {
+        self.title().to_owned()
+    }
+    /// Draws it showing `pane`, filling `ui`: a panel with a tab per instance draws that instance (#528).
+    fn pane_ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>, _pane: &str) {
+        self.ui(ui, cx);
+    }
+}
+
+/// The panel a pane id shows: the id itself, or for a tab per instance (#528) the part before its `:`.
+pub fn panel_of(pane: &str) -> &str {
+    pane.split_once(':').map_or(pane, |(panel, _)| panel)
 }
 
 /// A panel's id in the dock's tree, as saved.
@@ -127,6 +143,11 @@ pub struct Dock {
     tab_rects: Vec<(TileId, Rect)>,
     /// Whether changes are written to `layout.json`: not while a toolbar tab shows a layout of its own (#232).
     saving: bool,
+    /// Where a tab per instance opens (#528): the tab bar the last one was in, and a panel of that bar's that is not
+    /// one, which keeps the place once the tabs per instance are closed and their bar with them.
+    instance_home: Option<(TileId, Option<PanelId>)>,
+    /// The tab per instance last opened, clicked in or dropped: its bar is the home.
+    last_instance: Option<PanelId>,
 }
 
 impl std::fmt::Debug for Dock {
@@ -158,6 +179,8 @@ impl Dock {
             pointer: None,
             tab_rects: Vec::new(),
             saving: true,
+            instance_home: None,
+            last_instance: None,
         }
     }
 
@@ -173,6 +196,8 @@ impl Dock {
             pointer: None,
             tab_rects: Vec::new(),
             saving: true,
+            instance_home: None,
+            last_instance: None,
         }
     }
 
@@ -186,8 +211,9 @@ impl Dock {
         self.panels
     }
 
-    /// The panel registered as `id`.
+    /// The panel registered as `id`, or that shows the tab per instance `id` (#528).
     pub fn panel(&self, id: &str) -> Option<&'static dyn Panel> {
+        let id = panel_of(id);
         self.panels.iter().copied().find(|panel| panel.id() == id)
     }
 
@@ -287,6 +313,142 @@ impl Dock {
         layout::tidy(&mut self.tree);
     }
 
+    /// Opens the tab per instance `pane` (#528) and brings it to the front: in the tab bar the last one was in, else
+    /// beside the panel that bar had, else beside another tab of its panel, else where its panel's zone is.
+    pub fn open_instance(&mut self, pane: &str) {
+        if let Some(tile) = self.tile_of(pane) {
+            self.tree.make_active(|tile_id, _| tile_id == tile);
+            self.last_instance = Some(PanelId(pane.to_owned()));
+            return;
+        }
+        let kind = panel_of(pane);
+        if self.panel(pane).is_none() {
+            log::warn!("dock: there is no panel `{kind}`");
+            return;
+        }
+        let tiles = &self.tree.tiles;
+        let bar_of = |tile: TileId| {
+            let parent = tiles.parent_of(tile)?;
+            matches!(tiles.get(parent), Some(Tile::Container(Container::Tabs(_)))).then_some(parent)
+        };
+        let home = self.instance_home.as_ref();
+        let target = home
+            .map(|(bar, _)| *bar)
+            .filter(|bar| matches!(tiles.get(*bar), Some(Tile::Container(Container::Tabs(_)))))
+            .or_else(|| {
+                home.and_then(|(_, neighbour)| neighbour.as_ref())
+                    .and_then(|neighbour| tiles.find_pane(neighbour))
+                    .and_then(bar_of)
+            })
+            .or_else(|| {
+                tiles
+                    .iter()
+                    .find(|(_, tile)| matches!(tile, Tile::Pane(other) if panel_of(&other.0) == kind))
+                    .and_then(|(&tile, _)| bar_of(tile))
+            });
+        match target {
+            Some(bar) => {
+                let tile = self.tree.tiles.insert_pane(PanelId(pane.to_owned()));
+                if let Some(Tile::Container(Container::Tabs(tabs))) = self.tree.tiles.get_mut(bar) {
+                    tabs.add_child(tile);
+                    tabs.set_active(tile);
+                }
+            }
+            None => self.open_new(pane),
+        }
+        self.last_instance = Some(PanelId(pane.to_owned()));
+        self.note_instance_home();
+    }
+
+    /// Opens `pane`, which is not open, beside a panel of its panel's zone, or else at the right of the layout.
+    fn open_new(&mut self, pane: &str) {
+        let Some(panel) = self.panel(pane) else {
+            return;
+        };
+        let tiles = &mut self.tree.tiles;
+        let tile = tiles.insert_pane(PanelId(pane.to_owned()));
+        let neighbour = self
+            .panels
+            .iter()
+            .filter(|other| other.zone() == panel.zone() && other.id() != panel.id())
+            .find_map(|other| {
+                let found = tiles.find_pane(&PanelId::of(*other))?;
+                let parent = tiles.parent_of(found)?;
+                matches!(tiles.get(parent), Some(Tile::Container(Container::Tabs(_)))).then_some(parent)
+            });
+        if let Some(Tile::Container(Container::Tabs(tabs))) = neighbour.and_then(|parent| tiles.get_mut(parent)) {
+            tabs.add_child(tile);
+            tabs.set_active(tile);
+        } else {
+            let tabs = tiles.insert_tab_tile(vec![tile]);
+            self.tree.root = Some(match self.tree.root {
+                None => tabs,
+                Some(root) => layout::split(&mut self.tree.tiles, LinearDir::Horizontal, &[(root, 3.0), (tabs, 1.0)]),
+            });
+        }
+        layout::tidy(&mut self.tree);
+    }
+
+    /// Keeps where the last tab per instance is, while it is open: where the next one opens.
+    fn note_instance_home(&mut self) {
+        let Some(last) = &self.last_instance else {
+            return;
+        };
+        let tiles = &self.tree.tiles;
+        let Some(tile) = tiles.find_pane(last) else {
+            return;
+        };
+        let Some(bar) = tiles.parent_of(tile) else {
+            return;
+        };
+        let Some(Tile::Container(Container::Tabs(tabs))) = tiles.get(bar) else {
+            return;
+        };
+        let neighbour = tabs.children.iter().find_map(|child| match tiles.get(*child) {
+            Some(Tile::Pane(pane)) if !pane.0.contains(':') => Some(pane.clone()),
+            _ => None,
+        });
+        // A bar of tabs per instance alone keeps the panel it had last.
+        let neighbour = neighbour.or_else(|| self.instance_home.as_ref().and_then(|(_, kept)| kept.clone()));
+        self.instance_home = Some((bar, neighbour));
+    }
+
+    /// Moves the tab `pane` to the end of the tab bar holding `beside`, as dropping it on that bar does. Does nothing
+    /// unless both are open.
+    pub fn move_tab(&mut self, pane: &str, beside: &str) {
+        let tiles = &self.tree.tiles;
+        let (Some(dragged), Some(bar)) = (
+            self.tile_of(pane),
+            self.tile_of(beside).and_then(|tile| tiles.parent_of(tile)),
+        ) else {
+            return;
+        };
+        let drop = guides::TabDrop {
+            container: bar,
+            bar: Rect::NOTHING,
+            index: usize::MAX,
+            x: 0.0,
+        };
+        guides::drop_into_tabs(&mut self.tree, dragged, &drop);
+        layout::tidy(&mut self.tree);
+        if pane.contains(':') {
+            self.last_instance = Some(PanelId(pane.to_owned()));
+        }
+        self.note_instance_home();
+    }
+
+    /// The tabs per instance that are open (#528), in no order.
+    pub fn instance_panes(&self) -> Vec<String> {
+        self.tree
+            .tiles
+            .iter()
+            .filter_map(|(_, tile)| match tile {
+                Tile::Pane(pane) if pane.0.contains(':') => Some(pane.0.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Closes panel `id`, if it is open.
     pub fn close(&mut self, id: &str) {
         if let Some(tile) = self.tile_of(id) {
@@ -311,9 +473,15 @@ impl Dock {
     /// transient panels). For a toolbar tab's own layout (#232): while one shows, [`Dock::set_saving`] is off.
     pub fn replace(&mut self, tree: Tree<PanelId>) -> Tree<PanelId> {
         let old = self.persisted();
+        let instances = self.instance_panes();
         self.tree = tree;
         layout::tidy(&mut self.tree);
         self.focus = DockFocus::default();
+        // The open scripts stay open (#528), where their tabs open in the new layout.
+        self.instance_home = None;
+        for pane in instances {
+            self.open_instance(&pane);
+        }
         old
     }
 
@@ -326,8 +494,13 @@ impl Dock {
 
     /// Goes back to the default layout (saved like any other change).
     pub fn reset(&mut self) {
+        let instances = self.instance_panes();
         self.tree = layout::default_tree(self.panels);
         self.focus = DockFocus::default();
+        self.instance_home = None;
+        for pane in instances {
+            self.open_instance(&pane);
+        }
     }
 
     /// The panel with focus and the one under the pointer, as of the last frame.
@@ -388,11 +561,21 @@ impl Dock {
             close: Vec::new(),
             colors,
             tabs: Vec::new(),
+            pressed: None,
         };
         self.tree.ui(&mut behavior, ui);
-        let DockBehavior { focus, close, tabs, .. } = behavior;
+        let DockBehavior {
+            focus,
+            close,
+            tabs,
+            pressed,
+            ..
+        } = behavior;
         self.focus = focus;
         self.tab_rects = tabs;
+        if let Some(pane) = pressed.filter(|pane| pane.0.contains(':')) {
+            self.last_instance = Some(pane);
+        }
         if let Some((dragged, at)) = drag
             && !released
         {
@@ -411,6 +594,12 @@ impl Dock {
             guides::paint_dragged(&painter, &colors, at, guides.as_ref(), &title);
         }
         if let (Some(before), Some((dragged, at))) = (before, drag) {
+            // A tab per instance dropped somewhere is where the next one opens (#528).
+            if let Some(Tile::Pane(pane)) = before.tiles.get(dragged)
+                && pane.0.contains(':')
+            {
+                self.last_instance = Some(pane.clone());
+            }
             self.tree = before;
             if let Some(drop) = tab_drop {
                 guides::drop_into_tabs(&mut self.tree, dragged, &drop);
@@ -424,8 +613,13 @@ impl Dock {
             self.tree.remove_recursively(tile);
         }
         layout::tidy(&mut self.tree);
+        self.note_instance_home();
         if let Some(focused) = self.focus.focused
-            && !self.is_open(focused)
+            && !self
+                .tree
+                .tiles
+                .iter()
+                .any(|(_, tile)| matches!(tile, Tile::Pane(pane) if panel_of(&pane.0) == focused))
         {
             self.focus.focused = None;
         }
@@ -495,18 +689,21 @@ struct DockBehavior<'a, 'b> {
     pixels_per_point: f32,
     /// Each tab drawn this frame and where: where a dragged tab goes in a bar it is dropped on.
     tabs: Vec<(TileId, Rect)>,
+    /// The pane a mouse button was pressed in this frame.
+    pressed: Option<PanelId>,
 }
 
 impl DockBehavior<'_, '_> {
     fn panel(&self, id: &PanelId) -> Option<&'static dyn Panel> {
-        self.panels.iter().copied().find(|panel| panel.id() == id.0)
+        let id = panel_of(&id.0);
+        self.panels.iter().copied().find(|panel| panel.id() == id)
     }
 
     /// The title and icon of a tab showing `pane` (`None`: a group of panels).
     fn label(&self, pane: Option<&PanelId>) -> (String, Option<Icon>) {
         match pane {
             Some(pane) => match self.panel(pane) {
-                Some(panel) => (panel.title().to_owned(), Some(panel.icon())),
+                Some(panel) => (panel.pane_title(&pane.0, &*self.cx), Some(panel.icon())),
                 None => (pane.0.clone(), None),
             },
             None => ("Group".to_owned(), None),
@@ -653,26 +850,25 @@ impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {
             self.focus.hovered = Some(panel.id());
             if ui.input(|input| input.pointer.any_pressed()) {
                 self.focus.focused = Some(panel.id());
+                self.pressed = Some(pane.clone());
             }
         }
         let inner = rect.shrink2(vec2(PANE_MARGIN, PANE_MARGIN));
         ui.scope_builder(
             UiBuilder::new()
                 .max_rect(inner)
-                .id_salt(panel.id())
+                .id_salt(&pane.0)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
             |ui| {
                 ui.set_clip_rect(inner.intersect(ui.clip_rect()));
-                panel.ui(ui, self.cx);
+                panel.pane_ui(ui, self.cx, &pane.0);
             },
         );
         UiResponse::None
     }
 
     fn tab_title_for_pane(&mut self, pane: &PanelId) -> egui::WidgetText {
-        self.panel(pane)
-            .map_or_else(|| pane.0.clone(), |panel| panel.title().to_owned())
-            .into()
+        self.label(Some(pane)).0.into()
     }
 
     fn is_tab_closable(&self, _tiles: &Tiles<PanelId>, _tile: TileId) -> bool {

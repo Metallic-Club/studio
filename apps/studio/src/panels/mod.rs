@@ -10,6 +10,7 @@ pub mod game;
 pub mod insert;
 pub mod output;
 pub mod properties;
+pub mod script;
 pub mod values;
 pub mod viewport;
 
@@ -31,6 +32,8 @@ pub static PANELS: &[&dyn Panel] = &[
     &output::Output,
     &assets::Assets,
     &game::Game,
+    // A tab per script, opened from the Explorer (#528).
+    &script::ScriptEditor,
 ];
 
 /// The panels' ids.

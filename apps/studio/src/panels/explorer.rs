@@ -50,6 +50,18 @@ pub struct ExplorerState {
     inserting: Option<Inserting>,
     /// Whether the selection is being dragged onto another row (#353).
     dragging: bool,
+    /// The last plain click on a row, and when (the input's time): a slow second click on a script renames it (#528).
+    last_click: Option<(Id, f64)>,
+}
+
+/// How long after a click a second one on the same script still renames it (#528), in seconds: slower than a double
+/// click, which opens the script.
+pub const SLOW_CLICK: f64 = 1.5;
+
+/// Whether a click on `id` at `now` is the slow second click that renames a script (#528): on the row clicked `last`,
+/// after the double click's `double` seconds and within [`SLOW_CLICK`].
+pub fn is_slow_second_click(last: Option<(Id, f64)>, id: Id, now: f64, double: f64) -> bool {
+    last.is_some_and(|(row, at)| row == id && now - at > double && now - at <= SLOW_CLICK)
 }
 
 /// Where dragged rows land (#353): inside a row, or among its siblings just before or after it.
@@ -346,6 +358,7 @@ impl Panel for Explorer {
         let mut clicked = None;
         let mut toggled = None;
         let mut rename = None;
+        let mut open_script = None;
         let mut dropped = None;
         let pointer = ui.input(|input| input.pointer.interact_pos());
         let mut menu = None;
@@ -394,6 +407,8 @@ impl Panel for Explorer {
                     }
                     RowAction::Select => clicked = Some(row.id),
                     RowAction::Toggle => toggled = Some(*row),
+                    // A double click opens a script (#528); other instances are renamed (#436).
+                    RowAction::Rename if crate::code::is_script(editor.dm, row.id) => open_script = Some(row.id),
                     RowAction::Rename => rename = Some(row.id),
                     RowAction::Menu(edit) => menu = Some((row.id, edit)),
                     RowAction::Renamed(name) => renamed = Some((row.id, Some(name))),
@@ -407,9 +422,24 @@ impl Panel for Explorer {
         }
         if let Some(id) = clicked {
             let modifiers = ui.input(|input| input.modifiers);
+            let plain = !modifiers.command && !modifiers.shift;
+            // A script's name, which a double click does not rename, is renamed by a slow second click (#528).
+            let now = ui.input(|input| input.time);
+            let double = ui.ctx().options(|options| options.input_options.max_double_click_delay);
+            let slow = plain
+                && editor.selection.ids() == [id]
+                && crate::code::is_script(editor.dm, id)
+                && is_slow_second_click(editor.explorer.last_click, id, now, double);
             editor
                 .explorer
                 .click(&rows, editor.selection, id, modifiers.command, modifiers.shift);
+            editor.explorer.last_click = (plain && !slow).then_some((id, now));
+            if slow {
+                rename = Some(id);
+            }
+        }
+        if open_script.is_some() {
+            editor.explorer.last_click = None;
         }
         let mut editor = editor;
         // A double-click renames the row's instance in place (#436), as F2 does.
@@ -441,6 +471,9 @@ impl Panel for Explorer {
                 editor.selection.set_only(Some(id));
             }
             editor.tree_edit(edit);
+        }
+        if let Some(id) = open_script {
+            cx.editor.open_script(id);
         }
     }
 }
@@ -701,6 +734,19 @@ fn rename_field(ui: &mut Ui, rect: Rect, at: egui::Pos2, name: &str) -> RowActio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #528: the second click renames a script only on the same row, slower than a double click and within
+    /// [`SLOW_CLICK`].
+    #[test]
+    fn a_slow_second_click_is_between_a_double_click_and_too_late() {
+        let (row, other) = (Id::new(1, 0), Id::new(2, 0));
+        let last = Some((row, 10.0));
+        assert!(is_slow_second_click(last, row, 10.6, 0.3));
+        assert!(!is_slow_second_click(last, row, 10.2, 0.3), "a double click");
+        assert!(!is_slow_second_click(last, row, 12.0, 0.3), "too late");
+        assert!(!is_slow_second_click(last, other, 10.6, 0.3), "another row");
+        assert!(!is_slow_second_click(None, row, 10.6, 0.3));
+    }
 
     /// The template's game: Workspace (Camera, Baseplate, SpawnLocation), Lighting and the storage services.
     fn game() -> DataModel {

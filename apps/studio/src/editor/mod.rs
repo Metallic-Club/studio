@@ -53,6 +53,8 @@ pub struct EditorState {
     pub viewport: ViewportState,
     /// The game session, while one runs (Play in Studio, ADR 0010).
     pub play: Option<PlaySession>,
+    /// The script editor's open files and requests (#528).
+    pub scripts: crate::code::Scripts,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -91,6 +93,7 @@ impl EditorState {
             output: OutputState::new(log),
             viewport,
             play: None,
+            scripts: crate::code::Scripts::default(),
         }
     }
 

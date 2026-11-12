@@ -25,6 +25,7 @@
 
 pub mod app;
 pub mod cli;
+pub mod code;
 pub mod dock;
 pub mod editor;
 pub mod emblem;
