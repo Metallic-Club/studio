@@ -72,14 +72,17 @@ impl Panel for ScriptEditor {
         }
         let focus = cx.editor.scripts.take_focus(script);
         let editor = &mut *cx.editor;
+        // What is wrong with the code (#530), checked again only when a file changed.
+        let (_analysis, diagnostics) = editor.scripts.check(&mut editor.project, &editor.dm, script, &member);
         let text = editor.scripts.text(&mut editor.project, &member);
         let id = field_id(script);
         if focus {
             ui.memory_mut(|memory| memory.request_focus(id));
         }
-        let output = code::view::show(ui, id, text, &cx.settings.code);
+        let output = code::view::show(ui, id, text, &cx.settings.code, &diagnostics);
         if output.changed {
             let bytes = text.clone().into_bytes();
+            editor.scripts.edited();
             if let Err(error) = editor.project.write(&member, bytes) {
                 log::warn!("scripts: could not keep {member}: {error}");
             }

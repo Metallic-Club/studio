@@ -1,16 +1,20 @@
-//! The code field (#528, #529): a script's text in the Code Editor's font and colours, with the line numbers down its
+//! The code field (#528-#530): a script's text in the Code Editor's font and colours, with the line numbers down its
 //! left, the cursor's line lit, whitespace shown if asked, and Tab and Enter as a code editor has them. It scrolls both
 //! ways: code is not wrapped.
+//!
+//! Errors and warnings (#530) colour their line's number, are underlined with a wave, and have a mark in the scroll
+//! bar, which goes to their line when clicked; each says what is wrong under the pointer.
 
 use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange};
 use egui::text_edit::TextEditState;
 use egui::{
-    Align2, FontFamily, FontId, Galley, Id, Key, Modifiers, Pos2, Rect, Response, ScrollArea, Sense, Shape, Stroke,
-    TextBuffer, TextEdit, Ui, UiBuilder, pos2, vec2,
+    Align2, Color32, FontFamily, FontId, Galley, Id, Key, Modifiers, Painter, Pos2, Rect, Response, ScrollArea, Sense,
+    Shape, Stroke, TextBuffer, TextEdit, Ui, UiBuilder, pos2, vec2,
 };
 
+use super::analysis::{Diagnostic, Severity};
 use super::highlight;
 use super::settings::{CodeEditor, Kind};
 use crate::theme::tokens::space;
@@ -28,19 +32,43 @@ pub struct ViewOutput {
     pub galley_pos: Pos2,
     /// The cursor, as a character index, while the field has the keyboard.
     pub cursor: Option<usize>,
-    /// The gutter's area on the screen.
-    pub gutter: Rect,
+    /// The byte of the text under the pointer, if it is over a character.
+    pub hovered: Option<usize>,
+    /// The area the code is shown in, on the screen.
+    pub view: Rect,
 }
+
+/// The width of the scroll bar's marks.
+const MARK_WIDTH: f32 = 4.0;
 
 /// The font of code in `settings`.
 pub fn font(settings: &CodeEditor) -> FontId {
     FontId::new(settings.size, FontFamily::Name(fonts::CODE.into()))
 }
 
-/// Draws `text` as code filling `ui`, the field interacting as `id`.
-pub fn show(ui: &mut Ui, id: Id, text: &mut String, settings: &CodeEditor) -> ViewOutput {
+/// The colour of `severity` on the theme (`dark` or light), as the Output's lines have it.
+pub fn severity_color(severity: Severity, dark: bool) -> Color32 {
+    use crate::panels::output::{ERROR, ERROR_LIGHT, WARNING, WARNING_LIGHT};
+    match (severity, dark) {
+        (Severity::Error, true) => ERROR,
+        (Severity::Error, false) => ERROR_LIGHT,
+        (Severity::Warning, true) => WARNING,
+        (Severity::Warning, false) => WARNING_LIGHT,
+    }
+}
+
+/// Asks the field `id` to put its cursor at character `at` and scroll to it, from its next frame.
+pub fn reveal(ctx: &egui::Context, id: Id, at: usize) {
+    ctx.data_mut(|data| data.insert_temp(id.with("reveal"), at));
+    ctx.memory_mut(|memory| memory.request_focus(id));
+    ctx.request_repaint();
+}
+
+/// Draws `text` as code filling `ui`, the field interacting as `id`, marking `diagnostics`.
+pub fn show(ui: &mut Ui, id: Id, text: &mut String, settings: &CodeEditor, diagnostics: &[Diagnostic]) -> ViewOutput {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
+    let dark = colors.dark;
     let font = font(settings);
     let row_height = settings.size * settings.line_spacing;
     let digit = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0'));
@@ -48,108 +76,250 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, settings: &CodeEditor) -> Vi
     let lines = text.split('\n').count();
     let digits = lines.to_string().len().max(2);
     let gutter_width = digits as f32 * digit + 2.0 * space::S4;
-    let dark = colors.dark;
+    // A place asked for: the cursor there, its line a third of the way down.
+    let revealed = ui.ctx().data_mut(|data| data.remove_temp::<usize>(id.with("reveal")));
+    let mut scroll = ScrollArea::both()
+        .id_salt(id.with("scroll"))
+        .auto_shrink([false, false]);
+    if let Some(at) = revealed {
+        let at = at.min(text.chars().count());
+        if let Some(mut state) = TextEditState::load(ui.ctx(), id).or_else(|| Some(TextEditState::default())) {
+            state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
+            state.store(ui.ctx(), id);
+        }
+        let line = text.chars().take(at).filter(|c| *c == '\n').count();
+        scroll = scroll.vertical_scroll_offset((line as f32 * row_height - ui.available_height() / 3.0).max(0.0));
+    }
     let mut layouter = |ui: &Ui, text: &dyn TextBuffer, _wrap: f32| -> Arc<Galley> {
         let job = highlight::layout_job(text.as_str(), settings, &font, dark);
         ui.fonts_mut(|fonts| fonts.layout_job(job))
     };
-    let inner = ScrollArea::both()
-        .id_salt(id.with("scroll"))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let widest = layouter(ui, text, f32::INFINITY).size().x;
-            let view = ui.available_size();
-            let width = (widest + 4.0 * digit).max(view.x - gutter_width);
-            let height = (lines as f32 * row_height).max(view.y);
-            let top_left = ui.cursor().min;
-            let gutter = Rect::from_min_size(top_left, vec2(gutter_width, height));
-            let field = Rect::from_min_size(pos2(gutter.right(), top_left.y), vec2(width, height));
-            ui.allocate_rect(gutter.union(field), Sense::hover());
-            // Behind the text: the cursor's line, filled in once the field is laid out.
-            let line_light = ui.painter().add(Shape::Noop);
-            // Every row the view holds is the field's, so a click under the last line puts the cursor at the end.
-            let rows = ((height / row_height).floor() as usize).max(lines);
-            let output = ui
-                .scope_builder(UiBuilder::new().max_rect(field), |ui| {
-                    TextEdit::multiline(text)
-                        .id(id)
-                        .font(font.clone())
-                        .code_editor()
-                        .lock_focus(true)
-                        .frame(egui::Frame::NONE)
-                        .margin(vec2(space::S3, 0.0))
-                        .desired_width(width)
-                        .desired_rows(rows)
-                        .layouter(&mut layouter)
-                        .show(ui)
-                })
-                .inner;
-            let focused = output.response.response.has_focus();
-            let cursor = output.cursor_range.filter(|_| focused).map(|range| range.primary);
-            let current = cursor.map(|cursor| output.galley.layout_from_cursor(cursor).row);
-            let galley = &output.galley;
-            let painter = ui.painter();
-            if settings.highlight_line
-                && let Some(row) = current.and_then(|row| galley.rows.get(row))
-            {
-                let top = output.galley_pos.y + row.pos.y;
-                let band = Rect::from_min_max(pos2(field.left(), top), pos2(field.right(), top + row.rect().height()));
-                painter.set(line_light, Shape::rect_filled(band, 0.0, p.text.gamma_multiply(0.05)));
+    let shown = scroll.show(ui, |ui| {
+        let widest = layouter(ui, text, f32::INFINITY).size().x;
+        let view = ui.available_size();
+        let width = (widest + 4.0 * digit).max(view.x - gutter_width - MARK_WIDTH);
+        let height = (lines as f32 * row_height).max(view.y);
+        let top_left = ui.cursor().min;
+        let gutter = Rect::from_min_size(top_left, vec2(gutter_width, height));
+        let field = Rect::from_min_size(pos2(gutter.right(), top_left.y), vec2(width, height));
+        ui.allocate_rect(gutter.union(field), Sense::hover());
+        // Behind the text: the cursor's line, filled in once the field is laid out.
+        let line_light = ui.painter().add(Shape::Noop);
+        // Every row the view holds is the field's, so a click under the last line puts the cursor at the end.
+        let rows = ((height / row_height).floor() as usize).max(lines);
+        let output = ui
+            .scope_builder(UiBuilder::new().max_rect(field), |ui| {
+                TextEdit::multiline(text)
+                    .id(id)
+                    .font(font.clone())
+                    .code_editor()
+                    .lock_focus(true)
+                    .frame(egui::Frame::NONE)
+                    .margin(vec2(space::S3, 0.0))
+                    .desired_width(width)
+                    .desired_rows(rows)
+                    .layouter(&mut layouter)
+                    .show(ui)
+            })
+            .inner;
+        let response = output.response.response.clone();
+        let focused = response.has_focus();
+        let cursor = output.cursor_range.filter(|_| focused).map(|range| range.primary);
+        let current = cursor.map(|cursor| output.galley.layout_from_cursor(cursor).row);
+        let galley = Arc::clone(&output.galley);
+        let galley_pos = output.galley_pos;
+        let painter = ui.painter().clone();
+        if settings.highlight_line
+            && let Some(row) = current.and_then(|row| galley.rows.get(row))
+        {
+            let top = galley_pos.y + row.pos.y;
+            let band = Rect::from_min_max(pos2(field.left(), top), pos2(field.right(), top + row.rect().height()));
+            painter.set(line_light, Shape::rect_filled(band, 0.0, p.text.gamma_multiply(0.05)));
+        }
+        if settings.show_whitespace {
+            whitespace(
+                &painter,
+                &galley,
+                galley_pos,
+                settings.palette(dark).color(Kind::Text).gamma_multiply(0.3),
+            );
+        }
+        // The waves under what is wrong, worst last so it shows.
+        let mut worst_first: Vec<&Diagnostic> = diagnostics.iter().collect();
+        worst_first.sort_by_key(|diagnostic| diagnostic.severity);
+        for diagnostic in &worst_first {
+            wave(
+                &painter,
+                &galley,
+                galley_pos,
+                text,
+                diagnostic,
+                severity_color(diagnostic.severity, dark),
+            );
+        }
+        // The line numbers, the cursor's brighter, a line with a problem in its colour.
+        let mut line_severity: Vec<Option<Severity>> = vec![None; galley.rows.len()];
+        for diagnostic in diagnostics {
+            let line = text[..diagnostic.range.start.min(text.len())].matches('\n').count();
+            if let Some(slot) = line_severity.get_mut(line) {
+                *slot = (*slot).max(Some(diagnostic.severity));
             }
-            if settings.show_whitespace {
-                let ink = settings.palette(dark).color(Kind::Text).gamma_multiply(0.3);
-                for row in &galley.rows {
-                    let middle = output.galley_pos.y + row.pos.y + row.rect().height() / 2.0;
-                    for glyph in &row.glyphs {
-                        let left = output.galley_pos.x + row.pos.x + glyph.pos.x;
-                        match glyph.chr {
-                            ' ' => {
-                                painter.circle_filled(pos2(left + glyph.advance_width / 2.0, middle), 1.0, ink);
-                            }
-                            '\t' => {
-                                let (from, to) = (left + 2.0, left + glyph.advance_width - 2.0);
-                                if to > from {
-                                    painter.line_segment([pos2(from, middle), pos2(to, middle)], Stroke::new(1.0, ink));
-                                    painter.line_segment(
-                                        [pos2(to - 3.0, middle - 3.0), pos2(to, middle)],
-                                        Stroke::new(1.0, ink),
-                                    );
-                                    painter.line_segment(
-                                        [pos2(to - 3.0, middle + 3.0), pos2(to, middle)],
-                                        Stroke::new(1.0, ink),
-                                    );
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+        }
+        painter.rect_filled(gutter, 0.0, p.panel);
+        for (index, row) in galley.rows.iter().enumerate() {
+            let y = galley_pos.y + row.pos.y + row.rect().height() / 2.0;
+            let ink = match line_severity.get(index).copied().flatten() {
+                Some(severity) => severity_color(severity, dark),
+                None if current == Some(index) => p.text,
+                None => p.subtle,
+            };
+            painter.text(
+                pos2(gutter.right() - space::S4, y),
+                Align2::RIGHT_CENTER,
+                (index + 1).to_string(),
+                font.clone(),
+                ink,
+            );
+        }
+        // A number with a problem tells it under the pointer.
+        let gutter_response = ui.interact(gutter, id.with("gutter"), Sense::hover());
+        if let Some(at) = gutter_response.hover_pos() {
+            let line = ((at.y - galley_pos.y) / row_height).floor().max(0.0) as usize;
+            let messages = messages_on_line(text, diagnostics, line);
+            if !messages.is_empty() {
+                gutter_response.on_hover_text(messages.join("\n"));
             }
-            // The line numbers, the cursor's brighter.
-            painter.rect_filled(gutter, 0.0, p.panel);
-            for (index, row) in galley.rows.iter().enumerate() {
-                let y = output.galley_pos.y + row.pos.y + row.rect().height() / 2.0;
-                let ink = if current == Some(index) { p.text } else { p.subtle };
-                painter.text(
-                    pos2(gutter.right() - space::S4, y),
-                    Align2::RIGHT_CENTER,
-                    (index + 1).to_string(),
-                    FontId::new(settings.size, FontFamily::Name(fonts::CODE.into())),
-                    ink,
-                );
-            }
-            (output, cursor.map(|cursor| cursor.index.0), gutter)
-        })
-        .inner;
-    let (output, cursor, gutter) = inner;
-    changed |= output.response.response.changed();
+        }
+        // The byte under the pointer, when it is over text.
+        let hovered = response
+            .hover_pos()
+            .filter(|at| galley.rect.translate(galley_pos.to_vec2()).expand(1.0).contains(*at))
+            .map(|at| {
+                let cursor = galley.cursor_from_pos(at - galley_pos);
+                super::view::byte_of(text, cursor.index.0)
+            });
+        (
+            response,
+            galley,
+            galley_pos,
+            cursor.map(|cursor| cursor.index.0),
+            hovered,
+        )
+    });
+    let view = shown.inner_rect;
+    let (response, galley, galley_pos, cursor, hovered) = shown.inner;
+    changed |= response.changed();
+    marks(ui, id, view, lines, text, diagnostics, dark);
+    // What is wrong under the pointer.
+    if let Some(at) = hovered {
+        let here: Vec<&str> = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.range.start <= at && at < diagnostic.range.end.max(diagnostic.range.start + 1)
+            })
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect();
+        if !here.is_empty() {
+            response.clone().on_hover_text_at_pointer(here.join("\n"));
+        }
+    }
     ViewOutput {
         changed,
-        response: output.response.response,
-        galley: output.galley,
-        galley_pos: output.galley_pos,
+        response,
+        galley,
+        galley_pos,
         cursor,
-        gutter,
+        hovered,
+        view,
+    }
+}
+
+/// The messages of `diagnostics` on line `line` (from 0) of `text`.
+fn messages_on_line(text: &str, diagnostics: &[Diagnostic], line: usize) -> Vec<String> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| text[..diagnostic.range.start.min(text.len())].matches('\n').count() == line)
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect()
+}
+
+/// The marks of `diagnostics` along the scroll bar of the view `view`, each at its line's place in the code's `lines`;
+/// a click on one goes to its line, and it tells what is wrong under the pointer.
+fn marks(ui: &mut Ui, id: Id, view: Rect, lines: usize, text: &str, diagnostics: &[Diagnostic], dark: bool) {
+    let mut by_line: Vec<(usize, Severity, usize)> = Vec::new();
+    for diagnostic in diagnostics {
+        let start = diagnostic.range.start.min(text.len());
+        let line = text[..start].matches('\n').count();
+        let character = text[..start].chars().count();
+        match by_line.iter_mut().find(|(other, _, _)| *other == line) {
+            Some(entry) => entry.1 = entry.1.max(diagnostic.severity),
+            None => by_line.push((line, diagnostic.severity, character)),
+        }
+    }
+    for (line, severity, character) in by_line {
+        let y = view.top() + view.height() * (line as f32 + 0.5) / lines.max(1) as f32;
+        let rect = Rect::from_center_size(pos2(view.right() - MARK_WIDTH / 2.0, y), vec2(MARK_WIDTH, 4.0));
+        ui.painter().rect_filled(rect, 1.0, severity_color(severity, dark));
+        let response = ui.interact(rect.expand2(vec2(2.0, 2.0)), id.with(("mark", line)), Sense::click());
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Go to line {}", line + 1)));
+        if response.clicked() {
+            reveal(ui.ctx(), id, character);
+        }
+        let messages = messages_on_line(text, diagnostics, line);
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(format!("Line {}: {}", line + 1, messages.join("\n")));
+    }
+}
+
+/// A wave under the part of `diagnostic`'s range on its first line.
+fn wave(painter: &Painter, galley: &Galley, galley_pos: Pos2, text: &str, diagnostic: &Diagnostic, color: Color32) {
+    let start = diagnostic.range.start.min(text.len());
+    let line_end = text[start..].find('\n').map_or(text.len(), |offset| start + offset);
+    let end = diagnostic.range.end.clamp(start, line_end);
+    let (from, to) = (text[..start].chars().count(), text[..end].chars().count());
+    let left = galley.pos_from_cursor(CCursor::new(from));
+    let right = galley.pos_from_cursor(CCursor::new(to.max(from)));
+    let (x0, x1) = (
+        galley_pos.x + left.left(),
+        (galley_pos.x + right.left()).max(galley_pos.x + left.left() + 6.0),
+    );
+    let y = galley_pos.y + left.bottom() - 1.0;
+    let mut points = Vec::new();
+    let mut x = x0;
+    let mut up = true;
+    while x < x1 {
+        points.push(pos2(x, if up { y - 1.5 } else { y + 1.0 }));
+        up = !up;
+        x += 3.0;
+    }
+    points.push(pos2(x1, y));
+    painter.add(Shape::line(points, Stroke::new(1.0, color)));
+}
+
+/// Faint dots for spaces and arrows for tabs.
+fn whitespace(painter: &Painter, galley: &Galley, galley_pos: Pos2, ink: Color32) {
+    for row in &galley.rows {
+        let middle = galley_pos.y + row.pos.y + row.rect().height() / 2.0;
+        for glyph in &row.glyphs {
+            let left = galley_pos.x + row.pos.x + glyph.pos.x;
+            match glyph.chr {
+                ' ' => {
+                    painter.circle_filled(pos2(left + glyph.advance_width / 2.0, middle), 1.0, ink);
+                }
+                '\t' => {
+                    let (from, to) = (left + 2.0, left + glyph.advance_width - 2.0);
+                    if to > from {
+                        let stroke = Stroke::new(1.0, ink);
+                        painter.line_segment([pos2(from, middle), pos2(to, middle)], stroke);
+                        painter.line_segment([pos2(to - 3.0, middle - 3.0), pos2(to, middle)], stroke);
+                        painter.line_segment([pos2(to - 3.0, middle + 3.0), pos2(to, middle)], stroke);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -235,5 +405,25 @@ mod tests {
         assert_eq!(indentation(text, 12), "");
         assert_eq!(byte_of("héllo", 2), 3);
         assert_eq!(byte_of("hé", 9), 3);
+    }
+
+    #[test]
+    fn a_line_s_messages() {
+        let text = "a\nb\nc";
+        let diagnostics = [
+            Diagnostic {
+                range: 2..3,
+                severity: Severity::Warning,
+                message: "one".into(),
+            },
+            Diagnostic {
+                range: 4..5,
+                severity: Severity::Error,
+                message: "two".into(),
+            },
+        ];
+        assert_eq!(messages_on_line(text, &diagnostics, 1), ["one"]);
+        assert_eq!(messages_on_line(text, &diagnostics, 2), ["two"]);
+        assert!(messages_on_line(text, &diagnostics, 0).is_empty());
     }
 }

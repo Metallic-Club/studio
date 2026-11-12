@@ -511,6 +511,15 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   tabs or spaces for Tab, whitespace shown, and the current line lit. Enter keeps the line's indentation. These are
   kept in `code_editor.toml` beside `settings.toml` (`code::settings`), and each file is written only when its own
   settings change.
+- **Errors and warnings (#530)**: a script's code is checked when a file changes (`code::Scripts::check`). Syntax errors
+  come from the Luau compiler the game runs (`metallic_luau::check`, which makes no VM, re-exported by the engine).
+  Warnings come from `code::analysis`: unknown globals, unused locals (a name beginning with `_` is not), and members
+  that a known class lacks, where `workspace.Baseplate.X` checks the game's own children too. The analysis is a
+  parser of scopes and declarations that never fails, not a type checker, and what it cannot work out is never
+  warned about. Types come from `api/metallic.d.luau` (`code::api`, read with Luau's own libraries in the same syntax),
+  and from the game for `game`, `workspace`, `script`, `GetService` and `FindFirstChild`. A ModuleScript's members come
+  from its code through `require`. Each problem colours its line's number, gets a wave under it and a mark in the
+  scroll bar (clicked, the cursor goes to it), and shows its message under the pointer.
 
 ## Not in this slice
 

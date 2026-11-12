@@ -198,3 +198,13 @@ fn methods_as_values_children_and_instance_identity() {
     assert_eq!(prints.len(), 4, "{prints:?}");
     game.assert_no_errors();
 }
+
+/// #530: Studio's script editor checks code without a VM, and is told the line of a syntax error.
+#[test]
+fn code_is_checked_without_running_it() {
+    assert!(metallic_luau::check("local x = 1\nprint(x)\n", "Scripts/Ok.luau").is_ok());
+    let error = metallic_luau::check("local x = 1\nif x then\nprint(x)\n", "Scripts/Open.luau").unwrap_err();
+    assert_eq!(error.chunk, "Scripts/Open.luau");
+    assert!(error.line >= 3, "{error:?}");
+    assert!(error.message.contains("end"), "{error:?}");
+}

@@ -27,12 +27,12 @@ use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 
 /// An error's colour: the one status colour the website's tokens leave to the app.
-const ERROR: Color32 = Color32::from_rgb(0xFF, 0x7A, 0x7A);
+pub(crate) const ERROR: Color32 = Color32::from_rgb(0xFF, 0x7A, 0x7A);
 /// An error's colour on the light theme.
-const ERROR_LIGHT: Color32 = Color32::from_rgb(0xB4, 0x23, 0x23);
+pub(crate) const ERROR_LIGHT: Color32 = Color32::from_rgb(0xB4, 0x23, 0x23);
 /// A warning's colour, on the dark and the light theme (#502).
-const WARNING: Color32 = Color32::from_rgb(0xFF, 0xC0, 0x57);
-const WARNING_LIGHT: Color32 = Color32::from_rgb(0x9A, 0x5B, 0x00);
+pub(crate) const WARNING: Color32 = Color32::from_rgb(0xFF, 0xC0, 0x57);
+pub(crate) const WARNING_LIGHT: Color32 = Color32::from_rgb(0x9A, 0x5B, 0x00);
 /// The engine's messages, on the dark and the light theme (#502): a script's prints keep the text's colour.
 const ENGINE: Color32 = Color32::from_rgb(0x86, 0xB8, 0xFF);
 const ENGINE_LIGHT: Color32 = Color32::from_rgb(0x1F, 0x5F, 0xB8);

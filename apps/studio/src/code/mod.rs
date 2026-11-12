@@ -8,13 +8,19 @@
 //!   as it is typed (in memory, as every unsaved edit is), so Play runs it and Save writes it. The editor keeps each
 //!   file's text ([`Scripts`]) once it is read.
 //! - **Renaming a script** takes a slow double click in the Explorer, the double click being the editor's.
+//! - **Errors and warnings** (#530): each file is checked when it changes ([`Scripts::check`]), by the Luau compiler
+//!   (syntax) and by the editor's analysis ([`analysis`]); the code field marks them.
 
+pub mod analysis;
+pub mod api;
 pub mod highlight;
 pub mod lexer;
 pub mod settings;
 pub mod view;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use metallic_engine::metallic_core::{DataModel, Id, Value};
 use metallic_engine::metallic_project::Project;
@@ -45,6 +51,19 @@ pub struct Scripts {
     pub focused: Option<Id>,
     /// The script whose field takes the keyboard next frame: one just opened.
     focus: Option<Id>,
+    /// Each file's analysis and diagnostics as last checked, by its member (#530).
+    checked: HashMap<String, Checked>,
+    /// Counts the edits to any file: a file is checked again when it or another changed (it may require another).
+    edits: u64,
+}
+
+/// A file's analysis and diagnostics, and what they were made from.
+#[derive(Debug)]
+struct Checked {
+    /// The file's text's hash and the edit count when it was checked.
+    key: (u64, u64),
+    analysis: Rc<analysis::Analysis>,
+    diagnostics: Rc<Vec<analysis::Diagnostic>>,
 }
 
 impl Scripts {
@@ -60,6 +79,60 @@ impl Scripts {
                 String::new()
             }
         })
+    }
+
+    /// Notes that a file was edited: every file is checked again (#530).
+    pub fn edited(&mut self) {
+        self.edits += 1;
+    }
+
+    /// The analysis and diagnostics of `script`'s file `member` (#530), checked again only when a file changed: its
+    /// syntax error by the Luau compiler, and the analysis' warnings.
+    pub fn check(
+        &mut self,
+        project: &mut Project,
+        dm: &DataModel,
+        script: Id,
+        member: &str,
+    ) -> (Rc<analysis::Analysis>, Rc<Vec<analysis::Diagnostic>>) {
+        let text = self.text(project, member).clone();
+        let key = (hash(&text), self.edits);
+        if let Some(checked) = self.checked.get(member).filter(|checked| checked.key == key) {
+            return (Rc::clone(&checked.analysis), Rc::clone(&checked.diagnostics));
+        }
+        let code = Rc::new(analysis::Analysis::new(&text));
+        let mut diagnostics = Vec::new();
+        if let Err(error) = metallic_engine::metallic_luau::check(&text, member) {
+            diagnostics.push(analysis::Diagnostic {
+                range: line_range(&text, error.line.saturating_sub(1) as usize),
+                severity: analysis::Severity::Error,
+                message: error.message,
+            });
+        }
+        let sources = Sources::new(&mut self.texts, project, dm);
+        sources.with_env(Some(script), |env| diagnostics.extend(code.warnings(env)));
+        let diagnostics = Rc::new(diagnostics);
+        self.checked.insert(
+            member.to_owned(),
+            Checked {
+                key,
+                analysis: Rc::clone(&code),
+                diagnostics: Rc::clone(&diagnostics),
+            },
+        );
+        (code, diagnostics)
+    }
+
+    /// Runs `f` with the types' [`analysis::Env`] for `script`: the game `dm`, and the other scripts' code from this
+    /// editor's texts and `project`.
+    pub fn with_env<R>(
+        &mut self,
+        project: &mut Project,
+        dm: &DataModel,
+        script: Id,
+        f: impl FnOnce(&analysis::Env<'_>) -> R,
+    ) -> R {
+        Sources::new(&mut self.texts, project, dm).with_env(Some(script), f)
     }
 
     /// Takes the scripts whose tabs were asked for since the last call.
@@ -83,6 +156,82 @@ impl Scripts {
             self.opening.push(script);
         }
     }
+}
+
+/// Where the other scripts' code comes from, for `require` (#530): the editor's texts, or the project's files.
+struct Sources<'a> {
+    texts: RefCell<&'a mut HashMap<String, String>>,
+    project: RefCell<&'a mut Project>,
+    dm: &'a DataModel,
+    /// Each ModuleScript's analysis, once made.
+    modules: RefCell<HashMap<Id, Option<Rc<analysis::Analysis>>>>,
+}
+
+impl<'a> Sources<'a> {
+    fn new(texts: &'a mut HashMap<String, String>, project: &'a mut Project, dm: &'a DataModel) -> Self {
+        Self {
+            texts: RefCell::new(texts),
+            project: RefCell::new(project),
+            dm,
+            modules: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// The analysis of the ModuleScript `id`'s code.
+    fn module(&self, id: Id) -> Option<Rc<analysis::Analysis>> {
+        if let Some(found) = self.modules.borrow().get(&id) {
+            return found.clone();
+        }
+        let made = (is_a(self.dm, id, "ModuleScript"))
+            .then(|| source(self.dm, id))
+            .filter(|member| !member.is_empty())
+            .map(|member| {
+                let mut texts = self.texts.borrow_mut();
+                let text = texts.entry(member.clone()).or_insert_with(|| {
+                    let mut project = self.project.borrow_mut();
+                    if project.contains(&member) {
+                        project.read_text(&member).unwrap_or_default()
+                    } else {
+                        String::new()
+                    }
+                });
+                Rc::new(analysis::Analysis::new(text))
+            });
+        self.modules.borrow_mut().insert(id, made.clone());
+        made
+    }
+
+    fn with_env<R>(&self, script: Option<Id>, f: impl FnOnce(&analysis::Env<'_>) -> R) -> R {
+        let module = |id: Id| self.module(id);
+        let env = analysis::Env {
+            dm: self.dm,
+            script,
+            module: &module,
+        };
+        f(&env)
+    }
+}
+
+/// A hash of `text`, to tell whether it changed.
+fn hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The bytes of line `line` (from 0) of `text`, without its indentation: what a compiler error underlines.
+pub fn line_range(text: &str, line: usize) -> std::ops::Range<usize> {
+    let mut start = 0;
+    for (index, piece) in text.split('\n').enumerate() {
+        if index == line {
+            let indent = piece.len() - piece.trim_start().len();
+            let end = start + piece.trim_end().len();
+            return (start + indent).min(end)..end;
+        }
+        start += piece.len() + 1;
+    }
+    text.len()..text.len()
 }
 
 /// The tab id of `script`'s tab.
@@ -221,6 +370,14 @@ mod tests {
         assert_eq!(script_of("script"), None);
         assert_eq!(script_of("viewport"), None);
         assert_eq!(script_of("script:x:1"), None);
+    }
+
+    #[test]
+    fn a_line_s_range_leaves_its_indentation_out() {
+        let text = "a\n  local x =\nend";
+        assert_eq!(&text[line_range(text, 1)], "local x =");
+        assert_eq!(&text[line_range(text, 2)], "end");
+        assert_eq!(line_range(text, 9), text.len()..text.len());
     }
 
     #[test]
