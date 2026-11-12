@@ -488,10 +488,25 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   (`select::visual_box`), so a box round the parts on a floor leaves the floor out, and a part partly behind the
   camera can be picked too.
 
+### The script editor (2026-11-11, #528-#532)
+
+- **A tab per script (#528)**: a double click on a Script, LocalScript or ModuleScript in the Explorer opens its code in
+  a tab of its own (`crate::code`, `panels::script`), titled with its name. A panel may show one instance per tab: its
+  pane id is `<panel>:<instance>` (`script:12:0`), and such tabs are transient (not saved in `layout.json`, but kept
+  across a toolbar tab's layout and Reset layout). A new script tab opens in the tab bar the last one was opened,
+  clicked or dropped in. If that bar is gone, it opens beside a panel the bar had, and else beside the viewport. A
+  script's tab closes when it leaves the game.
+- **The code is the project's file**: `Source` names a member (`Scripts/Door.luau`). A script with none is given
+  `Scripts/<Name>.luau` when it is opened (one undo step, outside a game), starting as Roblox Studio's do. What is typed
+  is written into the project as it is typed (in memory, like every unsaved edit), so Play runs it and Save writes it.
+- **Renaming a script** takes a slow double click: a second plain click on its selected row after the double-click
+  time and within 1.5 s (`explorer::SLOW_CLICK`). F2 and the row's menu still rename it, and other instances keep the
+  double click (#436).
+
 ## Not in this slice
 
-The script editor, Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in
-the viewport, undo and redo, editing properties and Insert Object came with the list of 2026-11-07, above.)
+Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in the viewport, undo
+and redo, editing properties and Insert Object came with the list of 2026-11-07, above.)
 
 ## Consequences
 

@@ -547,6 +547,15 @@ impl Studio {
             self.dock.ui(ui, &mut cx);
         });
         crate::panels::insert::frame(&ctx, cx.editor, &mut cx.settings.editing.insert_grid);
+        // The script tabs asked for this frame (#528), and none for a script that left the game.
+        for script in cx.editor.scripts.take_opening() {
+            self.dock.open_instance(&crate::code::pane(script));
+        }
+        for pane in self.dock.instance_panes() {
+            if crate::code::script_of(&pane).is_none_or(|script| !crate::code::in_game(&cx.editor.dm, script)) {
+                self.dock.close(&pane);
+            }
+        }
         if let Some(action) = action {
             self.menu_action(action);
         }
@@ -4034,6 +4043,143 @@ mod tests {
         click_label(&mut harness, "File");
         let save = harness.state().studio.keymap().shortcut_text(ids::FILE_SAVE).unwrap();
         assert!(painted(&harness, &save), "Save shows {save}");
+    }
+
+    // The script editor (#528).
+
+    /// A Script called `name` with no file in ServerScriptService, shown in the Explorer.
+    fn add_bare_script(harness: &mut Harness<'static, Test>, name: &str) -> metallic_engine::metallic_core::Id {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let dm = &mut editor.dm;
+        let registry = dm.registry().clone();
+        let service = dm.service(registry.class_id("ServerScriptService").unwrap()).unwrap();
+        let script = dm.create(registry.class_id("Script").unwrap()).unwrap();
+        dm.set_name(script, name.into()).unwrap();
+        dm.set_parent(script, Some(service)).unwrap();
+        editor.explorer.reveal(&editor.dm, script);
+        settle(harness);
+        script
+    }
+
+    /// Two clicks on the Explorer row of `name`, `apart` seconds apart.
+    fn two_clicks(harness: &mut Harness<'_, Test>, name: &str, apart: f64) {
+        let rect = harness.get_by_role_and_label(Role::TreeItem, name).rect();
+        // A second after any click before, so the first is not taken as the second of a double click.
+        let time = harness.ctx.input(|input| input.time) + 1.0;
+        harness.input_mut().time = Some(time);
+        left_click(harness, rect);
+        harness.input_mut().time = Some(time + apart);
+        left_click(harness, rect);
+        harness.input_mut().time = None;
+        settle(harness);
+    }
+
+    /// The panes in the tab bar that holds `pane`.
+    fn bar_of(harness: &Harness<'_, Test>, pane: &str) -> Vec<String> {
+        use egui_tiles::{Container, Tile};
+        let tiles = &harness.state().studio.dock().tree().tiles;
+        let tile = tiles.find_pane(&crate::dock::PanelId(pane.to_owned())).unwrap();
+        let Some(Tile::Container(Container::Tabs(tabs))) = tiles.get(tiles.parent_of(tile).unwrap()) else {
+            panic!("{pane} is not in a tab bar");
+        };
+        tabs.children
+            .iter()
+            .filter_map(|child| match tiles.get(*child) {
+                Some(Tile::Pane(pane)) => Some(pane.0.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// #528: a double click on a script opens its code in a tab named after it, beside the viewport, and gives it a
+    /// file; what is typed is the project's file; a slow second click renames it; deleting it closes its tab.
+    #[test]
+    fn a_double_click_opens_a_script_and_a_slow_second_click_renames_it() {
+        let mut harness = editing(settings_file("editor-script-tab", None), "Script Tab Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let script = add_bare_script(&mut harness, "Door");
+        two_clicks(&mut harness, "Door", 0.05);
+        harness.get_by_role_and_label(Role::Tab, "Door");
+        assert!(
+            harness
+                .query_by_role_and_label(Role::TextInput, "Name of Door")
+                .is_none(),
+            "a double click opens a script, not renames it"
+        );
+        let pane = crate::code::pane(script);
+        assert!(
+            bar_of(&harness, &pane).contains(&panels::ids::VIEWPORT.to_owned()),
+            "beside the viewport"
+        );
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            assert_eq!(crate::code::source(&editor.dm, script), "Scripts/Door.luau");
+            assert_eq!(
+                editor.project.read_text("Scripts/Door.luau").unwrap(),
+                "print(\"Hello world!\")\n"
+            );
+        }
+        // Its field has the keyboard: what is typed goes into the file.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("print(1)".to_owned()));
+        settle(&mut harness);
+        assert_eq!(
+            harness
+                .state_mut()
+                .studio
+                .editor_mut()
+                .unwrap()
+                .project
+                .read_text("Scripts/Door.luau")
+                .unwrap(),
+            "print(1)"
+        );
+        // A slow second click on its row renames it, and its tab follows.
+        two_clicks(&mut harness, "Door", 0.8);
+        harness.get_by_role_and_label(Role::TextInput, "Name of Door");
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("Gate".to_owned()));
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Tab, "Gate");
+        // Too slow is two clicks.
+        two_clicks(&mut harness, "Gate", 2.0);
+        assert!(
+            harness
+                .query_by_role_and_label(Role::TextInput, "Name of Gate")
+                .is_none()
+        );
+        // Deleted, its tab closes.
+        harness.key_press(Key::Delete);
+        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::Tab, "Gate").is_none());
+        assert!(!harness.state().studio.dock().is_open(&pane));
+    }
+
+    /// #528: a script opens in the tab bar the last script tab was docked in, even once that tab is closed.
+    #[test]
+    fn a_script_opens_where_the_last_script_tab_was_docked() {
+        let mut harness = editing(settings_file("editor-script-home", None), "Script Home Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let first = add_bare_script(&mut harness, "First");
+        let second = add_bare_script(&mut harness, "Second");
+        two_clicks(&mut harness, "First", 0.05);
+        // Docked beside Output instead.
+        harness
+            .state_mut()
+            .studio
+            .dock_mut()
+            .move_tab(&crate::code::pane(first), panels::ids::OUTPUT);
+        settle(&mut harness);
+        assert!(bar_of(&harness, &crate::code::pane(first)).contains(&panels::ids::OUTPUT.to_owned()));
+        // Closed, then another script: by Output, where the first was.
+        harness.get_by_role_and_label(Role::Button, "Close First").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.dock().is_open(&crate::code::pane(first)));
+        two_clicks(&mut harness, "Second", 0.05);
+        assert!(bar_of(&harness, &crate::code::pane(second)).contains(&panels::ids::OUTPUT.to_owned()));
     }
 
     // Play in Studio: the Game tab with Play, Pause, Step and Stop (#246).
