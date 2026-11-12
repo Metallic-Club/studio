@@ -411,9 +411,14 @@ fn install_functions(lua: &Lua, globals: &Table) -> mlua::Result<()> {
     )?;
     globals.raw_set(
         "warn",
-        lua.create_function(move |_, values: Variadic<Value>| {
+        lua.create_function(move |lua, values: Variadic<Value>| {
             let line = join(values)?;
-            with_ctx(|ctx| ctx.warn(&line)).map_err(lua_error)
+            // The line of the code that called `warn` (level 1; 0 is `warn` itself), for the output to go to (#544).
+            let at = lua
+                .inspect_stack(1, |debug| debug.current_line())
+                .flatten()
+                .and_then(|line| u32::try_from(line).ok());
+            with_ctx(|ctx| ctx.warn_at(&line, at)).map_err(lua_error)
         })?,
     )?;
     globals.raw_set(

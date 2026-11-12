@@ -5,6 +5,8 @@
 //! warnings amber, the engine's messages blue, a script's prints in the text's own colour, debug lines faint. The
 //! three dots on its tab bar choose whether the time and the source show, and whether Play empties it first (#503).
 //! The lines are text that can be selected, across lines, and copied (#510).
+//! A script's error or warning knows its script and line (#544): under the pointer it is underlined, and a click opens
+//! the script there.
 //!
 //! The panel copies the lines logged since its last frame from the shared buffer into its own list, so it never holds
 //! the buffer's lock while it draws. Clear empties its list; the lines do not come back.
@@ -21,7 +23,7 @@ use log::Level;
 use super::{empty_note, ids, matches_words, search_box};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::keymap::Context;
-use crate::logging::{LogBuffer, LogLine, Origin};
+use crate::logging::{LogBuffer, LogLine, Origin, ScriptPlace};
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
@@ -246,15 +248,23 @@ impl Panel for Output {
             return;
         }
         let row = text::MONO + space::S3;
+        let dm = &cx.editor.dm;
+        let can_open = |place: &ScriptPlace| crate::code::script_at(dm, place).is_some();
+        let mut go_to = None;
         ScrollArea::vertical()
             .id_salt("output.lines")
             .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show_rows(ui, row, visible.len(), |ui, range| {
                 for line in &visible[range] {
-                    line_ui(ui, line, row, shown);
+                    if let Some(place) = line_ui(ui, line, row, shown, &can_open) {
+                        go_to = Some(place.clone());
+                    }
                 }
             });
+        if let Some(place) = go_to {
+            cx.editor.go_to_place(ui.ctx(), &place);
+        }
     }
 }
 
@@ -334,12 +344,20 @@ fn line_text(line: &LogLine, shown: crate::settings::Output, colors: &crate::the
     job
 }
 
-/// One line: the level's icon, then its text in the code font, coloured by level (#502) and selectable (#510).
-fn line_ui(ui: &mut Ui, line: &LogLine, height: f32, shown: crate::settings::Output) {
+/// One line: the level's icon, then its text in the code font, coloured by level (#502) and selectable (#510). A
+/// script's error or warning whose script `can_open` finds is underlined under the pointer, and returns its place
+/// when clicked (#544).
+fn line_ui<'a>(
+    ui: &mut Ui,
+    line: &'a LogLine,
+    height: f32,
+    shown: crate::settings::Output,
+    can_open: &dyn Fn(&ScriptPlace) -> bool,
+) -> Option<&'a ScriptPlace> {
     let colors = current_colors(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     if !ui.is_rect_visible(rect) {
-        return;
+        return None;
     }
     let glyph = match line.level {
         Level::Error => Icon::UiError,
@@ -374,9 +392,26 @@ fn line_ui(ui: &mut Ui, line: &LogLine, height: f32, shown: crate::settings::Out
         )
         .inner;
     response.widget_info(|| WidgetInfo::labeled(Role::ListItem, true, &line.message));
+    let mut clicked = None;
+    if let Some(place) = line.place.as_ref()
+        && matches!(line.level, Level::Error | Level::Warn)
+        && response.hovered()
+        && can_open(place)
+    {
+        let y = response.rect.bottom() - 1.0;
+        ui.painter().line_segment(
+            [pos2(response.rect.left(), y), pos2(response.rect.right(), y)],
+            Stroke::new(1.0, line_colour(line, &colors)),
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        if response.clicked() {
+            clicked = Some(place);
+        }
+    }
     if line.message.contains('\n') {
         response.on_hover_text(format!("{}\n{}", line.source, line.message));
     }
+    clicked
 }
 
 #[cfg(test)]

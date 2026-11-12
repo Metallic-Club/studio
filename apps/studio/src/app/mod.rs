@@ -4498,6 +4498,74 @@ mod tests {
         harness.get_by_label("Writes its arguments to the output, separated by spaces.");
     }
 
+    /// #544: a script's error or warning in the Output is underlined under the pointer and, clicked, opens the script
+    /// with the cursor on its line; a line from the engine is not.
+    #[test]
+    fn a_script_s_error_in_the_output_opens_the_script_at_its_line() {
+        use metallic_engine::metallic_script::{OutputSink, OutputSource};
+        let log = Arc::new(LogBuffer::new());
+        let path = settings_file("editor-output-go-to", None);
+        let mut harness = past_the_splash(path.clone());
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        harness.state_mut().studio.set_log(Arc::clone(&log));
+        let project = make_project_once(path.parent().unwrap(), "Output Go To Game");
+        harness.state_mut().studio.open(project);
+        wait_open(&mut harness);
+        settle(&mut harness);
+        let code = "local a = 1\nlocal b = 2\n\tprint(a + nil)\n";
+        let main = {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let dm = &mut editor.dm;
+            let registry = dm.registry().clone();
+            let service = dm.service(registry.class_id("ServerScriptService").unwrap()).unwrap();
+            let main = dm.create(registry.class_id("Script").unwrap()).unwrap();
+            dm.set_name(main, "Main".into()).unwrap();
+            dm.set_by_name(main, "Source", Value::String("Scripts/Main.luau".into()))
+                .unwrap();
+            dm.set_parent(main, Some(service)).unwrap();
+            editor.project.write("Scripts/Main.luau", code).unwrap();
+            main
+        };
+        let mut output = crate::logging::ScriptOutput::new(Arc::clone(&log));
+        let from = OutputSource {
+            script: "ServerScriptService.Main",
+            chunk: "Scripts/Main.luau#7.1",
+            line: Some(3),
+        };
+        output.error(&from, "attempt to perform arithmetic on nil");
+        log.push(
+            log::Level::Warn,
+            "metallic_engine",
+            "an engine warning",
+            crate::logging::Origin::Engine,
+        );
+        settle(&mut harness);
+        let pane = crate::code::pane(main);
+        // The engine's line goes nowhere.
+        let engine = harness
+            .get_by_role_and_label(Role::ListItem, "an engine warning")
+            .rect();
+        left_click(&mut harness, engine);
+        settle(&mut harness);
+        assert!(!harness.state().studio.dock().is_open(&pane));
+        // The script's: under the pointer, a hand; clicked, its script at line 3, after the indentation.
+        let error = harness
+            .get_by_role_and_label(Role::ListItem, "attempt to perform arithmetic on nil")
+            .rect();
+        harness.event(egui::Event::PointerMoved(error.center()));
+        settle(&mut harness);
+        assert_eq!(
+            harness.output().platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand
+        );
+        left_click(&mut harness, error);
+        settle(&mut harness);
+        settle(&mut harness);
+        assert!(harness.state().studio.dock().is_open(&pane));
+        let cursor = crate::code::view::cursor(&harness.ctx, crate::panels::script::field_id(main)).unwrap();
+        assert_eq!(cursor, code.find("print").unwrap());
+    }
+
     /// #532: Ctrl+click on a name goes to where it is declared: in the same script, or a ModuleScript's member in its
     /// own tab.
     #[test]

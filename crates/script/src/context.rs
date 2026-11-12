@@ -186,7 +186,16 @@ impl<'a> HostContext<'a> {
 
     /// Prints `message` to the output as a warning, as the running script.
     pub fn warn(&mut self, message: &str) {
-        let from = source(self.record);
+        self.warn_at(message, None);
+    }
+
+    /// Prints `message` to the output as a warning, as the running script from its line `line` (1-based) when the
+    /// backend knows it, so the output can go there (#544).
+    pub fn warn_at(&mut self, message: &str, line: Option<u32>) {
+        let from = OutputSource {
+            line,
+            ..source(self.record)
+        };
         self.output.warn(&from, message);
     }
 

@@ -260,3 +260,25 @@ fn destroying_a_thousand_connected_parts_leaks_nothing() {
     assert_eq!(game.host.listener_count(), 0);
     assert_eq!(game.dm.connection_count(), baseline_connections);
 }
+
+/// #544: a warning says the line `warn` was called from, so Studio's Output can go there.
+#[test]
+fn a_warning_knows_its_line() {
+    let mut game = Game::new();
+    let workspace = game.service("Workspace");
+    game.add(
+        "Script",
+        Some(workspace),
+        "Warner",
+        Some("local a = 1\n\nwarn(\"careful\", a)\n"),
+    );
+    game.start();
+    game.assert_no_errors();
+    let warnings: Vec<(String, Option<u32>)> = game
+        .host
+        .output()
+        .of_level(metallic_script::OutputLevel::Warn)
+        .map(|line| (line.message.clone(), line.line))
+        .collect();
+    assert_eq!(warnings, [("careful 1".to_owned(), Some(3))]);
+}

@@ -41,6 +41,19 @@ pub struct LogLine {
     pub origin: Origin,
     /// When it was logged (#502).
     pub time: std::time::SystemTime,
+    /// The script and line it was written from, for a script's line (#544).
+    pub place: Option<ScriptPlace>,
+}
+
+/// Where in a script a line was written (#544): what the Output needs to open that script at that line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptPlace {
+    /// The script's full name when it started, such as `Workspace.Door.Script`.
+    pub script: String,
+    /// The project member of its code, such as `Scripts/Door.luau`.
+    pub file: String,
+    /// The line, from 1, when known.
+    pub line: Option<u32>,
 }
 
 /// The last lines logged, shared by every thread that logs and every panel that reads them.
@@ -67,6 +80,18 @@ impl LogBuffer {
 
     /// Adds a line.
     pub fn push(&self, level: Level, source: impl Into<String>, message: impl Into<String>, origin: Origin) {
+        self.push_from(level, source, message, origin, None);
+    }
+
+    /// Adds a line written from `place` in a script (#544).
+    pub fn push_from(
+        &self,
+        level: Level,
+        source: impl Into<String>,
+        message: impl Into<String>,
+        origin: Origin,
+        place: Option<ScriptPlace>,
+    ) {
         // A thread that panicked while logging leaves whole lines behind: the ring is still good.
         let mut ring = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         ring.last += 1;
@@ -77,6 +102,7 @@ impl LogBuffer {
             message: message.into(),
             origin,
             time: std::time::SystemTime::now(),
+            place,
         };
         if ring.lines.len() == Self::CAPACITY {
             ring.lines.pop_front();
@@ -173,7 +199,15 @@ impl ScriptOutput {
             Some(line) => format!("{}:{line}", from.script),
             None => from.script.to_owned(),
         };
-        self.buffer.push(level, source, message, Origin::Script);
+        // A running script's chunk is `path#uid`; a compile error's, the path. The scheduler's own warnings have
+        // no file.
+        let file = from.chunk.split('#').next().unwrap_or_default();
+        let place = (file != from.script && !file.is_empty()).then(|| ScriptPlace {
+            script: from.script.to_owned(),
+            file: file.to_owned(),
+            line: from.line,
+        });
+        self.buffer.push_from(level, source, message, Origin::Script, place);
     }
 }
 
@@ -212,6 +246,34 @@ mod tests {
         assert_eq!(more.len(), 1);
         assert_eq!(more[0].level, Level::Error);
         assert!(buffer.read_since(3, &mut more) == 3 && more.len() == 1, "nothing new");
+    }
+
+    /// #544: a script's line knows its script's file and line; the scheduler's own has none.
+    #[test]
+    fn a_script_s_line_knows_where_it_was_written() {
+        let buffer = Arc::new(LogBuffer::new());
+        let mut output = ScriptOutput::new(Arc::clone(&buffer));
+        let door = OutputSource {
+            script: "Workspace.Door.Script",
+            chunk: "Scripts/Door.luau#4.1",
+            line: Some(3),
+        };
+        output.error(&door, "boom");
+        let scheduler = OutputSource {
+            script: "scheduler",
+            chunk: "scheduler",
+            line: None,
+        };
+        output.warn(&scheduler, "slow");
+        let mut lines = Vec::new();
+        buffer.read_since(0, &mut lines);
+        let door = ScriptPlace {
+            script: "Workspace.Door.Script".into(),
+            file: "Scripts/Door.luau".into(),
+            line: Some(3),
+        };
+        assert_eq!(lines[0].place, Some(door));
+        assert_eq!(lines[1].place, None);
     }
 
     #[test]
