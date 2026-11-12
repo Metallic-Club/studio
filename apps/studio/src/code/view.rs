@@ -64,8 +64,16 @@ pub fn reveal(ctx: &egui::Context, id: Id, at: usize) {
     ctx.request_repaint();
 }
 
-/// Draws `text` as code filling `ui`, the field interacting as `id`, marking `diagnostics`.
-pub fn show(ui: &mut Ui, id: Id, text: &mut String, settings: &CodeEditor, diagnostics: &[Diagnostic]) -> ViewOutput {
+/// Draws `text` as code filling `ui`, the field interacting as `id`, marking `diagnostics`. With `escape`, the field
+/// keeps the keyboard on Escape (a list over it closes instead).
+pub fn show(
+    ui: &mut Ui,
+    id: Id,
+    text: &mut String,
+    settings: &CodeEditor,
+    diagnostics: &[Diagnostic],
+    escape: bool,
+) -> ViewOutput {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let dark = colors.dark;
@@ -113,7 +121,12 @@ pub fn show(ui: &mut Ui, id: Id, text: &mut String, settings: &CodeEditor, diagn
                     .id(id)
                     .font(font.clone())
                     .code_editor()
-                    .lock_focus(true)
+                    .event_filter(egui::EventFilter {
+                        tab: true,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape,
+                    })
                     .frame(egui::Frame::NONE)
                     .margin(vec2(space::S3, 0.0))
                     .desired_width(width)

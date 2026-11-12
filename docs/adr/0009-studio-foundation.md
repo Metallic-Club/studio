@@ -520,6 +520,14 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   and from the game for `game`, `workspace`, `script`, `GetService` and `FindFirstChild`. A ModuleScript's members come
   from its code through `require`. Each problem colours its line's number, gets a wave under it and a mark in the
   scroll bar (clicked, the cursor goes to it), and shows its message under the pointer.
+- **Completion and hover (#531)**: typing a name, a `.` or `:`, or a quote opens a list under the cursor
+  (`code::complete`). After `.` it holds the members of what is before it, worked out by the analysis: an instance's
+  class's members and the game's children of it, a data type's or library's members, an enum's items, and a table's
+  fields, a ModuleScript's included. After `:` it holds only methods. Elsewhere it holds keywords, the locals in scope
+  and the globals; in the string of `GetService("`, `Instance.new("` or `FindFirstChild("`, the services, the creatable
+  classes or the children. Up and Down choose, Tab or Enter take one (unless what is typed already is it), Escape
+  closes the list (the field's event filter keeps Escape while it shows), and a click takes one. Under the pointer, a
+  name of the API shows its signature and description, and a local shows its type.
 
 ## Not in this slice
 
