@@ -230,6 +230,8 @@ pub fn show(
             }
         }
         let painter = ui.painter().clone();
+        // Where each line starts, for the marks below: worked out once (#561).
+        let line_index = Lines::new(text);
         // Found in the text as it is now, after this frame's typing.
         let (found, gone_to) = found.map_or((Vec::new(), None), |(finder, at)| (finder.matches(text), at));
         if !found.is_empty() {
@@ -237,7 +239,8 @@ pub fn show(
             let mut shapes = Vec::new();
             for range in &found {
                 let current = gone_to.as_ref() == Some(range);
-                for rect in range_rects(&galley, galley_pos, text, range.clone()) {
+                let chars = line_index.char_of(text, range.start)..line_index.char_of(text, range.end);
+                for rect in char_rects(&galley, galley_pos, chars) {
                     if current {
                         shapes.push(Shape::rect_filled(rect, 2.0, ink.gamma_multiply(0.45)));
                         shapes.push(Shape::rect_stroke(
@@ -274,9 +277,9 @@ pub fn show(
         for diagnostic in &worst_first {
             wave(
                 &painter,
-                &galley,
-                galley_pos,
+                (&galley, galley_pos),
                 text,
+                &line_index,
                 diagnostic,
                 severity_color(diagnostic.severity, dark),
             );
@@ -284,7 +287,7 @@ pub fn show(
         // The line numbers, the cursor's brighter, a line with a problem in its colour.
         let mut line_severity: Vec<Option<Severity>> = vec![None; galley.rows.len()];
         for diagnostic in diagnostics {
-            let line = text[..diagnostic.range.start.min(text.len())].matches('\n').count();
+            let line = line_index.line_of(diagnostic.range.start);
             if let Some(slot) = line_severity.get_mut(line) {
                 *slot = (*slot).max(Some(diagnostic.severity));
             }
@@ -320,7 +323,7 @@ pub fn show(
         let gutter_response = ui.interact(gutter, id.with("gutter"), Sense::hover());
         if let Some(at) = gutter_response.hover_pos() {
             let line = ((at.y - galley_pos.y) / row_height).floor().max(0.0) as usize;
-            let messages = messages_on_line(text, diagnostics, line);
+            let messages = messages_on_line(text, &line_index, diagnostics, line);
             if !messages.is_empty() {
                 gutter_response.on_hover_text(messages.join("\n"));
             }
@@ -329,7 +332,7 @@ pub fn show(
         let mut picked = false;
         let side = swatch_side(settings);
         for found in swatch::find(text) {
-            let chars = text[..found.start].chars().count();
+            let chars = line_index.char_of(text, found.start);
             let at = galley
                 .pos_from_cursor(CCursor::new(chars))
                 .translate(galley_pos.to_vec2());
@@ -481,15 +484,10 @@ fn below_last_line(ui: &Ui, id: Id, field: Rect, galley: &Galley, galley_pos: Po
     }
 }
 
-/// The rectangles on the screen covering the bytes `range` of `text` as `galley` (at `galley_pos`) lays it out: one per
+/// The rectangles on the screen covering the characters `range` of the code `galley` lays out at `galley_pos`: one per
 /// row it spans, a line's end showing as a space's width.
-pub fn range_rects(galley: &Galley, galley_pos: Pos2, text: &str, range: Range<usize>) -> Vec<Rect> {
-    let start = range.start.min(text.len());
-    let end = range.end.clamp(start, text.len());
-    let (from, to) = (
-        CCursor::new(text[..start].chars().count()),
-        CCursor::new(text[..end].chars().count()),
-    );
+fn char_rects(galley: &Galley, galley_pos: Pos2, range: Range<usize>) -> Vec<Rect> {
+    let (from, to) = (CCursor::new(range.start), CCursor::new(range.end.max(range.start)));
     let (first, last) = (galley.layout_from_cursor(from).row, galley.layout_from_cursor(to).row);
     let a = galley.pos_from_cursor(from);
     let b = galley.pos_from_cursor(to);
@@ -515,6 +513,47 @@ pub fn range_rects(galley: &Galley, galley_pos: Pos2, text: &str, range: Range<u
         .into_iter()
         .map(|rect| rect.translate(galley_pos.to_vec2()))
         .collect()
+}
+
+/// Where each line of a text starts (#561), so a byte's line and character index are found without counting from the
+/// text's start each time: a script with a problem on every line drew slowly, every problem counting its way there.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lines {
+    /// Each line's first byte.
+    starts: Vec<usize>,
+    /// Each line's first character's index.
+    chars: Vec<usize>,
+}
+
+impl Lines {
+    /// The lines of `text`.
+    pub fn new(text: &str) -> Self {
+        let mut starts = vec![0];
+        let mut chars = vec![0];
+        for (index, (byte, c)) in text.char_indices().enumerate() {
+            if c == '\n' {
+                starts.push(byte + 1);
+                chars.push(index + 1);
+            }
+        }
+        Self { starts, chars }
+    }
+
+    /// The line (from 0) holding byte `byte`.
+    pub fn line_of(&self, byte: usize) -> usize {
+        self.starts.partition_point(|&start| start <= byte).saturating_sub(1)
+    }
+
+    /// The index of the character at byte `byte` of `text`, the text these lines are of (its end, past the last).
+    pub fn char_of(&self, text: &str, byte: usize) -> usize {
+        let mut byte = byte.min(text.len());
+        while !text.is_char_boundary(byte) {
+            byte -= 1;
+        }
+        let line = self.line_of(byte);
+        let start = self.starts.get(line).copied().unwrap_or(0).min(byte);
+        self.chars.get(line).copied().unwrap_or(0) + text[start..byte].chars().count()
+    }
 }
 
 /// Selects the characters `chars` in the field `id` without taking the keyboard, and scrolls them into view on its next
@@ -610,11 +649,11 @@ fn problem_lines(
         .collect()
 }
 
-/// The messages of `diagnostics` on line `line` (from 0) of `text`.
-fn messages_on_line(text: &str, diagnostics: &[Diagnostic], line: usize) -> Vec<String> {
+/// The messages of `diagnostics` on line `line` (from 0) of `text`, whose lines are `lines`.
+fn messages_on_line(text: &str, lines: &Lines, diagnostics: &[Diagnostic], line: usize) -> Vec<String> {
     diagnostics
         .iter()
-        .filter(|diagnostic| text[..diagnostic.range.start.min(text.len())].matches('\n').count() == line)
+        .filter(|diagnostic| lines.line_of(diagnostic.range.start.min(text.len())) == line)
         .map(|diagnostic| diagnostic.message.clone())
         .collect()
 }
@@ -622,17 +661,18 @@ fn messages_on_line(text: &str, diagnostics: &[Diagnostic], line: usize) -> Vec<
 /// The marks of `diagnostics` along the scroll bar of the view `view`, each at its line's place in the code's `lines`;
 /// a click on one goes to its line, and it tells what is wrong under the pointer.
 fn marks(ui: &mut Ui, id: Id, view: Rect, lines: usize, text: &str, diagnostics: &[Diagnostic], dark: bool) {
-    let mut by_line: Vec<(usize, Severity, usize)> = Vec::new();
+    let index = Lines::new(text);
+    // Each line with a problem once, by line: its worst problem and where the first starts.
+    let mut by_line: std::collections::BTreeMap<usize, (Severity, usize)> = std::collections::BTreeMap::new();
     for diagnostic in diagnostics {
         let start = diagnostic.range.start.min(text.len());
-        let line = text[..start].matches('\n').count();
-        let character = text[..start].chars().count();
-        match by_line.iter_mut().find(|(other, _, _)| *other == line) {
-            Some(entry) => entry.1 = entry.1.max(diagnostic.severity),
-            None => by_line.push((line, diagnostic.severity, character)),
-        }
+        let line = index.line_of(start);
+        let entry = by_line
+            .entry(line)
+            .or_insert_with(|| (diagnostic.severity, index.char_of(text, start)));
+        entry.0 = entry.0.max(diagnostic.severity);
     }
-    for (line, severity, character) in by_line {
+    for (line, (severity, character)) in by_line {
         let y = view.top() + view.height() * (line as f32 + 0.5) / lines.max(1) as f32;
         let rect = Rect::from_center_size(pos2(view.right() - MARK_WIDTH / 2.0, y), vec2(MARK_WIDTH, 4.0));
         ui.painter().rect_filled(rect, 1.0, severity_color(severity, dark));
@@ -642,7 +682,7 @@ fn marks(ui: &mut Ui, id: Id, view: Rect, lines: usize, text: &str, diagnostics:
         if response.clicked() {
             reveal(ui.ctx(), id, character);
         }
-        let messages = messages_on_line(text, diagnostics, line);
+        let messages = messages_on_line(text, &index, diagnostics, line);
         response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(format!("Line {}: {}", line + 1, messages.join("\n")));
@@ -668,11 +708,18 @@ pub fn underline(painter: &Painter, output: &ViewOutput, text: &str, range: std:
 }
 
 /// A wave under the part of `diagnostic`'s range on its first line.
-fn wave(painter: &Painter, galley: &Galley, galley_pos: Pos2, text: &str, diagnostic: &Diagnostic, color: Color32) {
+fn wave(
+    painter: &Painter,
+    (galley, galley_pos): (&Galley, Pos2),
+    text: &str,
+    lines: &Lines,
+    diagnostic: &Diagnostic,
+    color: Color32,
+) {
     let start = diagnostic.range.start.min(text.len());
     let line_end = text[start..].find('\n').map_or(text.len(), |offset| start + offset);
     let end = diagnostic.range.end.clamp(start, line_end);
-    let (from, to) = (text[..start].chars().count(), text[..end].chars().count());
+    let (from, to) = (lines.char_of(text, start), lines.char_of(text, end));
     let left = galley.pos_from_cursor(CCursor::new(from));
     let right = galley.pos_from_cursor(CCursor::new(to.max(from)));
     let (x0, x1) = (
@@ -1096,14 +1143,6 @@ fn several_keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bo
     changed
 }
 
-/// The rectangles on the screen covering the characters `range` of the code `galley` lays out at `galley_pos`.
-fn char_rects(galley: &Galley, galley_pos: Pos2, range: Range<usize>) -> Vec<Rect> {
-    let text = galley.text();
-    let start = byte_of(text, range.start);
-    let end = byte_of(text, range.end);
-    range_rects(galley, galley_pos, text, start..end)
-}
-
 /// Enter in the field `id`: after a line that opens a block, a line indented one step more and the block's `end` when
 /// it is not closed (#542); otherwise a line with this one's indentation. Returns whether `text` changed.
 fn enter(ctx: &egui::Context, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
@@ -1257,6 +1296,26 @@ mod tests {
         assert_eq!(short, "ba");
     }
 
+    /// #561: a byte's line and character index, from the lines' starts.
+    #[test]
+    fn the_lines_find_a_byte_s_line_and_character() {
+        let text = "ab\nçd\n\nef";
+        let lines = Lines::new(text);
+        assert_eq!(lines.line_of(0), 0);
+        assert_eq!(lines.line_of(2), 0);
+        assert_eq!(lines.line_of(3), 1);
+        assert_eq!(lines.line_of(7), 2);
+        assert_eq!(lines.line_of(text.len()), 3);
+        for byte in 0..=text.len() {
+            if text.is_char_boundary(byte) {
+                assert_eq!(lines.char_of(text, byte), text[..byte].chars().count(), "byte {byte}");
+            }
+        }
+        // Inside a character: its start.
+        assert_eq!(lines.char_of(text, 4), 3);
+        assert_eq!(lines.char_of(text, 99), text.chars().count());
+    }
+
     #[test]
     fn a_line_s_messages() {
         let text = "a\nb\nc";
@@ -1272,8 +1331,8 @@ mod tests {
                 message: "two".into(),
             },
         ];
-        assert_eq!(messages_on_line(text, &diagnostics, 1), ["one"]);
-        assert_eq!(messages_on_line(text, &diagnostics, 2), ["two"]);
-        assert!(messages_on_line(text, &diagnostics, 0).is_empty());
+        assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 1), ["one"]);
+        assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 2), ["two"]);
+        assert!(messages_on_line(text, &Lines::new(text), &diagnostics, 0).is_empty());
     }
 }

@@ -553,6 +553,30 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   before them, in room the layout leaves (`code::swatch`). It opens the colour picker, and what is picked is written
   back in the same form.
 
+### Finding, the minimap and several cursors (2026-11-12, #554-#561)
+
+- **Find and replace (#554)**: Ctrl+F opens a find bar at the top right of a script's code, as VS Code's: the query
+  (the selection's text), match case, whole word and regular expression toggles (`regex`, already in the tree), which
+  match of how many, and Ctrl+H's replace row. The query is shared by every script's bar (`code::find::FindBar`), and
+  the bar keeps the match it went to itself, because an egui text field drops its selection while another has the
+  keyboard. Find, Find and replace, Find next (F3, Ctrl+G) and Find previous (Ctrl+Shift+G; Shift+F3 is the Lighting
+  stats) are commands of their own, firing while the code has the keyboard.
+- **Search across scripts (#555)**: Ctrl+Shift+F (Ctrl+Shift+H to replace) opens the Search panel, docked on the
+  left: every script file's matching lines, a click opening the script at the match, and a line, a file or every file
+  replaced, as typed text is kept until Save.
+- **The minimap (#556)**: the code in small down the right, in its colours (`code::minimap`, drawn from the layout's
+  coloured sections), the part in view shaded; it scrolls the code as a scroll bar. The Code Editor settings can hide
+  it.
+- **The mouse in the code (#557, #559, #560)**: the field takes the clicks it understands, and a layer over it the
+  rest: under the last line (to the end of the code, as VS Code does), with Shift+Alt held (a column selection), and
+  over the selection (drag and drop, Ctrl copying). egui hit-tests against the last frame's widgets, so these layers
+  exist from the frame before the press.
+- **Several cursors (#558)**: the field keeps its own cursor and `code::cursors` keeps the others; while there are any,
+  the code view does the keys at every cursor before the field sees them. Undo, redo, select all, Escape and a plain
+  click go back to one.
+- **Many problems (#561)**: each problem's line and character come from the lines' starts (`code::view::Lines`); a
+  script with a warning on every line had counted from the text's start for every pair of them each frame.
+
 ## Not in this slice
 
 Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in the viewport, undo

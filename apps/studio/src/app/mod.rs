@@ -4765,6 +4765,29 @@ mod tests {
         assert_eq!(text(&mut harness), "a = 1\nlocal print(a)local ");
     }
 
+    /// #561: a script with a warning on every line draws as quickly as one without: each problem's line is found from
+    /// the lines' starts, not by counting from the text's start (400 lines took about 270 ms a frame).
+    #[test]
+    fn a_script_with_a_warning_on_every_line_draws_quickly() {
+        let mut harness = editing(settings_file("editor-script-warnings", None), "Script Warnings Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let code: Vec<String> = (0..400).map(|n| format!("local value{n} = {n}")).collect();
+        let (script, _) = open_with_code(&mut harness, "Warned", &code.join("\n"));
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let (_, diagnostics) = editor
+            .scripts
+            .check(&mut editor.project, &editor.dm, script, "Scripts/Warned.luau");
+        assert!(diagnostics.len() >= 400, "{} problems", diagnostics.len());
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            harness.step();
+        }
+        // Generous for a slow machine: it was 2.7 s.
+        let took = start.elapsed();
+        assert!(took < std::time::Duration::from_millis(600), "10 frames took {took:?}");
+    }
+
     /// #556: the minimap down the code's right scrolls it: a click near its bottom shows the code's end, and dragging
     /// its shaded part back up shows the start. The setting hides it.
     #[test]
