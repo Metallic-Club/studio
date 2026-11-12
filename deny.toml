@@ -21,6 +21,8 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    # The Boost licence, as permissive as MIT: `clipboard-win` and `error-code`, the system clipboard on Windows (#538).
+    "BSL-1.0",
 ]
 confidence-threshold = 0.8
 # The list above is the policy, not an inventory: a license no dependency uses yet is not a problem.

@@ -95,10 +95,10 @@ zune-jpeg = "0.5"
 # are Studio's alone, and the Android and iOS checks exclude it. `default_fonts` is off: Studio bundles its own OFL
 # fonts (apps/studio/assets/fonts), and egui's include one under the Ubuntu Font Licence, which deny.toml rejects.
 egui = { version = "0.37.0", default-features = false }
-# Without its defaults, which turn on winit's (the titled Wayland decorations, RUSTSEC-2026-0192), opening links,
-# and the system clipboard (arboard, whose Windows backend `clipboard-win` is BSL-1.0, not on deny.toml's list).
-# egui keeps copied text inside Studio until a later issue decides on the system clipboard.
-egui-winit = { version = "0.37.0", default-features = false, features = ["x11", "wayland"] }
+# Without its defaults, which turn on winit's (the titled Wayland decorations, RUSTSEC-2026-0192) and opening links.
+# `clipboard` is the system clipboard (#538): arboard, and smithay-clipboard on Wayland, so text copies between
+# Studio and other apps. arboard's Windows backend `clipboard-win` is BSL-1.0, which deny.toml allows for it.
+egui-winit = { version = "0.37.0", default-features = false, features = ["clipboard", "x11", "wayland"] }
 # Without its defaults (wgpu's default features, WebGL). Only `egui_wgpu::Renderer` is used: the surface is the
 # engine's `RenderSurface`.
 egui-wgpu = { version = "0.37.0", default-features = false }
