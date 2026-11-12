@@ -2,8 +2,8 @@
 //! left, the cursor's line lit, whitespace shown if asked, and Tab and Enter as a code editor has them. It scrolls both
 //! ways: code is not wrapped.
 //!
-//! Errors and warnings (#530) colour their line's number, are underlined with a wave, and have a mark in the scroll
-//! bar, which goes to their line when clicked; each says what is wrong under the pointer.
+//! Errors and warnings (#530) colour their line's number and draw a line beside it (#539), are underlined with a wave,
+//! and have a mark in the scroll bar, which goes to their line when clicked; each says what is wrong under the pointer.
 
 use std::sync::Arc;
 
@@ -179,6 +179,14 @@ pub fn show(
             }
         }
         painter.rect_filled(gutter, 0.0, p.panel);
+        let row_spans: Vec<(f32, f32)> = galley
+            .rows
+            .iter()
+            .map(|row| (galley_pos.y + row.pos.y, row.rect().height()))
+            .collect();
+        for (rect, color) in problem_lines(gutter, &row_spans, &line_severity, dark) {
+            painter.rect_filled(rect, 0.0, color);
+        }
         for (index, row) in galley.rows.iter().enumerate() {
             let y = galley_pos.y + row.pos.y + row.rect().height() / 2.0;
             let ink = match line_severity.get(index).copied().flatten() {
@@ -245,6 +253,29 @@ pub fn show(
         hovered,
         view,
     }
+}
+
+/// How thick the line beside the number of a line with a problem is (#539).
+pub const PROBLEM_LINE: f32 = 2.0;
+
+/// The lines beside the numbers of the lines with a problem (#539), for the gutter `gutter` whose lines are
+/// `rows` (each its top and height on the screen) with the worst problem of each in `line_severity`: [`PROBLEM_LINE`]
+/// wide, just inside the gutter's right edge (between the numbers and the code), in that problem's colour.
+fn problem_lines(
+    gutter: Rect,
+    rows: &[(f32, f32)],
+    line_severity: &[Option<Severity>],
+    dark: bool,
+) -> Vec<(Rect, Color32)> {
+    let right = gutter.right() - space::S1;
+    rows.iter()
+        .zip(line_severity)
+        .filter_map(|(&(top, height), severity)| {
+            let severity = (*severity)?;
+            let rect = Rect::from_min_max(pos2(right - PROBLEM_LINE, top), pos2(right, top + height));
+            Some((rect, severity_color(severity, dark)))
+        })
+        .collect()
 }
 
 /// The messages of `diagnostics` on line `line` (from 0) of `text`.
@@ -436,6 +467,25 @@ mod tests {
         assert_eq!(indentation(text, 12), "");
         assert_eq!(byte_of("héllo", 2), 3);
         assert_eq!(byte_of("hé", 9), 3);
+    }
+
+    /// #539: a line with an error or a warning has a line in its colour beside its number; the others none.
+    #[test]
+    fn a_line_with_a_problem_has_a_line_beside_its_number() {
+        let gutter = Rect::from_min_size(pos2(10.0, 100.0), vec2(40.0, 300.0));
+        let rows = [(100.0, 20.0), (120.0, 20.0), (140.0, 20.0)];
+        let severities = [Some(Severity::Error), None, Some(Severity::Warning)];
+        let lines = problem_lines(gutter, &rows, &severities, true);
+        assert_eq!(lines.len(), 2);
+        let (error, warning) = (lines[0], lines[1]);
+        assert_eq!(error.0.width(), PROBLEM_LINE);
+        assert_eq!((error.0.top(), error.0.bottom()), (100.0, 120.0));
+        assert_eq!((warning.0.top(), warning.0.bottom()), (140.0, 160.0));
+        assert!(error.0.right() <= gutter.right() && error.0.left() > gutter.right() - space::S4);
+        assert_eq!(error.1, severity_color(Severity::Error, true));
+        assert_eq!(warning.1, severity_color(Severity::Warning, true));
+        let light = problem_lines(gutter, &rows, &severities, false);
+        assert_eq!(light[0].1, severity_color(Severity::Error, false));
     }
 
     #[test]
