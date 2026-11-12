@@ -306,7 +306,39 @@ pub fn new_member(name: &str, taken: impl Fn(&str) -> bool) -> String {
         .unwrap_or(first)
 }
 
+/// The editor's script a line of the Output was written from (#544): the one with its file, the one of its full name
+/// first (two scripts can share a file).
+pub fn script_at(dm: &DataModel, place: &crate::logging::ScriptPlace) -> Option<Id> {
+    let root = dm.root()?;
+    let mut found = None;
+    for id in dm.descendants(root).ok()? {
+        if is_script(dm, id) && source(dm, id) == place.file {
+            if dm.full_name(id).is_ok_and(|name| name == place.script) {
+                return Some(id);
+            }
+            found = found.or(Some(id));
+        }
+    }
+    found
+}
+
 impl EditorState {
+    /// Opens the tab of the script a line of the Output was written from, its cursor at the start of the line's code
+    /// (#544). Returns whether the script was found.
+    pub fn go_to_place(&mut self, ctx: &egui::Context, place: &crate::logging::ScriptPlace) -> bool {
+        let Some(id) = script_at(&self.dm, place) else {
+            return false;
+        };
+        self.open_own_script(id);
+        let member = source(&self.dm, id);
+        let text = self.scripts.text(&mut self.project, &member);
+        let line = place.line.map_or(0, |line| line.saturating_sub(1) as usize);
+        let start = line_range(text, line).start;
+        let at = text[..start.min(text.len())].chars().count();
+        view::reveal(ctx, crate::panels::script::field_id(id), at);
+        true
+    }
+
     /// Asks for the tab of the script `id` of the game the Explorer shows (#528). In a running game that is the
     /// editor's script with the same file. A script with no file is given one (one undo step), outside a game.
     pub fn open_script(&mut self, id: Id) {
@@ -329,6 +361,11 @@ impl EditorState {
                 }
             }
         };
+        self.open_own_script(id);
+    }
+
+    /// Asks for the tab of the editor's script `id`, giving it a file when it has none (outside a game).
+    fn open_own_script(&mut self, id: Id) {
         if !is_script(&self.dm, id) {
             return;
         }
