@@ -5,6 +5,9 @@
 //! An icon is not drawn over everything (#571): a part between the camera and the light hides it, as it would hide the
 //! light's lamp, and it cannot be clicked through the part. The part a light is in does not hide it.
 //!
+//! Its range lines are drawn over everything unless Viewport options → View says otherwise (#572): then the parts in
+//! front of them hide them, in short pieces.
+//!
 //! A selected light also shows how far it reaches, as a wireframe (#523): a PointLight's Range as a ball of three
 //! circles, a SpotLight's Range and Angle as a cone.
 
@@ -112,6 +115,23 @@ pub fn range_lines(dm: &DataModel, id: Id) -> Vec<[Vec3; 2]> {
     lines
 }
 
+/// How long, at most, a piece of a range line is when parts can hide it (#572), in studs.
+const PIECE: f32 = 1.5;
+
+/// The pieces of the range line `line` of the light `id` that can be seen from `from` (#572): the line in short pieces,
+/// those whose middle a part hides left out. The part the light is in does not hide it.
+pub fn seen_pieces(dm: &DataModel, from: Vec3, line: [Vec3; 2], id: Id) -> Vec<[Vec3; 2]> {
+    let [a, b] = line;
+    let pieces = ((b - a).length() / PIECE).ceil().clamp(1.0, 64.0) as usize;
+    (0..pieces)
+        .map(|piece| {
+            let at = |step: usize| a.lerp(b, step as f32 / pieces as f32);
+            [at(piece), at(piece + 1)]
+        })
+        .filter(|[start, end]| !super::pick::blocked(dm, from, (*start + *end) * 0.5, id))
+        .collect()
+}
+
 /// Adds the circle around `centre` through `centre + a` and `centre + b` (at right angles, as long as each other).
 fn circle(lines: &mut Vec<[Vec3; 2]>, centre: Vec3, a: Vec3, b: Vec3) {
     let point = |step: usize| {
@@ -193,6 +213,36 @@ mod tests {
         let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, -40.0), Vec3::new(0.0, 5.0, -80.0));
         let behind = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
         assert!(light_icons(&dm, &behind).is_empty());
+    }
+
+    /// #572: with the lines not over everything, the pieces of a range line behind a part are left out.
+    #[test]
+    fn a_part_in_front_hides_pieces_of_a_range_line() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let world = workspace(&dm).unwrap();
+        let light = dm.create(dm.registry().class_id("PointLight").unwrap()).unwrap();
+        dm.set_parent(light, Some(world)).unwrap();
+        let from = Vec3::new(0.0, 50.0, 30.0);
+        let line = [Vec3::new(-10.0, 50.0, 0.0), Vec3::new(10.0, 50.0, 0.0)];
+        let whole: f32 = seen_pieces(&dm, from, line, light)
+            .iter()
+            .map(|[a, b]| (*b - *a).length())
+            .sum();
+        assert!((whole - 20.0).abs() < 1e-3, "nothing in front: all of it");
+        // A wall in front of the line's middle.
+        let wall = dm.create(dm.registry().class_id("Part").unwrap()).unwrap();
+        dm.set_by_name(wall, "CFrame", Value::CFrame(CFrame::new(Vec3::new(0.0, 50.0, 15.0))))
+            .unwrap();
+        dm.set_by_name(wall, "Size", Value::Vector3(Vec3::new(4.0, 4.0, 1.0)))
+            .unwrap();
+        dm.set_parent(wall, Some(world)).unwrap();
+        let pieces = seen_pieces(&dm, from, line, light);
+        let seen: f32 = pieces.iter().map(|[a, b]| (*b - *a).length()).sum();
+        assert!(seen < 18.0 && seen > 10.0, "{seen} of 20 seen");
+        assert!(
+            pieces.iter().all(|[a, b]| ((*a + *b) * 0.5).x.abs() > 1.0),
+            "the middle is hidden"
+        );
     }
 
     /// #571: a part between the camera and a light hides its icon; the part a light is in does not.
