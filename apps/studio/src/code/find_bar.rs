@@ -174,7 +174,15 @@ pub fn show(ui: &mut Ui, id: Id, view: Rect, bar: &mut FindBar, count: &Count, f
         if icon_button(ui, id.with("toggle"), icon, words, true).clicked() {
             bar.show_replace = !bar.show_replace;
         }
-        let response = field(ui, query_id, &mut bar.query.text, "Find", field_width, count);
+        let response = field(
+            ui,
+            query_id,
+            &mut bar.query.text,
+            "Find",
+            "Find",
+            field_width,
+            matches!(count, Count::Error(_)),
+        );
         if response.changed() {
             actions.push(Action::Changed);
         }
@@ -240,7 +248,15 @@ pub fn show(ui: &mut Ui, id: Id, view: Rect, bar: &mut FindBar, count: &Count, f
     if bar.show_replace {
         ui.allocate_ui_with_layout(vec2(inner.width(), ROW), Layout::left_to_right(Align::Center), |ui| {
             ui.add_space(BUTTON + 2.0);
-            field(ui, replace_id, &mut bar.replace, "Replace", field_width, &Count::Empty);
+            field(
+                ui,
+                replace_id,
+                &mut bar.replace,
+                "Replace",
+                "Replace",
+                field_width,
+                false,
+            );
             let any = matches!(count, Count::Found { total, .. } if *total > 0);
             if text_button(ui, id.with("replace-one"), "Replace", "Replace", any)
                 .on_hover_text("Replace (Enter)")
@@ -259,13 +275,21 @@ pub fn show(ui: &mut Ui, id: Id, view: Rect, bar: &mut FindBar, count: &Count, f
     actions
 }
 
-/// A field of the bar: `label` for screen readers and as its hint, its border red while `count` is an error.
-fn field(ui: &mut Ui, id: Id, value: &mut String, label: &str, width: f32, count: &Count) -> Response {
+/// A field of the bar: `label` for screen readers and `hint` shown while it is empty, its border red for an `error`.
+pub(crate) fn field(
+    ui: &mut Ui,
+    id: Id,
+    value: &mut String,
+    label: &str,
+    hint: &str,
+    width: f32,
+    error: bool,
+) -> Response {
     let dark = current_colors(ui.ctx()).dark;
     let response = ui.add(
         TextEdit::singleline(value)
             .id(id)
-            .hint_text(label)
+            .hint_text(hint)
             .font(FontId::monospace(text::BODY))
             // Escape is the bar's: it closes it, rather than only leaving the field.
             .event_filter(egui::EventFilter {
@@ -276,7 +300,7 @@ fn field(ui: &mut Ui, id: Id, value: &mut String, label: &str, width: f32, count
             .desired_width(width)
             .margin(vec2(space::S2, 3.0)),
     );
-    if matches!(count, Count::Error(_)) {
+    if error {
         let red = crate::code::view::severity_color(crate::code::analysis::Severity::Error, dark);
         ui.painter()
             .rect_stroke(response.rect, 2.0, Stroke::new(1.0, red), egui::StrokeKind::Inside);
@@ -286,7 +310,7 @@ fn field(ui: &mut Ui, id: Id, value: &mut String, label: &str, width: f32, count
 }
 
 /// Gives the field `id` the keyboard with its `chars` characters all selected.
-fn focus_all(ctx: &egui::Context, id: Id, chars: usize) {
+pub(crate) fn focus_all(ctx: &egui::Context, id: Id, chars: usize) {
     let mut state = TextEditState::load(ctx, id).unwrap_or_default();
     state
         .cursor
@@ -296,7 +320,7 @@ fn focus_all(ctx: &egui::Context, id: Id, chars: usize) {
 }
 
 /// A square button of the bar showing `icon`, `label` for screen readers.
-fn icon_button(ui: &mut Ui, id: Id, icon: Icon, label: &str, enabled: bool) -> Response {
+pub(crate) fn icon_button(ui: &mut Ui, id: Id, icon: Icon, label: &str, enabled: bool) -> Response {
     let p = current_colors(ui.ctx()).palette;
     let (rect, _) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), Sense::hover());
     let sense = if enabled { Sense::click() } else { Sense::hover() };
@@ -324,7 +348,7 @@ fn icon_button(ui: &mut Ui, id: Id, icon: Icon, label: &str, enabled: bool) -> R
 }
 
 /// A small button of the bar showing `words`, `label` for screen readers.
-fn text_button(ui: &mut Ui, id: Id, words: &str, label: &str, enabled: bool) -> Response {
+pub(crate) fn text_button(ui: &mut Ui, id: Id, words: &str, label: &str, enabled: bool) -> Response {
     let p = current_colors(ui.ctx()).palette;
     let font = FontId::proportional(text::SMALL);
     let width = ui.fonts_mut(|fonts| fonts.layout_no_wrap(words.to_owned(), font.clone(), p.text).size().x) + 12.0;
@@ -343,7 +367,7 @@ fn text_button(ui: &mut Ui, id: Id, words: &str, label: &str, enabled: bool) -> 
 
 /// A toggle of the bar showing `words` in code's letters, lit while `on`; `label` for screen readers and its tooltip.
 /// Returns whether it was clicked.
-fn toggle(ui: &mut Ui, id: Id, words: &str, label: &str, on: &mut bool) -> bool {
+pub(crate) fn toggle(ui: &mut Ui, id: Id, words: &str, label: &str, on: &mut bool) -> bool {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let (rect, _) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), Sense::hover());

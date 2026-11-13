@@ -199,6 +199,97 @@ impl FindBar {
     }
 }
 
+/// The search across every script (#555), in the Search panel: its query, the replacement, and the files whose matches
+/// are folded away.
+#[derive(Debug, Default)]
+pub struct Search {
+    /// What is looked for.
+    pub query: Query,
+    /// What a match is replaced with.
+    pub replace: String,
+    /// Whether the replace field shows.
+    pub show_replace: bool,
+    /// Whether the query takes the keyboard next frame, all of it selected (the panel was just asked for).
+    pub asked: bool,
+    /// The files whose matches are folded away, by member.
+    pub folded: HashSet<String>,
+    /// The finder made from the query last, and the query it was made from.
+    made: Option<(Query, Result<Option<Finder>, String>)>,
+}
+
+impl Search {
+    /// The finder of the query, made again only when the query changed.
+    pub fn finder(&mut self) -> Result<Option<Finder>, String> {
+        if let Some((query, made)) = &self.made
+            && *query == self.query
+        {
+            return made.clone();
+        }
+        let made = self.query.finder();
+        self.made = Some((self.query.clone(), made.clone()));
+        made
+    }
+}
+
+/// The matches in one script file (#555).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileMatches {
+    /// The file, a member of the project.
+    pub member: String,
+    /// The script it is the code of (the first, if scripts share it).
+    pub script: ScriptId,
+    /// That script's full name (`ServerScriptService.Door`).
+    pub name: String,
+    /// Its matches, in order.
+    pub matches: Vec<LineMatch>,
+}
+
+/// A match and the line it is on, as a result shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineMatch {
+    /// The match, as bytes of the file.
+    pub range: Range<usize>,
+    /// Its line, from 0.
+    pub line: usize,
+    /// Its column on the line, in characters from 0.
+    pub column: usize,
+    /// The line before it, without its indentation and cut short from the left when long.
+    pub before: String,
+    /// The match (up to the line's end, when it goes on).
+    pub found: String,
+    /// The rest of the line.
+    pub after: String,
+}
+
+/// How much of a line before a match a result keeps.
+const BEFORE: usize = 32;
+
+/// The match `range` of `text` with its line, as a result shows it.
+pub fn line_match(text: &str, range: Range<usize>) -> LineMatch {
+    let start = text[..range.start].rfind('\n').map_or(0, |newline| newline + 1);
+    let end = text[range.start..]
+        .find('\n')
+        .map_or(text.len(), |newline| range.start + newline);
+    let line = text[..range.start].matches('\n').count();
+    let before = text[start..range.start].trim_start();
+    let kept = before.chars().count();
+    let before = if kept > BEFORE {
+        let skip = before.char_indices().nth(kept - BEFORE).map_or(0, |(byte, _)| byte);
+        format!("…{}", &before[skip..])
+    } else {
+        before.to_owned()
+    };
+    let found_end = range.end.min(end);
+    LineMatch {
+        line,
+        column: text[start..range.start].chars().count(),
+        before,
+        found: text[range.start..found_end].to_owned(),
+        after: text[found_end..end].trim_end().to_owned(),
+        range,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +366,23 @@ mod tests {
         let text = "a b a";
         let matches = finder.matches(text);
         assert_eq!(finder.replace_all(text, &matches, "$1"), "$1 b $1");
+    }
+
+    #[test]
+    fn a_result_shows_its_line_around_the_match() {
+        let text = "a = 1\n\t\tlocal door = open(door)\nb";
+        let finder = query("door").finder().unwrap().unwrap();
+        let matches = finder.matches(text);
+        let first = line_match(text, matches[0].clone());
+        assert_eq!(first.line, 1);
+        assert_eq!(first.column, 8);
+        assert_eq!((first.before.as_str(), first.found.as_str()), ("local ", "door"));
+        assert_eq!(first.after, " = open(door)");
+        // A long line is cut short before the match.
+        let long = format!("{}x", "y".repeat(80));
+        let far = line_match(&long, 80..81);
+        assert!(far.before.starts_with('…') && far.before.chars().count() == BEFORE + 1);
+        assert_eq!(far.found, "x");
     }
 
     #[test]
