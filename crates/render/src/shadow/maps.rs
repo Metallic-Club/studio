@@ -898,7 +898,7 @@ impl ShadowMaps {
                 if usize::from(mover.kind) < kinds && cascade.fit.frustum.contains_sphere(mover.center, mover.radius) {
                     // At the level the cascade's static casters take (crate::lod).
                     let level = if mover.class != 0 && levels.enabled() {
-                        levels.choose_caster(mover.class, mover.radius)
+                        levels.choose_caster(mover.class, mover.radius, mover.center)
                     } else {
                         0
                     };
