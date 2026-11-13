@@ -4,14 +4,21 @@
 //!
 //! [`ThemeState`] holds the look Studio wants and re-applies the style only when the look (or, in System mode, the
 //! system's mode) changes, so a frame never rebuilds it.
+//!
+//! A focused text field is outlined in the accent, a point wide (#588), by Studio's own text field style
+//! ([`FieldStyle`]): egui outlines it with the selection's stroke, which is the ink drawn on selected text, dark and
+//! three points wide.
 
 pub mod fonts;
 pub mod icons;
 pub mod tokens;
 
+use egui::class::HasClasses as _;
 use egui::epaint::{CornerRadius, Margin, Stroke};
 use egui::style::{Selection, WidgetVisuals, Widgets};
-use egui::{Color32, FontFamily, FontId, Pos2, Rect, TextStyle, Vec2, pos2, vec2};
+use egui::theme::{DefaultStyle, StyleProvider};
+use egui::widget_style::{StyleArgs, TextEditStyle, WidgetState};
+use egui::{Color32, FontFamily, FontId, Pos2, Rect, TextEdit, TextStyle, Vec2, pos2, vec2};
 
 use tokens::{ACCENT_INK, Accent, Hue, Motion, Palette, radius, shadow, size, space, text};
 
@@ -161,8 +168,6 @@ pub struct ThemeState {
     wanted: Look,
     applied: Option<Colors>,
     applied_look: Option<Look>,
-    /// The points per physical pixel the style was made for (#573): its borders are one pixel.
-    applied_scale: Option<f32>,
 }
 
 impl ThemeState {
@@ -172,7 +177,6 @@ impl ThemeState {
             wanted: look,
             applied: None,
             applied_look: None,
-            applied_scale: None,
         }
     }
 
@@ -191,13 +195,11 @@ impl ThemeState {
         self.applied.unwrap_or_default()
     }
 
-    /// Applies the wanted look to `ctx` unless it is already applied, at the display's scale (borders are a pixel,
-    /// #573). Returns whether it did.
+    /// Applies the wanted look to `ctx` unless it is already applied. Returns whether it did.
     pub fn apply(&mut self, ctx: &egui::Context) -> bool {
         let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
         let colors = self.wanted.colors(system_dark);
-        let scale = ctx.pixels_per_point();
-        if self.applied == Some(colors) && self.applied_look == Some(self.wanted) && self.applied_scale == Some(scale) {
+        if self.applied == Some(colors) && self.applied_look == Some(self.wanted) {
             return false;
         }
         let egui_theme = if colors.dark {
@@ -205,12 +207,13 @@ impl ThemeState {
         } else {
             egui::Theme::Light
         };
-        ctx.set_style_of(egui_theme, style(&colors, self.wanted.motion(), scale));
+        ctx.set_style_of(egui_theme, style(&colors, self.wanted.motion()));
+        // Replaces egui's own, which `Context::default` registered; it reads the colours from the style it is given.
+        ctx.replace_widget_theme::<TextEditStyle>(FieldStyle);
         ctx.set_theme(egui_theme);
         ctx.data_mut(|data| data.insert_temp(colors_key(), colors));
         self.applied = Some(colors);
         self.applied_look = Some(self.wanted);
-        self.applied_scale = Some(scale);
         true
     }
 }
@@ -226,9 +229,28 @@ fn colors_key() -> egui::Id {
     egui::Id::unique("metallic.theme")
 }
 
+/// Studio's text field style (#588): egui's, but a focused field is outlined as an active widget is, in the accent a
+/// point wide, rather than in the selection's stroke (the dark ink of selected text, three points wide). The selection
+/// keeps that stroke, which egui also draws selected text in.
+#[derive(Clone, Copy, Debug)]
+pub struct FieldStyle;
+
+impl StyleProvider<TextEditStyle> for FieldStyle {
+    fn style(&mut self, args: &StyleArgs<'_>) -> TextEditStyle {
+        let mut field = StyleProvider::<TextEditStyle>::style(&mut DefaultStyle, args);
+        if args.state == WidgetState::Active && !args.classes.has_class(&TextEdit::CLASS_READ_ONLY) {
+            // Taking the frame's stroke back to a point widens its margin by the difference: the text stays put.
+            field.atom_layout.frame = field
+                .atom_layout
+                .frame
+                .apply_stroke_and_expansion_without_layout_shift(args.style.visuals.widgets.active.bg_stroke, 0.0);
+        }
+        field
+    }
+}
+
 /// The full `egui::Style` of `colors`, moving with `motion`.
-/// Studio's egui style for `colors` and `motion` on a display of `pixels_per_point`.
-pub fn style(colors: &Colors, motion: Motion, pixels_per_point: f32) -> egui::Style {
+pub fn style(colors: &Colors, motion: Motion) -> egui::Style {
     let mut style = egui::Style {
         animation_time: motion.fast,
         ..egui::Style::default()
@@ -250,17 +272,11 @@ pub fn style(colors: &Colors, motion: Motion, pixels_per_point: f32) -> egui::St
     spacing.menu_margin = Margin::same(space::S2 as i8);
     spacing.indent = space::S6;
 
-    style.visuals = visuals(colors, hairline(pixels_per_point));
+    style.visuals = visuals(colors);
     style
 }
 
-/// A line one physical pixel wide on a display of `pixels_per_point`, in points: the lines between panels (#287) and
-/// the borders of fields and buttons (#573), which a whole point drew over more than a pixel, blurred and heavier.
-pub fn hairline(pixels_per_point: f32) -> f32 {
-    size::BORDER / pixels_per_point.max(0.25)
-}
-
-fn visuals(colors: &Colors, border: f32) -> egui::Visuals {
+fn visuals(colors: &Colors) -> egui::Visuals {
     let p = &colors.palette;
     let mut visuals = if colors.dark {
         egui::Visuals::dark()
@@ -270,7 +286,7 @@ fn visuals(colors: &Colors, border: f32) -> egui::Visuals {
     let widget = |fill: Color32, edge: Color32, ink: Color32| WidgetVisuals {
         bg_fill: fill,
         weak_bg_fill: fill,
-        bg_stroke: Stroke::new(border, edge),
+        bg_stroke: Stroke::new(size::BORDER, edge),
         corner_radius: CornerRadius::same(radius::ITEM),
         fg_stroke: Stroke::new(1.0, ink),
         expansion: 0.0,
@@ -294,7 +310,7 @@ fn visuals(colors: &Colors, border: f32) -> egui::Visuals {
     visuals.text_edit_bg_color = Some(p.input);
     visuals.code_bg_color = p.input;
     visuals.window_fill = p.surface;
-    visuals.window_stroke = Stroke::new(border, p.border);
+    visuals.window_stroke = Stroke::new(size::BORDER, p.border);
     visuals.window_corner_radius = CornerRadius::same(radius::DIALOG);
     visuals.menu_corner_radius = CornerRadius::same(radius::PANEL);
     visuals.panel_fill = p.bg;
@@ -677,7 +693,7 @@ mod tests {
             },
         ] {
             let colors = look.colors(None);
-            let style = style(&colors, look.motion(), 1.0);
+            let style = style(&colors, look.motion());
             let p = colors.palette;
             assert_eq!(style.visuals.dark_mode, colors.dark);
             assert_eq!(style.visuals.panel_fill, p.bg);
@@ -693,33 +709,46 @@ mod tests {
             assert_eq!(button.family, FontFamily::Name(fonts::STRONG.into()));
             assert_eq!(button.size, 14.0);
         }
-        let reduced = style(&Colors::default(), Motion::new(true), 1.0);
+        let reduced = style(&Colors::default(), Motion::new(true));
         assert_eq!(reduced.animation_time, 0.0);
     }
 
-    /// #573: a field's or a button's border is one physical pixel, as the lines between panels are, at any scale.
+    /// #588: a focused field is outlined in the accent a point wide, not in the dark ink of selected text.
     #[test]
-    fn borders_are_one_pixel_at_any_scale() {
-        let colors = Colors::default();
-        for scale in [1.0, 1.25, 1.5, 2.0] {
-            let style = style(&colors, Motion::new(false), scale);
-            for state in [&style.visuals.widgets.inactive, &style.visuals.widgets.hovered] {
-                assert_eq!(state.bg_stroke.width * scale, 1.0, "at {scale}");
-            }
-            assert_eq!(style.visuals.widgets.inactive.bg_stroke.color, colors.palette.border);
-            assert_eq!(style.visuals.window_stroke.width * scale, 1.0);
-        }
-        // The scale changing applies the style again.
+    fn a_focused_field_is_outlined_in_the_accent() {
         let ctx = egui::Context::default();
         let mut state = ThemeState::new(Look::default());
-        assert!(state.apply(&ctx));
-        ctx.set_pixels_per_point(1.5);
-        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
-        assert!(state.apply(&ctx), "a new scale");
-        assert_eq!(
-            ctx.style_of(ctx.theme()).visuals.widgets.inactive.bg_stroke.width,
-            1.0 / 1.5
+        state.apply(&ctx);
+        let field = egui::Id::unique("field");
+        let mut text = String::from("Part");
+        let mut outlines = |ctx: &egui::Context| -> Vec<Stroke> {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.add(TextEdit::singleline(&mut text).id(field));
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect) => Some(rect.stroke),
+                    _ => None,
+                })
+                .collect()
+        };
+        let idle = outlines(&ctx);
+        assert!(
+            idle.contains(&Stroke::new(size::BORDER, state.colors().palette.border)),
+            "{idle:?}"
         );
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        // A field is styled by its state in the frame before.
+        outlines(&ctx);
+        let focused = outlines(&ctx);
+        assert!(
+            focused.contains(&Stroke::new(size::BORDER, state.colors().accent)),
+            "{focused:?}"
+        );
+        assert!(focused.iter().all(|stroke| stroke.color != ACCENT_INK), "{focused:?}");
     }
 
     #[test]

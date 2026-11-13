@@ -14,7 +14,8 @@ workspace = true
 [dependencies]
 metallic_engine = { workspace = true, features = ["render", "physics", "luau"] }
 metallic_player.workspace = true
-egui.workspace = true
+# `experimental` makes egui's widget themes public: Studio styles the focused text field's outline (#588).
+egui = { workspace = true, features = ["experimental"] }
 egui-winit.workspace = true
 egui-wgpu.workspace = true
 winit.workspace = true
