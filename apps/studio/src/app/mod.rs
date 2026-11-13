@@ -4502,6 +4502,72 @@ mod tests {
         assert_eq!(text(&mut harness, "Scripts/Alpha.luau"), "local x = 1\nprint(x)");
     }
 
+    /// Opens a new script called `name` holding `code`, its field having the keyboard; returns it and its field's id.
+    fn open_with_code(
+        harness: &mut Harness<'static, Test>,
+        name: &str,
+        code: &str,
+    ) -> (metallic_engine::metallic_core::Id, egui::Id) {
+        let script = script_with_code(harness, name, code);
+        two_clicks(harness, name, 0.05);
+        settle(harness);
+        (script, crate::panels::script::field_id(script))
+    }
+
+    /// The place on the screen of character `at` of the code in the field `field`, half way down its line.
+    fn char_pos(harness: &Harness<'static, Test>, field: egui::Id, code: &str, at: usize) -> egui::Pos2 {
+        let settings = harness.state().studio.settings().code.clone();
+        let glyph = harness
+            .ctx
+            .fonts_mut(|fonts| fonts.glyph_width(&crate::code::view::font(&settings), '0'));
+        let rect = harness.get_by_role(Role::MultilineTextInput).rect();
+        let row = settings.size * settings.line_spacing;
+        let line = code.chars().take(at).filter(|c| *c == '\n').count();
+        let column = code
+            .chars()
+            .take(at)
+            .collect::<String>()
+            .rsplit('\n')
+            .next()
+            .map_or(0, |s| s.chars().count());
+        let _ = field;
+        egui::pos2(
+            rect.left() + column as f32 * glyph + 1.0,
+            rect.top() + (line as f32 + 0.5) * row,
+        )
+    }
+
+    /// #557: a click under the last line puts the cursor at the end of the code, and a drag from there selects back.
+    #[test]
+    fn a_click_under_the_last_line_goes_to_the_end() {
+        let mut harness = editing(settings_file("editor-script-below", None), "Script Below Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let code = "a = 1\nbb = 2\nccc = 3";
+        let (_, field) = open_with_code(&mut harness, "Below", code);
+        let rect = harness.get_by_role(Role::MultilineTextInput).rect();
+        let under = egui::pos2(rect.left() + 20.0, rect.bottom() + 300.0);
+        left_click(
+            &mut harness,
+            egui::Rect::from_center_size(under, egui::Vec2::splat(2.0)),
+        );
+        settle(&mut harness);
+        let end = code.chars().count();
+        assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(end..end));
+        assert!(harness.ctx.memory(|memory| memory.has_focus(field)));
+        // Dragged from there up to the second line's start: from there to the end.
+        harness.drag_at(under);
+        harness.step();
+        let to = char_pos(&harness, field, code, 6);
+        harness.hover_at(egui::pos2(to.x, under.y - 100.0));
+        harness.step();
+        harness.hover_at(to);
+        harness.step();
+        harness.drop_at(to);
+        settle(&mut harness);
+        assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(6..end));
+    }
+
     /// #556: the minimap down the code's right scrolls it: a click near its bottom shows the code's end, and dragging
     /// its shaded part back up shows the start. The setting hides it.
     #[test]
