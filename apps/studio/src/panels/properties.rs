@@ -672,12 +672,26 @@ mod tests {
         let baseplate = dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap();
 
         let groups = groups(&dm, &[baseplate]);
-        let names: Vec<&str> = groups.iter().map(|group| group.name).collect();
-        assert!(names.contains(&"Data") && names.contains(&"Transform"), "{names:?}");
-        let mut seen = std::collections::HashSet::new();
-        assert!(
-            names.iter().all(|name| seen.insert(*name)),
-            "each group once: {names:?}"
+        // #589: a part's properties, group by group, as the owner laid them out.
+        let layout: Vec<(&str, Vec<&str>)> = groups
+            .iter()
+            .map(|group| {
+                let rows = group.rows.iter().filter(|row| row.depth == 0);
+                (group.name, rows.map(|row| row.label.as_str()).collect())
+            })
+            .collect();
+        assert_eq!(
+            layout,
+            [
+                ("General", vec!["Name", "Parent", "Archivable"]),
+                ("Transform", vec!["Position", "Rotation", "Size", "PivotOffset"]),
+                (
+                    "Appearance",
+                    vec!["Shape", "Material", "Color", "Transparency", "CastShadow"]
+                ),
+                ("Collision", vec!["CanCollide"]),
+                ("Physics", vec!["Anchored"]),
+            ]
         );
         let value = |label: &str| {
             groups

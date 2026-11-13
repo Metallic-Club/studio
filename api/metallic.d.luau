@@ -805,10 +805,10 @@ declare extern type BasePart extends WorldObject with
     Transparency: number
     --- Whether the part casts a shadow.
     CastShadow: boolean
-    --- Whether the part stays where it is. An anchored part is not moved by gravity or collisions.
-    Anchored: boolean
     --- Whether other parts bump into this one. When off, things pass through it.
     CanCollide: boolean
+    --- Whether the part stays where it is. An anchored part is not moved by gravity or collisions. On by default.
+    Anchored: boolean
 end
 
 --- The base of Script and LocalScript: a script that runs on its own when the game starts, if enabled.

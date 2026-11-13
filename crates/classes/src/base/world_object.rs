@@ -251,7 +251,8 @@ fn pivot_to_method(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError
 /// The base of everything that has a place in the 3D world.
 pub static CLASS: ClassDesc = ClassDesc::new("WorldObject", Some("Instance"))
     .describe("The base of everything that has a position in the 3D world, such as models, parts, lights and cameras.")
-    .props(&[PropMeta::cframe("PivotOffset").group("Transform").desc(
+    // Last in Transform (#589), after what places the object itself.
+    .props(&[PropMeta::cframe("PivotOffset").group("Transform").order(10).desc(
         "Where the object's pivot sits, relative to the object. Moving and rotating the object happens around its pivot.",
     )])
     .methods(&[

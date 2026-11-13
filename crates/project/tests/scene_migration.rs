@@ -2,7 +2,7 @@
 //!
 //! `fixtures/v0.scene` is a hand-written format 0 scene: format 0 kept every instance's name in a `Name` property,
 //! which format 1 moved to a `name` key. It must load through the migration, with one warning for the upgrade and
-//! nothing else, and save back as the current format.
+//! nothing else (the steps after it add theirs), and save back as the current format.
 
 use metallic_core::{DataModel, Id, Value};
 use metallic_project::{SCENE_FORMAT, SceneWarning, load_scene, save_scene};
@@ -28,7 +28,10 @@ fn a_format_0_scene_loads_with_a_warning() {
     assert!(
         matches!(
             loaded.warnings.as_slice(),
-            [SceneWarning::Migrated { from: 0, to: 1, .. }]
+            [
+                SceneWarning::Migrated { from: 0, to: 1, .. },
+                SceneWarning::Migrated { from: 1, to: 2, .. }
+            ]
         ),
         "{:?}",
         loaded.warnings
@@ -66,4 +69,45 @@ fn a_format_0_scene_loads_with_a_warning() {
     assert_eq!(reloaded.warnings, []);
     let mut ids = reloaded.ids;
     assert_eq!(save_scene(&again, &mut ids).expect("save").text, saved.text);
+}
+
+/// `fixtures/v1.scene` is a format 1 scene, the template as it was, but with the spawn left unanchored: format 1 left
+/// `Anchored` out when it was off, its default then. Parts are anchored by default since format 2 (#589), so the
+/// spawn must load unanchored and save saying so.
+const V1: &str = include_str!("fixtures/v1.scene");
+
+#[test]
+fn a_format_1_scene_keeps_its_unanchored_parts() {
+    let mut dm = metallic_classes::new_game().expect("a new game");
+    let loaded = load_scene(&mut dm, V1).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(loaded.format, 1);
+    assert!(
+        matches!(
+            loaded.warnings.as_slice(),
+            [SceneWarning::Migrated { from: 1, to: 2, .. }]
+        ),
+        "{:?}",
+        loaded.warnings
+    );
+    let workspace = service(&dm, "Workspace");
+    let anchored = |name: &str| dm.get_by_name(child(&dm, workspace, name), "Anchored");
+    assert_eq!(anchored("Baseplate"), Ok(Value::Bool(true)));
+    assert_eq!(anchored("SpawnLocation"), Ok(Value::Bool(false)));
+
+    let mut ids = loaded.ids;
+    let saved = save_scene(&dm, &mut ids).expect("save");
+    let doc: serde_json::Value = serde_json::from_str(&saved.text).expect("JSON");
+    let instances = doc["instances"].as_array().expect("instances");
+    let props = |name: &str| {
+        instances
+            .iter()
+            .find(|instance| instance["name"] == name)
+            .map(|instance| instance["properties"].clone())
+            .unwrap_or_else(|| panic!("no {name}"))
+    };
+    assert_eq!(props("SpawnLocation")["Anchored"], false);
+    assert!(
+        props("Baseplate").get("Anchored").is_none(),
+        "anchored is the default now"
+    );
 }

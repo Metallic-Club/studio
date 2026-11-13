@@ -17,7 +17,8 @@ pub static COMPONENT: ComponentDesc = ComponentDesc::new("PrimitiveMesh")
 static PROPS: &[PropMeta] = &[PropMeta::enumeration("Shape", "PartShape", "Block")
     .visual()
     .physics()
-    .group("Part")
+    // First in Appearance, before BasePart's Material (#589).
+    .group("Appearance")
     .order(0)
     .desc(
         "The part's shape, stretched to its Size: a Ball whose sides differ is an ellipsoid; a Cylinder runs along X, \

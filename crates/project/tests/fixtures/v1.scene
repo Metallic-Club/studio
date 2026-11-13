@@ -1,0 +1,52 @@
+{
+  "format": 1,
+  "instances": [{
+    "id": 1,
+    "class": "Workspace",
+    "properties": {
+      "CurrentCamera": 2
+    }
+  }, {
+    "id": 2,
+    "parent": 1,
+    "class": "Camera",
+    "properties": {
+      "CFrame": [0.0, 20.0, 40.0, -0.22975293, -0.0, -0.0, 0.973249]
+    }
+  }, {
+    "id": 3,
+    "parent": 1,
+    "class": "Part",
+    "name": "Baseplate",
+    "properties": {
+      "Anchored": true,
+      "CFrame": [0.0, -8.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+      "Color": [0.3882353, 0.37254903, 0.38431373],
+      "Material": "Concrete",
+      "Size": [512.0, 16.0, 512.0]
+    }
+  }, {
+    "id": 4,
+    "parent": 1,
+    "class": "Part",
+    "name": "SpawnLocation",
+    "properties": {
+      "CFrame": [0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0],
+      "Color": [0.6392157, 0.63529414, 0.64705884],
+      "Material": "SmoothPlastic",
+      "Size": [12.0, 1.0, 12.0]
+    }
+  }, {
+    "id": 5,
+    "class": "Lighting"
+  }, {
+    "id": 6,
+    "class": "ReplicatedStorage"
+  }, {
+    "id": 7,
+    "class": "ServerScriptService"
+  }, {
+    "id": 8,
+    "class": "ServerStorage"
+  }]
+}

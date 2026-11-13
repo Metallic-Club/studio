@@ -22,11 +22,22 @@ struct Migration {
 }
 
 /// Every upgrade step, oldest first; one per version below [`SCENE_FORMAT`].
-static MIGRATIONS: &[Migration] = &[Migration {
-    from: 0,
-    change: "instance names moved from the `Name` property to the `name` key",
-    apply: names_out_of_properties,
-}];
+static MIGRATIONS: &[Migration] = &[
+    Migration {
+        from: 0,
+        change: "instance names moved from the `Name` property to the `name` key",
+        apply: names_out_of_properties,
+    },
+    Migration {
+        from: 1,
+        change: "parts are anchored by default: a part left unanchored says so",
+        apply: unanchored_parts_say_so,
+    },
+];
+
+/// The classes that were parts (`BasePart` and what derives from it) in format 1. Fixed: a class added later was
+/// never saved in format 1.
+const FORMAT_1_PARTS: [&str; 2] = ["Part", "MeshPart"];
 
 /// Upgrades `doc`, a scene of version `from`, to [`SCENE_FORMAT`], adding a warning per step.
 pub(super) fn upgrade(doc: &mut Json, from: u32, warnings: &mut Vec<SceneWarning>) -> Result<(), SceneError> {
@@ -80,6 +91,36 @@ fn names_out_of_properties(doc: &mut Json) -> Result<(), SceneError> {
     Ok(())
 }
 
+/// Format 1 left a part's `Anchored` out when it was off, the default then; format 2's default is on (#589), so a
+/// part without `Anchored` gets `false` and stays unanchored.
+fn unanchored_parts_say_so(doc: &mut Json) -> Result<(), SceneError> {
+    let Some(instances) = doc.get_mut("instances").and_then(Json::as_array_mut) else {
+        return Ok(());
+    };
+    for instance in instances {
+        let Some(instance) = instance.as_object_mut() else {
+            continue;
+        };
+        let is_part = instance
+            .get("class")
+            .and_then(Json::as_str)
+            .is_some_and(|class| FORMAT_1_PARTS.contains(&class));
+        if !is_part {
+            continue;
+        }
+        let properties = instance
+            .entry("properties")
+            .or_insert_with(|| Json::Object(Default::default()));
+        let Some(properties) = properties.as_object_mut() else {
+            return Err(SceneError::Malformed(format!(
+                "a part's `properties` is not an object: {properties}"
+            )));
+        };
+        properties.entry("Anchored").or_insert(Json::Bool(false));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -116,7 +157,47 @@ mod tests {
         );
         assert!(matches!(
             warnings.as_slice(),
-            [SceneWarning::Migrated { from: 0, to: 1, .. }]
+            [
+                SceneWarning::Migrated { from: 0, to: 1, .. },
+                SceneWarning::Migrated { from: 1, to: 2, .. }
+            ]
+        ));
+    }
+
+    /// #589: a format 1 part that left `Anchored` out was unanchored, and stays so.
+    #[test]
+    fn format_1_parts_keep_their_anchored() {
+        let mut doc = json!({
+            "format": 1,
+            "instances": [
+                {"id": 1, "class": "Workspace"},
+                {"id": 2, "parent": 1, "class": "Part", "name": "Floor", "properties": {"Anchored": true}},
+                {"id": 3, "parent": 1, "class": "Part", "name": "Crate", "properties": {"Size": [2.0, 2.0, 2.0]}},
+                {"id": 4, "parent": 1, "class": "MeshPart"},
+                {"id": 5, "parent": 1, "class": "Folder"},
+            ],
+        });
+        let mut warnings = Vec::new();
+        upgrade(&mut doc, 1, &mut warnings).unwrap();
+        assert_eq!(
+            doc,
+            json!({
+                "format": SCENE_FORMAT,
+                "instances": [
+                    {"id": 1, "class": "Workspace"},
+                    {"id": 2, "parent": 1, "class": "Part", "name": "Floor", "properties": {"Anchored": true}},
+                    {
+                        "id": 3, "parent": 1, "class": "Part", "name": "Crate",
+                        "properties": {"Anchored": false, "Size": [2.0, 2.0, 2.0]},
+                    },
+                    {"id": 4, "parent": 1, "class": "MeshPart", "properties": {"Anchored": false}},
+                    {"id": 5, "parent": 1, "class": "Folder"},
+                ],
+            })
+        );
+        assert!(matches!(
+            warnings.as_slice(),
+            [SceneWarning::Migrated { from: 1, to: 2, .. }]
         ));
     }
 
