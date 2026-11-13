@@ -900,7 +900,7 @@ impl SettingsWindow {
                 ui.set_width(CATEGORY_WIDTH);
                 for category in Category::ALL {
                     let selected = !searching && category == self.category;
-                    if category_item(ui, category.label(), selected).clicked() {
+                    if category_item(ui, category.label(), selected, false).clicked() {
                         self.show_category(category);
                     }
                 }
@@ -1134,9 +1134,9 @@ fn row(ui: &mut Ui, entry: &Entry, settings: &mut StudioSettings) {
     });
 }
 
-/// A category in the list: muted text, or for the selected one a surface with the accent's 3 × 19 bar on its left.
-/// The projects page's rail uses it too.
-pub(crate) fn category_item(ui: &mut Ui, label: &str, selected: bool) -> Response {
+/// A category in the list: muted text, or for the selected one a surface and bold text, with the accent's 3 × 19 bar on
+/// its left when `accent_bar` (the projects page's rail; not the Settings window's list, #601).
+pub(crate) fn category_item(ui: &mut Ui, label: &str, selected: bool, accent_bar: bool) -> Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::CONTROL), Sense::click());
@@ -1150,7 +1150,7 @@ pub(crate) fn category_item(ui: &mut Ui, label: &str, selected: bool) -> Respons
             Color32::TRANSPARENT
         };
         ui.painter().rect_filled(rect, CornerRadius::same(radius::ITEM), fill);
-        if selected {
+        if selected && accent_bar {
             let bar = egui::Rect::from_center_size(
                 pos2(rect.left() + size::ACCENT_BAR / 2.0, rect.center().y),
                 vec2(size::ACCENT_BAR, size::SELECTED_BAR),
@@ -1430,6 +1430,27 @@ fn aa_label(aa: AntiAliasing) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #601: the Settings window's selected category is marked by its surface and bold text, with no accent bar; the
+    /// projects page's rail keeps its bar.
+    #[test]
+    fn the_selected_category_has_no_accent_bar_in_settings() {
+        let ctx = egui::Context::default();
+        let bars = |accent_bar: bool| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                category_item(ui, "General", true, accent_bar);
+            });
+            output.textures_delta.clear();
+            let accent = current_colors(&ctx).accent;
+            output
+                .shapes
+                .iter()
+                .filter(|clipped| matches!(&clipped.shape, egui::Shape::Rect(rect) if rect.fill == accent))
+                .count()
+        };
+        assert_eq!(bars(false), 0, "Settings");
+        assert_eq!(bars(true), 1, "the projects page");
+    }
 
     fn names(found: &[&Entry]) -> Vec<&'static str> {
         found.iter().map(|entry| entry.name).collect()
