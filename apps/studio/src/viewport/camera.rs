@@ -1,6 +1,11 @@
-//! The editor camera (#385, after Forge-Engine's): Studio's own point of view on the game, never the game's
-//! `Workspace.CurrentCamera`, which it only reads once, to start where the game's camera is.
+//! The editor camera (#385, after Forge-Engine's): Studio's point of view on the game, which is the game's
+//! `Workspace.CurrentCamera`, as in Roblox Studio (#576).
 //!
+//! - **One view.** [`CameraSync`] writes where the editor camera is into the current camera's `CFrame` and
+//!   `FieldOfView` whenever it moves, straight into the data model: moving the view is not an undo step and leaves
+//!   nothing unsaved. When the camera's properties change from elsewhere (the Properties panel, undo), the editor
+//!   camera goes there. Play copies the scene, camera included, so the game starts from the view. A game without a
+//!   current camera is left without one; the editor camera then moves on its own.
 //! - **Looking** (a right drag) turns it where it stands. **Orbiting** (Alt with a drag) swings it round a pivot, the
 //!   point that was under the pointer when the drag began, which stays where it is on the screen. While either goes
 //!   on, Studio holds the pointer where it was (still shown) and turns by the mouse's own movement, so a drag never
@@ -13,7 +18,7 @@
 //!   or a fixed share of a guess in open space, travelled over a few frames.
 
 use metallic_engine::metallic_core::glam::{Quat, Vec2, Vec3};
-use metallic_engine::metallic_core::{DataModel, Id};
+use metallic_engine::metallic_core::{CFrame, DataModel, Id, Value};
 use metallic_engine::metallic_render::{Camera, CameraReader};
 
 /// How far the camera turns per unit the mouse moves while looking or orbiting, in radians (Forge's).
@@ -173,6 +178,27 @@ impl EditorCamera {
         }
     }
 
+    /// Where it is, as a game camera's `CFrame` (#576).
+    pub fn cframe(&self) -> CFrame {
+        CFrame::from_parts(self.position, self.rotation())
+    }
+
+    /// Its field of view, as a game camera's `FieldOfView`: vertical, in degrees (#576).
+    pub fn field_of_view(&self) -> f64 {
+        f64::from(self.fov_y.to_degrees())
+    }
+
+    /// Moves it to where `camera` is, looking the same way, as wide (#576). A drag under way goes on; a focus, a
+    /// glide or a zoom does not, since the view was put somewhere else.
+    pub fn place(&mut self, camera: &Camera) {
+        self.position = camera.position;
+        self.aim(camera.rotation * Vec3::NEG_Z);
+        self.fov_y = camera.fov_y;
+        self.focus = None;
+        self.glide = None;
+        self.zoom.0 = 0.0;
+    }
+
     /// Starts a drag: an orbit round `pivot`, or else (none given) an orbit round the focus when there is one, or a
     /// look.
     pub fn begin_look(&mut self, pivot: Option<Vec3>) {
@@ -320,6 +346,109 @@ pub fn frame_distance(radius: f32, fov_y: f32, aspect: f32) -> f32 {
     (radius / half_v.min(half_h).sin() * 1.15).clamp(3.0, 5000.0)
 }
 
+/// The game's current camera in `dm`: which it is, its `CFrame`, and its `FieldOfView` in degrees (70 when it has
+/// none). `None` when `Workspace.CurrentCamera` is unset, names a destroyed instance, or the camera has no `CFrame`.
+pub fn current_camera(dm: &DataModel) -> Option<(Id, CFrame, f64)> {
+    let workspace = dm
+        .registry()
+        .class_id("Workspace")
+        .and_then(|class| dm.service(class))?;
+    let Ok(Value::Ref(Some(camera))) = dm.get_by_name(workspace, "CurrentCamera") else {
+        return None;
+    };
+    let Ok(Value::CFrame(cframe)) = dm.get_by_name(camera, "CFrame") else {
+        return None;
+    };
+    let field_of_view = match dm.get_by_name(camera, "FieldOfView") {
+        Ok(Value::Number(degrees)) => degrees,
+        _ => 70.0,
+    };
+    Some((camera, cframe, field_of_view))
+}
+
+/// The game's current camera as the editor last left it: which it was, what it held, and the editor's view then.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Seen {
+    camera: Id,
+    cframe: CFrame,
+    field_of_view: f64,
+    view: Camera,
+}
+
+impl Seen {
+    /// Whether the data model still holds what was seen: nothing else wrote the camera since.
+    fn holds(&self, camera: Id, cframe: CFrame, field_of_view: f64) -> bool {
+        // By bits, so a NaN read back is still the same value and is not taken for an edit every frame.
+        self.camera == camera && self.cframe == cframe && self.field_of_view.to_bits() == field_of_view.to_bits()
+    }
+}
+
+/// Keeps the editor camera and the game's `Workspace.CurrentCamera` one view (#576): the editor's moves are written
+/// into the camera, and the camera's changes from elsewhere move the editor's. Each frame, [`CameraSync::follow`]
+/// before the editor camera moves and [`CameraSync::write`] after; neither while a game runs, whose camera is its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CameraSync {
+    /// The camera as last written or followed; `None` while the game has none.
+    seen: Option<Seen>,
+}
+
+impl CameraSync {
+    /// Moves `camera` to the game's current camera when that changed since it was last written or followed (the
+    /// Properties panel, undo), or is another camera than before (or the first one seen). Returns whether the view
+    /// moved.
+    pub fn follow(&mut self, dm: &DataModel, camera: &mut EditorCamera) -> bool {
+        let Some((id, cframe, field_of_view)) = current_camera(dm) else {
+            self.seen = None;
+            return false;
+        };
+        if self.seen.is_some_and(|seen| seen.holds(id, cframe, field_of_view)) {
+            return false;
+        }
+        let before = camera.camera();
+        camera.place(&Camera::from_cframe(cframe, field_of_view));
+        self.seen = Some(Seen {
+            camera: id,
+            cframe,
+            field_of_view,
+            view: camera.camera(),
+        });
+        camera.camera() != before
+    }
+
+    /// Writes `camera` into the game's current camera when it moved since, straight into `dm`: not through the
+    /// scene's edits, so it is neither an undo step nor an unsaved change. Writes only what changed, and nothing
+    /// before [`CameraSync::follow`] has found the camera.
+    pub fn write(&mut self, dm: &mut DataModel, camera: &EditorCamera) {
+        let Some(seen) = self.seen else {
+            return;
+        };
+        let view = camera.camera();
+        if view == seen.view || current_camera(dm).is_none_or(|(id, ..)| id != seen.camera) {
+            return;
+        }
+        if (view.position != seen.view.position || view.rotation != seen.view.rotation)
+            && let Err(error) = dm.set_by_name(seen.camera, "CFrame", Value::CFrame(camera.cframe()))
+        {
+            log::debug!("viewport: the camera's CFrame: {error}");
+        }
+        if view.fov_y != seen.view.fov_y
+            && let Err(error) = dm.set_by_name(seen.camera, "FieldOfView", Value::Number(camera.field_of_view()))
+        {
+            log::debug!("viewport: the camera's FieldOfView: {error}");
+        }
+        // What the camera holds now (clamped, or as it was if a write failed) is the editor's own: the next frame does
+        // not take it for an edit from elsewhere and pull the view back.
+        if let Some((id, cframe, field_of_view)) = current_camera(dm) {
+            self.seen = Some(Seen {
+                camera: id,
+                cframe,
+                field_of_view,
+                view,
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +466,102 @@ mod tests {
         assert!(close(camera.position, game.position));
         assert!(close(camera.forward(), game.rotation * Vec3::NEG_Z));
         assert!((camera.camera().fov_y - game.fov_y).abs() < 1e-6);
+    }
+
+    fn game_camera(dm: &DataModel) -> Camera {
+        let (_, cframe, field_of_view) = current_camera(dm).unwrap();
+        Camera::from_cframe(cframe, field_of_view)
+    }
+
+    #[test]
+    fn its_view_as_a_game_cameras_reads_back_as_the_same_view() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let (id, ..) = current_camera(&dm).unwrap();
+        let mut camera = EditorCamera::looking_at(Vec3::new(-12.0, 7.5, 3.0), Vec3::new(4.0, 0.0, -9.0));
+        camera.fov_y = 45f32.to_radians();
+        dm.set_by_name(id, "CFrame", Value::CFrame(camera.cframe())).unwrap();
+        dm.set_by_name(id, "FieldOfView", Value::Number(camera.field_of_view()))
+            .unwrap();
+        // The renderer's reading of the game's camera is the editor's view...
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let read = CameraReader::new().read(&dm, workspace).unwrap();
+        assert!(close(read.position, camera.position));
+        assert!(close(read.rotation * Vec3::NEG_Z, camera.forward()));
+        assert!(close(read.rotation * Vec3::Y, camera.rotation() * Vec3::Y));
+        assert!((read.fov_y - camera.fov_y()).abs() < 1e-5);
+        // ...and an editor camera placed there is the same one.
+        let mut back = EditorCamera::looking_at(Vec3::ZERO, Vec3::X);
+        back.place(&read);
+        assert!(close(back.position, camera.position));
+        assert!((back.yaw() - camera.yaw()).abs() < 1e-4 && (back.pitch() - camera.pitch()).abs() < 1e-4);
+        assert!((back.fov_y() - camera.fov_y()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_sync_writes_the_view_and_follows_the_cameras_edits() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let (id, start, _) = current_camera(&dm).unwrap();
+        let mut camera = EditorCamera::looking_at(Vec3::ZERO, Vec3::X);
+        let mut sync = CameraSync::default();
+        // The first frame takes the game's camera.
+        sync.follow(&dm, &mut camera);
+        assert!(close(camera.position, start.position()));
+        sync.write(&mut dm, &camera);
+        assert_eq!(current_camera(&dm).unwrap().1, start, "nothing moved, nothing written");
+
+        // Flying is written into the camera.
+        camera.fly(1.0, 0.0, 0.0, 20.0, 0.05);
+        sync.write(&mut dm, &camera);
+        let (_, written, _) = current_camera(&dm).unwrap();
+        assert_eq!(written, camera.cframe());
+        sync.follow(&dm, &mut camera);
+        assert_eq!(camera.cframe(), written, "its own write is not an edit to follow");
+
+        // An edit from elsewhere moves the view there, and is not written back over.
+        let place = CFrame::look_at(Vec3::new(5.0, 6.0, 7.0), Vec3::ZERO, Vec3::Y);
+        dm.set_by_name(id, "CFrame", Value::CFrame(place)).unwrap();
+        dm.set_by_name(id, "FieldOfView", Value::Number(30.0)).unwrap();
+        sync.follow(&dm, &mut camera);
+        assert!(close(camera.position, Vec3::new(5.0, 6.0, 7.0)));
+        assert!(close(camera.forward(), place.look_vector()));
+        assert!((camera.fov_y() - 30f32.to_radians()).abs() < 1e-6);
+        sync.write(&mut dm, &camera);
+        assert_eq!(current_camera(&dm).unwrap().1, place);
+        assert_eq!(current_camera(&dm).unwrap().2, 30.0);
+        assert!(close(game_camera(&dm).position, camera.position));
+    }
+
+    #[test]
+    fn without_a_current_camera_the_view_moves_on_its_own() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let (id, start, _) = current_camera(&dm).unwrap();
+        let mut camera = EditorCamera::framing(&dm);
+        let mut sync = CameraSync::default();
+        sync.follow(&dm, &mut camera);
+        dm.set_by_name(workspace, "CurrentCamera", Value::Ref(None)).unwrap();
+        sync.follow(&dm, &mut camera);
+        camera.fly(1.0, 0.0, 0.0, 20.0, 0.05);
+        let flown = camera;
+        sync.write(&mut dm, &camera);
+        assert_eq!(camera, flown);
+        assert_eq!(dm.get_by_name(id, "CFrame"), Ok(Value::CFrame(start)), "not written");
+        assert_eq!(
+            dm.get_by_name(workspace, "CurrentCamera"),
+            Ok(Value::Ref(None)),
+            "none made"
+        );
+        // Made current again, the camera is followed.
+        dm.set_by_name(workspace, "CurrentCamera", Value::Ref(Some(id)))
+            .unwrap();
+        sync.follow(&dm, &mut camera);
+        assert!(close(camera.position, start.position()));
+        // A destroyed one is as good as none.
+        dm.destroy(id).unwrap();
+        sync.follow(&dm, &mut camera);
+        camera.fly(1.0, 0.0, 0.0, 20.0, 0.05);
+        sync.write(&mut dm, &camera);
+        assert_eq!(current_camera(&dm), None);
     }
 
     #[test]

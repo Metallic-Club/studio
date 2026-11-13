@@ -1,15 +1,17 @@
 //! The viewport (ADR 0009, Viewport): the engine's render of the open game in the Viewport panel, seen from the
-//! editor's own camera.
+//! editor camera, which is the game's `Workspace.CurrentCamera` (#576).
 //!
 //! - **The texture.** The panel notes its size in physical pixels ([`ViewportState::pixels`]) and shows
 //!   [`ViewportState::texture`] filling itself. The shell (`app::viewport`) owns the engine side: after each frame's
 //!   interface it sizes the engine's viewport target to the panel, draws the game into it from the editor camera, and
 //!   registers the texture with egui-wgpu (again when a resize replaced it), before the frame is painted. While a
 //!   resize is under way the old texture is stretched over the new size, so there is never a black frame.
-//! - **The camera** ([`EditorCamera`]) is Studio's, not the game's `Workspace.CurrentCamera`: the game is shown, never
-//!   changed. It moves only through the keymap's viewport commands ([`ViewportState::navigate`], after Forge-Engine's
-//!   controls, #385): keys need the viewport's focus, the mouse and wheel start over it. While a look or an orbit goes
-//!   on, the shell holds the pointer where the drag began ([`ViewportState::hold`]).
+//! - **The camera** ([`EditorCamera`]) moves through the keymap's viewport commands ([`ViewportState::navigate`],
+//!   after Forge-Engine's controls, #385): keys need the viewport's focus, the mouse and wheel start over it. While a
+//!   look or an orbit goes on, the shell holds the pointer where the drag began ([`ViewportState::hold`]). As in
+//!   Roblox Studio it is the game's `Workspace.CurrentCamera` (#576, [`ViewportState::sync`]): each move is written
+//!   into the camera's `CFrame` and `FieldOfView`, as no undo step and no unsaved change, and editing those (the
+//!   Properties panel, undo) moves the view. Not while a game runs: its camera is its own.
 //! - **Frame pacing.** While the panel is shown and the window has focus it asks for frames continuously (at the
 //!   Rendering settings' frame cap, if any); otherwise Studio draws only on input or change.
 //! - **No game scripts run.** The editor shows the scene as it is; Play mode is later work.
@@ -72,6 +74,8 @@ pub struct NavInput<'a> {
 pub struct ViewportState {
     /// The editor camera.
     pub camera: EditorCamera,
+    /// What keeps the editor camera and the game's current camera one view (#576).
+    pub sync: camera::CameraSync,
     /// The panel's area as last drawn, in points.
     pub rect: Option<Rect>,
     /// The panel's size as last drawn, in physical pixels: the size the engine draws at.
@@ -110,6 +114,7 @@ impl ViewportState {
     pub fn new(dm: &DataModel) -> Self {
         Self {
             camera: EditorCamera::framing(dm),
+            sync: camera::CameraSync::default(),
             rect: None,
             pixels: None,
             shown: false,
