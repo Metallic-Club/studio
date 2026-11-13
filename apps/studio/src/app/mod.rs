@@ -4568,6 +4568,61 @@ mod tests {
         assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(6..end));
     }
 
+    /// #558: Alt+click adds cursors; typing, the arrows, deleting, Enter and pasting act at every one; Escape goes back
+    /// to one, and so does a click.
+    #[test]
+    fn alt_click_adds_cursors_that_type_together() {
+        let mut harness = editing(settings_file("editor-script-cursors", None), "Script Cursors Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let code = "a = 1\nbb = 2\nccc = 3";
+        let (_, field) = open_with_code(&mut harness, "Cursors", code);
+        let text = |harness: &mut Harness<'static, Test>| {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.project.read_text("Scripts/Cursors.luau").unwrap()
+        };
+        let at = char_pos(&harness, field, code, 0);
+        click_with(&mut harness, at, Modifiers::NONE);
+        let at = char_pos(&harness, field, code, 6);
+        click_with(&mut harness, at, Modifiers::ALT);
+        let at = char_pos(&harness, field, code, 13);
+        click_with(&mut harness, at, Modifiers::ALT);
+        assert_eq!(crate::code::view::carets(&harness.ctx, field).len(), 3);
+        harness.event(egui::Event::Text("x".to_owned()));
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "xa = 1\nxbb = 2\nxccc = 3");
+        // The arrows move every cursor: to each line's end.
+        harness.key_press(Key::End);
+        harness.event(egui::Event::Text(";".to_owned()));
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "xa = 1;\nxbb = 2;\nxccc = 3;");
+        harness.key_press(Key::Backspace);
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "xa = 1\nxbb = 2\nxccc = 3");
+        // A paste with a line per cursor puts one at each.
+        harness.event(egui::Event::Paste("-- a\n-- b\n-- c".to_owned()));
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "xa = 1-- a\nxbb = 2-- b\nxccc = 3-- c");
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "xa = 1-- a\n\nxbb = 2-- b\n\nxccc = 3-- c\n");
+        // Escape: one cursor, the field's own, which keeps the keyboard.
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert_eq!(crate::code::view::carets(&harness.ctx, field).len(), 1);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(field)));
+        harness.event(egui::Event::Text("y".to_owned()));
+        settle(&mut harness);
+        assert_eq!(text(&mut harness).matches('y').count(), 1);
+        // A click without Alt goes back to one too.
+        let at = char_pos(&harness, field, code, 0);
+        click_with(&mut harness, at, Modifiers::ALT);
+        assert_eq!(crate::code::view::carets(&harness.ctx, field).len(), 2);
+        let at = char_pos(&harness, field, code, 2);
+        click_with(&mut harness, at, Modifiers::NONE);
+        assert_eq!(crate::code::view::carets(&harness.ctx, field).len(), 1);
+    }
+
     /// #556: the minimap down the code's right scrolls it: a click near its bottom shows the code's end, and dragging
     /// its shaded part back up shows the start. The setting hides it.
     #[test]
