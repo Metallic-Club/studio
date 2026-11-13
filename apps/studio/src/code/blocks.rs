@@ -5,6 +5,9 @@
 //! `do`), `repeat`, or the `)` that closes a `function`'s parameters, named or not. An anonymous function inside a
 //! call's brackets, `x.Touched:Connect(function(hit)`, is closed with `end)`. Whether the block is closed is a count
 //! over the whole script: more `function`, `if` and `do` than `end` (or more `repeat` than `until`) means one is open.
+//!
+//! A block comment is closed the same way (#575): Enter after a line that opens `--[[` (or `--[==[`) not closed
+//! anywhere after it steps in and puts the `]]` (or `]==]`) under it.
 
 use super::lexer::{Token, TokenKind, lex};
 
@@ -40,6 +43,14 @@ pub fn enter(text: &str, at: usize, unit: &str) -> Option<Enter> {
         return None;
     }
     let indent: String = before.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    if let Some(level) = open_comment(text, line_start, at) {
+        let inner = format!("\n{indent}{unit}");
+        return Some(Enter {
+            replace: at..at,
+            with: format!("{inner}\n{indent}]{}]", "=".repeat(level)),
+            cursor: inner.len(),
+        });
+    }
     let tokens: Vec<Token> = lex(before)
         .into_iter()
         .filter(|token| token.kind != TokenKind::Comment)
@@ -71,6 +82,22 @@ pub fn enter(text: &str, at: usize, unit: &str) -> Option<Enter> {
         with: format!("{inner}\n{indent}{word}{tail}"),
         cursor,
     })
+}
+
+/// The level of the block comment (`--[[` is 0, `--[==[` is 2) that opens on the line from byte `line_start` of `text`
+/// before byte `at` and is not closed (#575); `None` when there is none.
+fn open_comment(text: &str, line_start: usize, at: usize) -> Option<usize> {
+    lex(text)
+        .into_iter()
+        .filter(|token| token.kind == TokenKind::Comment && token.unterminated)
+        .filter(|token| (line_start..at).contains(&token.start))
+        .find_map(|token| {
+            let opener = text.get(token.start..)?.strip_prefix("--[")?;
+            let level = opener.chars().take_while(|c| *c == '=').count();
+            let bracket = token.start + 3 + level;
+            // A long comment's bracket, and the cursor past it.
+            (opener[level..].starts_with('[') && at > bracket).then_some(level)
+        })
 }
 
 /// How the block `tokens` (of the line `line`, up to the cursor) opens is closed, and how many brackets were open
@@ -191,6 +218,21 @@ mod tests {
         assert_eq!(typed("function f()|\nend"), "function f()\n\t|\nend");
         assert_eq!(typed("if a then|\n\tb()\nend"), "if a then\n\t|\n\tb()\nend");
         assert_eq!(typed("repeat|\nuntil done"), "repeat\n\t|\nuntil done");
+    }
+
+    /// #575: a block comment not closed is closed under its opening line, at its level.
+    #[test]
+    fn a_block_comment_is_closed_under_its_opening_line() {
+        assert_eq!(typed("--[["), "--[[\n\t|\n]]");
+        assert_eq!(typed("x = 1\n  --[[ notes"), "x = 1\n  --[[ notes\n  \t|\n  ]]");
+        assert_eq!(typed("--[==["), "--[==[\n\t|\n]==]");
+        assert_eq!(typed("print(1) --[["), "print(1) --[[\n\t|\n]]");
+        // Closed already, on the line or below: a plain Enter.
+        assert_eq!(typed("--[[ a ]]"), "--[[ a ]]\n|");
+        assert_eq!(typed("--[[|\nold\n]]"), "--[[\n|\nold\n]]");
+        // Not a block comment, or the cursor before its bracket.
+        assert_eq!(typed("-- [["), "-- [[\n|");
+        assert_eq!(typed("local s = \"--[[\""), "local s = \"--[[\"\n|");
     }
 
     #[test]
