@@ -6,16 +6,25 @@
 //! closed row that holds something selected is marked with a dot.
 //!
 //! Each frame it lists the rows that show (only expanded instances are walked, so a large closed tree costs nothing)
-//! and draws just the rows in view. A search walks the whole tree: it shows every instance whose name or class
-//! matches, with its ancestors opened above it.
+//! and draws just the rows in view. A search walks the whole tree: it shows every instance that matches, with its
+//! ancestors opened above it.
+//!
+//! A search is words and filters (#577), as in Roblox Studio ([`query`]): every word must be in the instance's name
+//! or class, and every `key=value` term must hold. `ClassName=Part` (or `Class=`, `ClassType=`) asks for that class,
+//! `IsA=BasePart` for it or one inheriting from it, `Name=door` for a name containing `door`, and any other key for
+//! a property's value (`Anchored=true`, `Transparency>0.5`, `Material=Plastic`); `!=`, `<`, `>`, `<=` and `>=`
+//! compare too. The button beside the search box adds common filters, and one per class in the game, with a click.
 
-use std::collections::HashSet;
+pub mod query;
+
+use std::collections::{BTreeSet, HashSet};
 
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{DataModel, Id};
 
+use self::query::{Query, SUGGESTED, with_term};
 use super::insert::Inserting;
-use super::{class_icon, empty_note, ids, matches_words, search_box};
+use super::{class_icon, empty_note, ids, search_box_then};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::editor::edit::is_movable;
 use crate::editor::{Selection, TreeEdit};
@@ -253,12 +262,12 @@ pub fn rows(dm: &DataModel, state: &ExplorerState) -> Vec<Row> {
     let Some(root) = dm.root() else {
         return out;
     };
-    let query = state.query.trim();
+    let query = Query::parse(&state.query);
     for service in shown_children(dm, root) {
         if query.is_empty() {
             walk(dm, state, service, 0, &mut out);
         } else {
-            search(dm, query, service, 0, &mut out);
+            search(dm, &query, service, 0, &mut out);
         }
     }
     out
@@ -282,7 +291,7 @@ fn walk(dm: &DataModel, state: &ExplorerState, id: Id, depth: usize, out: &mut V
 }
 
 /// Adds `id` and its matching descendants if it or any of them matches `query`; returns whether anything did.
-fn search(dm: &DataModel, query: &str, id: Id, depth: usize, out: &mut Vec<Row>) -> bool {
+fn search(dm: &DataModel, query: &Query, id: Id, depth: usize, out: &mut Vec<Row>) -> bool {
     let at = out.len();
     out.push(Row {
         id,
@@ -294,9 +303,7 @@ fn search(dm: &DataModel, query: &str, id: Id, depth: usize, out: &mut Vec<Row>)
     for child in shown_children(dm, id) {
         any_child |= search(dm, query, child, depth + 1, out);
     }
-    let name = dm.name(id).unwrap_or_default();
-    let class = dm.class_name(id).unwrap_or_default();
-    let matches = matches_words(&format!("{name} {class}"), query);
+    let matches = query.matches(dm, id);
     if !matches && !any_child {
         out.truncate(at);
         return false;
@@ -330,19 +337,30 @@ impl Panel for Explorer {
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
         let editor = cx.editor.scene();
-        search_box(ui, &mut editor.explorer.query, "Search the game");
+        let mut added = None;
+        let dm: &DataModel = editor.dm;
+        search_box_then(ui, &mut editor.explorer.query, "Search the game", FILTER_BUTTON, |ui| {
+            added = filter_button(ui, dm)
+        });
+        if let Some(term) = added {
+            editor.explorer.query = with_term(&editor.explorer.query, &term);
+        }
         ui.add_space(space::S3);
         let rows = rows(editor.dm, editor.explorer);
+        let query = Query::parse(&editor.explorer.query);
         if rows.is_empty() {
-            let line = if editor.explorer.query.trim().is_empty() {
+            let typed = editor.explorer.query.trim();
+            let line = if query.is_empty() {
                 "The game is empty.".to_owned()
+            } else if query.has_filters() {
+                format!("Nothing matches \u{201C}{typed}\u{201D}.")
             } else {
-                format!("Nothing is called \u{201C}{}\u{201D}.", editor.explorer.query.trim())
+                format!("Nothing is called \u{201C}{typed}\u{201D}.")
             };
             empty_note(ui, &line);
             return;
         }
-        let searching = !editor.explorer.query.trim().is_empty();
+        let searching = !query.is_empty();
         let row_height = size::ROW;
         let mut scroll = ScrollArea::vertical()
             .id_salt("explorer.rows")
@@ -476,6 +494,64 @@ impl Panel for Explorer {
             cx.editor.open_script(id);
         }
     }
+}
+
+/// The room the filter button takes at the end of the search box's row (#577): as wide as the find bar's buttons it
+/// borrows.
+const FILTER_BUTTON: f32 = 22.0;
+
+/// The filter button at the end of the search box (#577): a menu of filters that a click adds to the search, the
+/// common ones ([`SUGGESTED`]) and then one for each class in `dm`. Returns the term chosen.
+fn filter_button(ui: &mut Ui, dm: &DataModel) -> Option<String> {
+    let id = ui.make_persistent_id("metallic.explorer.filters");
+    let response = crate::code::find_bar::icon_button(ui, id, Icon::UiCollapse, "Search filters", true)
+        .on_hover_text("Add a filter to the search");
+    let mut chosen = None;
+    egui::Popup::menu(&response).id(id.with("menu")).show(|ui| {
+        for (label, term) in SUGGESTED {
+            if filter_item(ui, label, term) {
+                chosen = Some(term.to_owned());
+            }
+        }
+        // Only the classes in the game: a list of every class would mostly find nothing.
+        let classes = classes_in(dm);
+        if !classes.is_empty() {
+            ui.separator();
+        }
+        for class in classes {
+            let term = format!("ClassName={class}");
+            if filter_item(ui, &format!("Class is {class}"), &term) {
+                chosen = Some(term);
+            }
+        }
+    });
+    chosen
+}
+
+/// One item of the filter button's menu, `label` with the `term` it adds in quiet text after it. Returns whether it
+/// was clicked.
+fn filter_item(ui: &mut Ui, label: &str, term: &str) -> bool {
+    let response = ui.add(egui::Button::new(label).shortcut_text(term));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+    response.clicked()
+}
+
+/// The classes of what the Explorer shows in `dm`, by name, the game and its services aside: the filter button offers
+/// a filter for each (#577).
+fn classes_in(dm: &DataModel) -> Vec<&'static str> {
+    let root = dm.root();
+    let mut found = BTreeSet::new();
+    let mut stack: Vec<Id> = root.into_iter().collect();
+    while let Some(id) = stack.pop() {
+        stack.extend(shown_children(dm, id));
+        let Some(info) = dm.class_of(id).ok().and_then(|class| dm.registry().class(class)) else {
+            continue;
+        };
+        if Some(id) != root && info.service_order().is_none() {
+            found.insert(info.name());
+        }
+    }
+    found.into_iter().collect()
 }
 
 /// How a row is drawn.
@@ -796,6 +872,39 @@ mod tests {
         assert_eq!(names(&dm, &rows(&dm, &state)), ["Workspace", "  Baseplate"]);
         state.set_query("teleporter");
         assert!(rows(&dm, &state).is_empty());
+    }
+
+    /// #577: filters narrow the tree as words do, the matches still under their ancestors.
+    #[test]
+    fn a_search_with_filters_shows_the_matches_under_their_ancestors() {
+        let dm = game();
+        let mut state = ExplorerState::new(&dm);
+        state.set_query("IsA=BasePart");
+        assert_eq!(
+            names(&dm, &rows(&dm, &state)),
+            ["Workspace", "  Baseplate", "  SpawnLocation"]
+        );
+        state.set_query("ClassName=Camera");
+        assert_eq!(names(&dm, &rows(&dm, &state)), ["Workspace", "  Camera"]);
+        state.set_query("spawn Anchored=true");
+        assert_eq!(names(&dm, &rows(&dm, &state)), ["Workspace", "  SpawnLocation"]);
+        state.set_query("Anchored=false");
+        assert!(rows(&dm, &state).is_empty());
+        // Half typed: only the key so far.
+        state.set_query("Anchored=");
+        assert_eq!(
+            names(&dm, &rows(&dm, &state)),
+            ["Workspace", "  Baseplate", "  SpawnLocation"]
+        );
+        // A blank search, quotes and all, is the tree.
+        state.set_query("\"\"");
+        assert_eq!(rows(&dm, &state), rows(&dm, &ExplorerState::new(&dm)));
+    }
+
+    #[test]
+    fn the_filter_menu_offers_the_classes_in_the_game_without_its_services() {
+        let dm = game();
+        assert_eq!(classes_in(&dm), ["Camera", "Part"]);
     }
 
     /// The rows' names as one string, the selected ones in brackets, the active one starred.

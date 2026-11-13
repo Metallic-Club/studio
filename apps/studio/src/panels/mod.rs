@@ -102,16 +102,35 @@ pub fn class_icon(registry: &Registry, class: ClassId) -> Icon {
 
 /// A search box filling the row, with the magnifier before it. Returns whether the text changed.
 pub(crate) fn search_box(ui: &mut Ui, query: &mut String, hint: &str) -> bool {
+    search_box_then(ui, query, hint, 0.0, |_| {})
+}
+
+/// A search box as [`search_box`], leaving `room` points at the end of the row for what `after` draws there (the
+/// Explorer's filter button, #577). The field is labelled `hint` for screen readers (and tests).
+pub(crate) fn search_box_then(
+    ui: &mut Ui,
+    query: &mut String,
+    hint: &str,
+    room: f32,
+    after: impl FnOnce(&mut Ui),
+) -> bool {
     let p = current_colors(ui.ctx()).palette;
     ui.horizontal(|ui| {
         icons::show(ui, Icon::UiSearch, text::BODY, p.subtle);
-        ui.add(
+        let width = if room > 0.0 {
+            (ui.available_width() - room - ui.spacing().item_spacing.x).max(0.0)
+        } else {
+            f32::INFINITY
+        };
+        let response = ui.add(
             TextEdit::singleline(query)
                 .hint_text(hint)
-                .desired_width(f32::INFINITY)
+                .desired_width(width)
                 .margin(vec2(space::S3, space::S2)),
-        )
-        .changed()
+        );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, hint));
+        after(ui);
+        response.changed()
     })
     .inner
 }

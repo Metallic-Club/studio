@@ -584,6 +584,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   model, so it is no undo step and no unsaved change; an edit of those from elsewhere (Properties, undo) moves the
   view, found by comparing the camera with what was last written. Play copies the scene, so the game starts from the
   view. Not while a game runs, and nothing happens when the game has no current camera.
+- **Search filters in the Explorer (#577)**: as in Roblox Studio, a `key=value` term (or `!=`, `<`, `>`, `<=`, `>=`)
+  is a filter and every other word matches names and classes, all of them holding (`panels::explorer::query`).
+  `ClassName=`, `IsA=` and `Name=` are their own keys; any other is a property, compared as a number, a boolean, an
+  enum item, contained text, or the text the Properties panel shows. A button beside the search box adds common
+  filters, and one per class in the game, with a click.
 
 ## Not in this slice
 
