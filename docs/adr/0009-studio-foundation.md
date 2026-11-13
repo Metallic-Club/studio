@@ -577,6 +577,14 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 - **Many problems (#561)**: each problem's line and character come from the lines' starts (`code::view::Lines`); a
   script with a warning on every line had counted from the text's start for every pair of them each frame.
 
+### Light gizmos, the camera and the Explorer's search (2026-11-12, #570-#578)
+
+- **Workspace's camera is the editor's view (#576)**: as in Roblox Studio, each move of the editor camera is written
+  into `Workspace.CurrentCamera`'s `CFrame` and `FieldOfView` (`viewport::camera::CameraSync`), straight into the data
+  model, so it is no undo step and no unsaved change; an edit of those from elsewhere (Properties, undo) moves the
+  view, found by comparing the camera with what was last written. Play copies the scene, so the game starts from the
+  view. Not while a game runs, and nothing happens when the game has no current camera.
+
 ## Not in this slice
 
 Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in the viewport, undo

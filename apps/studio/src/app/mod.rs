@@ -1132,6 +1132,12 @@ impl Studio {
         };
         let activations = self.keymap.dispatch(ctx, focus);
         if let Some(EditorScreen::Open(editor)) = &mut self.editor {
+            // The view is the game's current camera (#576): an edit of it since the last frame moves the view before
+            // this frame's moves, which are written back after. A running game's camera is its own.
+            let synced = !editor.is_playing();
+            if synced && editor.viewport.sync.follow(&editor.dm, &mut editor.viewport.camera) {
+                ctx.request_repaint();
+            }
             let (motion, pointer, dt, fast) = ctx.input(|input| {
                 // The mouse's own movement while the pointer is held (#385): the pointer itself does not move.
                 let motion = input.pointer.motion().unwrap_or(input.pointer.delta());
@@ -1153,6 +1159,9 @@ impl Studio {
             let speeds = &mut self.settings.settings_mut().viewport;
             if editor.viewport.navigate(&self.keymap, &activations, input, speeds) {
                 ctx.request_repaint();
+            }
+            if synced {
+                editor.viewport.sync.write(&mut editor.dm, &editor.viewport.camera);
             }
         }
         for activation in activations {
@@ -8073,7 +8082,7 @@ skip_sign_in = true
         assert!(orbited.position.distance(orbiting.position) > 0.1, "it moved around");
         assert!(orbited.yaw() != orbiting.yaw(), "turning to keep the pivot in view");
 
-        // The game's own camera never moved.
+        // The game's camera went with it (#576).
         let editor = harness.state().studio.editor().unwrap();
         let workspace = editor
             .dm
@@ -8082,7 +8091,129 @@ skip_sign_in = true
         let game = metallic_engine::metallic_render::CameraReader::new()
             .read(&editor.dm, workspace)
             .unwrap();
-        assert_eq!(game.position, start.position);
+        assert!(game.position.distance(orbited.position) < 1e-3);
+    }
+
+    /// The game camera's `CFrame` and `FieldOfView` in the editor's scene.
+    fn game_camera(
+        harness: &Harness<'_, Test>,
+    ) -> (
+        metallic_engine::metallic_core::Id,
+        metallic_engine::metallic_core::CFrame,
+        f64,
+    ) {
+        crate::viewport::camera::current_camera(&harness.state().studio.editor().unwrap().dm).unwrap()
+    }
+
+    #[test]
+    fn workspaces_camera_is_the_editors_view() {
+        use metallic_engine::metallic_core::glam::Vec3;
+        use metallic_engine::metallic_core::{CFrame, Value};
+        let mut harness = editing(settings_file("viewport-camera", None), "Camera Game");
+        // Saved, so the history's mark is the only one.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::S);
+        settle(&mut harness);
+        let (id, start, _) = game_camera(&harness);
+        let inside = harness.state().studio.editor().unwrap().viewport.rect.unwrap().center();
+        pointer(
+            &mut harness,
+            inside,
+            egui::PointerButton::Primary,
+            true,
+            Modifiers::NONE,
+        );
+        pointer(
+            &mut harness,
+            inside,
+            egui::PointerButton::Primary,
+            false,
+            Modifiers::NONE,
+        );
+        settle(&mut harness);
+        let steps = harness.state().studio.editor().unwrap().history.undo_len();
+
+        // Flying moves the game's camera, as no undo step and no unsaved change.
+        hold(&mut harness, Key::W);
+        let (_, flown, _) = game_camera(&harness);
+        assert!(flown != start);
+        assert_eq!(flown, camera(&harness).cframe());
+        let editor = harness.state().studio.editor().unwrap();
+        assert!(!editor.is_modified());
+        assert_eq!(editor.history.undo_len(), steps);
+        assert!(!editor.history.is_pending());
+
+        // An edit of the camera moves the view there, and undo moves it back.
+        let place = CFrame::look_at(Vec3::new(30.0, 12.0, -8.0), Vec3::ZERO, Vec3::Y);
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        editor.scene().set_by_name(id, "CFrame", Value::CFrame(place)).unwrap();
+        editor
+            .scene()
+            .set_by_name(id, "FieldOfView", Value::Number(50.0))
+            .unwrap();
+        settle(&mut harness);
+        let view = camera(&harness);
+        assert!(view.position.distance(Vec3::new(30.0, 12.0, -8.0)) < 1e-3);
+        assert!(view.forward().distance(place.look_vector()) < 1e-3);
+        assert!((view.fov_y() - 50f32.to_radians()).abs() < 1e-5);
+        assert_eq!(game_camera(&harness).1, place, "not written back over");
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert!(camera(&harness).position.distance(flown.position()) < 1e-3);
+        assert!((camera(&harness).fov_y() - 70f32.to_radians()).abs() < 1e-5);
+
+        // Play starts from the view; while the game runs, the editor's camera is left alone.
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        let studio = &harness.state().studio;
+        assert!(studio.is_playing(), "{:?}", studio.notice());
+        let editor = studio.editor().unwrap();
+        let (game, _) = editor.shown();
+        let (_, played, _) = crate::viewport::camera::current_camera(game).unwrap();
+        assert!(played.position().distance(flown.position()) < 1e-3);
+        let edited = game_camera(&harness).1;
+        harness
+            .state_mut()
+            .studio
+            .editor_mut()
+            .unwrap()
+            .viewport
+            .camera
+            .position += Vec3::X;
+        settle(&mut harness);
+        assert_eq!(game_camera(&harness).1, edited);
+        harness.key_press_modifiers(Modifiers::SHIFT, Key::F5);
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_playing());
+
+        // Without a current camera, the view moves on its own and none is made.
+        let workspace = {
+            let dm = &harness.state().studio.editor().unwrap().dm;
+            dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap()
+        };
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        editor
+            .dm
+            .set_by_name(workspace, "CurrentCamera", Value::Ref(None))
+            .unwrap();
+        let before = camera(&harness);
+        pointer(
+            &mut harness,
+            inside,
+            egui::PointerButton::Primary,
+            true,
+            Modifiers::NONE,
+        );
+        pointer(
+            &mut harness,
+            inside,
+            egui::PointerButton::Primary,
+            false,
+            Modifiers::NONE,
+        );
+        hold(&mut harness, Key::W);
+        assert!(camera(&harness).position != before.position);
+        let dm = &harness.state().studio.editor().unwrap().dm;
+        assert_eq!(dm.get_by_name(workspace, "CurrentCamera"), Ok(Value::Ref(None)));
     }
 
     /// Studio drawn offscreen with the template project open, its viewport drawn at the panel's size. `None` without

@@ -2,8 +2,9 @@
 //!
 //! - **What is recorded.** Studio changes a scene only through the scene's edits ([`Scene::set`](super::Scene::set),
 //!   [`Scene::move_to`](super::Scene::move_to)), which note each change here. Nothing else changes the editor's scene
-//!   (no script runs in it), so the data model needs no journal of its own. A running game has a history of its own,
-//!   dropped at Stop: it holds the panels' edits of the game, not what the game's scripts do.
+//!   (no script runs in it), so the data model needs no journal of its own; the one exception is the editor's view,
+//!   written into the current camera as it moves and on purpose no step (#576). A running game has a history of its
+//!   own, dropped at Stop: it holds the panels' edits of the game, not what the game's scripts do.
 //! - **Steps.** The app ends the action under way once per frame ([`History::commit`]), but not while a mouse button
 //!   is held: a drag is one step, however many frames it takes. Edits of the same properties less than
 //!   [`MERGE_WITHIN`] apart join the step before (typing a value, then typing more). A step also holds the selection
