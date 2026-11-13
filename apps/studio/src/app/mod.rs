@@ -4502,6 +4502,55 @@ mod tests {
         assert_eq!(text(&mut harness, "Scripts/Alpha.luau"), "local x = 1\nprint(x)");
     }
 
+    /// #556: the minimap down the code's right scrolls it: a click near its bottom shows the code's end, and dragging
+    /// its shaded part back up shows the start. The setting hides it.
+    #[test]
+    fn the_minimap_scrolls_the_code() {
+        let mut harness = editing(settings_file("editor-script-minimap", None), "Script Minimap Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let code: Vec<String> = (0..400).map(|n| format!("print({n})")).collect();
+        script_with_code(&mut harness, "Long", &code.join("\n"));
+        two_clicks(&mut harness, "Long", 0.05);
+        let field_top = |harness: &Harness<'static, Test>| harness.get_by_role(Role::MultilineTextInput).rect().top();
+        let start = field_top(&harness);
+        let map = harness.get_by_role_and_label(Role::ScrollBar, "Minimap").rect();
+        // Right of the code, left of the scroll bar.
+        let field = harness.get_by_role(Role::MultilineTextInput).rect();
+        assert!(
+            map.left() > field.left() + 200.0 && map.right() < field.right(),
+            "{map:?} in {field:?}"
+        );
+        let near_bottom = egui::pos2(map.center().x, map.bottom() - 4.0);
+        left_click(
+            &mut harness,
+            egui::Rect::from_center_size(near_bottom, egui::Vec2::splat(2.0)),
+        );
+        settle(&mut harness);
+        let scrolled = field_top(&harness);
+        assert!(scrolled < start - 1000.0, "scrolled from {start} to {scrolled}");
+        // The shaded part is at the bottom: dragged to the top, the code's start shows.
+        let from = egui::pos2(map.center().x, map.bottom() - 10.0);
+        harness.drag_at(from);
+        harness.step();
+        for step in 1..=10 {
+            let y = from.y + (map.top() - 40.0 - from.y) * step as f32 / 10.0;
+            harness.hover_at(egui::pos2(from.x, y));
+            harness.step();
+        }
+        harness.drop_at(egui::pos2(from.x, map.top() - 40.0));
+        settle(&mut harness);
+        assert!(
+            (field_top(&harness) - start).abs() < 1.0,
+            "back at the top: {}",
+            field_top(&harness)
+        );
+        // Off in the settings: no minimap.
+        harness.state_mut().studio.settings.settings_mut().code.minimap = false;
+        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::ScrollBar, "Minimap").is_none());
+    }
+
     /// #554: Ctrl+F opens the find bar on the selection; typing goes to the first match, Enter to the next, the toggles
     /// narrow the matches, Ctrl+H's row replaces them all, and Escape closes the bar.
     #[test]

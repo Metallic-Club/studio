@@ -204,7 +204,7 @@ impl Panel for ScriptEditor {
             }
             let mut at = find.at.get(&script).cloned().unwrap_or(0..0);
             let count = count(text, &finder, &at);
-            let mut actions = find_bar::show(ui, id.with("find"), output.view, find, &count, asked);
+            let mut actions = find_bar::show(ui, id.with("find"), output.code, find, &count, asked);
             match step {
                 Some(true) => actions.push(Action::Next),
                 Some(false) => actions.push(Action::Previous),

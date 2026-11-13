@@ -20,6 +20,7 @@ pub mod find;
 pub mod find_bar;
 pub mod highlight;
 pub mod lexer;
+pub mod minimap;
 pub mod settings;
 pub mod swatch;
 pub mod view;
