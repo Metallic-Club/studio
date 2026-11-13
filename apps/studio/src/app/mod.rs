@@ -3943,6 +3943,75 @@ mod tests {
         assert!(harness.query_by_role_and_label(Role::TreeItem, "Workspace").is_none());
     }
 
+    /// #577: a filter typed into the Explorer's search narrows the tree, and the filter button adds one with a click.
+    #[test]
+    fn the_explorer_search_takes_filters_and_its_button_adds_them() {
+        let mut harness = editing(settings_file("editor-search-filters", None), "Filter Game");
+        harness
+            .get_by_role_and_label(Role::TextInput, "Search the game")
+            .click();
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::TextInput, "Search the game")
+            .type_text("ClassName=camera");
+        settle(&mut harness);
+        assert_eq!(
+            harness.state_mut().studio.editor_mut().unwrap().explorer.query(),
+            "ClassName=camera"
+        );
+        harness.get_by_role_and_label(Role::TreeItem, "Workspace");
+        harness.get_by_role_and_label(Role::TreeItem, "Camera");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Baseplate").is_none());
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Lighting").is_none());
+
+        // Nothing is unanchored in the template.
+        let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
+        explorer.set_query("Anchored=false");
+        settle(&mut harness);
+        harness.get_by_label_contains("Nothing matches");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Workspace").is_none());
+
+        // The button's menu adds a filter to the search, after a space.
+        let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
+        explorer.set_query("plate");
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Search filters").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Class is Camera");
+        harness.get_by_role_and_label(Role::Button, "Parts").click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state_mut().studio.editor_mut().unwrap().explorer.query(),
+            "plate IsA=BasePart"
+        );
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate");
+        assert!(
+            harness
+                .query_by_role_and_label(Role::TreeItem, "SpawnLocation")
+                .is_none()
+        );
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Camera").is_none());
+        assert!(
+            harness.query_by_role_and_label(Role::Button, "Parts").is_none(),
+            "the menu closed"
+        );
+
+        // A class of the game's, from the same menu.
+        let explorer = &mut harness.state_mut().studio.editor_mut().unwrap().explorer;
+        explorer.set_query("");
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Search filters").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Class is Part").click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state_mut().studio.editor_mut().unwrap().explorer.query(),
+            "ClassName=Part"
+        );
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation");
+        assert!(harness.query_by_role_and_label(Role::TreeItem, "Camera").is_none());
+    }
+
     #[test]
     fn a_project_that_cannot_be_opened_goes_back_to_the_projects_with_the_error() {
         let path = config("editor-broken", Some("[general]\nskip_sign_in = true\n"), None);
