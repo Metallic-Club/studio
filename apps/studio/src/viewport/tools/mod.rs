@@ -25,6 +25,7 @@ use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, DataModel, Id, PropId, Value};
 
 use super::gizmo::{self, MoveHandle};
+use super::index::PartIndex;
 use super::pick::{self, Bounds};
 use super::select::{self, Gesture, SelectMode, SelectOp};
 use super::view::{Ray, View};
@@ -342,8 +343,8 @@ fn values(dm: &DataModel, watched: &[(Id, PropId)]) -> Vec<Option<Value>> {
 }
 
 /// Picks up the selection with `ray` (#358), when the part it meets is selected or inside something selected.
-pub fn carry(dm: &DataModel, selection: &Selection, ray: Ray) -> Option<Drag> {
-    let (part, t) = pick::nearest_part(dm, ray)?;
+pub fn carry(dm: &DataModel, parts: &PartIndex, selection: &Selection, ray: Ray) -> Option<Drag> {
+    let (part, t) = pick::nearest_part(dm, parts, ray)?;
     if !selection.contains(pick::selectable(dm, part)) {
         return None;
     }
@@ -391,12 +392,14 @@ pub fn update_drag(scene: &mut Scene<'_>, drag: &mut Drag, ray: Ray, keys: Keys,
 }
 
 /// The tools' part of a viewport frame: what is under the pointer, starting, running and ending a drag on the
-/// panel's `response`. Returns whether the pointer is on the gizmo, so a click there does not select.
+/// panel's `response`, picking from `parts` (#596). Returns whether the pointer is on the gizmo, so a click there does not
+/// select.
 pub fn interact(
     ui: &egui::Ui,
     response: &egui::Response,
     view: &View,
     scene: &mut Scene<'_>,
+    parts: &PartIndex,
     gizmo: &mut Gizmo,
     snap: Snap,
 ) -> bool {
@@ -415,7 +418,7 @@ pub fn interact(
             gizmo.gesture = Some(gesture);
         } else {
             // Released: what it picked joins the selection as the keys held then say.
-            let hits = gesture.finish(scene.dm, view);
+            let hits = gesture.finish(scene.dm, parts, view);
             select::combine(scene.selection, &hits, SelectOp::from_modifiers(modifiers));
         }
         return true;
@@ -451,13 +454,13 @@ pub fn interact(
             (Some((frame, handle)), Some(ray)) => begin_drag(scene.dm, handle, frame, ray, &targets),
             (None, Some(ray)) => {
                 // Off the handles, a selecting drag (#467), or a drag on a selected part carries the selection (#358).
-                let on_selected = pick::pick(scene.dm, ray).is_some_and(|id| scene.selection.contains(id));
+                let on_selected = pick::pick(scene.dm, parts, ray).is_some_and(|id| scene.selection.contains(id));
                 match gizmo.gesture_mode(on_selected).zip(origin) {
                     Some((mode, at)) => {
                         gizmo.gesture = Some(Gesture::start(mode, at));
                         None
                     }
-                    None => carry(scene.dm, scene.selection, ray),
+                    None => carry(scene.dm, parts, scene.selection, ray),
                 }
             }
             _ => None,

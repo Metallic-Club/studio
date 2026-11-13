@@ -163,7 +163,8 @@ pub fn sections(registry: &Registry, query: &str) -> Vec<Section> {
 /// panels are open), and inserts the class chosen. `grid` is the view (#500), switched by the window's button.
 pub fn frame(ctx: &egui::Context, editor: &mut crate::editor::EditorState, grid: &mut bool) {
     // Where it goes (#412): where the editor camera looks.
-    let aim = crate::viewport::aim(&editor.dm, &editor.viewport.camera);
+    editor.refresh_parts();
+    let aim = crate::viewport::aim(&editor.dm, &editor.parts, &editor.viewport.camera);
     let mut scene = editor.scene();
     let Some(mut inserting) = scene.explorer.take_inserting() else {
         return;

@@ -53,6 +53,9 @@ pub struct EditorState {
     pub viewport: ViewportState,
     /// The game session, while one runs (Play in Studio, ADR 0010).
     pub play: Option<PlaySession>,
+    /// The parts and lights in the editor's Workspace by where they are (#596), for picking; [`EditorState::refresh_parts`]
+    /// brings it up to date.
+    pub parts: crate::viewport::index::PartIndex,
     /// The script editor's open files and requests (#528).
     pub scripts: crate::code::Scripts,
 }
@@ -94,7 +97,13 @@ impl EditorState {
             viewport,
             play: None,
             scripts: crate::code::Scripts::default(),
+            parts: crate::viewport::index::PartIndex::new(),
         }
+    }
+
+    /// Brings [`EditorState::parts`] up to date with the editor's scene: what changed since the last refresh.
+    pub fn refresh_parts(&mut self) {
+        self.parts.update(&mut self.dm);
     }
 
     /// The project's file.

@@ -19,6 +19,7 @@
 pub mod axes;
 pub mod camera;
 pub mod gizmo;
+pub mod index;
 pub mod light_icons;
 pub mod pick;
 pub mod select;
@@ -65,6 +66,8 @@ pub struct NavInput<'a> {
     pub fast: bool,
     /// The scene, to aim at.
     pub dm: &'a DataModel,
+    /// Its parts by where they are (#596).
+    pub parts: &'a index::PartIndex,
     /// What is selected, the active instance last: what Focus frames.
     pub selection: &'a [Id],
 }
@@ -107,6 +110,8 @@ pub struct ViewportState {
     pub wireframe: bool,
     /// The performance overlay's viewers shown over the viewport (#479): its Debug options and Shift+F1 to F4.
     pub stats: StatsViewers,
+    /// The light icons as last worked out (#596).
+    pub light_icons: light_icons::IconCache,
 }
 
 impl ViewportState {
@@ -129,6 +134,7 @@ impl ViewportState {
             pick_cycle: pick::PickCycle::default(),
             wireframe: false,
             stats: StatsViewers::NONE,
+            light_icons: light_icons::IconCache::default(),
         }
     }
 
@@ -159,7 +165,7 @@ impl ViewportState {
                         .zip(view)
                         .and_then(|(at, view)| view.ray(at))
                         .unwrap_or((self.camera.position, self.camera.forward()));
-                    let (reach, _) = reach_along(input.dm, ray);
+                    let (reach, _) = reach_along(input.dm, input.parts, ray);
                     self.camera
                         .begin_look(Some(ray.0 + ray.1 * reach.max(camera::ORBIT_MIN_DISTANCE)));
                     self.hold = input.pointer;
@@ -175,7 +181,7 @@ impl ViewportState {
                     }
                 }
                 (ids::ZOOM, ActivationKind::Wheel(lines)) => {
-                    let ahead = reach_along(input.dm, (self.camera.position, self.camera.forward()));
+                    let ahead = reach_along(input.dm, input.parts, (self.camera.position, self.camera.forward()));
                     self.camera.zoom(lines, ahead);
                 }
                 (ids::SPEED, ActivationKind::Wheel(lines)) => {
@@ -211,8 +217,8 @@ impl ViewportState {
 
 /// How far along `ray` what is in front is: the first part it meets, or the ground (`true`, a surface not to pass);
 /// else (`false`) a distance that suits how high it starts, so zooming and orbiting still go somewhere in open space.
-fn reach_along(dm: &DataModel, ray: view::Ray) -> (f32, bool) {
-    if let Some((_, t)) = pick::nearest_part(dm, ray) {
+fn reach_along(dm: &DataModel, parts: &index::PartIndex, ray: view::Ray) -> (f32, bool) {
+    if let Some((_, t)) = pick::nearest_part(dm, parts, ray) {
         return (t, true);
     }
     let (origin, dir) = ray;
@@ -255,15 +261,15 @@ pub struct Aim {
 
 /// Where `camera` looks (#412): the first part's surface the middle of its view meets, else where that line meets the
 /// ground (y = 0, facing up), else a point [`OPEN_REACH`] ahead.
-pub fn aim(dm: &DataModel, camera: &EditorCamera) -> Aim {
+pub fn aim(dm: &DataModel, parts: &index::PartIndex, camera: &EditorCamera) -> Aim {
     let ray = (camera.position, camera.forward());
-    if let Some((t, normal)) = pick::nearest_face(dm, ray) {
+    if let Some((t, normal)) = pick::nearest_face(dm, parts, ray) {
         return Aim {
             point: ray.0 + ray.1 * t,
             normal: Some(normal),
         };
     }
-    match reach_along(dm, ray) {
+    match reach_along(dm, parts, ray) {
         (t, true) => Aim {
             point: ray.0 + ray.1 * t,
             normal: Some(Vec3::Y),
@@ -317,6 +323,7 @@ mod tests {
         let at = metallic_engine::metallic_core::CFrame::new(Vec3::new(30.0, 2.0, 0.0));
         dm.set_by_name(part, "CFrame", Value::CFrame(at)).unwrap();
         dm.set_parent(part, Some(workspace)).unwrap();
+        let parts = index::PartIndex::new();
         let mut viewport = ViewportState::new(&dm);
         viewport.rect = Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
         let mut speeds = crate::settings::Viewport::default();
@@ -332,6 +339,7 @@ mod tests {
             dt: 0.05,
             fast,
             dm: &dm,
+            parts: &parts,
             selection,
         };
         let mut nav = |viewport: &mut ViewportState, fired: &[Activation], keymap: &Keymap, input: NavInput<'_>| {

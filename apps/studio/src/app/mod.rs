@@ -501,6 +501,8 @@ impl Studio {
             let scene = editor.scene();
             scene.selection.retain_in_game(scene.dm);
         }
+        // The parts by where they are, for this frame's picking (#596).
+        editor.refresh_parts();
         if editor.is_playing() {
             // The game's frame first, so the panels show it; it runs every frame, Game tab in front or not.
             let dt = ctx.input(|input| input.stable_dt);
@@ -1156,6 +1158,7 @@ impl Studio {
                 dt,
                 fast,
                 dm: &editor.dm,
+                parts: &editor.parts,
                 selection: editor.selection.ids(),
             };
             let speeds = &mut self.settings.settings_mut().viewport;
@@ -3421,7 +3424,7 @@ mod tests {
         settle(&mut harness);
         let aim = {
             let editor = harness.state().studio.editor().unwrap();
-            crate::viewport::aim(&editor.dm, &editor.viewport.camera)
+            crate::viewport::aim(&editor.dm, &editor.parts, &editor.viewport.camera)
         };
         // Below the fold of the list: the screen reader's click.
         harness
@@ -6669,6 +6672,71 @@ mod tests {
         let tiles = &studio.dock().tree().tiles;
         let pane = tiles.find_pane(&crate::dock::PanelId(id.into())).unwrap();
         tiles.rect(tiles.parent_of(pane).unwrap()).unwrap()
+    }
+
+    /// #596: what a Studio frame costs with 20,000 parts in view, out of view and none, the pointer over the viewport
+    /// and a few lights in the scene. Timed, so it is run by hand (in release):
+    /// `cargo test -p metallic_studio --release -- --ignored --nocapture parts_out_of_view`.
+    #[test]
+    #[ignore = "a timing, run by hand"]
+    fn parts_out_of_view_cost_little_frame_time() {
+        use std::time::Instant;
+
+        use metallic_engine::metallic_core::glam::Vec3;
+        use metallic_engine::metallic_core::{CFrame, Value};
+        use metallic_engine::metallic_render::wgpu;
+
+        let Some((mut studio, mut offscreen)) = viewport_shown("viewport-out-of-view", egui::vec2(1280.0, 800.0))
+        else {
+            return;
+        };
+        let rect = studio.editor().unwrap().viewport.rect.unwrap();
+        let hover = vec![egui::Event::PointerMoved(rect.center())];
+        let time = |studio: &mut Studio, offscreen: &mut Offscreen, at: Vec3, to: Vec3| {
+            let editor = studio.editor_mut().unwrap();
+            editor.viewport.camera = crate::viewport::EditorCamera::looking_at(at, to);
+            for _ in 0..10 {
+                offscreen.frame_with(studio, hover.clone());
+            }
+            let _ = offscreen.context.device().poll(wgpu::PollType::wait_indefinitely());
+            let start = Instant::now();
+            let frames = 60;
+            for _ in 0..frames {
+                offscreen.frame_with(studio, hover.clone());
+                let _ = offscreen.context.device().poll(wgpu::PollType::wait_indefinitely());
+            }
+            start.elapsed() / frames
+        };
+        let toward = (Vec3::new(0.0, 30.0, 120.0), Vec3::ZERO);
+        let away = (Vec3::new(0.0, 30.0, 120.0), Vec3::new(0.0, 30.0, 400.0));
+        let empty = time(&mut studio, &mut offscreen, away.0, away.1);
+        let editor = studio.editor_mut().unwrap();
+        let dm = &mut editor.dm;
+        let world = crate::viewport::pick::workspace(dm).unwrap();
+        let class = dm.registry().class_id("Part").unwrap();
+        for i in 0..20_000 {
+            let id = dm.create(class).unwrap();
+            let at = Vec3::new(
+                (i % 140) as f32 * 2.0 - 140.0,
+                1.0 + (i / 140 % 4) as f32 * 2.0,
+                -((i / 560) as f32) * 2.0,
+            );
+            dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at))).unwrap();
+            dm.set_parent(id, Some(world)).unwrap();
+        }
+        for i in 0..8 {
+            let light = dm.create(dm.registry().class_id("PointLight").unwrap()).unwrap();
+            dm.set_by_name(
+                light,
+                "CFrame",
+                Value::CFrame(CFrame::new(Vec3::new(i as f32 * 10.0 - 40.0, 12.0, -20.0))),
+            )
+            .unwrap();
+            dm.set_parent(light, Some(world)).unwrap();
+        }
+        let seen = time(&mut studio, &mut offscreen, toward.0, toward.1);
+        let unseen = time(&mut studio, &mut offscreen, away.0, away.1);
+        eprintln!("frame: empty {empty:?}, 20,000 parts in view {seen:?}, out of view {unseen:?}");
     }
 
     #[test]

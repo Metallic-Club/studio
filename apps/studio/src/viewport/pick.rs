@@ -6,6 +6,7 @@ use metallic_engine::metallic_classes::base::world_object;
 use metallic_engine::metallic_core::glam::{Quat, Vec3};
 use metallic_engine::metallic_core::{DataModel, Id, Value};
 
+use super::index::{PartIndex, Step, each_on_ray};
 use super::view::Ray;
 
 /// A box in the world: where its centre is, half its size along its own axes, and how it is turned.
@@ -157,41 +158,69 @@ pub fn part_hit(dm: &DataModel, id: Id, ray: Ray) -> Option<f32> {
     super::shapes::hit(&bounds, &super::shapes::shape_of(dm, id), ray)
 }
 
-/// The nearest part `ray` meets in Workspace, by its actual shape (#494), and how far along it.
-pub fn nearest_part(dm: &DataModel, ray: Ray) -> Option<(Id, f32)> {
-    let world = workspace(dm)?;
-    dm.descendants(world)
-        .ok()?
-        .filter_map(|id| part_hit(dm, id, ray).map(|t| (id, t)))
-        .min_by(|a, b| a.1.total_cmp(&b.1))
+/// [`part_hit`] for a part the index found (#596): not one taken out of the game since it was last updated.
+fn found_hit(dm: &DataModel, id: Id, ray: Ray) -> Option<f32> {
+    dm.parent(id).ok().flatten()?;
+    part_hit(dm, id, ray)
+}
+
+/// The nearest part `ray` meets in Workspace, by its actual shape (#494), and how far along it. Only the parts whose
+/// boxes the ray passes through are tested ([`PartIndex`], #596).
+pub fn nearest_part(dm: &DataModel, parts: &PartIndex, ray: Ray) -> Option<(Id, f32)> {
+    let mut nearest: Option<(Id, f32)> = None;
+    each_on_ray(dm, parts, ray, f32::INFINITY, |id, _| match found_hit(dm, id, ray) {
+        Some(t) if nearest.is_none_or(|(_, best)| t < best) => {
+            nearest = Some((id, t));
+            Step::Limit(t)
+        }
+        _ => Step::Go,
+    });
+    nearest
 }
 
 /// Whether a part in Workspace stands between `from` and `to` (#571), so that `to` cannot be seen from `from`. The
 /// parts `holder` is inside (a light in its lamp) do not count, nor does a wholly transparent part.
-pub fn blocked(dm: &DataModel, from: Vec3, to: Vec3, holder: Id) -> bool {
+pub fn blocked(dm: &DataModel, parts: &PartIndex, from: Vec3, to: Vec3, holder: Id) -> bool {
     let distance = (to - from).length();
     let Some(direction) = (to - from).try_normalize() else {
         return false;
     };
-    let Some(world) = workspace(dm) else {
-        return false;
-    };
-    let Ok(all) = dm.descendants(world) else {
-        return false;
-    };
-    all.filter(|&id| id != holder)
-        .filter(|&id| part_hit(dm, id, (from, direction)).is_some_and(|t| t < distance - 1e-3))
-        .filter(|&id| !matches!(dm.get_by_name(id, "Transparency"), Ok(Value::Number(t)) if t >= 1.0))
-        .any(|id| !dm.is_descendant_of(holder, id).unwrap_or(false))
+    let reach = distance - 1e-3;
+    let mut blocked = false;
+    each_on_ray(dm, parts, (from, direction), reach, |id, _| {
+        let hides = id != holder
+            && found_hit(dm, id, (from, direction)).is_some_and(|t| t < reach)
+            && !matches!(dm.get_by_name(id, "Transparency"), Ok(Value::Number(t)) if t >= 1.0)
+            && !dm.is_descendant_of(holder, id).unwrap_or(false);
+        if hides {
+            blocked = true;
+            Step::Stop
+        } else {
+            Step::Go
+        }
+    });
+    blocked
 }
 
 /// The nearest part's face `ray` meets in Workspace: how far along, and the face's outward normal.
-pub fn nearest_face(dm: &DataModel, ray: Ray) -> Option<(f32, Vec3)> {
-    let world = workspace(dm)?;
-    dm.descendants(world)
-        .ok()?
-        .filter_map(|id| part_box(dm, id).and_then(|bounds| bounds.hit_face(ray)))
-        .min_by(|a, b| a.0.total_cmp(&b.0))
+pub fn nearest_face(dm: &DataModel, parts: &PartIndex, ray: Ray) -> Option<(f32, Vec3)> {
+    let mut nearest: Option<(f32, Vec3)> = None;
+    each_on_ray(dm, parts, ray, f32::INFINITY, |id, _| {
+        let face = dm
+            .parent(id)
+            .ok()
+            .flatten()
+            .and_then(|_| part_box(dm, id))
+            .and_then(|bounds| bounds.hit_face(ray));
+        match face {
+            Some((t, normal)) if nearest.is_none_or(|(best, _)| t < best) => {
+                nearest = Some((t, normal));
+                Step::Limit(t)
+            }
+            _ => Step::Go,
+        }
+    });
+    nearest
 }
 
 /// What a click on `part` selects: the outermost model it is in under Workspace; else the outermost part it is in
@@ -212,22 +241,20 @@ pub fn selectable(dm: &DataModel, part: Id) -> Id {
 }
 
 /// What a click along `ray` selects, if anything.
-pub fn pick(dm: &DataModel, ray: Ray) -> Option<Id> {
-    nearest_part(dm, ray).map(|(part, _)| selectable(dm, part))
+pub fn pick(dm: &DataModel, parts: &PartIndex, ray: Ray) -> Option<Id> {
+    nearest_part(dm, parts, ray).map(|(part, _)| selectable(dm, part))
 }
 
 /// Every part `ray` meets in Workspace, nearest first: what an Alt+click walks through (#482).
-pub fn parts_along(dm: &DataModel, ray: Ray) -> Vec<Id> {
-    let Some(world) = workspace(dm) else {
-        return Vec::new();
-    };
-    let Ok(descendants) = dm.descendants(world) else {
-        return Vec::new();
-    };
-    let mut hits: Vec<(Id, f32)> = descendants
-        .filter_map(|id| part_hit(dm, id, ray).map(|t| (id, t)))
-        .collect();
-    hits.sort_by(|a, b| a.1.total_cmp(&b.1));
+pub fn parts_along(dm: &DataModel, parts: &PartIndex, ray: Ray) -> Vec<Id> {
+    let mut hits: Vec<(Id, f32)> = Vec::new();
+    each_on_ray(dm, parts, ray, f32::INFINITY, |id, _| {
+        if let Some(t) = found_hit(dm, id, ray) {
+            hits.push((id, t));
+        }
+        Step::Go
+    });
+    hits.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
     hits.into_iter().map(|(id, _)| id).collect()
 }
 
@@ -327,8 +354,11 @@ mod tests {
         let near = part_at(&mut dm, world, Vec3::new(0.0, 0.0, 5.0), Vec3::ONE);
         let far = part_at(&mut dm, world, Vec3::ZERO, Vec3::ONE);
         let ray = (Vec3::new(0.0, 0.0, 20.0), Vec3::NEG_Z);
-        assert_eq!(pick(&dm, ray), Some(near));
-        assert_eq!(pick(&dm, (Vec3::new(9.0, 0.0, 20.0), Vec3::NEG_Z)), None);
+        assert_eq!(pick(&dm, &PartIndex::new(), ray), Some(near));
+        assert_eq!(
+            pick(&dm, &PartIndex::new(), (Vec3::new(9.0, 0.0, 20.0), Vec3::NEG_Z)),
+            None
+        );
 
         let model_class = dm.registry().class_id("Model").unwrap();
         let outer = dm.create(model_class).unwrap();
@@ -336,7 +366,7 @@ mod tests {
         dm.set_parent(outer, Some(world)).unwrap();
         dm.set_parent(inner, Some(outer)).unwrap();
         dm.set_parent(near, Some(inner)).unwrap();
-        assert_eq!(pick(&dm, ray), Some(outer), "the outermost model");
+        assert_eq!(pick(&dm, &PartIndex::new(), ray), Some(outer), "the outermost model");
         // A model's outline is the box round its parts.
         dm.set_parent(far, Some(inner)).unwrap();
         let outline = outline_box(&dm, outer).unwrap();
@@ -362,9 +392,9 @@ mod tests {
             assert_eq!(selectable(&dm, part), base, "{part:?}");
         }
         let at = |x: f32| (Vec3::new(x, 0.0, 20.0), Vec3::NEG_Z);
-        assert_eq!(pick(&dm, at(6.0)), Some(base));
+        assert_eq!(pick(&dm, &PartIndex::new(), at(6.0)), Some(base));
         // Alt+click's walk still meets the part itself (#482).
-        assert_eq!(parts_along(&dm, at(6.0)), [grandchild]);
+        assert_eq!(parts_along(&dm, &PartIndex::new(), at(6.0)), [grandchild]);
         let model = dm.create(dm.registry().class_id("Model").unwrap()).unwrap();
         dm.set_parent(model, Some(world)).unwrap();
         dm.set_parent(base, Some(model)).unwrap();
