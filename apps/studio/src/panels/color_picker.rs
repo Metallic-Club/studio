@@ -1,6 +1,7 @@
 //! The colour picker (#416), in Studio's style: a square of the colour's saturation and value (white at the top left,
 //! the hue at the top right, black along the bottom), a vertical hue slider to its right, and under them a hex field
-//! (`#rrggbb`) that a button switches to R, G and B fields (0 to 255). Everything is in sRGB, as the colour is shown.
+//! (`#rrggbb`) that a button switches to one field of R, G and B (`255, 255, 255`, 0 to 255, as the Properties panel
+//! has them; #574), each centred. Everything is in sRGB, as the colour is shown.
 //! The hue is kept while the picker is open, so a grey or black keeps the hue it was dragged from.
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
@@ -122,50 +123,25 @@ pub fn picker(ui: &mut Ui, id: Id, rgb: &mut [u8; 3]) -> bool {
     ui.horizontal(|ui| {
         let toggle = if state.rgb_fields { "Hex" } else { "RGB" };
         let field_width = SQUARE + STRIP + space::S3 - 44.0 - space::S3;
+        let channels = state.hsv.rgb8();
         if state.rgb_fields {
-            let mut channels = state.hsv.rgb8();
-            let mut changed = false;
-            let each = (field_width - 2.0 * space::S2) / 3.0;
-            ui.spacing_mut().item_spacing.x = space::S2;
-            for (channel, name) in channels.iter_mut().zip(["R", "G", "B"]) {
-                let response = ui.add_sized(
-                    [each, size::CONTROL],
-                    egui::DragValue::new(channel)
-                        .range(0..=255)
-                        .speed(1.0)
-                        .prefix(format!("{name} ")),
-                );
-                response.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name));
-                changed |= response.changed();
-            }
-            ui.spacing_mut().item_spacing.x = space::S3;
-            if changed {
-                state.hsv = Hsv::of(channels, state.hsv.h);
-            }
-        } else {
-            let field = id.with("hex");
-            let shown = hex(state.hsv.rgb8());
-            let mut typed = ui
-                .data(|data| data.get_temp::<String>(field))
-                .unwrap_or_else(|| shown.clone());
-            let response = ui.add_sized(
-                [field_width, size::CONTROL],
-                TextEdit::singleline(&mut typed)
-                    .id(field.with("field"))
-                    .font(FontId::monospace(text::BODY))
-                    .margin(vec2(space::S2, 2.0)),
-            );
-            response.widget_info(|| WidgetInfo::labeled(Role::TextInput, true, "Hex"));
-            if response.has_focus() {
-                ui.data_mut(|data| data.insert_temp(field, typed));
-            } else {
-                ui.data_mut(|data| data.remove::<String>(field));
-                if response.lost_focus()
-                    && let Some(picked) = parse_hex(&typed)
-                {
-                    state.hsv = Hsv::of(picked, state.hsv.h);
+            // One field of `255, 255, 255`, as the Properties panel's (#574); a dash or nothing keeps a channel.
+            let shown = channels.map(|channel| channel.to_string()).join(", ");
+            if let Some(typed) = entry(ui, id.with("rgb"), &shown, "RGB", field_width)
+                && let Some(parsed) = crate::panels::values::parse_components(&typed, 3, Some((0.0, 255.0)))
+            {
+                let mut picked = channels;
+                for (channel, value) in picked.iter_mut().zip(parsed) {
+                    if let Some(value) = value {
+                        *channel = value.round() as u8;
+                    }
                 }
+                state.hsv = Hsv::of(picked, state.hsv.h);
             }
+        } else if let Some(typed) = entry(ui, id.with("hex"), &hex(channels), "Hex", field_width)
+            && let Some(picked) = parse_hex(&typed)
+        {
+            state.hsv = Hsv::of(picked, state.hsv.h);
         }
         let button = ui.add_sized(
             [44.0, size::CONTROL],
@@ -183,6 +159,30 @@ pub fn picker(ui: &mut Ui, id: Id, rgb: &mut [u8; 3]) -> bool {
     let after = state.hsv.rgb8();
     *rgb = after;
     after != before
+}
+
+/// A field of the picker showing `shown` centred (#574), `label` for screen readers, kept as typed while it has the
+/// keyboard under `id`. Returns what was typed when it lets the keyboard go.
+fn entry(ui: &mut Ui, id: Id, shown: &str, label: &str, width: f32) -> Option<String> {
+    let mut typed = ui
+        .data(|data| data.get_temp::<String>(id))
+        .unwrap_or_else(|| shown.to_owned());
+    let response = ui.add_sized(
+        [width, size::CONTROL],
+        TextEdit::singleline(&mut typed)
+            .id(id.with("field"))
+            .font(FontId::monospace(text::BODY))
+            .align(egui::Align2::CENTER_CENTER)
+            .margin(vec2(space::S2, 2.0)),
+    );
+    response.widget_info(|| WidgetInfo::labeled(Role::TextInput, true, label));
+    if response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, typed));
+        None
+    } else {
+        ui.data_mut(|data| data.remove::<String>(id));
+        response.lost_focus().then_some(typed)
+    }
 }
 
 /// The saturation and value square: white at the top left, the hue at the top right, black along the bottom, with a
@@ -382,7 +382,46 @@ mod tests {
         harness.get_by_role_and_label(Role::Button, "Show RGB").click();
         harness.run();
         assert!(harness.query_by_role_and_label(Role::TextInput, "Hex").is_none());
-        harness.get_by_role_and_label(Role::SpinButton, "R");
         harness.get_by_role_and_label(Role::Button, "Show hex");
+        // #574: one field of the three channels, as the Properties panel has them.
+        let rgb = harness.get_by_role_and_label(Role::TextInput, "RGB");
+        assert_eq!(rgb.value().as_deref(), Some("18, 52, 86"));
+        rgb.click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get_by_role_and_label(Role::TextInput, "RGB")
+            .type_text("200, -, 300");
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(
+            *harness.state(),
+            [200, 0x34, 255],
+            "a dash keeps a channel; past 255 is 255"
+        );
+    }
+
+    /// #574: the hex and RGB fields' text is centred.
+    #[test]
+    fn the_fields_text_is_centred() {
+        let mut harness = harness([0x12, 0x34, 0x56]);
+        harness.run();
+        let centre_of = |harness: &Harness<'static, [u8; 3]>, label: &str, shown: &str| {
+            let field = harness.get_by_role_and_label(Role::TextInput, label).rect();
+            // Where the text is painted.
+            let painted = harness.output().shapes.iter().find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == shown => {
+                    Some(text.pos.x + text.galley.rect.center().x)
+                }
+                _ => None,
+            });
+            (field.center().x, painted.unwrap())
+        };
+        let (field, text) = centre_of(&harness, "Hex", "#123456");
+        assert!((text - field).abs() < 2.0, "{text} in {field}");
+        harness.get_by_role_and_label(Role::Button, "Show RGB").click();
+        harness.run();
+        let (field, text) = centre_of(&harness, "RGB", "18, 52, 86");
+        assert!((text - field).abs() < 2.0, "{text} in {field}");
     }
 }
