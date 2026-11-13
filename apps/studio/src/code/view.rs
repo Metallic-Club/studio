@@ -881,6 +881,8 @@ pub fn moved(text: &mut String, selection: Range<usize>, to: usize, copy: bool) 
     }
     let mut chars: Vec<char> = text.chars().collect();
     let to = to.min(chars.len());
+    // A selection kept from before the text changed can reach past its end.
+    let selection = selection.start.min(chars.len())..selection.end.min(chars.len());
     let piece: Vec<char> = chars[selection.clone()].to_vec();
     let length = piece.len();
     let at = if copy {
@@ -1250,6 +1252,9 @@ mod tests {
         let mut accents = "é b".to_owned();
         assert_eq!(moved(&mut accents, 0..1, 3, false), Some(Caret { anchor: 2, head: 3 }));
         assert_eq!(accents, " bé");
+        let mut short = "ab".to_owned();
+        assert_eq!(moved(&mut short, 1..9, 0, false), Some(Caret { anchor: 0, head: 1 }));
+        assert_eq!(short, "ba");
     }
 
     #[test]
