@@ -161,6 +161,8 @@ pub struct ThemeState {
     wanted: Look,
     applied: Option<Colors>,
     applied_look: Option<Look>,
+    /// The points per physical pixel the style was made for (#573): its borders are one pixel.
+    applied_scale: Option<f32>,
 }
 
 impl ThemeState {
@@ -170,6 +172,7 @@ impl ThemeState {
             wanted: look,
             applied: None,
             applied_look: None,
+            applied_scale: None,
         }
     }
 
@@ -188,11 +191,13 @@ impl ThemeState {
         self.applied.unwrap_or_default()
     }
 
-    /// Applies the wanted look to `ctx` unless it is already applied. Returns whether it did.
+    /// Applies the wanted look to `ctx` unless it is already applied, at the display's scale (borders are a pixel,
+    /// #573). Returns whether it did.
     pub fn apply(&mut self, ctx: &egui::Context) -> bool {
         let system_dark = ctx.system_theme().map(|theme| theme == egui::Theme::Dark);
         let colors = self.wanted.colors(system_dark);
-        if self.applied == Some(colors) && self.applied_look == Some(self.wanted) {
+        let scale = ctx.pixels_per_point();
+        if self.applied == Some(colors) && self.applied_look == Some(self.wanted) && self.applied_scale == Some(scale) {
             return false;
         }
         let egui_theme = if colors.dark {
@@ -200,11 +205,12 @@ impl ThemeState {
         } else {
             egui::Theme::Light
         };
-        ctx.set_style_of(egui_theme, style(&colors, self.wanted.motion()));
+        ctx.set_style_of(egui_theme, style(&colors, self.wanted.motion(), scale));
         ctx.set_theme(egui_theme);
         ctx.data_mut(|data| data.insert_temp(colors_key(), colors));
         self.applied = Some(colors);
         self.applied_look = Some(self.wanted);
+        self.applied_scale = Some(scale);
         true
     }
 }
@@ -221,7 +227,8 @@ fn colors_key() -> egui::Id {
 }
 
 /// The full `egui::Style` of `colors`, moving with `motion`.
-pub fn style(colors: &Colors, motion: Motion) -> egui::Style {
+/// Studio's egui style for `colors` and `motion` on a display of `pixels_per_point`.
+pub fn style(colors: &Colors, motion: Motion, pixels_per_point: f32) -> egui::Style {
     let mut style = egui::Style {
         animation_time: motion.fast,
         ..egui::Style::default()
@@ -243,11 +250,17 @@ pub fn style(colors: &Colors, motion: Motion) -> egui::Style {
     spacing.menu_margin = Margin::same(space::S2 as i8);
     spacing.indent = space::S6;
 
-    style.visuals = visuals(colors);
+    style.visuals = visuals(colors, hairline(pixels_per_point));
     style
 }
 
-fn visuals(colors: &Colors) -> egui::Visuals {
+/// A line one physical pixel wide on a display of `pixels_per_point`, in points: the lines between panels (#287) and
+/// the borders of fields and buttons (#573), which a whole point drew over more than a pixel, blurred and heavier.
+pub fn hairline(pixels_per_point: f32) -> f32 {
+    size::BORDER / pixels_per_point.max(0.25)
+}
+
+fn visuals(colors: &Colors, border: f32) -> egui::Visuals {
     let p = &colors.palette;
     let mut visuals = if colors.dark {
         egui::Visuals::dark()
@@ -257,7 +270,7 @@ fn visuals(colors: &Colors) -> egui::Visuals {
     let widget = |fill: Color32, edge: Color32, ink: Color32| WidgetVisuals {
         bg_fill: fill,
         weak_bg_fill: fill,
-        bg_stroke: Stroke::new(size::BORDER, edge),
+        bg_stroke: Stroke::new(border, edge),
         corner_radius: CornerRadius::same(radius::ITEM),
         fg_stroke: Stroke::new(1.0, ink),
         expansion: 0.0,
@@ -281,7 +294,7 @@ fn visuals(colors: &Colors) -> egui::Visuals {
     visuals.text_edit_bg_color = Some(p.input);
     visuals.code_bg_color = p.input;
     visuals.window_fill = p.surface;
-    visuals.window_stroke = Stroke::new(size::BORDER, p.border);
+    visuals.window_stroke = Stroke::new(border, p.border);
     visuals.window_corner_radius = CornerRadius::same(radius::DIALOG);
     visuals.menu_corner_radius = CornerRadius::same(radius::PANEL);
     visuals.panel_fill = p.bg;
@@ -664,7 +677,7 @@ mod tests {
             },
         ] {
             let colors = look.colors(None);
-            let style = style(&colors, look.motion());
+            let style = style(&colors, look.motion(), 1.0);
             let p = colors.palette;
             assert_eq!(style.visuals.dark_mode, colors.dark);
             assert_eq!(style.visuals.panel_fill, p.bg);
@@ -680,8 +693,33 @@ mod tests {
             assert_eq!(button.family, FontFamily::Name(fonts::STRONG.into()));
             assert_eq!(button.size, 14.0);
         }
-        let reduced = style(&Colors::default(), Motion::new(true));
+        let reduced = style(&Colors::default(), Motion::new(true), 1.0);
         assert_eq!(reduced.animation_time, 0.0);
+    }
+
+    /// #573: a field's or a button's border is one physical pixel, as the lines between panels are, at any scale.
+    #[test]
+    fn borders_are_one_pixel_at_any_scale() {
+        let colors = Colors::default();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let style = style(&colors, Motion::new(false), scale);
+            for state in [&style.visuals.widgets.inactive, &style.visuals.widgets.hovered] {
+                assert_eq!(state.bg_stroke.width * scale, 1.0, "at {scale}");
+            }
+            assert_eq!(style.visuals.widgets.inactive.bg_stroke.color, colors.palette.border);
+            assert_eq!(style.visuals.window_stroke.width * scale, 1.0);
+        }
+        // The scale changing applies the style again.
+        let ctx = egui::Context::default();
+        let mut state = ThemeState::new(Look::default());
+        assert!(state.apply(&ctx));
+        ctx.set_pixels_per_point(1.5);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+        assert!(state.apply(&ctx), "a new scale");
+        assert_eq!(
+            ctx.style_of(ctx.theme()).visuals.widgets.inactive.bg_stroke.width,
+            1.0 / 1.5
+        );
     }
 
     #[test]
