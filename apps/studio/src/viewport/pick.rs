@@ -166,6 +166,25 @@ pub fn nearest_part(dm: &DataModel, ray: Ray) -> Option<(Id, f32)> {
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// Whether a part in Workspace stands between `from` and `to` (#571), so that `to` cannot be seen from `from`. The
+/// parts `holder` is inside (a light in its lamp) do not count, nor does a wholly transparent part.
+pub fn blocked(dm: &DataModel, from: Vec3, to: Vec3, holder: Id) -> bool {
+    let distance = (to - from).length();
+    let Some(direction) = (to - from).try_normalize() else {
+        return false;
+    };
+    let Some(world) = workspace(dm) else {
+        return false;
+    };
+    let Ok(all) = dm.descendants(world) else {
+        return false;
+    };
+    all.filter(|&id| id != holder)
+        .filter(|&id| part_hit(dm, id, (from, direction)).is_some_and(|t| t < distance - 1e-3))
+        .filter(|&id| !matches!(dm.get_by_name(id, "Transparency"), Ok(Value::Number(t)) if t >= 1.0))
+        .any(|id| !dm.is_descendant_of(holder, id).unwrap_or(false))
+}
+
 /// The nearest part's face `ray` meets in Workspace: how far along, and the face's outward normal.
 pub fn nearest_face(dm: &DataModel, ray: Ray) -> Option<(f32, Vec3)> {
     let world = workspace(dm)?;

@@ -2,6 +2,9 @@
 //! so a light (which draws nothing of its own) can be seen and clicked. A click on an icon selects its light, as a
 //! click on a part does; the nearest icon wins where they overlap. Viewport options → View shows or hides them.
 //!
+//! An icon is not drawn over everything (#571): a part between the camera and the light hides it, as it would hide the
+//! light's lamp, and it cannot be clicked through the part. The part a light is in does not hide it.
+//!
 //! A selected light also shows how far it reaches, as a wireframe (#523): a PointLight's Range as a ball of three
 //! circles, a SpotLight's Range and Angle as a cone.
 
@@ -31,7 +34,8 @@ pub struct LightIcon {
     pub depth: f32,
 }
 
-/// The icons of the lights in `dm`'s Workspace that `view` sees, the farthest first (the order they are drawn in).
+/// The icons of the lights in `dm`'s Workspace that `view` sees, no part hiding them (#571), the farthest first (the
+/// order they are drawn in).
 pub fn light_icons(dm: &DataModel, view: &View) -> Vec<LightIcon> {
     let Some(world) = workspace(dm) else {
         return Vec::new();
@@ -44,6 +48,9 @@ pub fn light_icons(dm: &DataModel, view: &View) -> Vec<LightIcon> {
         .filter_map(|id| {
             let at = world_cframe(dm, id).ok()?.position();
             let centre = view.project(at)?;
+            if super::pick::blocked(dm, view.pos, at, id) {
+                return None;
+            }
             let icon = dm
                 .class_of(id)
                 .map_or(Icon::ExplorerInstance, |class| class_icon(dm.registry(), class));
@@ -186,6 +193,36 @@ mod tests {
         let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, -40.0), Vec3::new(0.0, 5.0, -80.0));
         let behind = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
         assert!(light_icons(&dm, &behind).is_empty());
+    }
+
+    /// #571: a part between the camera and a light hides its icon; the part a light is in does not.
+    #[test]
+    fn a_part_in_front_hides_a_light_s_icon() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let world = workspace(&dm).unwrap();
+        let make = |dm: &mut DataModel, class: &str, at: Vec3, parent: Id| {
+            let id = dm.create(dm.registry().class_id(class).unwrap()).unwrap();
+            dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at))).unwrap();
+            dm.set_parent(id, Some(parent)).unwrap();
+            id
+        };
+        // A lamp with a light inside, and a light on its own further off.
+        let lamp = make(&mut dm, "Part", Vec3::new(10.0, 5.0, 0.0), world);
+        let inside = make(&mut dm, "PointLight", Vec3::new(10.0, 5.0, 0.0), lamp);
+        let alone = make(&mut dm, "PointLight", Vec3::new(0.0, 5.0, 0.0), world);
+        let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, 20.0), Vec3::new(5.0, 5.0, 0.0));
+        let view = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
+        let seen = |dm: &DataModel| light_icons(dm, &view).iter().map(|icon| icon.id).collect::<Vec<_>>();
+        assert_eq!(seen(&dm).len(), 2, "the lamp does not hide its own light");
+        assert!(seen(&dm).contains(&inside));
+        // A wall between the camera and the lone light.
+        let wall = make(&mut dm, "Part", Vec3::new(0.0, 5.0, 10.0), world);
+        dm.set_by_name(wall, "Size", Value::Vector3(Vec3::new(4.0, 4.0, 1.0)))
+            .unwrap();
+        assert_eq!(seen(&dm), [inside]);
+        // A wholly transparent wall hides nothing.
+        dm.set_by_name(wall, "Transparency", Value::Number(1.0)).unwrap();
+        assert!(seen(&dm).contains(&alone));
     }
 
     /// #523: a PointLight's range is three circles of its Range; a SpotLight's a cone of its Range and Angle.
