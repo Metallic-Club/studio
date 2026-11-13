@@ -8,7 +8,7 @@
 //! viewports (`Context::show_viewport_immediate`), as Settings does. The shell opens a window for each viewport shown,
 //! draws it with the same device and UI renderer (so the icons, fonts and rendered views serve every window) while
 //! the main window draws, and closes it once it is no longer shown. Events in such a window redraw the main one,
-//! which draws it.
+//! which draws it. One asked at a place off every monitor (#578) opens centred over the main window instead.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -324,7 +324,7 @@ impl StudioWindow {
         )?;
         let own_repaint = windows.repaint.take();
         windows.close_unshown();
-        let opened = windows.open_wanted(context, &ctx, event_loop);
+        let opened = windows.open_wanted(context, &ctx, event_loop, &self.window);
         drop(shared);
         self.apply_vsync();
 
@@ -510,12 +510,29 @@ impl Windows {
         self.by_window.retain(|_, viewport| open.contains_key(viewport));
     }
 
-    /// Opens a window for each viewport shown without one. Returns whether any opened.
-    fn open_wanted(&mut self, context: &RenderContext, ctx: &egui::Context, event_loop: &ActiveEventLoop) -> bool {
+    /// Opens a window for each viewport shown without one, kept on a monitor ([`reachable_position`]) beside `main`.
+    /// Returns whether any opened.
+    fn open_wanted(
+        &mut self,
+        context: &RenderContext,
+        ctx: &egui::Context,
+        event_loop: &ActiveEventLoop,
+        main: &Window,
+    ) -> bool {
         let mut opened = false;
-        for (viewport, builder) in std::mem::take(&mut self.wanted) {
+        let mut monitors = None;
+        for (viewport, mut builder) in std::mem::take(&mut self.wanted) {
             if self.open.contains_key(&viewport) {
                 continue;
+            }
+            if let (Some(at), Some(size)) = (builder.position, builder.inner_size) {
+                let monitors = monitors.get_or_insert_with(|| monitor_rects(main));
+                let frame = main.outer_position().ok().map(|at| {
+                    let size = main.outer_size();
+                    (at.x, at.y, size.width, size.height)
+                });
+                let scale = egui_winit::pixels_per_point(ctx, main);
+                builder.position = reachable_position(at, size, scale, monitors, frame);
             }
             match OwnWindow::open(context, ctx, event_loop, viewport, &builder) {
                 Ok(own) => {
@@ -880,6 +897,32 @@ fn on_a_monitor(place: &crate::settings::WindowPlace, monitors: &[(i32, i32, u32
     })
 }
 
+/// Where a window of its own asked at `at`, its inside `size` (both in points at `pixels_per_point`), opens (#578):
+/// there while it is on one of `monitors` as [`on_a_monitor`] has it, or else centred over the main window's frame
+/// `main` (in physical pixels), or where the system puts it. A place kept for a monitor since unplugged is not used.
+fn reachable_position(
+    at: egui::Pos2,
+    size: egui::Vec2,
+    pixels_per_point: f32,
+    monitors: &[(i32, i32, u32, u32)],
+    main: Option<(i32, i32, u32, u32)>,
+) -> Option<egui::Pos2> {
+    let pixels = (at * pixels_per_point, size * pixels_per_point);
+    let place = crate::settings::WindowPlace {
+        x: pixels.0.x.round() as i32,
+        y: pixels.0.y.round() as i32,
+        width: pixels.1.x.round() as u32,
+        height: pixels.1.y.round() as u32,
+        maximized: false,
+    };
+    if on_a_monitor(&place, monitors) {
+        return Some(at);
+    }
+    let (x, y, width, height) = main?;
+    let centre = egui::pos2(x as f32 + width as f32 / 2.0, y as f32 + height as f32 / 2.0);
+    Some((centre - pixels.1 / 2.0) / pixels_per_point)
+}
+
 /// The splash's window: [`splash::SIZE`], borderless, fixed, see-through around its shape, centred on `monitor`,
 /// hidden until drawn, with the Metallic mark as its icon.
 fn splash_attributes(monitor: Option<&MonitorHandle>) -> WindowAttributes {
@@ -937,6 +980,25 @@ mod tests {
         assert!(!on_a_monitor(&place(4000, 100), &two), "past every monitor");
         assert!(!on_a_monitor(&place(100, 1090), &two), "its title bar below the screen");
         assert!(!on_a_monitor(&place(-2000, 0), &two[..1]), "that monitor is gone");
+    }
+
+    /// #578: a window of its own asked at a place off every monitor opens centred over the main window instead.
+    #[test]
+    fn a_window_of_its_own_off_every_monitor_opens_over_the_main_window() {
+        let two = [(0, 0, 1920, 1080), (-2560, -200, 2560, 1440)];
+        let main = Some((100, 100, 1600, 900));
+        let size = egui::vec2(780.0, 640.0);
+        // In points at 1.25: the left monitor's (-2000, 0) is (-1600, 0).
+        let left = egui::pos2(-1600.0, 0.0);
+        assert_eq!(reachable_position(left, size, 1.25, &two, main), Some(left));
+        let centred = reachable_position(left, size, 1.25, &two[..1], main);
+        // The main window's centre is (900, 550) in pixels, (720, 440) in points.
+        assert_eq!(centred, Some(egui::pos2(720.0 - 390.0, 440.0 - 320.0)));
+        assert_eq!(
+            reachable_position(egui::pos2(5000.0, 0.0), size, 1.0, &two, None),
+            None,
+            "the system's choice without a main window to centre on"
+        );
     }
 
     #[test]

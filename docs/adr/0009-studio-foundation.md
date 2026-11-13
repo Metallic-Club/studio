@@ -589,6 +589,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   `ClassName=`, `IsA=` and `Name=` are their own keys; any other is a property, compared as a number, a boolean, an
   enum item, contained text, or the text the Properties panel shows. A button beside the search box adds common
   filters, and one per class in the game, with a click.
+- **The Settings window's place (#578)**: it opens where it last closed, at its size, across runs too:
+  `[settings_window]` in `settings.toml`, a `WindowPlace` as `[window]` is (#505). It is noted while open and written
+  only when it closes (or Studio does), so dragging it never saves every frame; the builder of its window of its own
+  is kept while open, since egui moves a window whose builder changes. The shell opens one off every monitor centred
+  over Studio's window.
 
 ## Not in this slice
 

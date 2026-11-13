@@ -3,8 +3,10 @@
 //!
 //! A window of its own beside Studio's, as Roblox Studio's Settings are (#331): moved, resized and closed like any
 //! window, on every screen. Where Studio cannot open one (the tests draw Studio without a windowing system), it floats
-//! over Studio's window instead (#238), and is never docked. Every setting is one [`Entry`] in [`ENTRIES`], so the pages and the search read the same list,
-//! and adding a setting is one line there plus its control.
+//! over Studio's window instead (#238), and is never docked. Either way it opens where it was when it last closed, at
+//! the size it had, across runs too ([`StudioSettings::settings_window`], #578); the first time, centred over Studio.
+//! Every setting is one [`Entry`] in [`ENTRIES`], so the pages and the search read the same list, and adding a setting
+//! is one line there plus its control.
 
 use std::ops::RangeInclusive;
 
@@ -21,7 +23,7 @@ use metallic_engine::metallic_render::settings::{GraphicsSettings, Preset, Quali
 use super::keybinds::{self, KeybindsPage};
 use super::{
     LOD_BIAS, MAX_FRAME_CAP, MAX_VIEW_DISTANCE, MotionPreference, SHADOW_DISTANCE, StudioSettings, TARGET_FRAME_MS,
-    ui_scale,
+    WindowPlace, ui_scale,
 };
 use crate::code;
 use crate::keymap::{Command, Keymap};
@@ -580,6 +582,92 @@ fn window_icon() -> std::sync::Arc<egui::IconData> {
     .clone()
 }
 
+/// The window's size the first time it opens, in points.
+const SIZE: egui::Vec2 = vec2(780.0, 640.0);
+/// The smallest it may be made, in points.
+const MIN_SIZE: egui::Vec2 = vec2(680.0, 360.0);
+
+/// How the window of its own opens (#578): where and how large, in points, and whether maximised.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Opening {
+    /// Its frame's top-left corner; `None` leaves it to the system.
+    position: Option<egui::Pos2>,
+    /// Its inside's size.
+    size: egui::Vec2,
+    /// Whether it opens maximised.
+    maximized: bool,
+}
+
+/// How the window of its own opens: at `remembered` (in physical pixels, at `pixels_per_point`), or else at [`SIZE`]
+/// centred over Studio's window at `main` (its frame, in points). A place off every monitor is the shell's to catch.
+fn opening(remembered: Option<WindowPlace>, main: Option<egui::Rect>, pixels_per_point: f32) -> Opening {
+    let scale = if pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
+    match remembered {
+        Some(place) => Opening {
+            position: Some(pos2(place.x as f32, place.y as f32) / scale),
+            size: (vec2(place.width as f32, place.height as f32) / scale).max(MIN_SIZE),
+            maximized: place.maximized,
+        },
+        None => Opening {
+            position: main.map(|main| main.center() - SIZE / 2.0),
+            size: SIZE,
+            maximized: false,
+        },
+    }
+}
+
+/// Where the window of its own is now, from its viewport's `info` at `pixels_per_point`, in physical pixels; `last`
+/// while egui does not know (before it opens, or minimised). Maximised, it keeps the place it had before, to go back to.
+fn noted_place(info: &egui::ViewportInfo, pixels_per_point: f32, last: Option<WindowPlace>) -> Option<WindowPlace> {
+    if info.minimized == Some(true) {
+        return last;
+    }
+    let (Some(outer), Some(inner)) = (info.outer_rect, info.inner_rect) else {
+        return last;
+    };
+    let place = place_of(outer.min, inner.size(), pixels_per_point);
+    if info.maximized == Some(true) {
+        return Some(WindowPlace {
+            maximized: true,
+            ..last.unwrap_or(place)
+        });
+    }
+    Some(place)
+}
+
+/// A place at `corner` of `size`, both in points at `pixels_per_point`, in physical pixels.
+fn place_of(corner: egui::Pos2, size: egui::Vec2, pixels_per_point: f32) -> WindowPlace {
+    let (corner, size) = (corner * pixels_per_point, size * pixels_per_point);
+    WindowPlace {
+        x: corner.x.round() as i32,
+        y: corner.y.round() as i32,
+        width: size.x.round() as u32,
+        height: size.y.round() as u32,
+        maximized: false,
+    }
+}
+
+/// Where the floating window (#238) first opens in a run: its centre and outer size in points, from `remembered` (its
+/// rect in Studio's window, in physical pixels at `pixels_per_point`), or else [`SIZE`] centred in `content`. egui
+/// keeps it on the window, and remembers it after that.
+fn floating_place(
+    remembered: Option<WindowPlace>,
+    content: egui::Rect,
+    pixels_per_point: f32,
+) -> (egui::Pos2, egui::Vec2) {
+    let scale = if pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
+    match remembered {
+        Some(place) => {
+            let rect = egui::Rect::from_min_size(
+                pos2(place.x as f32, place.y as f32) / scale,
+                vec2(place.width as f32, place.height as f32) / scale,
+            );
+            (rect.center(), rect.size())
+        }
+        None => (content.center(), SIZE),
+    }
+}
+
 /// The width of a setting's control column.
 pub(super) const CONTROL_WIDTH: f32 = 260.0;
 /// The width of a drop-down in it.
@@ -600,6 +688,10 @@ pub struct SettingsWindow {
     focused: bool,
     /// Whether it is shown in a window of its own (#331), which has its own input: Studio's then never reads it.
     own_window: bool,
+    /// Where it is while open, in physical pixels (#578): kept in the settings once it closes.
+    place: Option<WindowPlace>,
+    /// How its window of its own was opened, kept while it is open: egui moves a window whose builder changes.
+    opened_as: Option<egui::ViewportBuilder>,
 }
 
 impl SettingsWindow {
@@ -614,7 +706,28 @@ impl SettingsWindow {
         self.focused = open;
         if !open {
             self.rect = None;
+            self.opened_as = None;
         }
+    }
+
+    /// Where it floats over Studio's window (#238), as last drawn: `None` closed, or in a window of its own.
+    pub fn rect(&self) -> Option<egui::Rect> {
+        self.rect
+    }
+
+    /// Keeps where the window is in `settings` (#578), to open there next time: it does so itself when it closes, and
+    /// Studio as Studio closes with it open.
+    pub fn keep_place(&self, settings: &mut StudioSettings) {
+        if let Some(place) = self.place {
+            settings.settings_window = Some(place);
+        }
+    }
+
+    /// Once it has closed: keeps where it was in `settings`, and forgets it, so a place from before never overwrites
+    /// the settings later.
+    fn forget_place(&mut self, settings: &mut StudioSettings) {
+        self.keep_place(settings);
+        self.place = None;
     }
 
     /// Whether it is open and the user's last click was in it: what is under it then gets no shortcuts.
@@ -672,6 +785,8 @@ impl SettingsWindow {
     pub fn show(&mut self, ctx: &egui::Context, settings: &mut StudioSettings, keymap: &mut Keymap) {
         self.own_window = self.open && !ctx.embed_viewports();
         if !self.open {
+            // However it was closed, where it was is kept for next time (#578).
+            self.forget_place(settings);
             return;
         }
         if self.own_window {
@@ -679,23 +794,29 @@ impl SettingsWindow {
             return;
         }
         let mut open = true;
+        let pixels_per_point = ctx.pixels_per_point();
+        let (centre, size) = floating_place(settings.settings_window, ctx.content_rect(), pixels_per_point);
         let shown = egui::Window::new("Settings")
             .id(Id::unique("metallic.settings"))
-            // Opens centred on the window; where it is moved to is egui's to remember.
+            // Where it last was (#578), or centred on the window; after that, where it is moved to is egui's to
+            // remember. The pivot stays the centre: egui would read the place it keeps by a new one.
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
+            .default_pos(centre)
             // Its own header, with Lucide's close button (#278), in place of egui's title bar.
             .title_bar(false)
             .collapsible(false)
             .resizable(true)
-            .default_size([780.0, 640.0])
-            .min_width(680.0)
-            .min_height(360.0)
+            .default_size(size)
+            .min_width(MIN_SIZE.x)
+            .min_height(MIN_SIZE.y)
             .show(ctx, |ui| {
                 crate::theme::window_header(ui, "Settings", &mut open);
                 self.contents(ui, settings, keymap);
             });
         self.rect = shown.map(|shown| shown.response.rect);
+        if let Some(rect) = self.rect {
+            self.place = Some(place_of(rect.min, rect.size(), pixels_per_point));
+        }
         let press = ctx.input(|input| {
             input
                 .pointer
@@ -708,26 +829,40 @@ impl SettingsWindow {
         }
         if !open {
             self.set_open(false);
+            self.forget_place(settings);
         }
     }
 
-    /// The window of its own (#331): its title bar the system's, centred over Studio's window when it opens, and closed
-    /// by its close button. A keybind being recorded reads its keys here, before the page is drawn.
+    /// The window of its own (#331): its title bar the system's, where it was when it last closed (#578) or else
+    /// centred over Studio's window, and closed by its close button. A keybind being recorded reads its keys here,
+    /// before the page is drawn.
     fn show_own_window(&mut self, ctx: &egui::Context, settings: &mut StudioSettings, keymap: &mut Keymap) {
         // What is under the pointer in Studio's window is never this window.
         self.rect = None;
         self.focused = false;
-        let size = egui::vec2(780.0, 640.0);
-        let mut builder = egui::ViewportBuilder::default()
-            .with_title("Settings")
-            .with_inner_size(size)
-            .with_min_inner_size([680.0, 360.0])
-            .with_icon(window_icon());
-        if let Some(main) = ctx.input(|input| input.viewport().outer_rect) {
-            builder = builder.with_position(main.center() - size / 2.0);
-        }
+        let builder = match &self.opened_as {
+            Some(builder) => builder.clone(),
+            None => {
+                // A place noted before it was closed and opened again within a frame.
+                self.keep_place(settings);
+                let main = ctx.input(|input| input.viewport().outer_rect);
+                let opening = opening(settings.settings_window, main, ctx.pixels_per_point());
+                let mut builder = egui::ViewportBuilder::default()
+                    .with_title("Settings")
+                    .with_inner_size(opening.size)
+                    .with_min_inner_size(MIN_SIZE)
+                    .with_maximized(opening.maximized)
+                    .with_icon(window_icon());
+                if let Some(at) = opening.position {
+                    builder = builder.with_position(at);
+                }
+                self.opened_as = Some(builder.clone());
+                builder
+            }
+        };
         let mut close = false;
         ctx.show_viewport_immediate(viewport_id(), builder, |ui, _| {
+            self.place = ui.input(|input| noted_place(input.viewport(), input.pixels_per_point(), self.place));
             if self.keybinds.is_capturing() {
                 self.keybinds.listen(ui.ctx(), keymap);
             }
@@ -742,6 +877,7 @@ impl SettingsWindow {
         });
         if close {
             self.set_open(false);
+            self.forget_place(settings);
         }
     }
 
@@ -1385,6 +1521,91 @@ mod tests {
                 );
             harness.run();
         }
+    }
+
+    /// #578: the window of its own opens where it was, at the size it had, or centred over Studio the first time.
+    #[test]
+    fn the_window_of_its_own_opens_where_it_was() {
+        let main = egui::Rect::from_min_size(pos2(100.0, 50.0), vec2(1280.0, 800.0));
+        let first = opening(None, Some(main), 1.0);
+        assert_eq!(first.position, Some(main.center() - SIZE / 2.0));
+        assert_eq!((first.size, first.maximized), (SIZE, false));
+        assert_eq!(
+            opening(None, None, 1.0).position,
+            None,
+            "the system's place, without Studio's"
+        );
+        // Kept in physical pixels, opened in points.
+        let place = WindowPlace {
+            x: -1500,
+            y: 300,
+            width: 1000,
+            height: 750,
+            maximized: true,
+        };
+        let again = opening(Some(place), Some(main), 1.25);
+        assert_eq!(again.position, Some(pos2(-1200.0, 240.0)));
+        assert_eq!((again.size, again.maximized), (vec2(800.0, 600.0), true));
+        // Never smaller than it may be made, nor scaled by nothing.
+        let small = WindowPlace {
+            width: 400,
+            height: 400,
+            ..place
+        };
+        assert_eq!(opening(Some(small), None, 1.0).size, vec2(MIN_SIZE.x, 400.0));
+        assert_eq!(opening(Some(place), None, 0.0).position, Some(pos2(-1500.0, 300.0)));
+    }
+
+    /// #578: where the window of its own is, as its viewport says, in physical pixels.
+    #[test]
+    fn the_window_of_its_own_s_place_is_noted_from_its_viewport() {
+        let info = |outer: egui::Rect, maximized: bool, minimized: bool| egui::ViewportInfo {
+            // The frame's corner, and the inside below its title bar.
+            outer_rect: Some(outer),
+            inner_rect: Some(egui::Rect::from_min_max(
+                outer.min + vec2(8.0, 30.0),
+                outer.max - vec2(8.0, 8.0),
+            )),
+            maximized: Some(maximized),
+            minimized: Some(minimized),
+            ..egui::ViewportInfo::default()
+        };
+        let normal = egui::Rect::from_min_size(pos2(-400.0, 80.0), vec2(816.0, 668.0));
+        let noted = noted_place(&info(normal, false, false), 1.5, None);
+        let place = WindowPlace {
+            x: -600,
+            y: 120,
+            width: 1200,
+            height: 945,
+            maximized: false,
+        };
+        assert_eq!(noted, Some(place));
+        // Not open yet, or minimised: as it was.
+        assert_eq!(noted_place(&egui::ViewportInfo::default(), 1.5, noted), noted);
+        assert_eq!(noted_place(&info(normal, false, true), 1.5, noted), noted);
+        // Maximised: the place to go back to, marked maximised.
+        let screen = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0));
+        let maximized = noted_place(&info(screen, true, false), 1.5, noted);
+        assert_eq!(
+            maximized,
+            Some(WindowPlace {
+                maximized: true,
+                ..place
+            })
+        );
+    }
+
+    /// #578: floating, it opens where it was in Studio's window, or centred in it.
+    #[test]
+    fn the_floating_window_opens_where_it_was() {
+        let content = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 1000.0));
+        assert_eq!(floating_place(None, content, 1.0), (pos2(800.0, 500.0), SIZE));
+        let place = place_of(pos2(40.0, 60.0), vec2(700.0, 500.0), 2.0);
+        assert_eq!((place.x, place.y, place.width, place.height), (80, 120, 1400, 1000));
+        assert_eq!(
+            floating_place(Some(place), content, 2.0),
+            (pos2(390.0, 310.0), vec2(700.0, 500.0))
+        );
     }
 
     #[test]

@@ -45,12 +45,15 @@ pub struct StudioSettings {
     pub keybinds: Keybinds,
     /// Where Studio's window was when it last closed (#505); `None` the first time.
     pub window: Option<WindowPlace>,
+    /// Where the Settings window was when it last closed (#578), saved in `[settings_window]`; `None` the first time.
+    pub settings_window: Option<WindowPlace>,
     /// The script editor's settings (#529), kept in a file of their own (`code_editor.toml`), not in `settings.toml`.
     pub code: crate::code::settings::CodeEditor,
 }
 
 /// Where Studio's window was (#505), saved in `[window]`: its frame's top-left corner and its inside's size, in
-/// physical pixels, as it was before it was maximised, and whether it was.
+/// physical pixels, as it was before it was maximised, and whether it was. The Settings window's (#578), in
+/// `[settings_window]`, is the same; floating over Studio's window (#238), it is its rect there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowPlace {
     /// The frame's left edge.
@@ -343,25 +346,8 @@ impl StudioSettings {
                 &mut e.insert_grid,
             );
         }
-        if let Some(window) = section("window") {
-            let int = |key: &str| window.get(key).and_then(Value::as_integer);
-            let size = |key: &str| {
-                int(key)
-                    .and_then(|v| u32::try_from(v).ok())
-                    .filter(|v| (WINDOW_SIZE.0..=WINDOW_SIZE.1).contains(v))
-            };
-            let at = |key: &str| int(key).and_then(|v| i32::try_from(v).ok());
-            settings.window = match (at("x"), at("y"), size("width"), size("height")) {
-                (Some(x), Some(y), Some(width), Some(height)) => Some(WindowPlace {
-                    x,
-                    y,
-                    width,
-                    height,
-                    maximized: window.get("maximized").and_then(Value::as_bool).unwrap_or(false),
-                }),
-                _ => None,
-            };
-        }
+        settings.window = section("window").and_then(read_place);
+        settings.settings_window = section("settings_window").and_then(read_place);
         if let Some(output) = section("output") {
             let o = &mut settings.output;
             read(output, "show_time", Value::as_bool, &mut o.show_time);
@@ -454,14 +440,10 @@ impl StudioSettings {
             let view = if e.insert_grid { "grid" } else { "list" };
             editing.insert("insert_view".into(), Value::String(view.into()));
         });
-        if let Some(place) = self.window {
-            with_section(&mut document, "window", |window| {
-                window.insert("x".into(), Value::Integer(i64::from(place.x)));
-                window.insert("y".into(), Value::Integer(i64::from(place.y)));
-                window.insert("width".into(), Value::Integer(i64::from(place.width)));
-                window.insert("height".into(), Value::Integer(i64::from(place.height)));
-                window.insert("maximized".into(), Value::Boolean(place.maximized));
-            });
+        for (name, place) in [("window", self.window), ("settings_window", self.settings_window)] {
+            if let Some(place) = place {
+                with_section(&mut document, name, |window| write_place(place, window));
+            }
         }
         let o = &self.output;
         with_section(&mut document, "output", |output| {
@@ -545,6 +527,34 @@ fn read<T>(table: &Table, key: &str, get: impl FnOnce(&Value) -> Option<T>, out:
             None => log::warn!("settings: `{key} = {value}` is not a valid value; using the default"),
         }
     }
+}
+
+/// The window's place in a `[window]` or `[settings_window]` table: `None` when a key is missing, or the size is not
+/// in [`WINDOW_SIZE`].
+fn read_place(table: &Table) -> Option<WindowPlace> {
+    let int = |key: &str| table.get(key).and_then(Value::as_integer);
+    let size = |key: &str| {
+        int(key)
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|v| (WINDOW_SIZE.0..=WINDOW_SIZE.1).contains(v))
+    };
+    let at = |key: &str| int(key).and_then(|v| i32::try_from(v).ok());
+    Some(WindowPlace {
+        x: at("x")?,
+        y: at("y")?,
+        width: size("width")?,
+        height: size("height")?,
+        maximized: table.get("maximized").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+/// Writes `place` into a `[window]` or `[settings_window]` table.
+fn write_place(place: WindowPlace, table: &mut Table) {
+    table.insert("x".into(), Value::Integer(i64::from(place.x)));
+    table.insert("y".into(), Value::Integer(i64::from(place.y)));
+    table.insert("width".into(), Value::Integer(i64::from(place.width)));
+    table.insert("height".into(), Value::Integer(i64::from(place.height)));
+    table.insert("maximized".into(), Value::Boolean(place.maximized));
 }
 
 /// A number, integer or not.
@@ -807,6 +817,52 @@ insert_view = \"grid\"
             assert_eq!(StudioSettings::from_document(&document).window, None, "{broken}");
         }
         assert_eq!(StudioSettings::default().window, None);
+    }
+
+    /// #578: the Settings window's place round-trips beside Studio's, and is checked as Studio's is.
+    #[test]
+    fn the_settings_window_s_place_round_trips() {
+        let document: Table = toml::from_str(
+            "[window]\nx = 0\ny = 0\nwidth = 1600\nheight = 900\n\
+             [settings_window]\nx = -700\ny = 120\nwidth = 900\nheight = 700\n",
+        )
+        .unwrap();
+        let settings = StudioSettings::from_document(&document);
+        let place = WindowPlace {
+            x: -700,
+            y: 120,
+            width: 900,
+            height: 700,
+            maximized: false,
+        };
+        assert_eq!(settings.settings_window, Some(place));
+        assert_eq!(settings.window.map(|window| window.width), Some(1600), "each its own");
+        let written = settings.to_document(&Table::new());
+        assert_eq!(written["settings_window"]["width"].as_integer(), Some(900));
+        assert_eq!(StudioSettings::from_document(&written).settings_window, Some(place));
+        for broken in [
+            "x = 1\ny = 1\nwidth = 900\nheight = 99999",
+            "x = 1\ny = 1\nwidth = -900\nheight = 700",
+            "x = 1\ny = \"top\"\nwidth = 900\nheight = 700",
+            "y = 1\nwidth = 900\nheight = 700",
+            "",
+        ] {
+            let document: Table = toml::from_str(&format!("[settings_window]\n{broken}\n")).unwrap();
+            assert_eq!(
+                StudioSettings::from_document(&document).settings_window,
+                None,
+                "{broken}"
+            );
+        }
+        let document: Table = toml::from_str("settings_window = 3\n").unwrap();
+        assert_eq!(StudioSettings::from_document(&document).settings_window, None);
+        assert_eq!(StudioSettings::default().settings_window, None);
+        assert!(
+            !StudioSettings::default()
+                .to_document(&Table::new())
+                .contains_key("settings_window"),
+            "nothing is written until it has a place"
+        );
     }
 
     /// #509: a custom accent is kept as `custom` and its colour; a bad colour leaves the preset there was.
