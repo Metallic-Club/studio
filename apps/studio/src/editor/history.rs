@@ -17,6 +17,7 @@
 //! - **Saved or not.** Each step that changes the scene leaves it at a new revision; the scene has unsaved changes
 //!   while its revision is not the one last saved ([`History::is_saved`]), so undoing back to it clears the mark.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use metallic_engine::metallic_core::{DataModel, DmError, Id, PropId, Value};
@@ -200,6 +201,9 @@ pub struct History {
     redo: Vec<Step>,
     /// The changes of the action under way.
     pending: Vec<Change>,
+    /// Where each property written in the action under way is noted in `pending` (#597): a drag of thousands of parts
+    /// writes each of them every frame, and finding its note by walking the others made that quadratic.
+    noted: HashMap<(Id, PropId), usize>,
     /// The selection when the last step ended.
     selection: Selection,
     /// The scene's revision before the oldest step kept.
@@ -221,14 +225,14 @@ impl History {
 
     /// Notes a change of the action under way. A property written again in the same action keeps its first old value.
     pub fn note(&mut self, change: Change) {
-        if let Change::Prop { id, prop, new, .. } = &change
-            && let Some(Change::Prop { new: mine, .. }) = self
-                .pending
-                .iter_mut()
-                .find(|mine| matches!(mine, Change::Prop { id: i, prop: p, .. } if i == id && p == prop))
-        {
-            mine.clone_from(new);
-            return;
+        if let Change::Prop { id, prop, new, .. } = &change {
+            if let Some(&at) = self.noted.get(&(*id, *prop))
+                && let Some(Change::Prop { new: mine, .. }) = self.pending.get_mut(at)
+            {
+                mine.clone_from(new);
+                return;
+            }
+            self.noted.insert((*id, *prop), self.pending.len());
         }
         self.pending.push(change);
     }
@@ -246,6 +250,7 @@ impl History {
             return;
         }
         let mut changes = std::mem::take(&mut self.pending);
+        self.noted.clear();
         changes.retain(|change| !change.is_noop());
         let moved = *selection != self.selection;
         if changes.is_empty() && !moved {

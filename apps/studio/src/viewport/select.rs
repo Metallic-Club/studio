@@ -209,8 +209,8 @@ fn inside(polygon: &[Pos2], point: Pos2) -> bool {
 pub fn combine(selection: &mut Selection, hits: &[Id], op: SelectOp) {
     match op {
         SelectOp::Replace => *selection = Selection::of(hits.iter().copied()),
-        SelectOp::Add => hits.iter().for_each(|&id| selection.add(id)),
-        SelectOp::Subtract => hits.iter().for_each(|&id| selection.remove(id)),
+        SelectOp::Add => selection.extend(hits.iter().copied()),
+        SelectOp::Subtract => selection.remove_all(hits.iter().copied()),
     }
 }
 

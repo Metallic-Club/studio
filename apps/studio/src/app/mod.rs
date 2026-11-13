@@ -3744,7 +3744,7 @@ mod tests {
         harness.set_size(egui::vec2(1280.0, 900.0));
         settle(&mut harness);
         let tool = |harness: &Harness<'_, Test>| harness.state().studio.editor().unwrap().viewport.gizmo.tool;
-        // The faint outline round the part under the pointer: lines in half the accent.
+        // The faint outline round the part under the pointer: lines in half the accent, in the outlines' mesh (#597).
         let faint = |harness: &Harness<'_, Test>| {
             let ink = current_colors(&harness.ctx).accent.gamma_multiply(0.5);
             harness
@@ -3752,7 +3752,7 @@ mod tests {
                 .shapes
                 .iter()
                 .filter(
-                    |clipped| matches!(&clipped.shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == ink),
+                    |clipped| matches!(&clipped.shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == ink)),
                 )
                 .count()
         };
@@ -6737,6 +6737,120 @@ mod tests {
         let seen = time(&mut studio, &mut offscreen, toward.0, toward.1);
         let unseen = time(&mut studio, &mut offscreen, away.0, away.1);
         eprintln!("frame: empty {empty:?}, 20,000 parts in view {seen:?}, out of view {unseen:?}");
+    }
+
+    /// #597: what selecting 10,000 parts costs, and a frame with them selected (the Move tool's gizmo up, the pointer
+    /// over the viewport, the Explorer showing them). Timed, so it is run by hand:
+    /// `cargo test -p metallic_studio -- --ignored --nocapture many_selected`.
+    #[test]
+    #[ignore = "a timing, run by hand"]
+    fn many_selected_stay_responsive() {
+        use std::time::Instant;
+
+        use metallic_engine::metallic_core::glam::Vec3;
+        use metallic_engine::metallic_core::{CFrame, Value};
+        use metallic_engine::metallic_render::wgpu;
+
+        let Some((mut studio, mut offscreen)) = viewport_shown("viewport-many-selected", egui::vec2(1280.0, 800.0))
+        else {
+            return;
+        };
+        let rect = studio.editor().unwrap().viewport.rect.unwrap();
+        let hover = vec![egui::Event::PointerMoved(rect.center())];
+        let editor = studio.editor_mut().unwrap();
+        let dm = &mut editor.dm;
+        let world = crate::viewport::pick::workspace(dm).unwrap();
+        let folder = dm.create(dm.registry().class_id("Folder").unwrap()).unwrap();
+        dm.set_parent(folder, Some(world)).unwrap();
+        let class = dm.registry().class_id("Part").unwrap();
+        let mut parts = Vec::new();
+        for i in 0..10_000 {
+            let id = dm.create(class).unwrap();
+            let at = Vec3::new((i % 100) as f32 * 2.0 - 100.0, 1.0, -((i / 100) as f32) * 2.0);
+            dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at))).unwrap();
+            dm.set_parent(id, Some(folder)).unwrap();
+            parts.push(id);
+        }
+        editor.explorer.reveal(&editor.dm, parts[0]);
+        editor.viewport.camera = crate::viewport::EditorCamera::looking_at(Vec3::new(0.0, 40.0, 60.0), Vec3::ZERO);
+        editor.viewport.gizmo.tool = Some(crate::viewport::tools::Tool::Move);
+        for _ in 0..5 {
+            offscreen.frame_with(&mut studio, hover.clone());
+        }
+        let start = Instant::now();
+        studio.menu_action(MenuAction::SelectAll);
+        let select = start.elapsed();
+        let editor = studio.editor_mut().unwrap();
+        let shown = editor.selection.len();
+        let start = Instant::now();
+        crate::viewport::select::combine(
+            &mut editor.selection,
+            &parts,
+            crate::viewport::select::SelectOp::Replace,
+        );
+        let marquee = start.elapsed();
+        let mut time = |studio: &mut Studio| {
+            for _ in 0..3 {
+                offscreen.frame_with(studio, hover.clone());
+            }
+            let _ = offscreen.context.device().poll(wgpu::PollType::wait_indefinitely());
+            let start = Instant::now();
+            let frames = 20;
+            for _ in 0..frames {
+                offscreen.frame_with(studio, hover.clone());
+                let _ = offscreen.context.device().poll(wgpu::PollType::wait_indefinitely());
+            }
+            start.elapsed() / frames
+        };
+        let selected = time(&mut studio);
+        // A drag of the Move tool's X arrow over ten frames, as the viewport runs one.
+        let drag = {
+            use crate::viewport::gizmo::MoveHandle;
+            use crate::viewport::tools::{self, Handle, Keys, Snap, Tool};
+            let editor = studio.editor_mut().unwrap();
+            let start = Instant::now();
+            let targets = tools::targets(&editor.dm, &editor.selection);
+            let frame = tools::frame_for(&editor.dm, Tool::Move, false, &targets, Vec3::new(0.0, 40.0, 60.0)).unwrap();
+            let ray = |x: f32| {
+                (
+                    Vec3::new(x, 40.0, 60.0),
+                    (frame.origin - Vec3::new(0.0, 40.0, 60.0)).normalize(),
+                )
+            };
+            let mut drag = tools::begin_drag(
+                &editor.dm,
+                Handle::Move(MoveHandle::Arrow(0, 1.0)),
+                frame,
+                ray(0.0),
+                &targets,
+            )
+            .unwrap();
+            for step in 1..=10 {
+                tools::update_drag(
+                    &mut editor.scene(),
+                    &mut drag,
+                    ray(step as f32),
+                    Keys::default(),
+                    Snap::default(),
+                );
+            }
+            editor.scene().commit(Instant::now(), false);
+            start.elapsed() / 10
+        };
+        let start = Instant::now();
+        studio.menu_action(MenuAction::Tree(crate::editor::edit::TreeEdit::Delete));
+        let delete = start.elapsed();
+        let start = Instant::now();
+        studio.menu_action(MenuAction::Undo);
+        let undo = start.elapsed();
+        let after = time(&mut studio);
+        studio.editor_mut().unwrap().selection.clear();
+        let none = time(&mut studio);
+        eprintln!(
+            "select all ({shown} rows) {select:?}, marquee of 10,000 {marquee:?}; frame with 10,000 selected \
+             {selected:?}, with none {none:?}; a drag frame {drag:?}; delete {delete:?}, undo {undo:?}, a frame \
+             after {after:?}"
+        );
     }
 
     #[test]

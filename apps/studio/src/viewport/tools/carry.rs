@@ -4,6 +4,8 @@
 //! snaps to the move increment, so things land on one grid). Over nothing it slides on a plane through where it was
 //! grabbed: level, unless the view is nearly level too, when it faces the camera.
 
+use std::collections::HashSet;
+
 use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, DataModel, Id};
 
@@ -37,7 +39,8 @@ pub(super) fn slide_normal(dir: Vec3) -> Vec3 {
 
 /// Picks up `targets` at `grab`, the point of a part `ray` met.
 pub(super) fn begin(dm: &DataModel, targets: &[Id], grab: Vec3, ray: Ray) -> Option<CarryDrag> {
-    let carried: Vec<Id> = targets
+    // A set (#597): every part in Workspace is checked against it.
+    let carried: HashSet<Id> = targets
         .iter()
         .flat_map(|&target| std::iter::once(target).chain(dm.descendants(target).into_iter().flatten()))
         .collect();

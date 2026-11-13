@@ -23,6 +23,7 @@
 //! between the columns can be dragged left and right (#324), and stays where it was left.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use egui::{
     Align, Button, Color32, CornerRadius, CursorIcon, Key, Label, Layout, Popup, PopupCloseBehavior, Rect, RichText,
@@ -191,6 +192,26 @@ pub fn groups(dm: &DataModel, ids: &[Id]) -> Vec<Group> {
             }
         })
         .collect()
+}
+
+/// The rows worked out last, for which selection at which revision of the editor's scene.
+type GroupCache = Arc<(u64, Vec<Id>, Arc<Vec<Group>>)>;
+
+/// [`groups`] of `ids`, kept between frames while the editor's scene is at `revision` and the selection is the same
+/// (#597): with thousands selected, comparing every one's properties each frame is most of the frame. `None` (a
+/// running game, whose values change every frame) works them out each time.
+fn cached_groups(ctx: &egui::Context, dm: &DataModel, ids: &[Id], revision: Option<u64>) -> Arc<Vec<Group>> {
+    let Some(revision) = revision else {
+        return Arc::new(groups(dm, ids));
+    };
+    let key = egui::Id::unique("metallic.properties.groups");
+    let kept: Option<GroupCache> = ctx.data(|data| data.get_temp(key));
+    if let Some(kept) = kept.filter(|kept| kept.0 == revision && kept.1 == ids) {
+        return Arc::clone(&kept.2);
+    }
+    let fresh = Arc::new(groups(dm, ids));
+    ctx.data_mut(|data| data.insert_temp(key, Arc::new((revision, ids.to_vec(), Arc::clone(&fresh)))));
+    fresh
 }
 
 /// The rows of a value shown as `label` (#417): its own, then its parts' (a vector's axes, a colour's channels, a
@@ -559,9 +580,12 @@ impl Panel for Properties {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        // What changed in the editor's scene since the rows were last worked out (#597).
+        let revision = cx.editor.parts.revision();
         // The running game's values while one runs, live (ADR 0010 §5).
         let mut scene = cx.editor.scene();
-        if scene.playing {
+        let playing = scene.playing;
+        if playing {
             // The values change as the game runs. No banner says so (#309).
             ui.ctx().request_repaint();
         }
@@ -617,7 +641,7 @@ impl Panel for Properties {
                 let share = name_share(ui.ctx());
                 let top = ui.cursor().top();
                 let mut open = open_rows(ui.ctx());
-                for group in groups(dm, &ids) {
+                for group in cached_groups(ui.ctx(), dm, &ids, (!playing).then_some(revision)).iter() {
                     section_label(ui, group.name);
                     edits.extend(rows_ui(ui, dm, &group.rows, &mut open, share, &taken).edits);
                     ui.add_space(space::S5);

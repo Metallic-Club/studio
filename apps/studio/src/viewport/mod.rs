@@ -21,6 +21,7 @@ pub mod camera;
 pub mod gizmo;
 pub mod index;
 pub mod light_icons;
+pub mod lines;
 pub mod pick;
 pub mod select;
 pub mod shapes;
