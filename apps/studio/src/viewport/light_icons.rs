@@ -62,10 +62,13 @@ pub fn light_icons(dm: &DataModel, view: &View) -> Vec<LightIcon> {
 /// How many lines a range's circle is drawn with.
 const CIRCLE_STEPS: usize = 48;
 
+/// How many lines a SpotLight's cone has from the light to its end (#570).
+const CONE_SIDES: usize = 8;
+
 /// The wireframe of how far the light `id` reaches (#523), as lines in the world: a PointLight's Range as three
 /// circles, one in each of its axis planes; a SpotLight's as a cone along its forward direction (−Z), opening Angle
-/// degrees, its sides Range long: the circle where it ends and four lines from the light to it. Empty for anything
-/// else, and for a light with no reach.
+/// degrees, its sides Range long: the circle where it ends and eight lines from the light to it (#570). Empty for
+/// anything else, and for a light with no reach.
 pub fn range_lines(dm: &DataModel, id: Id) -> Vec<[Vec3; 2]> {
     let number = |name: &str| match dm.get_by_name(id, name) {
         Ok(Value::Number(n)) => Some(n as f32),
@@ -88,7 +91,10 @@ pub fn range_lines(dm: &DataModel, id: Id) -> Vec<[Vec3; 2]> {
         let half = (number("Angle").unwrap_or(90.0) * 0.5).to_radians();
         let (centre, radius) = (at - back * range * half.cos(), range * half.sin());
         circle(&mut lines, centre, right * radius, up * radius);
-        for side in [right, up, -right, -up] {
+        // Eight sides round the cone (#570), every 45 degrees.
+        for step in 0..CONE_SIDES {
+            let turn = std::f32::consts::TAU * step as f32 / CONE_SIDES as f32;
+            let side = right * turn.cos() + up * turn.sin();
             lines.push([at, centre + side * radius]);
         }
     } else if is_a(dm, id, "PointLight") {
@@ -207,7 +213,8 @@ mod tests {
         let spot = light(&mut dm, "SpotLight");
         dm.set_by_name(spot, "Angle", Value::Number(60.0)).unwrap();
         let cone = range_lines(&dm, spot);
-        assert_eq!(cone.len(), CIRCLE_STEPS + 4);
+        assert_eq!(cone.len(), CIRCLE_STEPS + CONE_SIDES);
+        assert_eq!(CONE_SIDES, 8);
         // Its sides run from the light, Range long, 30 degrees off its forward direction (−Z).
         for [from, to] in &cone[CIRCLE_STEPS..] {
             assert_eq!(*from, at);
