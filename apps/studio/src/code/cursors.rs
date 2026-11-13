@@ -133,6 +133,15 @@ fn word_right(chars: &[char], at: usize) -> usize {
     at
 }
 
+/// Keeps every cursor within a text `length` characters long: the text can change under cursors kept from before
+/// (a replace from the Search panel).
+fn clamp(carets: &mut [Caret], length: usize) {
+    for caret in carets {
+        caret.anchor = caret.anchor.min(length);
+        caret.head = caret.head.min(length);
+    }
+}
+
 /// Puts the cursors that overlap or meet together, keeping the order of the first of each.
 pub fn merge(carets: &mut Vec<Caret>) {
     let mut out: Vec<Caret> = Vec::with_capacity(carets.len());
@@ -166,6 +175,7 @@ pub fn merge(carets: &mut Vec<Caret>) {
 /// Makes `edit` at every one of `carets` in `text`, each ending after what it put in. `indent` is what Tab puts in.
 pub fn edit(text: &mut String, carets: &mut Vec<Caret>, edit: &Edit) {
     let chars: Vec<char> = text.chars().collect();
+    clamp(carets, chars.len());
     // Each cursor's range to replace and what replaces it, by its place in `carets`.
     let mut order: Vec<usize> = (0..carets.len()).collect();
     order.sort_by_key(|&index| carets[index].range().start);
@@ -228,6 +238,7 @@ pub fn edit(text: &mut String, carets: &mut Vec<Caret>, edit: &Edit) {
 /// Moves every one of `carets` in `text` by `motion`, their selections growing with `extend` (Shift).
 pub fn motion(text: &str, carets: &mut Vec<Caret>, motion: Motion, extend: bool) {
     let chars: Vec<char> = text.chars().collect();
+    clamp(carets, chars.len());
     for caret in carets.iter_mut() {
         let range = caret.range();
         let head = match motion {
@@ -347,6 +358,16 @@ mod tests {
         let mut at = carets(&[10, 17]);
         edit(&mut text, &mut at, &Edit::Backspace { word: true });
         assert_eq!(text, "local  = ");
+    }
+
+    #[test]
+    fn cursors_past_the_end_stay_in_the_text() {
+        let mut text = "ab".to_owned();
+        let mut at = vec![Caret::at(9), Caret { anchor: 1, head: 30 }];
+        edit(&mut text, &mut at, &Edit::Backspace { word: false });
+        assert_eq!(text, "a");
+        motion(&text, &mut at, Motion::Up, false);
+        assert!(at.iter().all(|caret| caret.head <= 1));
     }
 
     #[test]
