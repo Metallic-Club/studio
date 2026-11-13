@@ -3569,6 +3569,13 @@ mod tests {
         harness.get_by_role_and_label(Role::CheckBox, "Light icons").click();
         settle(&mut harness);
         assert!(!harness.state().studio.settings().viewport.show_light_icons);
+        // #572: whether a light's range lines draw over everything is the menu's too.
+        assert!(harness.state().studio.settings().viewport.light_lines_on_top);
+        harness
+            .get_by_role_and_label(Role::CheckBox, "Light lines over everything")
+            .click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.settings().viewport.light_lines_on_top);
         harness.key_press(Key::Escape);
         settle(&mut harness);
         click_with(&mut harness, lamp, Modifiers::NONE);

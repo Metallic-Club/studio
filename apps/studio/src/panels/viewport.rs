@@ -37,12 +37,20 @@ const SPEED_NOTE: Duration = Duration::from_millis(900);
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport;
 
-/// Draws `id`'s outline box (a part's own, a model's round its parts), or a light's reach (#523), with `stroke`.
-fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Stroke) {
+/// Draws `id`'s outline box (a part's own, a model's round its parts), or a light's reach (#523), with `stroke`. A
+/// light's reach is drawn over everything when `on_top`, else hidden where parts are in front of it (#572).
+fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Stroke, on_top: bool) {
     // A light's reach (#523): it has no box of its own.
-    for [a, b] in light_icons::range_lines(dm, id) {
-        if let Some(line) = view.segment(a, b) {
-            painter.line_segment(line, stroke);
+    for line in light_icons::range_lines(dm, id) {
+        let pieces = if on_top {
+            vec![line]
+        } else {
+            light_icons::seen_pieces(dm, view.pos, line, id)
+        };
+        for [a, b] in pieces {
+            if let Some(line) = view.segment(a, b) {
+                painter.line_segment(line, stroke);
+            }
         }
     }
     let Some(bounds) = pick::outline_box(dm, id) else {
@@ -162,6 +170,12 @@ impl Panel for Viewport {
             indented(ui, |ui| {
                 crate::theme::checkbox(ui, &mut cx.settings.viewport.show_axes, "Axis gizmo");
                 crate::theme::checkbox(ui, &mut cx.settings.viewport.show_light_icons, "Light icons");
+                crate::theme::checkbox(
+                    ui,
+                    &mut cx.settings.viewport.light_lines_on_top,
+                    "Light lines over everything",
+                )
+                .on_hover_text("Off, parts in front of a selected light's range lines hide them.");
             });
         });
         // How the parts are drawn (#478). The wireframe needs a device that draws lines.
@@ -289,6 +303,7 @@ impl Panel for Viewport {
             }
             let painter = ui.painter().with_clip_rect(rect);
             let accent = current_colors(ui.ctx()).accent;
+            let on_top = cx.settings.viewport.light_lines_on_top;
             // Under the pointer, faintly, while a tool is active (#466).
             if let Some(id) = hovered.filter(|&id| gizmo.tool.is_some() && !editor.selection.contains(id)) {
                 outline(
@@ -297,10 +312,11 @@ impl Panel for Viewport {
                     &editor.dm,
                     id,
                     Stroke::new(1.0, accent.gamma_multiply(0.5)),
+                    on_top,
                 );
             }
             for &id in editor.selection.ids() {
-                outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent));
+                outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent), on_top);
             }
             light_icons::paint(
                 &painter,

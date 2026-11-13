@@ -142,6 +142,8 @@ pub struct Viewport {
     pub show_axes: bool,
     /// Whether lights show as their icons, which can be clicked (#506).
     pub show_light_icons: bool,
+    /// Whether a selected light's range lines draw over everything (#572), or are hidden where parts are in front.
+    pub light_lines_on_top: bool,
     /// How the viewport draws the parts (#478): shaded, unlit, lighting only, light density or wireframe.
     pub shading: ShadingView,
 }
@@ -153,6 +155,7 @@ impl Default for Viewport {
             secondary_speed: 3.0,
             show_axes: true,
             show_light_icons: true,
+            light_lines_on_top: true,
             shading: ShadingView::Shaded,
         }
     }
@@ -373,6 +376,12 @@ impl StudioSettings {
             read(viewport, "light_icons", Value::as_bool, &mut v.show_light_icons);
             read(
                 viewport,
+                "light_lines_on_top",
+                Value::as_bool,
+                &mut v.light_lines_on_top,
+            );
+            read(
+                viewport,
                 "shading",
                 |v| v.as_str().and_then(ShadingView::parse),
                 &mut v.shading,
@@ -467,6 +476,7 @@ impl StudioSettings {
             viewport.insert("secondary_speed".into(), round(v.secondary_speed));
             viewport.insert("show_axes".into(), Value::Boolean(v.show_axes));
             viewport.insert("light_icons".into(), Value::Boolean(v.show_light_icons));
+            viewport.insert("light_lines_on_top".into(), Value::Boolean(v.light_lines_on_top));
             viewport.insert("shading".into(), Value::String(v.shading.as_str().into()));
         });
         let a = &self.appearance;
@@ -852,6 +862,7 @@ insert_view = \"grid\"
                 secondary_speed: SECONDARY_SPEED.0,
                 show_axes: false,
                 show_light_icons: true,
+                light_lines_on_top: true,
                 shading: ShadingView::Wireframe,
             }
         );
