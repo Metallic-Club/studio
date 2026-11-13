@@ -386,9 +386,11 @@ impl Studio {
         self.settings.settings()
     }
 
-    /// Keeps where the window is, to open there next time (#505), and saves the settings now: Studio is closing.
+    /// Keeps where the window is, to open there next time (#505), and the Settings window's if it is open (#578), and
+    /// saves the settings now: Studio is closing.
     pub fn close_with_window_at(&mut self, place: crate::settings::WindowPlace) {
         self.settings.settings_mut().window = Some(place);
+        self.settings_window.keep_place(self.settings.settings_mut());
         if let Err(error) = self.settings.save_if_changed() {
             log::warn!("settings: could not save them: {error}");
         }
@@ -6151,6 +6153,79 @@ mod tests {
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         settle(&mut harness);
         assert!(harness.state().studio.is_settings_open());
+    }
+
+    /// Where the floating Settings window is, as last drawn.
+    fn settings_rect(harness: &mut Harness<'_, Test>) -> egui::Rect {
+        let rect = harness.state_mut().studio.settings_window().rect();
+        rect.expect("the Settings window is open")
+    }
+
+    /// #578: the Settings window opens again where it was moved to, at the size it was made, and keeps that in the
+    /// settings file for the next run.
+    #[test]
+    fn the_settings_window_opens_again_where_it_was_and_as_large() {
+        let path = settings_file("settings-window-place", None);
+        let mut harness = past_the_splash(path.clone());
+        harness.state_mut().studio.settings_window().set_open(true);
+        settle(&mut harness);
+        let first = settings_rect(&mut harness);
+        // Moved by its header, then made larger by its bottom-right corner.
+        let header = first.center_top() + egui::vec2(-150.0, 20.0);
+        drag(&mut harness, header, header + egui::vec2(-200.0, -60.0));
+        let moved = settings_rect(&mut harness);
+        assert_eq!(
+            moved.min,
+            first.min + egui::vec2(-200.0, -60.0),
+            "{first:?} to {moved:?}"
+        );
+        let corner = moved.right_bottom() - egui::vec2(2.0, 2.0);
+        drag(&mut harness, corner, corner + egui::vec2(120.0, 80.0));
+        let resized = settings_rect(&mut harness);
+        // Larger; its corner moves a little too, as egui keeps the place by the window's centre.
+        assert!(
+            resized.width() > moved.width() + 60.0 && resized.height() > moved.height() + 40.0,
+            "{moved:?} to {resized:?}"
+        );
+
+        // Closed by its close button and opened again, it is where it was.
+        harness.get_by_role_and_label(Role::Button, "Close Settings").click();
+        settle(&mut harness);
+        assert!(!harness.state().studio.is_settings_open());
+        harness.state_mut().studio.settings_window().set_open(true);
+        settle(&mut harness);
+        assert_eq!(settings_rect(&mut harness), resized);
+
+        // Kept in the settings file, in physical pixels (one a point here).
+        let text = std::fs::read_to_string(&path).unwrap();
+        let kept = StudioSettings::from_document(&text.parse().unwrap()).settings_window;
+        assert_eq!(
+            kept,
+            Some(crate::settings::WindowPlace {
+                x: resized.min.x as i32,
+                y: resized.min.y as i32,
+                width: resized.width() as u32,
+                height: resized.height() as u32,
+                maximized: false,
+            }),
+            "{text}"
+        );
+    }
+
+    /// #578: a place kept in the settings file is where the Settings window first opens.
+    #[test]
+    fn the_settings_window_first_opens_where_the_settings_keep_it() {
+        let path = settings_file(
+            "settings-window-kept",
+            Some("[settings_window]\nx = 60\ny = 40\nwidth = 900\nheight = 700\n"),
+        );
+        let mut harness = past_the_splash(path);
+        harness.state_mut().studio.settings_window().set_open(true);
+        settle(&mut harness);
+        assert_eq!(
+            settings_rect(&mut harness),
+            egui::Rect::from_min_size(egui::pos2(60.0, 40.0), egui::vec2(900.0, 700.0))
+        );
     }
 
     #[test]

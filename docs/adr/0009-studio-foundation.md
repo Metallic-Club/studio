@@ -579,6 +579,18 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
 
 ### Light gizmos, the camera and the Explorer's search (2026-11-12, #570-#578)
 
+- **Light gizmos (#570-#572)**: a SpotLight's cone has eight lines to its end circle. A light's icon is hidden when a
+  part stands between the camera and the light (`viewport::pick::blocked`; the part the light is in, and a wholly
+  transparent one, do not count), so it is no longer drawn, or clicked, through walls. Whether a selected light's
+  range lines draw over everything is an option of the viewport's menu (`light_lines_on_top`); off, they are drawn in
+  short pieces, those a part hides left out.
+- **Borders a pixel wide (#573)**: fields', buttons' and windows' borders are one physical pixel (`theme::hairline`),
+  as the lines between panels are; a whole point blurred over more than a pixel at scales above 100%. The style is
+  applied again when the scale changes.
+- **The colour picker's fields (#574)**: the hex code is centred, and RGB is one field of `255, 255, 255`, read as the
+  Properties panel reads it (`values::parse_components`).
+- **Block comments close (#575)**: Enter after `--[[` (or `--[==[`) not closed after it puts the `]]` of its level
+  under it, as `end` is put in after a block.
 - **Workspace's camera is the editor's view (#576)**: as in Roblox Studio, each move of the editor camera is written
   into `Workspace.CurrentCamera`'s `CFrame` and `FieldOfView` (`viewport::camera::CameraSync`), straight into the data
   model, so it is no undo step and no unsaved change; an edit of those from elsewhere (Properties, undo) moves the
@@ -589,6 +601,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   `ClassName=`, `IsA=` and `Name=` are their own keys; any other is a property, compared as a number, a boolean, an
   enum item, contained text, or the text the Properties panel shows. A button beside the search box adds common
   filters, and one per class in the game, with a click.
+- **The Settings window's place (#578)**: it opens where it last closed, at its size, across runs too:
+  `[settings_window]` in `settings.toml`, a `WindowPlace` as `[window]` is (#505). It is noted while open and written
+  only when it closes (or Studio does), so dragging it never saves every frame; the builder of its window of its own
+  is kept while open, since egui moves a window whose builder changes. The shell opens one off every monitor centred
+  over Studio's window.
 
 ## Not in this slice
 
