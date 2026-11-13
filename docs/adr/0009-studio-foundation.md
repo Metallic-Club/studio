@@ -624,6 +624,14 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   leave defaults out, so this is scene format 2: its migration gives a format 1 part (`Part`, `MeshPart`) that left
   `Anchored` out an explicit `false`, and it stays unanchored. Scripts that want a falling part set `Anchored = false`,
   unlike Roblox, where `Instance.new("Part")` is unanchored.
+- **Attributes in Properties (#591)**: with one instance selected, its attributes follow its properties under
+  **Attributes**, by name, drawn and edited as property rows are (a vector or a colour opens into its parts; one
+  holding an enum item is shown, not edited). **Add attribute** asks for a name (as Roblox: up to 100 letters, digits
+  and underscores, not one it has) and a type (string, boolean, number, Color3, Vector2, Vector3); a right click on
+  an attribute's name renames or deletes it. The scene notes each change (`Scene::set_attribute`,
+  `history::Change::Attribute`), so it is an undo step and an unsaved change; typing into a value joins one step as a
+  property's does, but adding or removing one is a step of its own. Scenes already saved attributes (#590). The
+  forms are popups that close on a click outside them, not in them, as egui's menus otherwise do.
 
 ## Not in this slice
 

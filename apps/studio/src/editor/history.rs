@@ -1,7 +1,8 @@
 //! Undo and redo (#348): a history of steps per scene, as Forge's (`state/history.rs`).
 //!
 //! - **What is recorded.** Studio changes a scene only through the scene's edits ([`Scene::set`](super::Scene::set),
-//!   [`Scene::move_to`](super::Scene::move_to)), which note each change here. Nothing else changes the editor's scene
+//!   [`Scene::set_attribute`](super::Scene::set_attribute), [`Scene::move_to`](super::Scene::move_to)), which note
+//!   each change here. Nothing else changes the editor's scene
 //!   (no script runs in it), so the data model needs no journal of its own; the one exception is the editor's view,
 //!   written into the current camera as it moves and on purpose no step (#576). A running game has a history of its
 //!   own, dropped at Stop: it holds the panels' edits of the game, not what the game's scripts do.
@@ -72,6 +73,17 @@ pub enum Change {
         /// Its value after.
         new: Value,
     },
+    /// Attribute `name` of `id` (#591) went from `old` to `new`; `None` is not set (added from nothing, or removed).
+    Attribute {
+        /// The instance.
+        id: Id,
+        /// The attribute's name.
+        name: String,
+        /// Its value before.
+        old: Option<Value>,
+        /// Its value after.
+        new: Option<Value>,
+    },
     /// `id` moved from `old` to `new`: a new instance comes from no parent, a deleted one goes to none.
     Parent {
         /// The instance.
@@ -87,7 +99,7 @@ impl Change {
     /// The instance it changed.
     pub fn id(&self) -> Id {
         match self {
-            Change::Prop { id, .. } | Change::Parent { id, .. } => *id,
+            Change::Prop { id, .. } | Change::Attribute { id, .. } | Change::Parent { id, .. } => *id,
         }
     }
 
@@ -95,6 +107,7 @@ impl Change {
     fn is_noop(&self) -> bool {
         match self {
             Change::Prop { old, new, .. } => old == new,
+            Change::Attribute { old, new, .. } => old == new,
             Change::Parent { old, new, .. } => old == new,
         }
     }
@@ -103,6 +116,9 @@ impl Change {
     fn apply(&self, dm: &mut DataModel, back: bool) -> Result<(), DmError> {
         match self {
             Change::Prop { id, prop, old, new } => dm.set(*id, *prop, if back { old } else { new }.clone()),
+            Change::Attribute { id, name, old, new } => {
+                dm.set_attribute(*id, name, if back { old } else { new }.clone())
+            }
             Change::Parent { id, old, new } => if back { old } else { new }.restore(dm, *id),
         }
     }
@@ -122,16 +138,26 @@ struct Step {
 }
 
 impl Step {
-    /// Whether it only writes properties: a step later edits of the same properties can join.
+    /// Whether it only writes properties (or attributes' values): a step later edits of the same ones can join. Adding
+    /// or removing an attribute is a step of its own (#591), so undoing what was typed into a new one keeps it.
     fn is_property_edit(&self) -> bool {
         self.selection.is_none()
             && !self.changes.is_empty()
-            && self.changes.iter().all(|change| matches!(change, Change::Prop { .. }))
+            && self.changes.iter().all(|change| match change {
+                Change::Prop { .. } => true,
+                Change::Attribute { old, new, .. } => old.is_some() && new.is_some(),
+                Change::Parent { .. } => false,
+            })
     }
 
-    /// Joins `later` (property writes only) to it if it writes exactly the same properties. Returns whether it did.
+    /// Joins `later` (property and attribute writes only) to it if it writes exactly the same ones. Returns whether
+    /// it did.
     fn absorb(&mut self, later: &[Change], at: Instant) -> bool {
-        let same = |a: &Change, b: &Change| matches!((a, b), (Change::Prop { id, prop, .. }, Change::Prop { id: i, prop: p, .. }) if id == i && prop == p);
+        let same = |a: &Change, b: &Change| match (a, b) {
+            (Change::Prop { id, prop, .. }, Change::Prop { id: i, prop: p, .. }) => id == i && prop == p,
+            (Change::Attribute { id, name, .. }, Change::Attribute { id: i, name: n, .. }) => id == i && name == n,
+            _ => false,
+        };
         let same_targets = later.len() == self.changes.len()
             && later
                 .iter()
@@ -140,10 +166,10 @@ impl Step {
             return false;
         }
         for change in later {
-            if let Change::Prop { new, .. } = change
-                && let Some(Change::Prop { new: mine, .. }) = self.changes.iter_mut().find(|mine| same(mine, change))
-            {
-                mine.clone_from(new);
+            match (self.changes.iter_mut().find(|mine| same(mine, change)), change) {
+                (Some(Change::Prop { new: mine, .. }), Change::Prop { new, .. }) => mine.clone_from(new),
+                (Some(Change::Attribute { new: mine, .. }), Change::Attribute { new, .. }) => mine.clone_from(new),
+                _ => {}
             }
         }
         self.at = at;
@@ -595,5 +621,45 @@ mod tests {
             0.5,
             "the oldest kept step's value before it"
         );
+    }
+
+    /// #591: an attribute added, typed into and removed is undone and redone as a property is; typing into it joins
+    /// one step.
+    #[test]
+    fn attribute_changes_undo_and_redo() {
+        let mut s = Scene::new();
+        let part = s.part("Door");
+        let attribute = |s: &mut Scene, value: Option<Value>| {
+            let old = s.dm.attribute(part, "Speed").unwrap().cloned();
+            s.dm.set_attribute(part, "Speed", value).unwrap();
+            let new = s.dm.attribute(part, "Speed").unwrap().cloned();
+            s.history.note(Change::Attribute {
+                id: part,
+                name: "Speed".to_owned(),
+                old,
+                new,
+            });
+        };
+        let speed = |s: &Scene| s.dm.attribute(part, "Speed").unwrap().cloned();
+        attribute(&mut s, Some(Value::Number(0.0)));
+        s.commit(LATER);
+        for typed in [1.0, 12.0, 125.0] {
+            attribute(&mut s, Some(Value::Number(typed)));
+            s.commit(Duration::from_millis(100));
+        }
+        assert_eq!(s.history.undo_len(), 2, "added, then typed into");
+        attribute(&mut s, None);
+        s.commit(LATER);
+        assert_eq!(speed(&s), None);
+
+        assert!(s.undo().edited);
+        assert_eq!(speed(&s), Some(Value::Number(125.0)));
+        s.undo();
+        assert_eq!(speed(&s), Some(Value::Number(0.0)));
+        s.undo();
+        assert_eq!(speed(&s), None, "never added");
+        s.redo();
+        s.redo();
+        assert_eq!(speed(&s), Some(Value::Number(125.0)));
     }
 }

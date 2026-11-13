@@ -13,24 +13,34 @@
 //! inspector does: a value they disagree on is mixed, and an edit is made to each of them (a vector's component alone
 //! on each, so they keep their others), as one undo step. The header names the count ("3 Parts", "4 objects").
 //!
+//! **Attributes** (#591): with one instance selected, its attributes follow its properties, by name, edited as
+//! properties are (a vector or a colour opens into its parts). The Add attribute button asks for a name and a type; a
+//! right click on an attribute's name renames or deletes it. Every change goes through the scene, so it is an undo step
+//! and an unsaved change, and scenes save attributes.
+//!
 //! Each group's rows are striped (#230): alternately a little darker and a little brighter than the panel, with faint
 //! 1 px lines between the rows and between the name and value columns ([`crate::theme::tokens::RowShades`]). The line
 //! between the columns can be dragged left and right (#324), and stays where it was left.
 
+use std::collections::HashSet;
+
 use egui::{
-    Align, Color32, CornerRadius, CursorIcon, Label, Layout, Rect, RichText, Role, ScrollArea, Sense, Stroke, Ui,
-    UiBuilder, WidgetInfo, pos2, vec2,
+    Align, Button, Color32, CornerRadius, CursorIcon, Key, Label, Layout, Popup, PopupCloseBehavior, Rect, RichText,
+    Role, ScrollArea, Sense, Stroke, TextEdit, Ui, UiBuilder, WidgetInfo, pos2, vec2,
 };
-use metallic_engine::metallic_core::{DataModel, Id, PropFlags, PropId, PropMeta, PropType, ResolvedProp, Value};
+use metallic_engine::metallic_core::{
+    Color3, DataModel, Id, PropFlags, PropId, PropMeta, PropType, ResolvedProp, Value, Vector2, Vector3,
+};
 
 use super::values::{self, Edit, Mixed, Part};
 use super::{class_icon, empty_note, ids};
 use crate::dock::{Panel, PanelContext, Zone};
+use crate::editor::Scene;
 use crate::keymap::Context;
 use crate::settings::window::section_label;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
-use crate::theme::{current_colors, fonts};
+use crate::theme::{ButtonKind, current_colors, fonts};
 
 /// The group of properties declared without one.
 const DEFAULT_GROUP: &str = "Data";
@@ -86,8 +96,8 @@ pub struct PropertyRow {
     pub value: Value,
     /// What the selected instances disagree on.
     pub mixed: Mixed,
-    /// The property, as the active instance's class numbers it.
-    pub prop: PropId,
+    /// What it edits.
+    pub source: Source,
     /// Its declaration.
     pub meta: &'static PropMeta,
     /// Which part of the value the row shows.
@@ -95,6 +105,15 @@ pub struct PropertyRow {
     /// Whether the panel edits it: not a read-only property, a computed one with no setter, or a reference (in any
     /// of the selected instances' classes).
     pub editable: bool,
+}
+
+/// What a row edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// A property, as the active instance's class numbers it.
+    Property(PropId),
+    /// The active instance's attribute of this name (#591).
+    Attribute(String),
 }
 
 /// A group of properties, in the order the panel lists them.
@@ -136,7 +155,7 @@ pub fn groups(dm: &DataModel, ids: &[Id]) -> Vec<Group> {
         };
         let meta = prop.meta;
         // The others' values, the active one's first; a property one of them lacks is not shared.
-        let mut all = vec![value.clone()];
+        let mut all = vec![value];
         let mut shared_editable = editable(meta);
         let shared = others.iter().all(|&other| {
             let Some(theirs) = shown_prop(dm, other, meta.name).filter(|theirs| theirs.ty == meta.ty) else {
@@ -154,62 +173,8 @@ pub fn groups(dm: &DataModel, ids: &[Id]) -> Vec<Group> {
             meta.group
         };
         let label = if meta.label.is_empty() { meta.name } else { meta.label };
-        let row = |shown: &str, path: &[&str], part: Part, component: Option<usize>, opens: bool| {
-            let full: Vec<&str> = std::iter::once(label).chain(path.iter().copied()).collect();
-            let key = full.join("/");
-            let parent = (!path.is_empty()).then(|| full[..full.len() - 1].join("/"));
-            let mixed = Mixed::of(&all, part);
-            PropertyRow {
-                label: full.join(" "),
-                shown: shown.to_owned(),
-                key,
-                parent,
-                depth: path.len() as u8,
-                opens,
-                component,
-                description: meta.description,
-                value: value.clone(),
-                mixed: match component {
-                    // A part's row is mixed where its component is.
-                    Some(i) => Mixed {
-                        whole: mixed.parts[i],
-                        parts: [mixed.parts[i]; 3],
-                    },
-                    None => mixed,
-                },
-                prop: PropId::new(index as u16),
-                meta,
-                part,
-                editable: shared_editable,
-            }
-        };
-        // The property's row, then its parts' (#417).
-        let mut rows = Vec::new();
-        let axes = |value: &Value| -> &'static [&'static str] {
-            match value {
-                Value::Vector2(_) => &["X", "Y"],
-                Value::Color3(_) => &["R", "G", "B"],
-                _ => &["X", "Y", "Z"],
-            }
-        };
-        match &value {
-            Value::CFrame(_) => {
-                rows.push(row(label, &[], Part::Whole, None, true));
-                for (part, name) in [(Part::Position, "Position"), (Part::Orientation, "Rotation")] {
-                    rows.push(row(name, &[name], part, None, true));
-                    for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
-                        rows.push(row(axis, &[name, axis], part, Some(i), false));
-                    }
-                }
-            }
-            Value::Vector3(_) | Value::Vector2(_) | Value::Color3(_) => {
-                rows.push(row(label, &[], Part::Whole, None, true));
-                for (i, &axis) in axes(&value).iter().enumerate() {
-                    rows.push(row(axis, &[axis], Part::Whole, Some(i), false));
-                }
-            }
-            _ => rows.push(row(label, &[], Part::Whole, None, false)),
-        }
+        let source = Source::Property(PropId::new(index as u16));
+        let rows = value_rows(label, label, meta, &all, &source, shared_editable);
         let keyed = rows.into_iter().map(|row| (meta.order, index, row));
         match groups.iter_mut().find(|(group, _)| *group == name) {
             Some((_, list)) => list.extend(keyed),
@@ -226,6 +191,278 @@ pub fn groups(dm: &DataModel, ids: &[Id]) -> Vec<Group> {
             }
         })
         .collect()
+}
+
+/// The rows of a value shown as `label` (#417): its own, then its parts' (a vector's axes, a colour's channels, a
+/// `CFrame`'s position and rotation, and theirs), keyed by their path from `key`. `all` holds each selected instance's
+/// value, the active one's first.
+fn value_rows(
+    label: &str,
+    key: &str,
+    meta: &'static PropMeta,
+    all: &[Value],
+    source: &Source,
+    editable: bool,
+) -> Vec<PropertyRow> {
+    let Some(value) = all.first() else {
+        return Vec::new();
+    };
+    let row = |shown: &str, path: &[&str], part: Part, component: Option<usize>, opens: bool| {
+        let full: Vec<&str> = std::iter::once(label).chain(path.iter().copied()).collect();
+        let keys: Vec<&str> = std::iter::once(key).chain(path.iter().copied()).collect();
+        let parent = (!path.is_empty()).then(|| keys[..keys.len() - 1].join("/"));
+        let mixed = Mixed::of(all, part);
+        PropertyRow {
+            label: full.join(" "),
+            shown: shown.to_owned(),
+            key: keys.join("/"),
+            parent,
+            depth: path.len() as u8,
+            opens,
+            component,
+            description: meta.description,
+            value: value.clone(),
+            mixed: match component {
+                // A part's row is mixed where its component is.
+                Some(i) => Mixed {
+                    whole: mixed.parts[i],
+                    parts: [mixed.parts[i]; 3],
+                },
+                None => mixed,
+            },
+            source: source.clone(),
+            meta,
+            part,
+            editable,
+        }
+    };
+    let mut rows = Vec::new();
+    let axes: &[&str] = match value {
+        Value::Vector2(_) => &["X", "Y"],
+        Value::Color3(_) => &["R", "G", "B"],
+        _ => &["X", "Y", "Z"],
+    };
+    match value {
+        Value::CFrame(_) => {
+            rows.push(row(label, &[], Part::Whole, None, true));
+            for (part, name) in [(Part::Position, "Position"), (Part::Orientation, "Rotation")] {
+                rows.push(row(name, &[name], part, None, true));
+                for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+                    rows.push(row(axis, &[name, axis], part, Some(i), false));
+                }
+            }
+        }
+        Value::Vector3(_) | Value::Vector2(_) | Value::Color3(_) => {
+            rows.push(row(label, &[], Part::Whole, None, true));
+            for (i, &axis) in axes.iter().enumerate() {
+                rows.push(row(axis, &[axis], Part::Whole, Some(i), false));
+            }
+        }
+        _ => rows.push(row(label, &[], Part::Whole, None, false)),
+    }
+    rows
+}
+
+/// What an attribute's row is declared as (#591): attributes have no declaration, and the editors only read a range,
+/// a speed and an enum's type from one, none of which an attribute has.
+static ATTRIBUTE: PropMeta = PropMeta::string("Attribute", "");
+
+/// The rows of `id`'s attributes (#591), by name. One that holds an enum item or an instance is shown, not edited:
+/// the editors need a declared enum type, and Studio does not make either.
+pub fn attribute_rows(dm: &DataModel, id: Id) -> Vec<PropertyRow> {
+    let Ok(attributes) = dm.attributes(id) else {
+        return Vec::new();
+    };
+    let mut named: Vec<(&str, &Value)> = attributes.iter().map(|(name, value)| (&**name, value)).collect();
+    named.sort_by(|a, b| a.0.cmp(b.0));
+    named
+        .into_iter()
+        .flat_map(|(name, value)| {
+            let editable = !matches!(value, Value::Enum(_) | Value::Ref(_));
+            let source = Source::Attribute(name.to_owned());
+            value_rows(
+                name,
+                &format!("@{name}"),
+                &ATTRIBUTE,
+                std::slice::from_ref(value),
+                &source,
+                editable,
+            )
+        })
+        .collect()
+}
+
+/// The types a new attribute can have (#591), as Roblox names them, in its order.
+pub const ATTRIBUTE_TYPES: [&str; 6] = ["string", "boolean", "number", "Color3", "Vector2", "Vector3"];
+
+/// The value a new attribute of `kind` (one of [`ATTRIBUTE_TYPES`]) starts with.
+fn starting_value(kind: &str) -> Value {
+    match kind {
+        "boolean" => Value::Bool(false),
+        "number" => Value::Number(0.0),
+        "Color3" => Value::Color3(Color3::new(0.0, 0.0, 0.0)),
+        "Vector2" => Value::Vector2(Vector2::new(0.0, 0.0)),
+        "Vector3" => Value::Vector3(Vector3::new(0.0, 0.0, 0.0)),
+        _ => Value::String("".into()),
+    }
+}
+
+/// The longest an attribute's name can be, as in Roblox.
+const NAME_LIMIT: usize = 100;
+
+/// Why `name` cannot name an attribute beside those `taken` (#591), or `None` when it can: as in Roblox, up to 100
+/// letters, digits and underscores.
+pub fn name_problem(name: &str, taken: &[String]) -> Option<&'static str> {
+    if name.is_empty() {
+        Some("Give it a name.")
+    } else if name.chars().count() > NAME_LIMIT {
+        Some("At most 100 characters.")
+    } else if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Some("Letters, digits and _ only.")
+    } else if taken.iter().any(|other| other == name) {
+        Some("It has one by that name.")
+    } else {
+        None
+    }
+}
+
+/// A change to the active instance's attributes other than a value (#591).
+#[derive(Clone, Debug, PartialEq)]
+enum AttributeAction {
+    /// Add one of this name with this value.
+    Add(String, Value),
+    /// Give one another name, keeping its value.
+    Rename {
+        /// Its name.
+        from: String,
+        /// The new one.
+        to: String,
+    },
+    /// Remove one.
+    Delete(String),
+}
+
+/// Makes `action` to `id`'s attributes through `scene`, so it is an undo step; a rename is two changes in one step.
+fn apply_attribute_action(scene: &mut Scene<'_>, id: Id, action: AttributeAction) {
+    let done = match action {
+        AttributeAction::Add(name, value) => scene.set_attribute(id, &name, Some(value)),
+        AttributeAction::Rename { from, to } => {
+            let value = scene.dm.attribute(id, &from).ok().flatten().cloned();
+            scene
+                .set_attribute(id, &from, None)
+                .and_then(|()| scene.set_attribute(id, &to, value))
+        }
+        AttributeAction::Delete(name) => scene.set_attribute(id, &name, None),
+    };
+    if let Err(error) = done {
+        log::warn!("properties: {error}");
+    }
+}
+
+/// How wide the fields of the attribute menus are.
+const MENU_FIELD: f32 = 180.0;
+
+/// A line of `note` under a field saying what is wrong with it.
+fn field_note(ui: &mut Ui, note: &str) {
+    let p = current_colors(ui.ctx()).palette;
+    ui.label(RichText::new(note).size(text::SMALL).color(p.subtle));
+}
+
+/// The menu a right click on attribute `name`'s row opens (#591): a field that renames it, and Delete. It closes on a
+/// click outside it, not on one in its field.
+fn attribute_menu(response: &egui::Response, name: &str, taken: &[String]) -> Option<AttributeAction> {
+    let field = response.id.with("rename");
+    let mut action = None;
+    let shown = Popup::context_menu(response)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            let mut typed = ui
+                .data(|data| data.get_temp::<String>(field))
+                .unwrap_or_else(|| name.to_owned());
+            let others: Vec<String> = taken.iter().filter(|other| *other != name).cloned().collect();
+            let edit = ui.add(
+                TextEdit::singleline(&mut typed)
+                    .id(field.with("field"))
+                    .desired_width(MENU_FIELD),
+            );
+            edit.widget_info(|| WidgetInfo::labeled(Role::TextInput, true, "Attribute name"));
+            let problem = name_problem(&typed, &others);
+            if let Some(problem) = problem {
+                field_note(ui, problem);
+            }
+            let ready = problem.is_none() && typed != name;
+            let entered = edit.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+            let rename = ui.add_enabled(ready, Button::new("Rename"));
+            rename.widget_info(|| WidgetInfo::labeled(Role::Button, ready, "Rename attribute"));
+            if ready && (rename.clicked() || entered) {
+                action = Some(AttributeAction::Rename {
+                    from: name.to_owned(),
+                    to: typed.clone(),
+                });
+                ui.close();
+            }
+            ui.separator();
+            let delete = ui.button("Delete");
+            delete.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Delete attribute"));
+            if delete.clicked() {
+                action = Some(AttributeAction::Delete(name.to_owned()));
+                ui.close();
+            }
+            ui.data_mut(|data| data.insert_temp(field, typed));
+        });
+    // What was typed is forgotten once the menu closes: it opens on the name again.
+    if shown.is_none() || action.is_some() {
+        response.ctx.data_mut(|data| data.remove::<String>(field));
+    }
+    action
+}
+
+/// The Add attribute button under the attributes (#591), and the form it opens: a name, a type and Add. Returns the
+/// attribute to add when one is asked for.
+fn add_attribute(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
+    let id = egui::Id::unique("metallic.properties.add_attribute");
+    let button = crate::theme::button(ui, ButtonKind::Secondary, "Add attribute");
+    let mut action = None;
+    let shown = Popup::menu(&button)
+        .id(id.with("menu"))
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            let (mut name, mut kind) = ui.data(|data| data.get_temp::<(String, usize)>(id)).unwrap_or_default();
+            let field = ui.add(
+                TextEdit::singleline(&mut name)
+                    .id(id.with("name"))
+                    .hint_text("Name")
+                    .desired_width(MENU_FIELD),
+            );
+            field.widget_info(|| WidgetInfo::labeled(Role::TextInput, true, "New attribute name"));
+            let problem = name_problem(&name, taken);
+            if let Some(problem) = problem.filter(|_| !name.is_empty()) {
+                field_note(ui, problem);
+            }
+            // The types as buttons, one of them chosen: a drop-down would be a menu in a menu.
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(MENU_FIELD);
+                for (index, &label) in ATTRIBUTE_TYPES.iter().enumerate() {
+                    if ui.selectable_label(kind == index, label).clicked() {
+                        kind = index;
+                    }
+                }
+            });
+            let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+            let add = ui.add_enabled(problem.is_none(), Button::new("Add"));
+            add.widget_info(|| WidgetInfo::labeled(Role::Button, problem.is_none(), "Add the attribute"));
+            if problem.is_none() && (add.clicked() || entered) {
+                let kind_name = ATTRIBUTE_TYPES.get(kind).copied().unwrap_or("string");
+                action = Some(AttributeAction::Add(name.clone(), starting_value(kind_name)));
+                name.clear();
+                ui.close();
+            }
+            ui.data_mut(|data| data.insert_temp(id, (name, kind)));
+        });
+    if shown.is_none() {
+        ui.data_mut(|data| data.remove::<(String, usize)>(id));
+    }
+    action
 }
 
 fn visible(prop: &ResolvedProp) -> bool {
@@ -365,7 +602,14 @@ impl Panel for Properties {
             }
         });
         ui.add_space(space::S4);
-        let mut edits: Vec<(&'static str, Part, Edit)> = Vec::new();
+        let mut edits: Vec<RowEdit> = Vec::new();
+        let mut attribute_action = None;
+        // Attributes are the active instance's, listed when it is the only one selected (#591).
+        let attributes = (ids.len() == 1).then(|| attribute_rows(dm, id));
+        let taken: Vec<String> = dm
+            .attributes(id)
+            .map(|list| list.iter().map(|(name, _)| name.to_string()).collect())
+            .unwrap_or_default();
         ScrollArea::vertical()
             .id_salt("properties.rows")
             .auto_shrink([false, false])
@@ -375,61 +619,61 @@ impl Panel for Properties {
                 let mut open = open_rows(ui.ctx());
                 for group in groups(dm, &ids) {
                     section_label(ui, group.name);
-                    // A part's row shows while every row it opens from is open (#417).
-                    let shown: Vec<&PropertyRow> = group
-                        .rows
-                        .iter()
-                        .filter(|row| {
-                            let mut at = row.parent.as_deref();
-                            while let Some(parent) = at {
-                                if !open.contains(parent) {
-                                    return false;
-                                }
-                                at = parent.rsplit_once('/').map(|(up, _)| up);
-                            }
-                            true
-                        })
-                        .collect();
-                    // The rows touch, so the stripes and the lines between them are continuous.
-                    ui.scope(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        let shades = p.rows();
-                        for (index, row) in shown.iter().enumerate() {
-                            let last = index + 1 == shown.len();
-                            let is_open = row.opens.then(|| open.contains(&row.key));
-                            let out = ui
-                                .push_id(&row.key, |ui| {
-                                    row_ui(ui, dm, row, shades.fill(index), last, share, is_open)
-                                })
-                                .inner;
-                            if let Some(edit) = out.edit {
-                                edits.push((row.meta.name, row.part, edit));
-                            }
-                            if out.toggled && !open.remove(&row.key) {
-                                open.insert(row.key.clone());
-                            }
-                        }
-                    });
+                    edits.extend(rows_ui(ui, dm, &group.rows, &mut open, share, &taken).edits);
+                    ui.add_space(space::S5);
+                }
+                let mut bottom = ui.cursor().top();
+                if let Some(rows) = &attributes {
+                    section_label(ui, "Attributes");
+                    let drawn = rows_ui(ui, dm, rows, &mut open, share, &taken);
+                    edits.extend(drawn.edits);
+                    attribute_action = drawn.action;
+                    bottom = ui.cursor().top();
+                    if !rows.is_empty() {
+                        ui.add_space(space::S3);
+                    }
+                    if let Some(added) = add_attribute(ui, &taken) {
+                        attribute_action = Some(added);
+                    }
                     ui.add_space(space::S5);
                 }
                 ui.data_mut(|data| data.insert_temp(open_id(), open));
-                let rows = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
+                // The line between the columns is dragged anywhere down the rows, not over the button under them.
+                let rows = Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=bottom);
                 split_grip(ui, rows, share);
             });
-        // To each selected instance's own value, through the scene, so the frame's edits are one undo step (#348); a
-        // value a property refuses is logged.
-        for (name, part, edit) in edits {
-            for &target in &ids {
-                let Ok(current) = scene.dm.get_by_name(target, name) else {
-                    continue;
-                };
-                let Some(value) = values::apply(&edit, part, &current) else {
-                    continue;
-                };
-                if let Err(error) = scene.set_by_name(target, name, value) {
-                    log::warn!("properties: {error}");
+        // To each selected instance's own value (an attribute, to the active instance's), through the scene, so the
+        // frame's edits are one undo step (#348); a value a property refuses is logged.
+        for (source, name, part, edit) in edits {
+            match source {
+                Source::Property(_) => {
+                    for &target in &ids {
+                        let Ok(current) = scene.dm.get_by_name(target, name) else {
+                            continue;
+                        };
+                        let Some(value) = values::apply(&edit, part, &current) else {
+                            continue;
+                        };
+                        if let Err(error) = scene.set_by_name(target, name, value) {
+                            log::warn!("properties: {error}");
+                        }
+                    }
+                }
+                Source::Attribute(attribute) => {
+                    let Some(current) = scene.dm.attribute(id, &attribute).ok().flatten().cloned() else {
+                        continue;
+                    };
+                    let Some(value) = values::apply(&edit, part, &current) else {
+                        continue;
+                    };
+                    if let Err(error) = scene.set_attribute(id, &attribute, Some(value)) {
+                        log::warn!("properties: {error}");
+                    }
                 }
             }
+        }
+        if let Some(action) = attribute_action {
+            apply_attribute_action(&mut scene, id, action);
         }
     }
 }
@@ -444,12 +688,77 @@ fn open_rows(ctx: &egui::Context) -> std::collections::HashSet<String> {
     ctx.data(|data| data.get_temp(open_id())).unwrap_or_default()
 }
 
+/// A row's edit: what it edits, the property's name (an attribute's is in its source), the part and the change.
+type RowEdit = (Source, &'static str, Part, Edit);
+
+/// What a group's rows did this frame.
+#[derive(Default)]
+struct Drawn {
+    /// Their edits.
+    edits: Vec<RowEdit>,
+    /// What an attribute's menu asked for.
+    action: Option<AttributeAction>,
+}
+
+/// Draws `rows` (a group's) touching and striped, a part's row only while every row it opens from is `open` (#417),
+/// and opens or closes what was clicked. `taken` are the active instance's attribute names, which a rename checks.
+fn rows_ui(
+    ui: &mut Ui,
+    dm: &DataModel,
+    rows: &[PropertyRow],
+    open: &mut HashSet<String>,
+    share: f32,
+    taken: &[String],
+) -> Drawn {
+    let p = current_colors(ui.ctx()).palette;
+    let shown: Vec<&PropertyRow> = rows
+        .iter()
+        .filter(|row| {
+            let mut at = row.parent.as_deref();
+            while let Some(parent) = at {
+                if !open.contains(parent) {
+                    return false;
+                }
+                at = parent.rsplit_once('/').map(|(up, _)| up);
+            }
+            true
+        })
+        .collect();
+    let mut drawn = Drawn::default();
+    // The rows touch, so the stripes and the lines between them are continuous.
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let shades = p.rows();
+        for (index, row) in shown.iter().enumerate() {
+            let last = index + 1 == shown.len();
+            let is_open = row.opens.then(|| open.contains(&row.key));
+            let out = ui
+                .push_id(&row.key, |ui| {
+                    row_ui(ui, dm, row, shades.fill(index), last, share, is_open, taken)
+                })
+                .inner;
+            if let Some(edit) = out.edit {
+                drawn.edits.push((row.source.clone(), row.meta.name, row.part, edit));
+            }
+            if out.toggled && !open.remove(&row.key) {
+                open.insert(row.key.clone());
+            }
+            if out.action.is_some() {
+                drawn.action = out.action;
+            }
+        }
+    });
+    drawn
+}
+
 /// What a row did this frame.
 struct RowOut {
     /// What the user changed.
     edit: Option<Edit>,
     /// Its arrow was clicked: open or close it.
     toggled: bool,
+    /// What its menu asked for (an attribute's, #591).
+    action: Option<AttributeAction>,
 }
 
 /// How far a part's row is indented per level.
@@ -458,7 +767,8 @@ const INDENT: f32 = 14.0;
 /// One row of a fixed height striped with `fill`: its name on the left (indented by its depth, after an arrow that
 /// opens or closes it when `open` says it opens, #417), cut short with an ellipsis (and shown whole on hover) when it
 /// does not fit, and its editor (or, when it cannot be edited, its value) on the right. A faint line sits above the
-/// row and between its columns, and under it when it is the group's `last`. The names take `share` of its width.
+/// row and between its columns, and under it when it is the group's `last`. The names take `share` of its width. An
+/// attribute's name opens its menu on a right click (#591); `taken` are the names a rename cannot take.
 #[allow(clippy::too_many_arguments)]
 fn row_ui(
     ui: &mut Ui,
@@ -468,10 +778,12 @@ fn row_ui(
     last: bool,
     share: f32,
     open: Option<bool>,
+    taken: &[String],
 ) -> RowOut {
     let mut out = RowOut {
         edit: None,
         toggled: false,
+        action: None,
     };
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
@@ -553,6 +865,11 @@ fn row_ui(
             name.on_hover_text(row.description);
         }
     });
+    if let (Source::Attribute(attribute), 0) = (&row.source, row.depth) {
+        let response = ui.interact(name_cell, ui.scope_id().with("attribute"), Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("Attribute {attribute}")));
+        out.action = attribute_menu(&response, attribute, taken);
+    }
     let typed = ui
         .scope_builder(in_cell(value_cell), |ui| {
             ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
@@ -737,5 +1054,42 @@ mod tests {
             .find(|row| row.label == "CurrentCamera")
             .unwrap();
         assert_eq!(format_value(&dm, &camera.value), "Camera");
+    }
+
+    /// #591: an instance's attributes are rows by name, a vector's opening into its axes; one holding an enum item is shown,
+    /// not edited. A new name is checked as Roblox checks one.
+    #[test]
+    fn attributes_are_rows_by_name_and_their_names_are_checked() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.create(dm.registry().class_id("Part").unwrap()).unwrap();
+        dm.set_parent(part, Some(workspace)).unwrap();
+        dm.set_attribute(part, "Speed", Some(Value::Number(3.0))).unwrap();
+        dm.set_attribute(part, "Aim", Some(Value::Vector3(Vector3::new(0.0, 1.0, 0.0))))
+            .unwrap();
+        let wood = metallic_engine::metallic_core::EnumItem::new("Material", "Wood");
+        dm.set_attribute(part, "Kind", Some(Value::Enum(wood))).unwrap();
+
+        let rows = attribute_rows(&dm, part);
+        let top: Vec<(&str, bool)> = rows
+            .iter()
+            .filter(|row| row.depth == 0)
+            .map(|row| (row.label.as_str(), row.editable))
+            .collect();
+        assert_eq!(top, [("Aim", true), ("Kind", false), ("Speed", true)]);
+        let axes: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.parent.as_deref() == Some("@Aim"))
+            .map(|row| row.label.as_str())
+            .collect();
+        assert_eq!(axes, ["Aim X", "Aim Y", "Aim Z"]);
+        assert!(rows.iter().all(|row| matches!(&row.source, Source::Attribute(_))));
+
+        let taken = ["Speed".to_owned()];
+        for wrong in ["", "Speed", "two words", "dash-ed", &"a".repeat(101)] {
+            assert!(name_problem(wrong, &taken).is_some(), "{wrong:?}");
+        }
+        assert_eq!(name_problem("Max_Speed2", &taken), None);
+        assert_eq!(name_problem(&"a".repeat(100), &taken), None);
     }
 }

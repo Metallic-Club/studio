@@ -50,6 +50,22 @@ impl Scene<'_> {
         self.set(id, prop, value)
     }
 
+    /// Sets the attribute `name` of `id` to `value`, or removes it with `None` (#591), as part of the action under way.
+    pub fn set_attribute(&mut self, id: Id, name: &str, value: Option<Value>) -> Result<(), DmError> {
+        let old = self.dm.attribute(id, name)?.cloned();
+        self.dm.set_attribute(id, name, value)?;
+        let new = self.dm.attribute(id, name)?.cloned();
+        if old != new {
+            self.history.note(Change::Attribute {
+                id,
+                name: name.to_owned(),
+                old,
+                new,
+            });
+        }
+        Ok(())
+    }
+
     /// Moves `id` under `parent`, before its child `before` (`None`: last), or out of the tree with no `parent`: a
     /// delete, which undo takes back to the same instance. As part of the action under way.
     pub fn move_to(&mut self, id: Id, parent: Option<Id>, before: Option<Id>) -> Result<(), DmError> {
