@@ -61,6 +61,16 @@ pub struct ExplorerState {
     dragging: bool,
     /// The last plain click on a row, and when (the input's time): a slow second click on a script renames it (#528).
     last_click: Option<(Id, f64)>,
+    /// The selection's new parent is being picked (#599): the next click on a row, or on a part in the viewport, is it.
+    pub parent_pick: Option<ParentPick>,
+}
+
+/// Picking a new parent for the selection (#599), from the Parent row in Properties: the next row clicked in the
+/// Explorer, or part clicked in the viewport, becomes it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ParentPick {
+    /// Why the instance picked last cannot be the parent; picking goes on.
+    pub refused: Option<String>,
 }
 
 /// How long after a click a second one on the same script still renames it (#528), in seconds: slower than a double
@@ -336,7 +346,7 @@ impl Panel for Explorer {
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
-        let editor = cx.editor.scene();
+        let mut editor = cx.editor.scene();
         let mut added = None;
         let dm: &DataModel = editor.dm;
         search_box_then(ui, &mut editor.explorer.query, "Search the game", FILTER_BUTTON, |ui| {
@@ -438,7 +448,12 @@ impl Panel for Explorer {
         if let Some(row) = toggled {
             editor.explorer.set_expanded(row.id, !row.expanded);
         }
-        if let Some(id) = clicked {
+        // Picking a parent from the Parent row (#599): the row clicked is the parent, not the selection.
+        let picked = clicked.filter(|_| editor.explorer.parent_pick.is_some());
+        if let Some(parent) = picked {
+            editor.pick_parent(parent);
+        }
+        if let Some(id) = clicked.filter(|_| picked.is_none()) {
             let modifiers = ui.input(|input| input.modifiers);
             let plain = !modifiers.command && !modifiers.shift;
             // A script's name, which a double click does not rename, is renamed by a slow second click (#528).
@@ -459,7 +474,6 @@ impl Panel for Explorer {
         if open_script.is_some() {
             editor.explorer.last_click = None;
         }
-        let mut editor = editor;
         // A double-click renames the row's instance in place (#436), as F2 does.
         if let Some(id) = rename {
             editor.selection.set_only(Some(id));
@@ -471,6 +485,9 @@ impl Panel for Explorer {
                 editor.move_selection(parent, before);
                 editor.explorer.set_expanded(parent, true);
             }
+        }
+        if editor.explorer.parent_pick.is_some() && ui.rect_contains_pointer(ui.max_rect()) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         if editor.explorer.dragging {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);

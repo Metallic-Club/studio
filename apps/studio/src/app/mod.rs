@@ -503,6 +503,15 @@ impl Studio {
         }
         // The parts by where they are, for this frame's picking (#596).
         editor.refresh_parts();
+        {
+            // Esc stops picking a parent (#599), as does a selection with nothing left in it.
+            let scene = editor.scene();
+            if scene.explorer.parent_pick.is_some()
+                && (scene.selection.is_empty() || ctx.input(|input| input.key_pressed(egui::Key::Escape)))
+            {
+                scene.explorer.parent_pick = None;
+            }
+        }
         if editor.is_playing() {
             // The game's frame first, so the panels show it; it runs every frame, Game tab in front or not.
             let dt = ctx.input(|input| input.stable_dt);
@@ -2867,6 +2876,82 @@ mod tests {
         dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap()
     }
 
+    /// The parent of the instance named `name` (anywhere in Workspace), by name.
+    fn parent_name(harness: &Harness<'_, Test>, name: &str) -> String {
+        let dm = &harness.state().studio.editor().unwrap().dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let id = dm.find_first_child(workspace, name, true).unwrap().unwrap();
+        let parent = dm.parent(id).unwrap().unwrap();
+        dm.name(parent).unwrap().to_owned()
+    }
+
+    /// #599: the Parent row's value starts picking; a row clicked in the Explorer becomes the parent, as one undo step;
+    /// a parent the selection cannot go in is refused, saying why, and Esc stops.
+    #[test]
+    fn the_parent_row_picks_a_new_parent_from_the_explorer() {
+        let mut harness = editing(settings_file("editor-pick-parent", None), "Pick Game");
+        harness.set_size(egui::vec2(1280.0, 1200.0));
+        settle(&mut harness);
+        let picking =
+            |harness: &Harness<'_, Test>| harness.state().studio.editor().unwrap().explorer.parent_pick.clone();
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
+        settle(&mut harness);
+        assert_eq!(parent_name(&harness, "SpawnLocation"), "Workspace");
+        harness.get_by_role_and_label(Role::Button, "Pick a parent").click();
+        settle(&mut harness);
+        assert!(picking(&harness).is_some());
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        assert_eq!(parent_name(&harness, "SpawnLocation"), "Baseplate");
+        assert!(picking(&harness).is_none(), "picked: done");
+        assert_eq!(selected_names(&harness), ["SpawnLocation"], "the selection stays");
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(parent_name(&harness, "SpawnLocation"), "Workspace", "one undo step");
+
+        // Inside itself: refused, and picking goes on until Esc.
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Pick a parent").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        assert_eq!(parent_name(&harness, "Baseplate"), "Workspace");
+        assert_eq!(
+            picking(&harness).and_then(|pick| pick.refused).as_deref(),
+            Some("Baseplate can't go inside itself.")
+        );
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(picking(&harness).is_none(), "Esc stops");
+
+        // A second click on the value stops too.
+        harness.get_by_role_and_label(Role::Button, "Pick a parent").click();
+        settle(&mut harness);
+        assert!(picking(&harness).is_some());
+        harness.get_by_role_and_label(Role::Button, "Pick a parent").click();
+        settle(&mut harness);
+        assert!(picking(&harness).is_none());
+        assert_eq!(parent_name(&harness, "Baseplate"), "Workspace");
+    }
+
+    /// #599: picking a parent with a click on a part in the viewport.
+    #[test]
+    fn the_parent_row_picks_a_new_parent_in_the_viewport() {
+        let mut harness = editing(settings_file("editor-pick-parent-viewport", None), "Pick Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Pick a parent").click();
+        settle(&mut harness);
+        let baseplate = on_screen(&harness, "Baseplate");
+        left_click(&mut harness, egui::Rect::from_center_size(baseplate, egui::Vec2::ZERO));
+        assert_eq!(parent_name(&harness, "SpawnLocation"), "Baseplate");
+        assert_eq!(selected_names(&harness), ["SpawnLocation"]);
+        assert!(harness.state().studio.editor().unwrap().explorer.parent_pick.is_none());
+    }
+
     #[test]
     fn edits_undo_and_redo_from_the_keys_and_the_edit_menu_and_mark_the_title() {
         let mut harness = editing(settings_file("editor-undo", None), "Undo Game");
@@ -3176,10 +3261,13 @@ mod tests {
         type_into(&mut harness, "Transparency", "4");
         assert_eq!(value(&harness, "Transparency"), Value::Number(1.0));
         assert!(harness.query_by_role_and_label(Role::TextInput, "Parent").is_none());
+        // The Parent's name, on the button that picks another (#599).
         assert_eq!(
-            harness.query_all_by_label("Workspace").count(),
-            2,
-            "the Explorer's row and the Parent's name"
+            harness
+                .get_by_role_and_label(Role::Button, "Pick a parent")
+                .value()
+                .as_deref(),
+            Some("Workspace")
         );
     }
 

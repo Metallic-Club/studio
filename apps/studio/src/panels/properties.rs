@@ -33,6 +33,7 @@ use metallic_engine::metallic_core::{
     Color3, DataModel, Id, PropFlags, PropId, PropMeta, PropType, ResolvedProp, Value, Vector2, Vector3,
 };
 
+use super::explorer::ParentPick;
 use super::values::{self, Edit, Mixed, Part};
 use super::{class_icon, empty_note, ids};
 use crate::dock::{Panel, PanelContext, Zone};
@@ -40,7 +41,7 @@ use crate::editor::Scene;
 use crate::keymap::Context;
 use crate::settings::window::section_label;
 use crate::theme::icons::{self, Icon};
-use crate::theme::tokens::{size, space, text};
+use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{ButtonKind, current_colors, fonts};
 
 /// The group of properties declared without one.
@@ -491,7 +492,7 @@ fn visible(prop: &ResolvedProp) -> bool {
 }
 
 /// Whether the panel edits a property: not when it is read-only, computed without a setter, or a reference (the
-/// Parent changes by dragging in the Explorer).
+/// Parent changes by dragging in the Explorer, or by picking one from its row, #599).
 fn editable(meta: &PropMeta) -> bool {
     !meta.flags.contains(PropFlags::READ_ONLY)
         && meta.computed.is_none_or(|computed| computed.set.is_some())
@@ -628,6 +629,9 @@ impl Panel for Properties {
         ui.add_space(space::S4);
         let mut edits: Vec<RowEdit> = Vec::new();
         let mut attribute_action = None;
+        // The Parent row picks a new parent from the Explorer or the viewport (#599).
+        let picking = scene.explorer.parent_pick.clone();
+        let mut pick = false;
         // Attributes are the active instance's, listed when it is the only one selected (#591).
         let attributes = (ids.len() == 1).then(|| attribute_rows(dm, id));
         let taken: Vec<String> = dm
@@ -643,13 +647,15 @@ impl Panel for Properties {
                 let mut open = open_rows(ui.ctx());
                 for group in cached_groups(ui.ctx(), dm, &ids, (!playing).then_some(revision)).iter() {
                     section_label(ui, group.name);
-                    edits.extend(rows_ui(ui, dm, &group.rows, &mut open, share, &taken).edits);
+                    let drawn = rows_ui(ui, dm, &group.rows, &mut open, share, &taken, picking.as_ref());
+                    edits.extend(drawn.edits);
+                    pick |= drawn.pick;
                     ui.add_space(space::S5);
                 }
                 let mut bottom = ui.cursor().top();
                 if let Some(rows) = &attributes {
                     section_label(ui, "Attributes");
-                    let drawn = rows_ui(ui, dm, rows, &mut open, share, &taken);
+                    let drawn = rows_ui(ui, dm, rows, &mut open, share, &taken, None);
                     edits.extend(drawn.edits);
                     attribute_action = drawn.action;
                     bottom = ui.cursor().top();
@@ -696,6 +702,12 @@ impl Panel for Properties {
                 }
             }
         }
+        if pick {
+            scene.explorer.parent_pick = match picking {
+                Some(_) => None,
+                None => Some(ParentPick::default()),
+            };
+        }
         if let Some(action) = attribute_action {
             apply_attribute_action(&mut scene, id, action);
         }
@@ -722,6 +734,8 @@ struct Drawn {
     edits: Vec<RowEdit>,
     /// What an attribute's menu asked for.
     action: Option<AttributeAction>,
+    /// The Parent row's value was clicked: start or stop picking a parent (#599).
+    pick: bool,
 }
 
 /// Draws `rows` (a group's) touching and striped, a part's row only while every row it opens from is `open` (#417),
@@ -733,6 +747,7 @@ fn rows_ui(
     open: &mut HashSet<String>,
     share: f32,
     taken: &[String],
+    picking: Option<&ParentPick>,
 ) -> Drawn {
     let p = current_colors(ui.ctx()).palette;
     let shown: Vec<&PropertyRow> = rows
@@ -758,7 +773,7 @@ fn rows_ui(
             let is_open = row.opens.then(|| open.contains(&row.key));
             let out = ui
                 .push_id(&row.key, |ui| {
-                    row_ui(ui, dm, row, shades.fill(index), last, share, is_open, taken)
+                    row_ui(ui, dm, row, shades.fill(index), last, share, is_open, taken, picking)
                 })
                 .inner;
             if let Some(edit) = out.edit {
@@ -767,6 +782,7 @@ fn rows_ui(
             if out.toggled && !open.remove(&row.key) {
                 open.insert(row.key.clone());
             }
+            drawn.pick |= out.pick;
             if out.action.is_some() {
                 drawn.action = out.action;
             }
@@ -783,6 +799,8 @@ struct RowOut {
     toggled: bool,
     /// What its menu asked for (an attribute's, #591).
     action: Option<AttributeAction>,
+    /// The Parent row's value was clicked (#599).
+    pick: bool,
 }
 
 /// How far a part's row is indented per level.
@@ -803,11 +821,13 @@ fn row_ui(
     share: f32,
     open: Option<bool>,
     taken: &[String],
+    picking: Option<&ParentPick>,
 ) -> RowOut {
     let mut out = RowOut {
         edit: None,
         toggled: false,
         action: None,
+        pick: false,
     };
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
@@ -894,6 +914,7 @@ fn row_ui(
         response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("Attribute {attribute}")));
         out.action = attribute_menu(&response, attribute, taken);
     }
+    let mut pick_clicked = false;
     let typed = ui
         .scope_builder(in_cell(value_cell), |ui| {
             ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
@@ -905,6 +926,10 @@ fn row_ui(
                 Some(index) => {
                     let shown = values::component_text(&row.value, row.part, index).unwrap_or_default();
                     ui.label(RichText::new(shown).size(text::BODY).color(p.text));
+                    None
+                }
+                None if is_parent_row(row) => {
+                    pick_clicked = parent_value(ui, dm, row, picking);
                     None
                 }
                 None if row.editable => values::edit(ui, dm, row.meta, &row.label, row.part, &row.value, row.mixed),
@@ -920,7 +945,58 @@ fn row_ui(
         })
         .inner;
     out.edit = typed.or(picked);
+    out.pick = pick_clicked;
     out
+}
+
+/// Whether `row` is an instance's Parent (#599), which a click on its value picks anew.
+fn is_parent_row(row: &PropertyRow) -> bool {
+    matches!(row.source, Source::Property(_)) && row.meta.name == "Parent" && row.component.is_none()
+}
+
+/// The Parent row's value (#599): the parent's name, on a button that starts picking a new parent from the Explorer or
+/// the viewport. While picking it says so, or why the instance picked last cannot be the parent, in the accent, and a
+/// click stops picking. Returns whether it was clicked.
+fn parent_value(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, picking: Option<&ParentPick>) -> bool {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let (shown, ink) = match picking {
+        Some(ParentPick { refused: Some(reason) }) => (reason.clone(), colors.accent),
+        Some(_) => ("Click the new parent\u{2026}".to_owned(), colors.accent),
+        None if row.mixed.whole => ("Mixed".to_owned(), p.subtle),
+        None => (format_value(dm, &values::shown(&row.value, row.part)), p.text),
+    };
+    let cell = ui.max_rect();
+    let response = ui.allocate_rect(cell, Sense::click());
+    response.widget_info(|| WidgetInfo {
+        current_text_value: Some(shown.clone()),
+        ..WidgetInfo::selected(Role::Button, true, picking.is_some(), "Pick a parent")
+    });
+    if picking.is_some() || response.hovered() {
+        let fill = if picking.is_some() {
+            colors.accent.gamma_multiply(0.18)
+        } else {
+            p.surface_hover
+        };
+        ui.painter().rect_filled(
+            cell.expand2(vec2(space::S2, -2.0)),
+            CornerRadius::same(radius::ITEM),
+            fill,
+        );
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    let galley = ui
+        .painter()
+        .layout(shown, egui::FontId::proportional(text::BODY), ink, cell.width());
+    let at = pos2(cell.left(), cell.center().y - galley.size().y / 2.0);
+    ui.painter().with_clip_rect(cell).galley(at, galley, ink);
+    let tip = if picking.is_some() {
+        "Click an instance in the Explorer, or a part in the viewport, to make it the parent. Esc or a click here \
+         stops."
+    } else {
+        "Click, then click an instance in the Explorer or a part in the viewport to make it the parent."
+    };
+    response.on_hover_text(tip).clicked()
 }
 
 /// The strip over the line between the columns, down every row in `rows` (#324): dragging it moves the line, which
