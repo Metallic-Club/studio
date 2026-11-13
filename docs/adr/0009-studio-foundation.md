@@ -584,9 +584,11 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   transparent one, do not count), so it is no longer drawn, or clicked, through walls. Whether a selected light's
   range lines draw over everything is an option of the viewport's menu (`light_lines_on_top`); off, they are drawn in
   short pieces, those a part hides left out.
-- **Borders a pixel wide (#573)**: fields', buttons' and windows' borders are one physical pixel (`theme::hairline`),
-  as the lines between panels are; a whole point blurred over more than a pixel at scales above 100%. The style is
-  applied again when the scale changes.
+- **A focused field's outline (#573, #588)**: #573 drew borders a physical pixel wide, but the outline asked about
+  was a focused field's, and #588 undid it. egui outlines a focused field with the selection's stroke, which is also
+  the colour of selected text (`ACCENT_INK`, dark, and three points wide here). Studio now registers its own text
+  field style (`theme::FieldStyle`, egui's widget themes, behind its `experimental` feature): a focused field is
+  outlined as an active widget is, in the accent a point wide, and selected text keeps its ink.
 - **The colour picker's fields (#574)**: the hex code is centred, and RGB is one field of `255, 255, 255`, read as the
   Properties panel reads it (`values::parse_components`).
 - **Block comments close (#575)**: Enter after `--[[` (or `--[==[`) not closed after it puts the `]]` of its level

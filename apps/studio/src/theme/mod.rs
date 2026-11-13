@@ -4,14 +4,21 @@
 //!
 //! [`ThemeState`] holds the look Studio wants and re-applies the style only when the look (or, in System mode, the
 //! system's mode) changes, so a frame never rebuilds it.
+//!
+//! A focused text field is outlined in the accent, a point wide (#588), by Studio's own text field style
+//! ([`FieldStyle`]): egui outlines it with the selection's stroke, which is the ink drawn on selected text, dark and
+//! three points wide.
 
 pub mod fonts;
 pub mod icons;
 pub mod tokens;
 
+use egui::class::HasClasses as _;
 use egui::epaint::{CornerRadius, Margin, Stroke};
 use egui::style::{Selection, WidgetVisuals, Widgets};
-use egui::{Color32, FontFamily, FontId, Pos2, Rect, TextStyle, Vec2, pos2, vec2};
+use egui::theme::{DefaultStyle, StyleProvider};
+use egui::widget_style::{StyleArgs, TextEditStyle, WidgetState};
+use egui::{Color32, FontFamily, FontId, Pos2, Rect, TextEdit, TextStyle, Vec2, pos2, vec2};
 
 use tokens::{ACCENT_INK, Accent, Hue, Motion, Palette, radius, shadow, size, space, text};
 
@@ -201,6 +208,8 @@ impl ThemeState {
             egui::Theme::Light
         };
         ctx.set_style_of(egui_theme, style(&colors, self.wanted.motion()));
+        // Replaces egui's own, which `Context::default` registered; it reads the colours from the style it is given.
+        ctx.replace_widget_theme::<TextEditStyle>(FieldStyle);
         ctx.set_theme(egui_theme);
         ctx.data_mut(|data| data.insert_temp(colors_key(), colors));
         self.applied = Some(colors);
@@ -218,6 +227,26 @@ pub fn current_colors(ctx: &egui::Context) -> Colors {
 /// Where the applied colours are kept in the context's memory.
 fn colors_key() -> egui::Id {
     egui::Id::unique("metallic.theme")
+}
+
+/// Studio's text field style (#588): egui's, but a focused field is outlined as an active widget is, in the accent a
+/// point wide, rather than in the selection's stroke (the dark ink of selected text, three points wide). The selection
+/// keeps that stroke, which egui also draws selected text in.
+#[derive(Clone, Copy, Debug)]
+pub struct FieldStyle;
+
+impl StyleProvider<TextEditStyle> for FieldStyle {
+    fn style(&mut self, args: &StyleArgs<'_>) -> TextEditStyle {
+        let mut field = StyleProvider::<TextEditStyle>::style(&mut DefaultStyle, args);
+        if args.state == WidgetState::Active && !args.classes.has_class(&TextEdit::CLASS_READ_ONLY) {
+            // Taking the frame's stroke back to a point widens its margin by the difference: the text stays put.
+            field.atom_layout.frame = field
+                .atom_layout
+                .frame
+                .apply_stroke_and_expansion_without_layout_shift(args.style.visuals.widgets.active.bg_stroke, 0.0);
+        }
+        field
+    }
 }
 
 /// The full `egui::Style` of `colors`, moving with `motion`.
@@ -682,6 +711,44 @@ mod tests {
         }
         let reduced = style(&Colors::default(), Motion::new(true));
         assert_eq!(reduced.animation_time, 0.0);
+    }
+
+    /// #588: a focused field is outlined in the accent a point wide, not in the dark ink of selected text.
+    #[test]
+    fn a_focused_field_is_outlined_in_the_accent() {
+        let ctx = egui::Context::default();
+        let mut state = ThemeState::new(Look::default());
+        state.apply(&ctx);
+        let field = egui::Id::unique("field");
+        let mut text = String::from("Part");
+        let mut outlines = |ctx: &egui::Context| -> Vec<Stroke> {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.add(TextEdit::singleline(&mut text).id(field));
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect) => Some(rect.stroke),
+                    _ => None,
+                })
+                .collect()
+        };
+        let idle = outlines(&ctx);
+        assert!(
+            idle.contains(&Stroke::new(size::BORDER, state.colors().palette.border)),
+            "{idle:?}"
+        );
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        // A field is styled by its state in the frame before.
+        outlines(&ctx);
+        let focused = outlines(&ctx);
+        assert!(
+            focused.contains(&Stroke::new(size::BORDER, state.colors().accent)),
+            "{focused:?}"
+        );
+        assert!(focused.iter().all(|stroke| stroke.color != ACCENT_INK), "{focused:?}");
     }
 
     #[test]
