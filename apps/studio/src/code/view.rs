@@ -5,7 +5,7 @@
 //! A click under the last line puts the cursor at the end of the code, as VS Code does (#557).
 //!
 //! Alt+click adds a cursor, and the keys act at every one (#558, [`super::cursors`]); Shift+Alt with a click or a drag
-//! selects a column, a cursor on each line (#559).
+//! selects a column, a cursor on each line (#559). Selected code dragged elsewhere moves there, Ctrl copying it (#560).
 //!
 //! Enter after a line that opens a block steps in and, when the block is not closed, puts in its `end` (#542,
 //! [`super::blocks`]).
@@ -207,6 +207,7 @@ pub fn show(
         below_last_line(ui, id, field, &output.galley, output.galley_pos, text);
         let response = output.response.response.clone();
         alt_click(ui, id, &response, &output.galley, output.galley_pos, before);
+        let dropped = drag_and_drop(ui, id, text, &output.galley, output.galley_pos);
         column_select(ui, id, field, &output.galley, output.galley_pos, before);
         if response.has_focus() {
             let (selections, carets) = extra_shapes(ui, id, &output.galley, output.galley_pos);
@@ -358,7 +359,7 @@ pub fn show(
             galley_pos,
             cursor.map(|cursor| cursor.index.0),
             hovered,
-            picked,
+            picked || dropped,
         )
     });
     let view = shown.inner_rect;
@@ -809,6 +810,95 @@ fn alt_click(ui: &Ui, id: Id, response: &Response, galley: &Galley, galley_pos: 
     set_carets(ui.ctx(), id, &all);
 }
 
+/// Dragging the selection of the field `id` (#560), its code `text` laid out as `galley` at `galley_pos`: let go
+/// elsewhere, the selected code moves there (Ctrl copies it instead) and stays selected; a mark shows where it goes
+/// while dragging. A click on the selection, or a drop on it, puts the cursor there. Returns whether `text` changed.
+fn drag_and_drop(ui: &Ui, id: Id, text: &mut String, galley: &Galley, galley_pos: Pos2) -> bool {
+    let carets = carets(ui.ctx(), id);
+    let [caret] = carets.as_slice() else {
+        return false;
+    };
+    let selection = caret.range();
+    if selection.is_empty() || !ui.memory(|memory| memory.has_focus(id)) {
+        return false;
+    }
+    // The selection's rows take the pointer from the field.
+    let responses: Vec<Response> = char_rects(galley, galley_pos, selection.clone())
+        .into_iter()
+        .enumerate()
+        .map(|(row, rect)| ui.interact(rect, id.with(("drag", row)), Sense::click_and_drag()))
+        .collect();
+    let copy = ui.input(|input| input.modifiers.command);
+    let over = |at: Pos2| galley.cursor_from_pos(at - galley_pos).index.0;
+    let mut changed = false;
+    for response in &responses {
+        if response.dragged() {
+            ui.ctx().set_cursor_icon(if copy {
+                egui::CursorIcon::Copy
+            } else {
+                egui::CursorIcon::Grabbing
+            });
+            if let Some(at) = ui.input(|input| input.pointer.latest_pos()) {
+                let mark = galley
+                    .pos_from_cursor(CCursor::new(over(at)))
+                    .translate(galley_pos.to_vec2());
+                ui.painter().line_segment(
+                    [mark.center_top(), mark.center_bottom()],
+                    Stroke::new(2.0, current_colors(ui.ctx()).accent),
+                );
+            }
+        } else if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        }
+        if (response.drag_stopped() || response.clicked())
+            && let Some(at) = ui.input(|input| input.pointer.latest_pos())
+        {
+            let to = over(at);
+            match moved(text, selection.clone(), to, copy) {
+                Some(moved) => {
+                    set_carets(ui.ctx(), id, &[moved]);
+                    ui.ctx().data_mut(|data| data.insert_temp(id.with("follow"), true));
+                    changed = true;
+                }
+                // A click, or a drop on the selection itself: the cursor there.
+                None => set_carets(ui.ctx(), id, &[Caret::at(to)]),
+            }
+        }
+        if response.clicked() || response.drag_stopped() {
+            // The field gives up the keyboard when a click ends on another widget: it is given it back.
+            ui.memory_mut(|memory| memory.request_focus(id));
+            ui.ctx().request_repaint();
+        }
+    }
+    changed
+}
+
+/// The characters `selection` of `text` dropped at character `to` (#560): moved there, or with `copy` copied there.
+/// Returns the code's new selection, or nothing when dropped inside the selection (which does nothing).
+pub fn moved(text: &mut String, selection: Range<usize>, to: usize, copy: bool) -> Option<Caret> {
+    if (selection.start..=selection.end).contains(&to) {
+        return None;
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    let to = to.min(chars.len());
+    // A selection kept from before the text changed can reach past its end.
+    let selection = selection.start.min(chars.len())..selection.end.min(chars.len());
+    let piece: Vec<char> = chars[selection.clone()].to_vec();
+    let length = piece.len();
+    let at = if copy {
+        to
+    } else {
+        chars.drain(selection.clone());
+        if to > selection.end { to - length } else { to }
+    };
+    chars.splice(at..at, piece);
+    *text = chars.into_iter().collect();
+    Some(Caret {
+        anchor: at,
+        head: at + length,
+    })
+}
+
 /// Shift+Alt with a click or a drag in the field `field` (#559), its code laid out as `galley` at `galley_pos`: a
 /// cursor on each line of the box, each selecting the box's part of its line, as VS Code's column selection. A click's
 /// box is from the field's cursor `before` it to the click; a drag's, from where it started to the pointer. While
@@ -1143,6 +1233,28 @@ mod tests {
         assert_eq!(warning.1, severity_color(Severity::Warning, true));
         let light = problem_lines(gutter, &rows, &severities, false);
         assert_eq!(light[0].1, severity_color(Severity::Error, false));
+    }
+
+    /// #560: a selection dropped elsewhere moves there, or with Ctrl is copied there, and stays selected; dropped in
+    /// itself it does nothing.
+    #[test]
+    fn a_dropped_selection_moves_or_is_copied() {
+        let mut text = "alpha beta gamma".to_owned();
+        assert_eq!(moved(&mut text, 6..10, 16, false), Some(Caret { anchor: 12, head: 16 }));
+        assert_eq!(text, "alpha  gammabeta");
+        assert_eq!(moved(&mut text, 12..16, 0, false), Some(Caret { anchor: 0, head: 4 }));
+        assert_eq!(text, "betaalpha  gamma");
+        assert_eq!(moved(&mut text, 0..4, 2, false), None);
+        assert_eq!(moved(&mut text, 0..4, 4, false), None);
+        assert_eq!(text, "betaalpha  gamma");
+        assert_eq!(moved(&mut text, 0..4, 10, true), Some(Caret { anchor: 10, head: 14 }));
+        assert_eq!(text, "betaalpha beta gamma");
+        let mut accents = "é b".to_owned();
+        assert_eq!(moved(&mut accents, 0..1, 3, false), Some(Caret { anchor: 2, head: 3 }));
+        assert_eq!(accents, " bé");
+        let mut short = "ab".to_owned();
+        assert_eq!(moved(&mut short, 1..9, 0, false), Some(Caret { anchor: 0, head: 1 }));
+        assert_eq!(short, "ba");
     }
 
     #[test]
