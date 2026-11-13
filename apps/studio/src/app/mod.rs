@@ -2955,6 +2955,78 @@ mod tests {
         settle(harness);
     }
 
+    /// #591: an attribute is added under Attributes with a name and a type, edited as a property is, and renamed and
+    /// deleted from its name's menu; each change is an undo step.
+    #[test]
+    fn attributes_are_added_edited_renamed_and_deleted_in_properties() {
+        let mut harness = editing(settings_file("editor-attributes", None), "Edit Game");
+        harness.set_size(egui::vec2(1280.0, 1500.0));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        let baseplate = editor_baseplate(&harness);
+        let attribute = |harness: &Harness<'_, Test>, name: &str| {
+            let editor = harness.state().studio.editor().unwrap();
+            editor.dm.attribute(baseplate, name).unwrap().cloned()
+        };
+        let undo = |harness: &mut Harness<'_, Test>| {
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+            settle(harness);
+        };
+
+        // Added: a name, a type, Add.
+        harness.get_by_role_and_label(Role::Button, "Add attribute").click();
+        settle(&mut harness);
+        let field = harness
+            .get_by_role_and_label(Role::TextInput, "New attribute name")
+            .rect();
+        left_click(&mut harness, field);
+        harness.event(egui::Event::Text("Speed".to_owned()));
+        settle(&mut harness);
+        harness.get_by_label("number").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Add the attribute").click();
+        settle(&mut harness);
+        assert_eq!(attribute(&harness, "Speed"), Some(Value::Number(0.0)));
+        assert!(
+            harness.query_by_label("New attribute name").is_none(),
+            "the form closed"
+        );
+
+        // Edited as a property is.
+        type_into(&mut harness, "Speed", "12");
+        assert_eq!(attribute(&harness, "Speed"), Some(Value::Number(12.0)));
+        undo(&mut harness);
+        assert_eq!(attribute(&harness, "Speed"), Some(Value::Number(0.0)));
+
+        // Renamed from its menu: the value goes with it.
+        harness.get_by_label("Attribute Speed").click_secondary();
+        settle(&mut harness);
+        let field = harness.get_by_role_and_label(Role::TextInput, "Attribute name").rect();
+        left_click(&mut harness, field);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("MaxSpeed".to_owned()));
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(attribute(&harness, "Speed"), None);
+        assert_eq!(attribute(&harness, "MaxSpeed"), Some(Value::Number(0.0)));
+        undo(&mut harness);
+        assert_eq!(attribute(&harness, "Speed"), Some(Value::Number(0.0)));
+        assert_eq!(attribute(&harness, "MaxSpeed"), None, "a rename is one step");
+
+        // Deleted from its menu.
+        harness.get_by_label("Attribute Speed").click_secondary();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Delete attribute").click();
+        settle(&mut harness);
+        assert_eq!(attribute(&harness, "Speed"), None);
+        assert!(harness.query_by_label("Attribute Speed").is_none());
+        undo(&mut harness);
+        assert_eq!(attribute(&harness, "Speed"), Some(Value::Number(0.0)));
+        undo(&mut harness);
+        assert_eq!(attribute(&harness, "Speed"), None, "never added");
+    }
+
     #[test]
     fn properties_edit_each_kind_of_value_and_undo_puts_it_back() {
         let mut harness = editing(settings_file("editor-edit-props", None), "Edit Game");
