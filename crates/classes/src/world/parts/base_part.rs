@@ -130,6 +130,8 @@ fn orientation_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), Scrip
 static PROPS: &[PropMeta] = &[
     PropMeta::cframe(CFRAME)
         .transform()
+        // Position and Rotation are its rows in the Properties panel (#589); scripts still see it.
+        .flags(PropFlags::HIDDEN)
         .group("Transform")
         .order(0)
         .desc("Where the part is and how it is rotated, in world space. Position and Orientation are views of it."),
@@ -161,10 +163,11 @@ static PROPS: &[PropMeta] = &[
         .group("Transform")
         .order(3)
         .desc("How big the part is along X, Y and Z, in metres. Each side is kept between 0.001 and 2048."),
+    // Appearance's order leaves 0 to a part's Shape (#589).
     PropMeta::color3("Color", 0.64, 0.64, 0.64)
         .visual()
         .group("Appearance")
-        .order(0)
+        .order(2)
         .desc("The part's colour."),
     PropMeta::enumeration("Material", "Material", "Plastic")
         .visual()
@@ -176,23 +179,29 @@ static PROPS: &[PropMeta] = &[
         .widget(Widget::Slider)
         .visual()
         .group("Appearance")
-        .order(2)
+        .order(3)
         .desc("How see-through the part is: 0 is solid, 1 is invisible."),
     PropMeta::boolean("CastShadow", true)
         .visual()
         .group("Appearance")
-        .order(3)
+        .order(4)
         .desc("Whether the part casts a shadow."),
-    PropMeta::boolean("Anchored", false)
+    // Collision is declared before Physics so the Properties panel lists it first: groups come in the order a class
+    // first names them.
+    PropMeta::boolean("CanCollide", true)
+        .physics()
+        .group("Collision")
+        .order(0)
+        .desc("Whether other parts bump into this one. When off, things pass through it."),
+    // On by default (#589): a part placed in Studio stays where it is put. Scenes from before keep theirs (format 2).
+    PropMeta::boolean("Anchored", true)
         .physics()
         .group("Physics")
         .order(0)
-        .desc("Whether the part stays where it is. An anchored part is not moved by gravity or collisions."),
-    PropMeta::boolean("CanCollide", true)
-        .physics()
-        .group("Physics")
-        .order(1)
-        .desc("Whether other parts bump into this one. When off, things pass through it."),
+        .desc(
+            "Whether the part stays where it is. An anchored part is not moved by gravity or collisions. On by \
+             default.",
+        ),
 ];
 
 /// The base of every solid part.
@@ -336,7 +345,7 @@ mod tests {
         );
         assert_eq!(dm.get_by_name(part, "Transparency"), Ok(Value::Number(0.0)));
         assert_eq!(dm.get_by_name(part, "CastShadow"), Ok(Value::Bool(true)));
-        assert_eq!(dm.get_by_name(part, "Anchored"), Ok(Value::Bool(false)));
+        assert_eq!(dm.get_by_name(part, "Anchored"), Ok(Value::Bool(true)), "on by default (#589)");
         assert_eq!(dm.get_by_name(part, "CanCollide"), Ok(Value::Bool(true)));
         assert_eq!(
             dm.get_by_name(part, "Material"),

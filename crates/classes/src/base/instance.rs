@@ -163,17 +163,21 @@ fn get_attributes(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError>
 
 static PROPS: &[PropMeta] = &[
     // The scene format stores names and the tree itself, so neither goes through the generic property path.
+    // General is the Properties panel's first group (#589).
     PropMeta::string("Name", "Instance")
         .computed(name_get, Some(name_set))
         .flags(PropFlags::NO_SAVE)
+        .group("General")
         .order(-2)
         .desc("The instance's name. Names do not have to be unique; FindFirstChild returns the first match."),
     PropMeta::reference("Parent", "Instance")
         .computed(parent_get, Some(parent_set))
         .flags(PropFlags::NO_SAVE)
+        .group("General")
         .order(-1)
         .desc("The instance this one sits under, or nil when it is outside the game. Setting it moves the instance."),
     PropMeta::boolean("Archivable", true)
+        .group("General")
         .desc("Whether the instance is copied by Clone and saved with the game. Turn it off for temporary objects."),
 ];
 

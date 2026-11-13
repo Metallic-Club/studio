@@ -3002,34 +3002,42 @@ mod tests {
         undo(&mut harness);
         assert!(matches!(value(&harness, "Size"), Value::Vector3(size) if size.x == 512.0));
 
-        // A CFrame shows whole, and opens into its position and orientation (#417): the position row moves the part,
-        // the orientation row turns it.
-        let placed = value(&harness, "CFrame");
+        // A CFrame shows whole, and opens into its position and orientation (#417). A part's own CFrame is not listed
+        // (#589): its Position and Rotation are; its PivotOffset is a CFrame.
+        assert!(harness.query_by_role_and_label(Role::Button, "Open CFrame").is_none());
+        let placed = value(&harness, "PivotOffset");
         assert!(
             harness
-                .query_by_role_and_label(Role::TextInput, "CFrame Position")
+                .query_by_role_and_label(Role::TextInput, "PivotOffset Position")
                 .is_none(),
             "closed"
         );
-        harness.get_by_role_and_label(Role::Button, "Open CFrame").click();
+        harness.get_by_role_and_label(Role::Button, "Open PivotOffset").click();
         settle(&mut harness);
         // A blank leaves that component.
-        type_into(&mut harness, "CFrame Position", ", 20, ");
-        let Value::CFrame(frame) = value(&harness, "CFrame") else {
+        type_into(&mut harness, "PivotOffset Position", ", 20, ");
+        let Value::CFrame(offset) = value(&harness, "PivotOffset") else {
             panic!("a CFrame");
         };
-        assert!((frame.position().y - 20.0).abs() < 1e-4);
+        assert!((offset.position().y - 20.0).abs() < 1e-4);
         // Rotation, as a part's own Orientation row reads too (#455).
         assert!(harness.query_by_label("Orientation").is_none());
         harness.get_by_role_and_label(Role::TextInput, "Rotation");
-        type_into(&mut harness, "CFrame Rotation", "0, 90, 0");
+        type_into(&mut harness, "PivotOffset Rotation", "0, 90, 0");
+        let Value::CFrame(offset) = value(&harness, "PivotOffset") else {
+            panic!("a CFrame");
+        };
+        assert!((offset.to_orientation_deg().y - 90.0).abs() < 1e-3, "{offset:?}");
+        // Two edits of one property this close together are one step (#348).
+        undo(&mut harness);
+        assert_eq!(value(&harness, "PivotOffset"), placed);
+        // The part's own Rotation turns it.
+        type_into(&mut harness, "Rotation", "0, 90, 0");
         let Value::Vector3(turned) = value(&harness, "Orientation") else {
             panic!("a vector");
         };
         assert!((turned.y - 90.0).abs() < 1e-3, "{turned:?}");
-        // Two edits of one property this close together are one step (#348).
         undo(&mut harness);
-        assert_eq!(value(&harness, "CFrame"), placed);
         // A vector opens into its parts, each on a row of its own that edits it alone (#417).
         harness.get_by_role_and_label(Role::Button, "Open Size").click();
         settle(&mut harness);

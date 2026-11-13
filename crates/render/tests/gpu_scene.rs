@@ -39,6 +39,10 @@ impl Game {
 
     fn part(&mut self) -> Id {
         let id = self.dm.create(self.part).expect("a part");
+        // Unanchored, as a falling part is: parts are anchored by default (#589), and these tests move them.
+        self.dm
+            .set_by_name(id, "Anchored", Value::Bool(false))
+            .expect("unanchored");
         self.dm.set_parent(id, Some(self.workspace)).expect("parented");
         id
     }

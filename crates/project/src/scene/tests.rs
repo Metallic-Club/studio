@@ -58,7 +58,7 @@ fn rich_game() -> (DataModel, Id, Id) {
     dm.set_by_name(part, "Shape", enum_item(&dm, "PartShape", "Wedge"))
         .unwrap();
     dm.set_by_name(part, "Transparency", Value::Number(0.1)).unwrap();
-    dm.set_by_name(part, "Anchored", Value::Bool(true)).unwrap();
+    dm.set_by_name(part, "Anchored", Value::Bool(false)).unwrap();
     dm.set_by_name(model, "PrimaryPart", Value::Ref(Some(part))).unwrap();
     let light = new_in(&mut dm, "PointLight", part, "Lamp");
     dm.set_by_name(light, "Range", Value::Number(30.0)).unwrap();
@@ -171,11 +171,11 @@ fn defaults_are_left_out_and_keys_are_sorted() {
     );
     assert!(saved.get("name").is_none());
 
-    dm.set_by_name(part, "Anchored", Value::Bool(true)).unwrap();
+    dm.set_by_name(part, "Anchored", Value::Bool(false)).unwrap();
     dm.set_by_name(part, "Size", Value::Vector3(Vector3::new(1.0, 2.0, 3.0)))
         .unwrap();
     let text = save(&dm);
-    assert!(text.contains("\"properties\": {\n      \"Anchored\": true,\n      \"Size\": [1.0, 2.0, 3.0]\n    }"));
+    assert!(text.contains("\"properties\": {\n      \"Anchored\": false,\n      \"Size\": [1.0, 2.0, 3.0]\n    }"));
 }
 
 fn named_or_class<'a>(doc: &'a Json, class: &str) -> &'a Json {
@@ -264,7 +264,7 @@ fn values_are_written_by_their_declared_type() {
     let props = &part["properties"];
     assert_eq!(props["Material"], "Wood");
     assert_eq!(props["Shape"], "Wedge");
-    assert_eq!(props["Anchored"], true);
+    assert_eq!(props["Anchored"], false);
     assert_eq!(props["Size"], json!([4.0, 7.0, 0.2]));
     assert_eq!(props["CFrame"].as_array().unwrap().len(), 7);
     assert_eq!(part["attributes"]["Speed"], json!({"Number": 3.5}));

@@ -8,7 +8,7 @@
 //!
 //! ```json
 //! {
-//!   "format": 1,
+//!   "format": 2,
 //!   "instances": [{
 //!     "id": 1,
 //!     "class": "Workspace",
@@ -79,7 +79,7 @@ pub(crate) use references::{find as find_references, rewrite_paths};
 pub use save::save_scene;
 
 /// The scene format version this engine writes. Older versions load through migrations; newer ones are refused.
-pub const SCENE_FORMAT: u32 = 1;
+pub const SCENE_FORMAT: u32 = 2;
 
 /// The file name extension of a scene inside a project (`Scenes/Main.scene`).
 pub const SCENE_EXTENSION: &str = "scene";

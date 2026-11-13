@@ -493,11 +493,11 @@ mod tests {
         // Far apart, or another property: steps of their own.
         s.set(part, "Transparency", Value::Number(0.7));
         s.commit(LATER);
-        s.set(part, "Anchored", Value::Bool(true));
+        s.set(part, "Anchored", Value::Bool(false));
         s.commit(Duration::from_millis(100));
         assert_eq!(s.history.undo_len(), 3);
         // Typed and typed back: nothing left to undo.
-        s.set(part, "Anchored", Value::Bool(false));
+        s.set(part, "Anchored", Value::Bool(true));
         s.commit(Duration::from_millis(100));
         assert_eq!(s.history.undo_len(), 2);
     }

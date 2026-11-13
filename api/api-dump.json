@@ -91,7 +91,7 @@
           "computed": true,
           "range": null,
           "wraps": false,
-          "group": "",
+          "group": "General",
           "description": "The instance's name. Names do not have to be unique; FindFirstChild returns the first match.",
           "aliases": [],
           "derived_from": []
@@ -111,7 +111,7 @@
           "computed": true,
           "range": null,
           "wraps": false,
-          "group": "",
+          "group": "General",
           "description": "The instance this one sits under, or nil when it is outside the game. Setting it moves the instance.",
           "aliases": [],
           "derived_from": []
@@ -125,7 +125,7 @@
           "computed": false,
           "range": null,
           "wraps": false,
-          "group": "",
+          "group": "General",
           "description": "Whether the instance is copied by Clone and saved with the game. Turn it off for temporary objects.",
           "aliases": [],
           "derived_from": []
@@ -2077,7 +2077,8 @@
             0.0
           ],
           "flags": [
-            "TRANSFORM"
+            "TRANSFORM",
+            "HIDDEN"
           ],
           "read_only": false,
           "computed": false,
@@ -2232,22 +2233,6 @@
           "derived_from": []
         },
         {
-          "name": "Anchored",
-          "type": "Bool",
-          "default": false,
-          "flags": [
-            "PHYSICS"
-          ],
-          "read_only": false,
-          "computed": false,
-          "range": null,
-          "wraps": false,
-          "group": "Physics",
-          "description": "Whether the part stays where it is. An anchored part is not moved by gravity or collisions.",
-          "aliases": [],
-          "derived_from": []
-        },
-        {
           "name": "CanCollide",
           "type": "Bool",
           "default": true,
@@ -2258,8 +2243,24 @@
           "computed": false,
           "range": null,
           "wraps": false,
-          "group": "Physics",
+          "group": "Collision",
           "description": "Whether other parts bump into this one. When off, things pass through it.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Anchored",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "PHYSICS"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Physics",
+          "description": "Whether the part stays where it is. An anchored part is not moved by gravity or collisions. On by default.",
           "aliases": [],
           "derived_from": []
         }
@@ -2979,7 +2980,7 @@
           "computed": false,
           "range": null,
           "wraps": false,
-          "group": "Part",
+          "group": "Appearance",
           "description": "The part's shape, stretched to its Size: a Ball whose sides differ is an ellipsoid; a Cylinder runs along X, its ends the ellipse of the Y and Z sizes; a Wedge slopes down towards -Z.",
           "aliases": [],
           "derived_from": []

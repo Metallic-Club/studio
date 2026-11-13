@@ -609,6 +609,22 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   is kept while open, since egui moves a window whose builder changes. The shell opens one off every monitor centred
   over Studio's window.
 
+### A part's properties and its attributes (2026-11-13, #588-#592)
+
+- **A focused field (#588)**: see #573 above; the accent outline is `theme::FieldStyle`.
+- **A part's properties (#589)**, laid out as the owner asked: **General** (Name, Parent, Archivable: every class's
+  first group), **Transform** (Position, Rotation, Size, then PivotOffset, which is last for every world object and
+  opens into its position and rotation), **Appearance** (Shape first, then Material, Color, Transparency,
+  CastShadow), **Collision** (CanCollide) and **Physics** (Anchored). A part's `CFrame` is `HIDDEN`, so not listed:
+  Position and Rotation are its rows; scripts still see it. Groups come in the order a class first names them, which
+  is why `CanCollide` is declared before `Anchored`. What the engine does not have yet (Locked, Reflectance, CanQuery,
+  CanTouch, CollisionGroup, Massless, Mass, the assembly velocities, CustomPhysicalProperties, tags) is tracked in
+  #592.
+- **Anchored by default (#589)**: a part is anchored when made, so one placed in Studio stays where it is put. Scenes
+  leave defaults out, so this is scene format 2: its migration gives a format 1 part (`Part`, `MeshPart`) that left
+  `Anchored` out an explicit `false`, and it stays unanchored. Scripts that want a falling part set `Anchored = false`,
+  unlike Roblox, where `Instance.new("Part")` is unanchored.
+
 ## Not in this slice
 
 Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in the viewport, undo
