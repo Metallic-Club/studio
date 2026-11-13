@@ -1049,6 +1049,20 @@ impl Studio {
         }
     }
 
+    /// What the script editor's commands act on (#554): the script last clicked in or typed in, while its code or its
+    /// find bar has the keyboard or a script tab is the panel with focus.
+    fn script_in_focus(&self, ctx: &egui::Context) -> Option<crate::code::ScriptId> {
+        let script = self.editor()?.scripts.focused?;
+        let field = crate::panels::script::field_id(script);
+        let bar = field.with("find");
+        let typing = ctx.memory(|memory| memory.focused()).is_some_and(|focused| {
+            focused == field
+                || focused == crate::code::find_bar::query_id(bar)
+                || focused == crate::code::find_bar::replace_id(bar)
+        });
+        (typing || self.dock.focus().focused == Some(crate::code::PANEL)).then_some(script)
+    }
+
     /// Opens or closes the Settings window, on any screen.
     fn toggle_settings(&mut self) {
         let open = self.settings_window.is_open();
@@ -1122,6 +1136,30 @@ impl Studio {
                 ids::PROJECT_CLOSE if editing => self.show_projects(),
                 ids::FILE_SAVE if editing => self.save(),
                 ids::VIEW_RESET_LAYOUT if editing => self.reset_layout(),
+                ids::SCRIPT_FIND | ids::SCRIPT_REPLACE if editing => {
+                    let replace = activation.command == ids::SCRIPT_REPLACE;
+                    if let Some(script) = self.script_in_focus(ctx)
+                        && let Some(editor) = self.editor_mut()
+                    {
+                        editor.scripts.find.open(script, replace);
+                        ctx.request_repaint();
+                    }
+                }
+                ids::SCRIPT_FIND_NEXT | ids::SCRIPT_FIND_PREVIOUS if editing => {
+                    let forward = activation.command == ids::SCRIPT_FIND_NEXT;
+                    if let Some(script) = self.script_in_focus(ctx)
+                        && let Some(editor) = self.editor_mut()
+                    {
+                        let find = &mut editor.scripts.find;
+                        if find.is_open(script) || !find.query.text.is_empty() {
+                            find.open.insert(script);
+                            find.step = Some((script, forward));
+                        } else {
+                            find.open(script, false);
+                        }
+                        ctx.request_repaint();
+                    }
+                }
                 ids::TEST_PLAY if editing => self.menu_action(MenuAction::Play),
                 ids::TEST_PAUSE if editing => self.menu_action(MenuAction::Pause),
                 ids::TEST_STEP if editing => self.menu_action(MenuAction::Step),
@@ -4302,6 +4340,107 @@ mod tests {
         assert!(
             line_top > 0.0 && line_top + row <= 1000.0,
             "the cursor's line at {line_top}, the field's top at {top}"
+        );
+    }
+
+    /// The match the find bar of `script` went to, as bytes.
+    fn found_at(harness: &Harness<'_, Test>, script: metallic_engine::metallic_core::Id) -> std::ops::Range<usize> {
+        harness.state().studio.editor().unwrap().scripts.find.at[&script].clone()
+    }
+
+    /// #554: Ctrl+F opens the find bar on the selection; typing goes to the first match, Enter to the next, the toggles
+    /// narrow the matches, Ctrl+H's row replaces them all, and Escape closes the bar.
+    #[test]
+    fn ctrl_f_finds_and_replaces_in_a_script() {
+        let mut harness = editing(settings_file("editor-script-find", None), "Script Find Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let script = add_bare_script(&mut harness, "Finder");
+        two_clicks(&mut harness, "Finder", 0.05);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        let code = "local part = 1\nlocal Part = part + 1\nprint(parts)";
+        harness.event(egui::Event::Text(code.to_owned()));
+        settle(&mut harness);
+        let field = crate::panels::script::field_id(script);
+        let text = |harness: &mut Harness<'static, Test>| {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.project.read_text("Scripts/Finder.luau").unwrap()
+        };
+        // The selection is what is looked for.
+        crate::code::view::select(&harness.ctx, field, 6..10);
+        settle(&mut harness);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::F);
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.editor().unwrap().scripts.find.query.text, "part");
+        // Typed: the first match from the cursor, then the next; case does not matter yet.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("Part".to_owned()));
+        settle(&mut harness);
+        assert_eq!(found_at(&harness, script), 6..10);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(found_at(&harness, script), 21..25);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(found_at(&harness, script), 28..32);
+        // Match case: only `Part`; whole word too, then only `part` and `part`, not `parts`.
+        harness
+            .get_by_role_and_label(Role::CheckBox, "Match case (Alt+C)")
+            .click();
+        settle(&mut harness);
+        assert_eq!(found_at(&harness, script), 21..25);
+        harness
+            .get_by_role_and_label(Role::CheckBox, "Match case (Alt+C)")
+            .click();
+        harness
+            .get_by_role_and_label(Role::CheckBox, "Match whole word (Alt+W)")
+            .click();
+        settle(&mut harness);
+        // F3 and Ctrl+Shift+G step from anywhere in the script.
+        harness.key_press(Key::F3);
+        settle(&mut harness);
+        let after_f3 = found_at(&harness, script);
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::G);
+        settle(&mut harness);
+        assert_ne!(found_at(&harness, script), after_f3);
+        // Replace all, from Ctrl+H's row.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::H);
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TextInput, "Replace").click();
+        settle(&mut harness);
+        harness.event(egui::Event::Text("piece".to_owned()));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Replace all").click();
+        settle(&mut harness);
+        assert_eq!(
+            text(&mut harness),
+            "local piece = 1\nlocal piece = piece + 1\nprint(parts)"
+        );
+        // Replace one at a time: the selected match, then the next is selected.
+        harness.get_by_role_and_label(Role::TextInput, "Find").click();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("piece".to_owned()));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TextInput, "Replace").click();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(egui::Event::Text("p".to_owned()));
+        settle(&mut harness);
+        let first = found_at(&harness, script);
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        assert_eq!(text(&mut harness).matches("piece").count(), 2);
+        assert_ne!(found_at(&harness, script), first);
+        // Escape closes it, giving the code the keyboard.
+        harness.get_by_role_and_label(Role::TextInput, "Find").click();
+        settle(&mut harness);
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(harness.query_by_role_and_label(Role::TextInput, "Find").is_none());
+        assert!(harness.ctx.memory(|memory| memory.has_focus(field)));
+        // With the match gone to selected.
+        assert_eq!(
+            crate::code::view::selection(&harness.ctx, field),
+            Some(found_at(&harness, script))
         );
     }
 

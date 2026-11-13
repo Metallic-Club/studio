@@ -16,6 +16,8 @@ pub mod api;
 pub mod blocks;
 pub mod complete;
 pub mod definition;
+pub mod find;
+pub mod find_bar;
 pub mod highlight;
 pub mod lexer;
 pub mod settings;
@@ -59,6 +61,8 @@ pub struct Scripts {
     checked: HashMap<String, Checked>,
     /// Counts the edits to any file: a file is checked again when it or another changed (it may require another).
     edits: u64,
+    /// The scripts' find bar (#554).
+    pub find: find::FindBar,
 }
 
 /// A file's analysis and diagnostics, and what they were made from.
@@ -73,16 +77,12 @@ struct Checked {
 impl Scripts {
     /// The text of `member`: as edited, or read from `project` the first time (empty for a file it lacks).
     pub fn text(&mut self, project: &mut Project, member: &str) -> &mut String {
-        self.texts.entry(member.to_owned()).or_insert_with(|| {
-            if project.contains(member) {
-                project.read_text(member).unwrap_or_else(|error| {
-                    log::warn!("scripts: could not read {member}: {error}");
-                    String::new()
-                })
-            } else {
-                String::new()
-            }
-        })
+        read_text(&mut self.texts, project, member)
+    }
+
+    /// The text of `member` (as [`Scripts::text`]) and the find bar, together.
+    pub fn text_and_find(&mut self, project: &mut Project, member: &str) -> (&mut String, &mut find::FindBar) {
+        (read_text(&mut self.texts, project, member), &mut self.find)
     }
 
     /// Notes that a file was edited: every file is checked again (#530).
@@ -214,6 +214,20 @@ impl<'a> Sources<'a> {
         };
         f(&env)
     }
+}
+
+/// The text of `member` in `texts`: as edited, or read from `project` the first time (empty for a file it lacks).
+fn read_text<'a>(texts: &'a mut HashMap<String, String>, project: &mut Project, member: &str) -> &'a mut String {
+    texts.entry(member.to_owned()).or_insert_with(|| {
+        if project.contains(member) {
+            project.read_text(member).unwrap_or_else(|error| {
+                log::warn!("scripts: could not read {member}: {error}");
+                String::new()
+            })
+        } else {
+            String::new()
+        }
+    })
 }
 
 /// A hash of `text`, to tell whether it changed.

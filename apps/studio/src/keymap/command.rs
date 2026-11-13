@@ -158,6 +158,14 @@ pub mod ids {
     pub const PROJECT_CLOSE: &str = "project.close";
     /// Puts the editor's panels back where they start.
     pub const VIEW_RESET_LAYOUT: &str = "view.reset_layout";
+    /// Opens the find bar of the script being edited (#554).
+    pub const SCRIPT_FIND: &str = "script.find";
+    /// Opens the find bar of the script being edited with its replace row (#554).
+    pub const SCRIPT_REPLACE: &str = "script.replace";
+    /// Goes to the next match of the find bar's query in the script being edited (#554).
+    pub const SCRIPT_FIND_NEXT: &str = "script.find_next";
+    /// Goes to the match before in the script being edited (#554).
+    pub const SCRIPT_FIND_PREVIOUS: &str = "script.find_previous";
     /// Starts a game session in the Game tab (Play in Studio).
     pub const TEST_PLAY: &str = "test.play";
     /// Pauses or resumes the game session.
@@ -310,6 +318,22 @@ const fn tool(
     }
 }
 
+/// A command of the script editor (#554): it fires while the script's code has the keyboard, the code being a text
+/// field.
+const fn script(
+    id: &'static str,
+    title: &'static str,
+    description: &'static str,
+    bind: &'static [&'static str],
+) -> Command {
+    Command {
+        contexts: &[Context::Editor],
+        defaults: bind,
+        while_typing: true,
+        ..Command::new(id, title, "Script editor", description)
+    }
+}
+
 /// Every Studio command, in the order the Keybinds page lists them. The viewport's are registered for #217.
 pub const STUDIO_COMMANDS: &[Command] = &[
     Command {
@@ -339,6 +363,31 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         defaults: &["Primary+S"],
         ..Command::new(ids::FILE_SAVE, "Save", "Project", "Saves the project to its file.")
     },
+    script(
+        ids::SCRIPT_FIND,
+        "Find",
+        "Opens the find bar of the script being edited, looking for the selection.",
+        &["Primary+F"],
+    ),
+    script(
+        ids::SCRIPT_REPLACE,
+        "Find and replace",
+        "Opens the find bar of the script being edited with its replace row.",
+        &["Primary+H"],
+    ),
+    script(
+        ids::SCRIPT_FIND_NEXT,
+        "Find next",
+        "Selects the next match of the find bar's text in the script being edited.",
+        &["F3", "Primary+G"],
+    ),
+    script(
+        ids::SCRIPT_FIND_PREVIOUS,
+        "Find previous",
+        "Selects the match before in the script being edited.",
+        // Not Shift+F3: that shows the Lighting stats.
+        &["Primary+Shift+G"],
+    ),
     Command {
         contexts: &[Context::Editor],
         ..Command::new(
