@@ -47,6 +47,8 @@ pub struct StudioSettings {
     pub window: Option<WindowPlace>,
     /// Where the Settings window was when it last closed (#578), saved in `[settings_window]`; `None` the first time.
     pub settings_window: Option<WindowPlace>,
+    /// Who is using Studio (#602): a name and a colour for the profile button, while there is no sign-in.
+    pub profile: Profile,
     /// The script editor's settings (#529), kept in a file of their own (`code_editor.toml`), not in `settings.toml`.
     pub code: crate::code::settings::CodeEditor,
 }
@@ -90,6 +92,63 @@ impl Default for Output {
             clear_on_play: true,
         }
     }
+}
+
+/// Who is using Studio (#602), saved in `[profile]`: there are no accounts yet, so offline the profile button shows
+/// a name and a colour of the user's choosing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Profile {
+    /// The name shown, trimmed and at most [`Profile::MAX_NAME`] characters; empty until one is set.
+    pub name: String,
+    /// The avatar's colour.
+    pub color: [u8; 3],
+}
+
+impl Profile {
+    /// The longest name, in characters.
+    pub const MAX_NAME: usize = 24;
+
+    /// The name as the button shows it: "Guest" until one is set.
+    pub fn shown_name(&self) -> &str {
+        if self.name.trim().is_empty() {
+            "Guest"
+        } else {
+            self.name.trim()
+        }
+    }
+
+    /// The avatar's letter: the name's first, upper case; `None` without a name.
+    pub fn initial(&self) -> Option<char> {
+        self.name
+            .trim()
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().next().unwrap_or(c))
+    }
+
+    /// `name` as it is kept: trimmed, at most [`Profile::MAX_NAME`] characters.
+    pub fn clean_name(name: &str) -> String {
+        name.trim().chars().take(Self::MAX_NAME).collect()
+    }
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            color: crate::profile::COLORS[0],
+        }
+    }
+}
+
+/// `#rrggbb` (or `rrggbb`) as a colour.
+fn hex_color(text: &str) -> Option<[u8; 3]> {
+    let hex = text.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let channel = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
+    Some([channel(0)?, channel(2)?, channel(4)?])
 }
 
 /// The General category.
@@ -333,6 +392,20 @@ impl StudioSettings {
                 &mut settings.general.skip_sign_in,
             );
         }
+        if let Some(profile) = section("profile") {
+            read(
+                profile,
+                "name",
+                |v| v.as_str().map(Profile::clean_name),
+                &mut settings.profile.name,
+            );
+            read(
+                profile,
+                "color",
+                |v| v.as_str().and_then(hex_color),
+                &mut settings.profile.color,
+            );
+        }
         if let Some(editing) = section("editing") {
             let e = &mut settings.editing;
             read(editing, "snap_moves", Value::as_bool, &mut e.snap_moves);
@@ -429,6 +502,12 @@ impl StudioSettings {
         with_section(&mut document, "general", |general| {
             general.insert("skip_sign_in".into(), Value::Boolean(self.general.skip_sign_in));
         });
+        let profile = &self.profile;
+        with_section(&mut document, "profile", |table| {
+            table.insert("name".into(), Value::String(profile.name.clone()));
+            let [r, g, b] = profile.color;
+            table.insert("color".into(), Value::String(format!("#{r:02x}{g:02x}{b:02x}")));
+        });
         let e = &self.editing;
         with_section(&mut document, "editing", |editing| {
             // In thousandths, so 0.2 is written as 0.2 and not as the f32's 0.20000000298023224.
@@ -495,6 +574,7 @@ impl StudioSettings {
 
     /// Brings every value into its range.
     pub fn clamp(&mut self) {
+        self.profile.name = Profile::clean_name(&self.profile.name);
         self.code.clamp();
         let e = &mut self.editing;
         let within = |value: f32, (min, max): (f32, f32), default: f32| {

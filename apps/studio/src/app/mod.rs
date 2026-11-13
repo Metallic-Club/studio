@@ -464,7 +464,8 @@ impl Studio {
             }
             Screen::Projects => {
                 let mark = self.mark(&ctx, RAIL_MARK);
-                if let Some(path) = self.projects.show(ui, Some(&mark), &self.keymap) {
+                let profile = &mut self.settings.settings_mut().profile;
+                if let Some(path) = self.projects.show(ui, Some(&mark), &self.keymap, profile) {
                     self.open(path);
                 }
             }
@@ -523,7 +524,8 @@ impl Studio {
         let action = ui
             .scope_builder(UiBuilder::new().max_rect(bar), |ui| {
                 let settings_open = self.settings_window.is_open();
-                editor::top_bar(ui, editor, &self.dock, &self.keymap, settings_open)
+                let profile = &mut self.settings.settings_mut().profile;
+                editor::top_bar(ui, editor, &self.dock, &self.keymap, settings_open, profile)
             })
             .inner;
         // The toolbar under the menu bar (#232).
@@ -2364,6 +2366,48 @@ mod tests {
         assert!(!path.exists(), "nothing changed, nothing written");
         // Opened again, it asks again.
         assert_eq!(past_the_splash(path).state().studio.screen(), Screen::SignIn);
+    }
+
+    /// #602: the profile button at the foot of the projects page and beside the editor's gear opens a popup that says
+    /// no one is signed in and sets the name and colour the avatar shows, which are saved.
+    #[test]
+    fn the_profile_button_sets_a_name_and_a_colour_offline() {
+        let path = config("profile", None, None);
+        let mut harness = past_the_splash(path.clone());
+        harness.get_by_label("Continue offline").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().studio.screen(), Screen::Projects);
+        harness.get_by_role_and_label(Role::Button, "Profile").click();
+        settle(&mut harness);
+        harness.get_by_label_contains("You're not signed in.");
+        let field = harness.get_by_role_and_label(Role::TextInput, "Profile name").rect();
+        left_click(&mut harness, field);
+        harness.event(egui::Event::Text("Ada Lovelace ".to_owned()));
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::RadioButton, "Colour #10a37f")
+            .click();
+        settle(&mut harness);
+        let profile = harness.state().studio.settings().profile.clone();
+        assert_eq!(profile.name, "Ada Lovelace", "kept trimmed");
+        assert_eq!(profile.color, [16, 163, 127]);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains("[profile]") && saved.contains("name = \"Ada Lovelace\""),
+            "{saved}"
+        );
+        assert!(saved.contains("color = \"#10a37f\""), "{saved}");
+        assert_eq!(SettingsStore::peek(&path).profile, profile, "read back");
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+
+        // The editor has one too, beside the gear.
+        let mut harness = editing(path, "Profile Game");
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Profile").click();
+        settle(&mut harness);
+        harness.get_by_label("Ada Lovelace");
+        harness.get_by_label("Offline");
     }
 
     #[test]

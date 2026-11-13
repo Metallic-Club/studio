@@ -33,6 +33,7 @@ pub mod folders;
 pub mod keymap;
 pub mod logging;
 pub mod panels;
+pub mod profile;
 pub mod projects;
 pub mod settings;
 pub mod theme;
