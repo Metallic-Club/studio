@@ -345,3 +345,22 @@ fn a_damaged_member_or_index_fails_its_checksum() {
         "{error}"
     );
 }
+
+/// #603: the editor's own data (`.studio/`) is not packed into the game, and is not an asset.
+#[test]
+fn a_pak_leaves_out_the_editor_s_data() {
+    let dir = scratch("editor_data");
+    let mut project = project(&dir);
+    project.write(".studio/explorer.json", "{}").expect("the editor's data");
+    project.refresh_assets().expect("indexed");
+    assert_eq!(project.assets().id(".studio/explorer.json"), None);
+    let path = dir.join("game.pak");
+    Pak::pack(&mut project, &path).expect("packed");
+    let pak = Pak::open(&path).expect("opened");
+    let members = GameFiles::members(&pak);
+    assert!(
+        !members.iter().any(|member| member.starts_with(".studio/")),
+        "{members:?}"
+    );
+    assert_eq!(members.len() + 1, project.members().len());
+}

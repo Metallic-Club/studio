@@ -13,7 +13,8 @@
 //!
 //! # Which members are assets
 //!
-//! Every member except the project's own metadata at the root: `metallic.toml` and `assets.json` ([`is_asset`]).
+//! Every member except the project's own metadata at the root, `metallic.toml` and `assets.json`, and the editor's data
+//! under `.studio/` ([`is_asset`]).
 //! That is scenes (`Scenes/`), scripts (`Scripts/`) and everything under `Assets/`, and any other member a project
 //! holds, so a member moved between folders keeps its id.
 //!
@@ -57,9 +58,19 @@ pub const INDEX_FILE: &str = "assets.json";
 /// The `format` version of `assets.json` this engine writes and reads.
 pub const INDEX_FORMAT: u32 = 1;
 
-/// Whether `member` is an asset that gets an id: every member but `metallic.toml` and `assets.json`.
+/// The folder of the editor's own data in a project (#603): what Studio keeps about the project that is not part of the
+/// game, such as the Explorer's folder colours. Its members are not assets and are not packed into a game's pak.
+pub const EDITOR_DATA: &str = ".studio/";
+
+/// Whether `member` is the editor's own data ([`EDITOR_DATA`]).
+pub fn is_editor_data(member: &str) -> bool {
+    member.starts_with(EDITOR_DATA)
+}
+
+/// Whether `member` is an asset that gets an id: every member but `metallic.toml`, `assets.json` and the editor's own
+/// data under [`EDITOR_DATA`].
 pub fn is_asset(member: &str) -> bool {
-    member != MANIFEST_FILE && member != INDEX_FILE
+    member != MANIFEST_FILE && member != INDEX_FILE && !is_editor_data(member)
 }
 
 /// A stable id for an asset, unique across projects and never reused. Written as 32 lowercase hex digits.

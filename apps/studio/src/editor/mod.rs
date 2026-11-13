@@ -73,13 +73,15 @@ impl EditorState {
     /// The editor of a project just opened, its Output reading `log`.
     pub fn new(opened: Opened, log: Arc<LogBuffer>) -> Self {
         let Opened {
-            project,
+            mut project,
             dm,
             scene_ids,
             assets,
             mesh_assets,
         } = opened;
-        let explorer = ExplorerState::new(&dm);
+        let mut explorer = ExplorerState::new(&dm);
+        // The folders' icon colours (#603), kept beside the scene.
+        explorer.icon_colors = crate::panels::explorer::colors::IconColors::load(&mut project, &scene_ids);
         let viewport = ViewportState::new(&dm);
         // Picking meets a MeshPart by its triangles once they are read (#494).
         crate::viewport::shapes::register_meshes(dm.uid(), project.asset_reader());
@@ -152,6 +154,10 @@ impl EditorState {
         self.project
             .write(&scene, saved.text.into_bytes())
             .map_err(|error| error.to_string())?;
+        // The folders' icon colours (#603), by the ids the scene was just saved with.
+        self.explorer
+            .icon_colors
+            .save(&self.dm, &mut self.project, &self.scene_ids)?;
         self.project.save().map_err(|error| error.to_string())?;
         self.history.mark_saved();
         log::info!("projects: saved {}", self.project.path().display());
