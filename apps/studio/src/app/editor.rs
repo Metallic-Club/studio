@@ -420,8 +420,18 @@ pub(crate) fn top_bar(
                     (MenuAction::Pause, pause.0, pause.1, ids::TEST_PAUSE),
                     (MenuAction::Play, Icon::ToolbarPlay, "Play", ids::TEST_PLAY),
                 ] {
+                    if kind == MenuAction::Play {
+                        // Beside Play, on its right: how it plays (ADR 0011 §8).
+                        crate::team::play_menu::arrow(ui, team, play.allows(MenuAction::Play));
+                    }
                     let tip = match keymap.shortcut_text(command) {
+                        Some(keys) if kind == MenuAction::Play => {
+                            format!("{} ({keys})", crate::team::play_menu::mode_name(team.play_mode))
+                        }
                         Some(keys) => format!("{label} ({keys})"),
+                        None if kind == MenuAction::Play => {
+                            crate::team::play_menu::mode_name(team.play_mode).to_owned()
+                        }
                         None => label.to_owned(),
                     };
                     let look = match kind {

@@ -333,10 +333,29 @@ struct Shadow {
     attrs: Vec<(Arc<str>, Value)>,
 }
 
+/// What a sync carries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scope {
+    /// What a save writes: Team Create's scene.
+    #[default]
+    Saved,
+    /// What a game's clients get from its server: what a save writes but the server-only services' subtrees
+    /// (`ServerStorage`, `ServerScriptService`).
+    Replicated,
+}
+
+impl Scope {
+    /// Whether the service `class` (persisted or not) is synced in this scope.
+    fn takes(self, class: &str, persisted: bool) -> bool {
+        persisted && (self == Scope::Saved || !matches!(class, "ServerStorage" | "ServerScriptService"))
+    }
+}
+
 /// One peer's side of scene sync: the net ids, the shadow, and the data model's change consumer.
 #[derive(Debug)]
 pub struct SceneSync {
     user: UserId,
+    scope: Scope,
     consumer: ConsumerId,
     to_net: HashMap<Id, NetId>,
     to_id: HashMap<NetId, Id>,
@@ -381,7 +400,7 @@ fn current_camera(dm: &DataModel) -> Option<Id> {
 }
 
 /// Whether `id` is in the synced tree: a persisted service, or archivable under one.
-fn in_scope(dm: &DataModel, id: Id) -> bool {
+fn in_scope(dm: &DataModel, id: Id, scope: Scope) -> bool {
     let registry = dm.registry();
     let mut at = id;
     loop {
@@ -392,7 +411,7 @@ fn in_scope(dm: &DataModel, id: Id) -> bool {
             return false;
         };
         if info.service_order().is_some() {
-            return info.persisted() && dm.service(class) == Some(at);
+            return scope.takes(info.name(), info.persisted()) && dm.service(class) == Some(at);
         }
         if let Some(archivable) = info.prop_id("Archivable")
             && !matches!(dm.get_ref(at, archivable), Ok(Value::Bool(true)))
@@ -429,11 +448,22 @@ impl SceneSync {
     /// Sync for `dm`, whose synced instances have the net ids `ids` gives (the scene ids of the scene the session
     /// started from, for every peer); new instances are numbered for `user`.
     pub fn new(dm: &mut DataModel, ids: impl IntoIterator<Item = (Id, NetId)>, user: UserId) -> Result<Self, String> {
+        Self::with_scope(dm, ids, user, Scope::Saved)
+    }
+
+    /// Sync for `dm` (see [`SceneSync::new`]) carrying `scope`.
+    pub fn with_scope(
+        dm: &mut DataModel,
+        ids: impl IntoIterator<Item = (Id, NetId)>,
+        user: UserId,
+        scope: Scope,
+    ) -> Result<Self, String> {
         let consumer = dm
             .register_consumer(DirtyBits::PROPERTY | DirtyBits::STRUCTURE | DirtyBits::CREATED)
             .map_err(|error| error.to_string())?;
         let mut sync = Self {
             user,
+            scope,
             consumer,
             to_net: HashMap::new(),
             to_id: HashMap::new(),
@@ -553,7 +583,7 @@ impl SceneSync {
             shadow.synced = false;
         }
         let camera = current_camera(dm);
-        let order = synced_order(dm);
+        let order = synced_order(dm, self.scope);
         for &id in &order {
             self.assign(id);
         }
@@ -656,7 +686,7 @@ impl SceneSync {
             if covered.contains(&id) {
                 continue;
             }
-            let now = in_scope(dm, id);
+            let now = in_scope(dm, id, self.scope);
             let was = self.shadow.get(&id).is_some_and(|s| s.synced);
             match (was, now) {
                 (false, true) => {
@@ -954,7 +984,7 @@ impl SceneSync {
         while let Some(at) = stack.pop() {
             if self.net(at).is_some() {
                 let mut shadow = self.read_shadow(dm, at, camera);
-                shadow.synced = in_scope(dm, at);
+                shadow.synced = in_scope(dm, at, self.scope);
                 self.shadow.insert(at, shadow);
             }
             if let Ok(kids) = dm.children(at) {
@@ -1108,7 +1138,7 @@ impl SceneSync {
             return vec![SceneOp::Remove { id: net }];
         };
         let camera = current_camera(dm);
-        if !in_scope(dm, local) {
+        if !in_scope(dm, local, self.scope) {
             return vec![SceneOp::Remove { id: net }];
         }
         match op {
@@ -1153,7 +1183,7 @@ impl SceneSync {
     pub fn state(&mut self, dm: &DataModel) -> Vec<Record> {
         let camera = current_camera(dm);
         let mut out = Vec::new();
-        for service in persisted_services(dm) {
+        for service in persisted_services(dm, self.scope) {
             out.extend(self.records(dm, service, camera));
         }
         out
@@ -1240,7 +1270,7 @@ impl SceneSync {
             }
         }
         // What the host does not have leaves the tree.
-        for id in synced_order(dm) {
+        for id in synced_order(dm, self.scope) {
             if !wanted.contains(&id) && !is_service(dm, id) && !self.net(id).is_some_and(|net| keep(&Key::Place(net))) {
                 let _ = dm.set_parent(id, None);
             }
@@ -1254,7 +1284,7 @@ impl SceneSync {
         let camera = current_camera(dm);
         let mut hash = crate::Fnv::new();
         let mut w = Writer::new();
-        for id in synced_order(dm) {
+        for id in synced_order(dm, self.scope) {
             w.u64(self.net(id).map_or(0, |n| n.0));
             if let Ok(class) = dm.class_of(id) {
                 w.u32(u32::from(class.raw()));
@@ -1305,20 +1335,24 @@ fn archivable(dm: &DataModel, id: Id) -> bool {
 }
 
 /// The persisted services, in service order.
-fn persisted_services(dm: &DataModel) -> Vec<Id> {
+fn persisted_services(dm: &DataModel, scope: Scope) -> Vec<Id> {
     let registry = dm.registry();
     registry
         .services()
         .iter()
-        .filter(|&&class| registry.class(class).is_some_and(|info| info.persisted()))
+        .filter(|&&class| {
+            registry
+                .class(class)
+                .is_some_and(|info| scope.takes(info.name(), info.persisted()))
+        })
         .filter_map(|&class| dm.service(class))
         .collect()
 }
 
 /// Every synced instance, in tree order.
-fn synced_order(dm: &DataModel) -> Vec<Id> {
+fn synced_order(dm: &DataModel, scope: Scope) -> Vec<Id> {
     let mut out = Vec::new();
-    for service in persisted_services(dm) {
+    for service in persisted_services(dm, scope) {
         let mut stack = vec![service];
         while let Some(at) = stack.pop() {
             out.push(at);
@@ -1399,6 +1433,11 @@ impl HostScene {
         })
     }
 
+    /// The host's side over a sync made elsewhere ([`SceneSync::with_scope`]).
+    pub fn from_sync(sync: SceneSync) -> Self {
+        Self { sync }
+    }
+
     /// The host's own edits since the last call, for everyone.
     pub fn collect(&mut self, dm: &mut DataModel, out: &mut HostOut) {
         let ops = self.sync.collect(dm);
@@ -1475,6 +1514,20 @@ fn apply_body(origin: UserId, ops: &[SceneOp]) -> Vec<u8> {
     w.finish()
 }
 
+/// Writes `records` (a whole world, as [`SceneSync::state`] gives it).
+pub fn write_records(records: &[Record], w: &mut Writer) {
+    w.len_of(records.len());
+    for record in records {
+        record.write(w);
+    }
+}
+
+/// Reads records written by [`write_records`].
+pub fn read_records(r: &mut Reader<'_>) -> Result<Vec<Record>, CodecError> {
+    let count = r.count("records", MAX_RECORDS * 10)?;
+    (0..count).map(|_| Record::read(r)).collect()
+}
+
 fn records_body(records: &[Record]) -> Vec<u8> {
     let mut w = Writer::new();
     w.len_of(records.len());
@@ -1497,6 +1550,8 @@ pub struct ClientScene {
     deferred: Vec<SceneOp>,
     /// Whether a resync was asked for and not answered.
     asked: bool,
+    /// Keys this peer owns: the host's operations on them are never applied (a game client's own character).
+    owned: HashSet<Key>,
 }
 
 impl ClientScene {
@@ -1509,7 +1564,26 @@ impl ClientScene {
             pending: HashMap::new(),
             deferred: Vec::new(),
             asked: false,
+            owned: HashSet::new(),
         })
+    }
+
+    /// A participant's side over a sync made elsewhere ([`SceneSync::with_scope`]).
+    pub fn from_sync(sync: SceneSync) -> Self {
+        Self {
+            sync,
+            seq: 0,
+            inflight: VecDeque::new(),
+            pending: HashMap::new(),
+            deferred: Vec::new(),
+            asked: false,
+            owned: HashSet::new(),
+        }
+    }
+
+    /// Makes `key` the participant's own: the host's operations on it are never applied from now on.
+    pub fn own(&mut self, key: Key) {
+        self.owned.insert(key);
     }
 
     /// Whether every edit of the participant's was acknowledged.
@@ -1536,7 +1610,7 @@ impl ClientScene {
     }
 
     fn is_pending(&self, key: &Key) -> bool {
-        self.pending.get(key).is_some_and(|&n| n > 0)
+        self.owned.contains(key) || self.pending.get(key).is_some_and(|&n| n > 0)
     }
 
     fn apply_all(&mut self, dm: &mut DataModel, ops: Vec<SceneOp>) {
@@ -1596,8 +1670,10 @@ impl ClientScene {
                 let records: Vec<Record> = (0..count).map(|_| Record::read(&mut r)).collect::<Result<_, _>>()?;
                 r.finish()?;
                 let pending = self.pending.clone();
-                self.sync
-                    .reconcile(dm, &records, |key| pending.get(key).is_some_and(|&n| n > 0));
+                let owned = self.owned.clone();
+                self.sync.reconcile(dm, &records, |key| {
+                    pending.get(key).is_some_and(|&n| n > 0) || owned.contains(key)
+                });
                 self.deferred.clear();
                 self.asked = false;
                 return Ok(None);

@@ -46,7 +46,7 @@ pub struct EditorFacts<'a> {
     pub profile: (&'a str, [u8; 3]),
 }
 
-fn popup_id() -> egui::Id {
+pub(crate) fn popup_id() -> egui::Id {
     egui::Id::unique("metallic.team_create.popup")
 }
 

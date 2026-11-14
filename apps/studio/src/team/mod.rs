@@ -18,6 +18,7 @@
 pub mod live;
 pub mod menu;
 pub mod page;
+pub mod play_menu;
 pub mod presence;
 pub mod probe;
 pub mod store;
@@ -100,11 +101,40 @@ pub enum Session {
     Joined(Box<Joined>),
 }
 
+/// How Play runs (ADR 0011 §8), chosen from the arrow beside Play.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlayMode {
+    /// The game in Studio alone: Server and Game tabs over one game.
+    #[default]
+    Solo,
+    /// The host runs a shared server; everyone in the session joins it as a player.
+    TeamCreate,
+    /// A local server and Player processes that join it by themselves.
+    Clients,
+}
+
+/// The message kinds of shared play, between Team Create's host and its participants.
+pub mod play_kind {
+    /// The host started Team Create Play: its game server's port follows.
+    pub const STARTED: u8 = 40;
+    /// The host stopped it.
+    pub const STOPPED: u8 = 41;
+}
+
 /// Something Studio has to do for Team Create.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     /// Open the participant's copy at this path.
     Open(PathBuf),
+    /// The host started Team Create Play: join its game server at `host:port` as a player.
+    JoinPlay {
+        /// The host's address.
+        host: String,
+        /// The game server's port.
+        port: u16,
+    },
+    /// The host stopped Team Create Play.
+    StopPlay,
     /// The participant's session is over: close the copy and tell them why.
     Close {
         /// The notice's title.
@@ -172,6 +202,8 @@ pub struct TeamCreate {
     pub page_actions: Vec<PageAction>,
     /// The owner's project to host again once it is open (the projects page's Open and host).
     pub host_after_open: Option<PathBuf>,
+    /// How Play runs.
+    pub play_mode: PlayMode,
 }
 
 impl std::fmt::Debug for TeamCreate {
@@ -202,6 +234,7 @@ impl TeamCreate {
             prober: probe::Prober::new(Arc::clone(&prober_waker)),
             page_actions: Vec::new(),
             host_after_open: None,
+            play_mode: PlayMode::Solo,
         }
     }
 
@@ -223,6 +256,31 @@ impl TeamCreate {
     /// Writes participants' copies under `cache` from now on.
     pub fn set_cache(&mut self, cache: PathBuf) {
         self.cache = cache;
+    }
+
+    /// The waker the window is woken through, for the play servers and clients a session starts.
+    pub fn waker(&self) -> Waker {
+        Arc::clone(&self.waker)
+    }
+
+    /// Tells everyone in the hosted session that Team Create Play started on `port` (or stopped, with `None`).
+    pub fn announce_play(&mut self, port: Option<u16>) {
+        if let Session::Hosting(hosting) = &mut self.session {
+            let channel = metallic_engine::metallic_net::transport::Channel::Reliable;
+            match port {
+                Some(port) => {
+                    hosting
+                        .server
+                        .host
+                        .broadcast_op(channel, play_kind::STARTED, port.to_le_bytes().to_vec(), None)
+                }
+                None => hosting
+                    .server
+                    .host
+                    .broadcast_op(channel, play_kind::STOPPED, Vec::new(), None),
+            }
+            hosting.server.flush();
+        }
     }
 
     /// Uses `store` (read once the splash is done).
@@ -486,6 +544,22 @@ impl TeamCreate {
                             ))
                         }
                         ClientEvent::Refused(reason) => over = Some(("Disconnected from the host", reason)),
+                        ClientEvent::Op {
+                            kind: play_kind::STARTED,
+                            bytes,
+                            ..
+                        } => {
+                            if let [a, b] = bytes[..] {
+                                requests.push(Request::JoinPlay {
+                                    host: joined.host.clone(),
+                                    port: u16::from_le_bytes([a, b]),
+                                });
+                            }
+                        }
+                        ClientEvent::Op {
+                            kind: play_kind::STOPPED,
+                            ..
+                        } => requests.push(Request::StopPlay),
                         ClientEvent::Op { kind, bytes, .. } => {
                             if let (Some(live), Some(editor)) = (joined.live.as_mut(), copy.as_deref_mut())
                                 && !live.receive(editor, &mut joined.link.client, kind, &bytes)

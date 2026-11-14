@@ -5,6 +5,7 @@
 //! metallic_player --bench 600          # 600 frames after a warm-up, then the stats as JSON on stdout
 //! metallic_player --scene demo --preset high
 //! metallic_player --project MyGame.mtproj   # a project's start scene, with its scripts
+//! metallic_player --connect 127.0.0.1:7351 --name Player1   # join a game server (Studio's Multiple Clients)
 //! ```
 //!
 //! The graphics settings are read from `graphics.toml` in the user's config folder (made with the Auto preset the
@@ -32,6 +33,8 @@ Usage: metallic_player [OPTIONS]
 Options:
   --scene <NAME>     The built-in game to run [default: demo] (scenes: {scenes})
   --project <FILE>   A .mtproj project to run in place of a built-in game: its start scene, with its scripts
+  --connect <ADDR>   Join the game a server runs at ADDR (host:port), as a player: Studio's Multiple Clients
+  --name <NAME>      The player's name with --connect [default: Player]
   --preset <NAME>    The graphics preset for this run, in place of the settings file's (presets: {presets})
   --bench <FRAMES>   Run FRAMES frames after a warm-up, without a frame cap, print the stats as JSON and exit
   --overlay          Start with the performance overlay shown (F3 toggles it; Shift+F1 to F4 one viewer each)
@@ -43,6 +46,8 @@ Options:
 struct Args {
     scene: Scene,
     project: Option<PathBuf>,
+    connect: Option<String>,
+    name: Option<String>,
     preset: Option<Preset>,
     bench: Option<u64>,
     overlay: bool,
@@ -65,6 +70,8 @@ impl Args {
                     scene_given = true;
                 }
                 Long("project") => parsed.project = Some(PathBuf::from(parser.value()?)),
+                Long("connect") => parsed.connect = Some(parser.value()?.string()?),
+                Long("name") => parsed.name = Some(parser.value()?.string()?),
                 Long("preset") => parsed.preset = Some(parser.value()?.parse()?),
                 Long("overlay") => parsed.overlay = true,
                 Long("bench") => {
@@ -125,6 +132,9 @@ fn main() -> ExitCode {
 
     let mut config = args.config();
     load_user_graphics(&mut config);
+    if let Some(address) = &args.connect {
+        return connect(config, address, args.name.as_deref().unwrap_or("Player"));
+    }
     if args.bench.is_none() {
         let game = match &config.project {
             Some(path) => format!("project {}", path.display()),
@@ -246,6 +256,50 @@ impl log::Log for StderrLogger {
     fn flush(&self) {}
 }
 
+/// `--connect`: joins the game served at `address` as `name`, in a window of its own, until the window closes or the
+/// game ends (ADR 0011 §8). The server's world arrives before the window opens.
+fn connect(mut config: PlayerConfig, address: &str, name: &str) -> ExitCode {
+    use metallic_engine::metallic_net::play::Connecting;
+    use metallic_engine::metallic_net::transport::{no_waker, parse_address};
+    use metallic_player::remote::RemoteGame;
+
+    let result = (|| -> Result<(), String> {
+        let (host, port) = parse_address(address, 7351)?;
+        let registry = metallic_engine::metallic_classes::shared_registry().map_err(|error| error.to_string())?;
+        let fingerprint = metallic_engine::metallic_net::registry_fingerprint(&registry);
+        eprintln!(
+            "Metallic Player {}: joining {host}:{port} as {name}…",
+            metallic_player::VERSION
+        );
+        let (welcome, connecting) =
+            Connecting::start(&host, port, name, metallic_player::VERSION, fingerprint, no_waker()).wait()?;
+        let mut game = metallic_engine::metallic_classes::new_game().map_err(|error| error.to_string())?;
+        let client = connecting.into_client(&mut game, &welcome)?;
+        config.window.title = format!("{} - Metallic Player", welcome.name);
+        let sources = RemoteGame::sources(&welcome.sources);
+        let mut player = Player::with_game(
+            config,
+            game,
+            sources,
+            metallic_engine::RunContext::Client,
+            metallic_engine::StdOutput,
+        )
+        .map_err(|error| error.to_string())?;
+        eprintln!(
+            "Joined as {}. WASD to walk, Space and Shift up and down, Q and E turn.",
+            welcome.name
+        );
+        player.set_frame_hook(RemoteGame::new(client).hook());
+        player.run().map(drop).map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: could not join {address}: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

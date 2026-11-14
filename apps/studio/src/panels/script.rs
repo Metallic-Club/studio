@@ -638,8 +638,13 @@ fn paint_carets(ui: &Ui, output: &code::view::ViewOutput, carets: &[code::Remote
         }
         painter.line_segment([at.left_top(), at.left_bottom()], egui::Stroke::new(2.0, color));
         let galley = painter.layout_no_wrap(caret.name.clone(), font.clone(), egui::Color32::WHITE);
+        // The name goes past the end of the caret's line, so it never covers code.
+        let text = output.galley.text();
+        let line_end = caret.head + text.chars().skip(caret.head).take_while(|c| *c != '\n').count();
+        let end = output.galley.pos_from_cursor(CCursor::new(line_end));
+        let x = end.right() + output.galley_pos.x + 10.0;
         let tag = egui::Rect::from_min_size(
-            egui::pos2(at.left(), at.top() - galley.size().y - 2.0),
+            egui::pos2(x.max(at.left() + 6.0), at.center().y - galley.size().y / 2.0 - 1.0),
             galley.size() + egui::vec2(6.0, 2.0),
         );
         painter.rect_filled(tag, 3.0, color);

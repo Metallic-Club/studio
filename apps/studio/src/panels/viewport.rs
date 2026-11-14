@@ -172,6 +172,12 @@ impl Panel for Viewport {
         "Viewport"
     }
 
+    /// "Server" while a game runs (ADR 0011 §8): the tab shows the running game's world then, the Game tab a player's
+    /// view of it.
+    fn pane_title(&self, _pane: &str, cx: &PanelContext<'_>) -> String {
+        if cx.editor.is_playing() { "Server" } else { self.title() }.to_owned()
+    }
+
     fn icon(&self) -> Icon {
         Icon::PanelViewport
     }

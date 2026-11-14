@@ -6,6 +6,7 @@
 
 pub mod edit;
 pub mod history;
+pub mod multi;
 pub mod open;
 pub mod play;
 pub mod selection;
