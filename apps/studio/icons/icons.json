@@ -330,6 +330,9 @@
     "ui.collapse": {
       "file": "interface/chevron-down.svg"
     },
+    "ui.copy": {
+      "file": "interface/copy.svg"
+    },
     "ui.delete": {
       "file": "interface/trash-2.svg"
     },

@@ -62,6 +62,13 @@ fn screenshots_of_team_create() {
     a.0.settings.settings_mut().profile.name = "Ada".into();
     b.0.settings.settings_mut().profile.name = "Bob".into();
     b.0.settings.settings_mut().profile.color = crate::profile::COLORS[3];
+    // The menu before hosting (#643): Host and Join.
+    egui::Popup::open_id(&a.1.ctx, crate::team::menu::popup_id());
+    for _ in 0..30 {
+        a.1.frame(&mut a.0);
+    }
+    write_png(&out.join("643-team-create-host.png"), a.1.read());
+    egui::Popup::close_id(&a.1.ctx, crate::team::menu::popup_id());
     // A crate and a script on the host.
     let crate_a = {
         let editor = a.0.editor_mut().unwrap();
@@ -148,6 +155,13 @@ fn screenshots_of_team_create() {
     }
     write_png(&out.join("632-team-create-session.png"), a.1.read());
     egui::Popup::close_id(&a.1.ctx, crate::team::menu::popup_id());
+    // How Play runs, while hosting (#643).
+    egui::Popup::open_id(&a.1.ctx, crate::team::play_menu::popup_id());
+    for _ in 0..30 {
+        a.1.frame(&mut a.0);
+    }
+    write_png(&out.join("643-play-modes.png"), a.1.read());
+    egui::Popup::close_id(&a.1.ctx, crate::team::play_menu::popup_id());
 
     // Both open the script; Bob types, and Ada sees his cursor.
     let script = |s: &Studio| {
