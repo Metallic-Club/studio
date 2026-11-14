@@ -95,6 +95,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `toolbar.separator` | A separator, in the toolbar's Add window. | Interface | [`toolbar/separator-vertical.svg`](https://lucide.dev/icons/separator-vertical) | `toolbar.separator.svg`, `toolbar.separator.png` |
 | `ui.search` | A search box. | Interface | [`interface/search.svg`](https://lucide.dev/icons/search) | `ui.search.svg`, `ui.search.png` |
 | `ui.close` | Close, dismiss. | Interface | [`interface/x.svg`](https://lucide.dev/icons/x) | `ui.close.svg`, `ui.close.png` |
+| `ui.copy` | Copy to the clipboard. | Interface | [`interface/copy.svg`](https://lucide.dev/icons/copy) | `ui.copy.svg`, `ui.copy.png` |
 | `ui.warning` | A warning. | Interface | [`interface/triangle-alert.svg`](https://lucide.dev/icons/triangle-alert) | `ui.warning.svg`, `ui.warning.png` |
 | `ui.error` | An error. | Interface | [`interface/circle-x.svg`](https://lucide.dev/icons/circle-x) | `ui.error.svg`, `ui.error.png` |
 | `ui.info` | Information. | Interface | [`interface/info.svg`](https://lucide.dev/icons/info) | `ui.info.svg`, `ui.info.png` |

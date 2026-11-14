@@ -339,6 +339,8 @@ icons! {
     UiSearch = "ui.search", Interface, "search";
     /// Close, dismiss.
     UiClose = "ui.close", Interface, "x";
+    /// Copy to the clipboard.
+    UiCopy = "ui.copy", Interface, "copy";
     /// A warning.
     UiWarning = "ui.warning", Interface, "triangle-alert";
     /// An error.

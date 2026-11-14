@@ -59,7 +59,7 @@ pub fn paint_avatar(ui: &Ui, rect: Rect, profile: &Profile) {
 }
 
 /// White or near-black, whichever reads better on `color`.
-fn ink_on([r, g, b]: [u8; 3]) -> Color32 {
+pub(crate) fn ink_on([r, g, b]: [u8; 3]) -> Color32 {
     let luma = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
     if luma > 165.0 {
         Color32::from_rgb(24, 24, 27)
