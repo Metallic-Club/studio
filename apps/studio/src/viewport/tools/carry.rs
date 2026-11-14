@@ -106,7 +106,13 @@ mod tests {
         let view = look(Vec3::new(0.0, 20.0, 30.0), Vec3::ZERO);
         // Grab the crate's top, carry it onto the floor at (5, 0, 5): it sits on it, centred there.
         let grab = view.project(Vec3::new(0.0, 2.0, 0.0)).unwrap();
-        let mut drag = carry(&bench.dm, &bench.selection, view.ray(grab).unwrap()).expect("a part under the pointer");
+        let mut drag = carry(
+            &bench.dm,
+            &crate::viewport::index::PartIndex::new(),
+            &bench.selection,
+            view.ray(grab).unwrap(),
+        )
+        .expect("a part under the pointer");
         let mut scene = bench.scene();
         let to = |at: Vec3| view.ray(view.project(at).unwrap()).unwrap();
         update_drag(

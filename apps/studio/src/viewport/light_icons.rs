@@ -17,6 +17,7 @@ use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{DataModel, Id, Value};
 
 use super::View;
+use super::index::PartIndex;
 use super::pick::{is_a, workspace};
 use crate::panels::class_icon;
 use crate::theme::icons::{self, Icon};
@@ -38,20 +39,25 @@ pub struct LightIcon {
 }
 
 /// The icons of the lights in `dm`'s Workspace that `view` sees, no part hiding them (#571), the farthest first (the
-/// order they are drawn in).
-pub fn light_icons(dm: &DataModel, view: &View) -> Vec<LightIcon> {
-    let Some(world) = workspace(dm) else {
-        return Vec::new();
+/// order they are drawn in). The lights and the parts that could hide them come from `parts` (#596).
+pub fn light_icons(dm: &DataModel, parts: &PartIndex, view: &View) -> Vec<LightIcon> {
+    let lights: Vec<Id> = if parts.follows(dm) {
+        parts.lights().collect()
+    } else {
+        let Some(world) = workspace(dm) else {
+            return Vec::new();
+        };
+        let Ok(descendants) = dm.descendants(world) else {
+            return Vec::new();
+        };
+        descendants.filter(|&id| is_a(dm, id, "Light")).collect()
     };
-    let Ok(descendants) = dm.descendants(world) else {
-        return Vec::new();
-    };
-    let mut out: Vec<LightIcon> = descendants
-        .filter(|&id| is_a(dm, id, "Light"))
+    let mut out: Vec<LightIcon> = lights
+        .into_iter()
         .filter_map(|id| {
             let at = world_cframe(dm, id).ok()?.position();
             let centre = view.project(at)?;
-            if super::pick::blocked(dm, view.pos, at, id) {
+            if super::pick::blocked(dm, parts, view.pos, at, id) {
                 return None;
             }
             let icon = dm
@@ -67,6 +73,27 @@ pub fn light_icons(dm: &DataModel, view: &View) -> Vec<LightIcon> {
         .collect();
     out.sort_by(|a, b| b.depth.total_cmp(&a.depth));
     out
+}
+
+/// The light icons as last worked out (#596): for the same view of the same scene, the same icons, without testing
+/// every light against the parts again.
+#[derive(Clone, Debug, Default)]
+pub struct IconCache {
+    /// The view and the part index's revision they were worked out for.
+    key: Option<(View, u64)>,
+    icons: Vec<LightIcon>,
+}
+
+impl IconCache {
+    /// The icons `view` shows of `dm`'s lights: those worked out last when neither the view nor the scene changed.
+    pub fn icons(&mut self, dm: &DataModel, parts: &PartIndex, view: &View) -> &[LightIcon] {
+        let key = (*view, parts.revision());
+        if !parts.follows(dm) || self.key != Some(key) {
+            self.icons = light_icons(dm, parts, view);
+            self.key = parts.follows(dm).then_some(key);
+        }
+        &self.icons
+    }
 }
 
 /// How many lines a range's circle is drawn with.
@@ -120,7 +147,7 @@ const PIECE: f32 = 1.5;
 
 /// The pieces of the range line `line` of the light `id` that can be seen from `from` (#572): the line in short pieces,
 /// those whose middle a part hides left out. The part the light is in does not hide it.
-pub fn seen_pieces(dm: &DataModel, from: Vec3, line: [Vec3; 2], id: Id) -> Vec<[Vec3; 2]> {
+pub fn seen_pieces(dm: &DataModel, parts: &PartIndex, from: Vec3, line: [Vec3; 2], id: Id) -> Vec<[Vec3; 2]> {
     let [a, b] = line;
     let pieces = ((b - a).length() / PIECE).ceil().clamp(1.0, 64.0) as usize;
     (0..pieces)
@@ -128,7 +155,7 @@ pub fn seen_pieces(dm: &DataModel, from: Vec3, line: [Vec3; 2], id: Id) -> Vec<[
             let at = |step: usize| a.lerp(b, step as f32 / pieces as f32);
             [at(piece), at(piece + 1)]
         })
-        .filter(|[start, end]| !super::pick::blocked(dm, from, (*start + *end) * 0.5, id))
+        .filter(|[start, end]| !super::pick::blocked(dm, parts, from, (*start + *end) * 0.5, id))
         .collect()
 }
 
@@ -198,7 +225,7 @@ mod tests {
         let far = light(&mut dm, "SpotLight", Vec3::new(0.0, 5.0, -20.0));
         let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, 20.0), Vec3::new(0.0, 5.0, 0.0));
         let view = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
-        let icons = light_icons(&dm, &view);
+        let icons = light_icons(&dm, &PartIndex::new(), &view);
         assert_eq!(
             icons.iter().map(|icon| icon.id).collect::<Vec<_>>(),
             [far, near],
@@ -212,7 +239,7 @@ mod tests {
         // Behind the camera: no icon.
         let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, -40.0), Vec3::new(0.0, 5.0, -80.0));
         let behind = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
-        assert!(light_icons(&dm, &behind).is_empty());
+        assert!(light_icons(&dm, &PartIndex::new(), &behind).is_empty());
     }
 
     /// #572: with the lines not over everything, the pieces of a range line behind a part are left out.
@@ -224,7 +251,7 @@ mod tests {
         dm.set_parent(light, Some(world)).unwrap();
         let from = Vec3::new(0.0, 50.0, 30.0);
         let line = [Vec3::new(-10.0, 50.0, 0.0), Vec3::new(10.0, 50.0, 0.0)];
-        let whole: f32 = seen_pieces(&dm, from, line, light)
+        let whole: f32 = seen_pieces(&dm, &PartIndex::new(), from, line, light)
             .iter()
             .map(|[a, b]| (*b - *a).length())
             .sum();
@@ -236,7 +263,7 @@ mod tests {
         dm.set_by_name(wall, "Size", Value::Vector3(Vec3::new(4.0, 4.0, 1.0)))
             .unwrap();
         dm.set_parent(wall, Some(world)).unwrap();
-        let pieces = seen_pieces(&dm, from, line, light);
+        let pieces = seen_pieces(&dm, &PartIndex::new(), from, line, light);
         let seen: f32 = pieces.iter().map(|[a, b]| (*b - *a).length()).sum();
         assert!(seen < 18.0 && seen > 10.0, "{seen} of 20 seen");
         assert!(
@@ -262,17 +289,25 @@ mod tests {
         let alone = make(&mut dm, "PointLight", Vec3::new(0.0, 5.0, 0.0), world);
         let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, 20.0), Vec3::new(5.0, 5.0, 0.0));
         let view = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
-        let seen = |dm: &DataModel| light_icons(dm, &view).iter().map(|icon| icon.id).collect::<Vec<_>>();
-        assert_eq!(seen(&dm).len(), 2, "the lamp does not hide its own light");
-        assert!(seen(&dm).contains(&inside));
+        // With the index (#596), as the viewport asks.
+        let mut parts = PartIndex::new();
+        let mut seen = |dm: &mut DataModel| {
+            parts.update(dm);
+            light_icons(dm, &parts, &view)
+                .iter()
+                .map(|icon| icon.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(seen(&mut dm).len(), 2, "the lamp does not hide its own light");
+        assert!(seen(&mut dm).contains(&inside));
         // A wall between the camera and the lone light.
         let wall = make(&mut dm, "Part", Vec3::new(0.0, 5.0, 10.0), world);
         dm.set_by_name(wall, "Size", Value::Vector3(Vec3::new(4.0, 4.0, 1.0)))
             .unwrap();
-        assert_eq!(seen(&dm), [inside]);
+        assert_eq!(seen(&mut dm), [inside]);
         // A wholly transparent wall hides nothing.
         dm.set_by_name(wall, "Transparency", Value::Number(1.0)).unwrap();
-        assert!(seen(&dm).contains(&alone));
+        assert!(seen(&mut dm).contains(&alone));
     }
 
     /// #523: a PointLight's range is three circles of its Range; a SpotLight's a cone of its Range and Angle.

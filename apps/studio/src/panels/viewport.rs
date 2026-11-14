@@ -23,6 +23,7 @@ use crate::keymap::Context;
 use crate::theme::icons::Icon;
 use crate::theme::tokens::text;
 use crate::theme::{current_colors, fonts};
+use crate::viewport::index::PartIndex;
 use crate::viewport::light_icons;
 use crate::viewport::pick::{self, EDGES};
 use crate::viewport::tools;
@@ -39,13 +40,13 @@ pub struct Viewport;
 
 /// Draws `id`'s outline box (a part's own, a model's round its parts), or a light's reach (#523), with `stroke`. A
 /// light's reach is drawn over everything when `on_top`, else hidden where parts are in front of it (#572).
-fn outline(painter: &Painter, view: &View, dm: &DataModel, id: Id, stroke: Stroke, on_top: bool) {
+fn outline(painter: &Painter, view: &View, dm: &DataModel, parts: &PartIndex, id: Id, stroke: Stroke, on_top: bool) {
     // A light's reach (#523): it has no box of its own.
     for line in light_icons::range_lines(dm, id) {
         let pieces = if on_top {
             vec![line]
         } else {
-            light_icons::seen_pieces(dm, view.pos, line, id)
+            light_icons::seen_pieces(dm, parts, view.pos, line, id)
         };
         for [a, b] in pieces {
             if let Some(line) = view.segment(a, b) {
@@ -250,16 +251,26 @@ impl Panel for Viewport {
                 move_step: if editing.snap_moves { editing.move_step } else { 0.0 },
                 turn_step: if editing.snap_turns { editing.turn_step } else { 0.0 },
             };
-            let on_gizmo = tools::interact(ui, &response, &view, &mut cx.editor.scene(), &mut gizmo, snap);
+            // The index is lent to the tools, which hold the whole scene (#596).
+            let parts = std::mem::take(&mut cx.editor.parts);
+            let on_gizmo = tools::interact(ui, &response, &view, &mut cx.editor.scene(), &parts, &mut gizmo, snap);
             let editor = &mut *cx.editor;
+            editor.parts = parts;
+            // What a drag moved this frame, before what is under the pointer is picked.
+            editor.refresh_parts();
             // The lights' icons (#506), clicked before what is behind them.
             let lights = if cx.settings.viewport.show_light_icons {
-                light_icons::light_icons(&editor.dm, &view)
+                editor
+                    .viewport
+                    .light_icons
+                    .icons(&editor.dm, &editor.parts, &view)
+                    .to_vec()
             } else {
                 Vec::new()
             };
             let under = |at: egui::Pos2| {
-                light_icons::icon_at(&lights, at).or_else(|| view.ray(at).and_then(|ray| pick::pick(&editor.dm, ray)))
+                light_icons::icon_at(&lights, at)
+                    .or_else(|| view.ray(at).and_then(|ray| pick::pick(&editor.dm, &editor.parts, ray)))
             };
             let hovered = response.hover_pos().filter(|_| !on_gizmo).and_then(under);
             let modifiers = ui.input(|input| input.modifiers);
@@ -279,7 +290,7 @@ impl Panel for Viewport {
                     // The part itself, even inside a model, and on the same spot again the one behind it (#482).
                     let hits = at
                         .and_then(|at| view.ray(at))
-                        .map(|ray| pick::parts_along(&editor.dm, ray))
+                        .map(|ray| pick::parts_along(&editor.dm, &editor.parts, ray))
                         .unwrap_or_default();
                     let at = at.map_or([0.0; 2], |at| [at.x, at.y]);
                     match editor.viewport.pick_cycle.advance(at, &hits, pick::CYCLE_TOLERANCE) {
@@ -310,13 +321,22 @@ impl Panel for Viewport {
                     &painter,
                     &view,
                     &editor.dm,
+                    &editor.parts,
                     id,
                     Stroke::new(1.0, accent.gamma_multiply(0.5)),
                     on_top,
                 );
             }
             for &id in editor.selection.ids() {
-                outline(&painter, &view, &editor.dm, id, Stroke::new(OUTLINE, accent), on_top);
+                outline(
+                    &painter,
+                    &view,
+                    &editor.dm,
+                    &editor.parts,
+                    id,
+                    Stroke::new(OUTLINE, accent),
+                    on_top,
+                );
             }
             light_icons::paint(
                 &painter,

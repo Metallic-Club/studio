@@ -11,10 +11,13 @@
 //! that rectangle's middle, its visual centre. When the gesture ends, Shift adds what it picked, Ctrl (Cmd)
 //! removes it, and otherwise it becomes the selection ([`SelectOp`]).
 
+use std::collections::HashSet;
+
 use egui::{Painter, Pos2, Rect, Stroke};
 use metallic_engine::metallic_core::{DataModel, Id};
 
 use super::View;
+use super::index::PartIndex;
 use super::pick;
 use crate::editor::Selection;
 
@@ -118,18 +121,26 @@ fn visual_box(view: &View, bounds: &pick::Bounds) -> Option<Rect> {
     shown.is_positive().then_some(shown)
 }
 
-/// Everything in Workspace that can be picked and shows in the viewport, as `view` shows it.
-pub fn screen_items(dm: &DataModel, view: &View) -> Vec<ScreenItem> {
-    let Some(world) = pick::workspace(dm) else {
-        return Vec::new();
+/// Everything in Workspace that can be picked and shows in the viewport, as `view` shows it. The parts come from
+/// `parts` (#596).
+pub fn screen_items(dm: &DataModel, parts: &PartIndex, view: &View) -> Vec<ScreenItem> {
+    let all: Vec<Id> = if parts.follows(dm) {
+        parts.parts().collect()
+    } else {
+        let Some(world) = pick::workspace(dm) else {
+            return Vec::new();
+        };
+        dm.descendants(world)
+            .into_iter()
+            .flatten()
+            .filter(|&part| pick::part_box(dm, part).is_some())
+            .collect()
     };
+    let mut seen = HashSet::new();
     let mut ids: Vec<Id> = Vec::new();
-    for part in dm.descendants(world).into_iter().flatten() {
-        if pick::part_box(dm, part).is_none() {
-            continue;
-        }
+    for part in all {
         let id = pick::selectable(dm, part);
-        if !ids.contains(&id) {
+        if seen.insert(id) {
             ids.push(id);
         }
     }
@@ -252,12 +263,12 @@ impl Gesture {
 
     /// What it picks in `dm` as `view` shows it, now it has ended. Paint also picks whatever lies under the middle of
     /// its path, as a click would: what is under the brush, where its visual bounding box also takes in what is not.
-    pub fn finish(&self, dm: &DataModel, view: &View) -> Vec<Id> {
-        let mut hits = self.hits(&screen_items(dm, view));
+    pub fn finish(&self, dm: &DataModel, parts: &PartIndex, view: &View) -> Vec<Id> {
+        let mut hits = self.hits(&screen_items(dm, parts, view));
         if self.mode == SelectMode::Paint {
             let step = BRUSH * 0.5;
             let mut under = |at: Pos2| {
-                if let Some(id) = view.ray(at).and_then(|ray| pick::pick(dm, ray))
+                if let Some(id) = view.ray(at).and_then(|ray| pick::pick(dm, parts, ray))
                     && !hits.contains(&id)
                 {
                     hits.push(id);
