@@ -168,7 +168,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const WARM_UP: usize = 30;
 const FRAMES: usize = 100;
 /// The size of the frame uniform the parts and the sky read (`Frame` in `src/parts/frame.wgsl`).
-const FRAME_UNIFORM_SIZE: u64 = 848;
+const FRAME_UNIFORM_SIZE: u64 = 912;
 /// The shadow cascades the shadowed parts frames draw, all of them every frame.
 const CASCADES: usize = 3;
 /// What the shadowed parts frames draw: three cascades, each holding every caster, so a sun that moves every

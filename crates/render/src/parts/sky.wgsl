@@ -61,5 +61,6 @@ fn sky_color(view: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let view = normalize(frame.view_forward.xyz + in.ndc.x * frame.view_right.xyz + in.ndc.y * frame.view_up.xyz);
-    return vec4<f32>(encode(sky_color(view)), 1.0);
+    // The sky is as far as the fog reaches for it, at the frame's exposure (#600).
+    return vec4<f32>(encode(finish(sky_color(view), frame.fog_range.z)), 1.0);
 }

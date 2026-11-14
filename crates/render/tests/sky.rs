@@ -320,3 +320,74 @@ fn the_sky_writes_only_finite_values() {
         assert!(bad.is_empty(), "{hours}:00: pixels not finite {bad:?}");
     }
 }
+
+/// #600: Roblox's Lighting properties reach the image. Fog turns the far floor and the sky into `FogColor` while the
+/// near floor keeps its own; `ExposureCompensation` darkens the whole frame; `EnvironmentDiffuseScale` 0 leaves the
+/// shaded side of a part to the sun alone, darker.
+#[test]
+fn fog_exposure_and_the_environment_change_the_image() {
+    let Some(context) = gpu() else { return };
+    let set = |game: &mut Game, name: &str, value: Value| {
+        let lighting = lighting_service(game);
+        game.dm.set_by_name(lighting, name, value).expect(name);
+    };
+    let mut game = sunset_game();
+    set_clock_time(&mut game, 12.0);
+    let plain = render(&context, &mut game, PassSet::default(), 1);
+
+    // Fog: pure red from 20 studs, whole at 60.
+    set(
+        &mut game,
+        "FogColor",
+        Value::Color3(metallic_core::Color3::new(1.0, 0.0, 0.0)),
+    );
+    set(&mut game, "FogStart", Value::Number(20.0));
+    set(&mut game, "FogEnd", Value::Number(60.0));
+    let fogged = render(&context, &mut game, PassSet::default(), 1);
+    let sky = pixel(&fogged, SIZE / 2, 2);
+    let near = pixel(&fogged, SIZE / 2, SIZE - 4);
+    eprintln!(
+        "fog: sky {sky:?}, near floor {near:?} (was {:?})",
+        pixel(&plain, SIZE / 2, SIZE - 4)
+    );
+    assert!(
+        sky[0] > 200 && sky[1] < 40 && sky[2] < 40,
+        "the sky is the fog: {sky:?}"
+    );
+    assert_eq!(
+        near,
+        pixel(&plain, SIZE / 2, SIZE - 4),
+        "nearer than FogStart, nothing changes"
+    );
+    set(&mut game, "FogEnd", Value::Number(100_000.0));
+    assert_eq!(
+        render(&context, &mut game, PassSet::default(), 1),
+        plain,
+        "no fog at FogEnd 100000"
+    );
+
+    // Exposure: two stops down is darker everywhere.
+    set(&mut game, "ExposureCompensation", Value::Number(-2.0));
+    let dark = render(&context, &mut game, PassSet::default(), 1);
+    eprintln!(
+        "mean level: plain {:.1}, -2 stops {:.1}",
+        mean_level(&plain),
+        mean_level(&dark)
+    );
+    assert!(mean_level(&dark) < mean_level(&plain) * 0.7);
+    set(&mut game, "ExposureCompensation", Value::Number(0.0));
+
+    // No environment light: the frame loses the sky's light on every surface.
+    set(&mut game, "EnvironmentDiffuseScale", Value::Number(0.0));
+    set(&mut game, "EnvironmentSpecularScale", Value::Number(0.0));
+    let unlit = render(&context, &mut game, PassSet::default(), 1);
+    let floor = |pixels: &[[u8; 4]]| {
+        pixel(pixels, SIZE / 2, SIZE - 4)
+            .iter()
+            .take(3)
+            .map(|&c| u32::from(c))
+            .sum::<u32>()
+    };
+    eprintln!("floor: plain {}, no environment {}", floor(&plain), floor(&unlit));
+    assert!(floor(&unlit) < floor(&plain), "the floor lost the sky's light");
+}

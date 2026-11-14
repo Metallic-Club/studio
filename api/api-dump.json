@@ -756,41 +756,24 @@
       "defaults": [],
       "properties": [
         {
-          "name": "ClockTime",
-          "type": "Number",
-          "default": 14.0,
+          "name": "Ambient",
+          "type": "Color3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
           "flags": [
             "VISUAL"
           ],
           "read_only": false,
           "computed": false,
-          "range": [
-            0.0,
-            24.0
-          ],
-          "wraps": true,
-          "group": "Sun",
-          "description": "The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can simply add to it to run the day.",
-          "aliases": [],
-          "derived_from": []
-        },
-        {
-          "name": "TimeOfDay",
-          "type": "String",
-          "default": "14:00:00",
-          "flags": [
-            "NO_SAVE"
-          ],
-          "read_only": false,
-          "computed": true,
           "range": null,
           "wraps": false,
-          "group": "Sun",
-          "description": "ClockTime written as hours, minutes and seconds, such as \"14:30:00\" (hours 0-23, seconds optional when writing). Setting it sets ClockTime; a text that is not a time is an error.",
+          "group": "Appearance",
+          "description": "Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and nights brighter.",
           "aliases": [],
-          "derived_from": [
-            "ClockTime"
-          ]
+          "derived_from": []
         },
         {
           "name": "Brightness",
@@ -806,8 +789,160 @@
             null
           ],
           "wraps": false,
-          "group": "Sun",
+          "group": "Appearance",
           "description": "How strong the sunlight is (and the moonlight, at night). 0 turns the sun off; there is no upper limit.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "ColorShift_Bottom",
+          "type": "Color3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "Light of this colour on the sides of surfaces facing away from the sun (or the moon), as strong as its light. Black, the default, adds none.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "ColorShift_Top",
+          "type": "Color3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "A colour added to the sunlight (or moonlight) on surfaces facing it, as strong as its light. Black, the default, leaves the light as it is.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "EnvironmentDiffuseScale",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            1.0
+          ],
+          "wraps": false,
+          "group": "Appearance",
+          "description": "How much of the sky's light surfaces take from all around, 0 to 1: at 0 only the sun, Ambient and the lights light them.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "EnvironmentSpecularScale",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            1.0
+          ],
+          "wraps": false,
+          "group": "Appearance",
+          "description": "How much of the sky shiny surfaces reflect, 0 to 1: at 0 they reflect only the sun and the lights.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "GlobalShadows",
+          "type": "Bool",
+          "default": true,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own CastShadow. Turning it off saves the cost of drawing the shadows.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "OutdoorAmbient",
+          "type": "Color3",
+          "default": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night and is bluer then.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "ShadowSoftness",
+          "type": "Number",
+          "default": 0.2,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            1.0
+          ],
+          "wraps": false,
+          "group": "Appearance",
+          "description": "How soft the edges of the sun's shadows are, from 0 (sharpest) to 1 (softest).",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "ClockTime",
+          "type": "Number",
+          "default": 14.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            24.0
+          ],
+          "wraps": true,
+          "group": "Data",
+          "description": "The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can simply add to it to run the day.",
           "aliases": [],
           "derived_from": []
         },
@@ -825,10 +960,28 @@
             90.0
           ],
           "wraps": false,
-          "group": "Sun",
+          "group": "Data",
           "description": "Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it passes straight overhead at noon, further north it stays lower in the south.",
           "aliases": [],
           "derived_from": []
+        },
+        {
+          "name": "TimeOfDay",
+          "type": "String",
+          "default": "14:00:00",
+          "flags": [
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "wraps": false,
+          "group": "Data",
+          "description": "ClockTime written as hours, minutes and seconds, such as \"14:30:00\" (hours 0-23, seconds optional when writing). Setting it sets ClockTime; a text that is not a time is an error.",
+          "aliases": [],
+          "derived_from": [
+            "ClockTime"
+          ]
         },
         {
           "name": "SunDirection",
@@ -846,7 +999,7 @@
           "computed": true,
           "range": null,
           "wraps": false,
-          "group": "Sun",
+          "group": "Data",
           "description": "The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. It points below the horizon at night, when the moon, opposite it, lights the scene.",
           "aliases": [],
           "derived_from": [
@@ -855,9 +1008,32 @@
           ]
         },
         {
-          "name": "GlobalShadows",
-          "type": "Bool",
-          "default": true,
+          "name": "ExposureCompensation",
+          "type": "Number",
+          "default": 0.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            -3.0,
+            3.0
+          ],
+          "wraps": false,
+          "group": "Exposure",
+          "description": "Makes the whole picture brighter or darker, in stops from -3 to 3: each stop doubles or halves it. 0 leaves it as it is.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "FogColor",
+          "type": "Color3",
+          "default": [
+            0.75,
+            0.75,
+            0.75
+          ],
           "flags": [
             "VISUAL"
           ],
@@ -865,8 +1041,46 @@
           "computed": false,
           "range": null,
           "wraps": false,
-          "group": "Sun",
-          "description": "Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own CastShadow. Turning it off saves the cost of drawing the shadows.",
+          "group": "Fog",
+          "description": "The colour things fade to in the distance, and the sky becomes, when there is fog.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "FogEnd",
+          "type": "Number",
+          "default": 100000.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            100000.0
+          ],
+          "wraps": false,
+          "group": "Fog",
+          "description": "How far away, in studs, the fog hides everything. At 100000, the most and the default, there is no fog.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "FogStart",
+          "type": "Number",
+          "default": 0.0,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            100000.0
+          ],
+          "wraps": false,
+          "group": "Fog",
+          "description": "How far away, in studs, the fog begins: nearer than this, nothing is fogged.",
           "aliases": [],
           "derived_from": []
         },
@@ -907,46 +1121,6 @@
           "wraps": false,
           "group": "Sky",
           "description": "The colour of the sky at the horizon in the middle of the day; the sky fades to it from SkyColor.",
-          "aliases": [],
-          "derived_from": []
-        },
-        {
-          "name": "OutdoorAmbient",
-          "type": "Color3",
-          "default": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "flags": [
-            "VISUAL"
-          ],
-          "read_only": false,
-          "computed": false,
-          "range": null,
-          "wraps": false,
-          "group": "Ambient",
-          "description": "The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night and is bluer then.",
-          "aliases": [],
-          "derived_from": []
-        },
-        {
-          "name": "Ambient",
-          "type": "Color3",
-          "default": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "flags": [
-            "VISUAL"
-          ],
-          "read_only": false,
-          "computed": false,
-          "range": null,
-          "wraps": false,
-          "group": "Ambient",
-          "description": "Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and nights brighter.",
           "aliases": [],
           "derived_from": []
         }
