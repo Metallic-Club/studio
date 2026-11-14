@@ -19,6 +19,23 @@ pub(super) fn free_port() -> u16 {
         .port()
 }
 
+/// A port to host on whose next port (Team Create Play's, #639) is free too. Both below every OS's ephemeral range
+/// (Windows from 49152, Linux from 32768): there, the joiner's own outgoing socket can be handed the port after the
+/// host's, as Windows hands them out in order.
+pub(super) fn free_pair() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let bindable = |port: u16| std::net::TcpListener::bind(("0.0.0.0", port)).is_ok();
+    // Spread over the range by process, so test runs side by side rarely try the same ports.
+    let start = 20_000 + (std::process::id() % 400) as u16 * 20;
+    loop {
+        let port = start + NEXT.fetch_add(2, Ordering::Relaxed) % 4_000;
+        if bindable(port) && bindable(port + 1) {
+            return port;
+        }
+    }
+}
+
 /// Steps both Studios until `done` holds, for at most twenty seconds.
 pub(super) fn until(
     a: &mut Harness<'_, Test>,
@@ -62,7 +79,7 @@ pub(super) fn open_menu(harness: &mut Harness<'_, Test>) {
 /// Hosts from `a`'s menu on a free port; returns it.
 pub(super) fn host(a: &mut Harness<'_, Test>) -> u16 {
     open_menu(a);
-    let port = free_port();
+    let port = free_pair();
     a.state_mut().studio.team_mut().form.port = port.to_string();
     a.get_by_role_and_label(Role::Button, "Start hosting").click();
     settle(a);

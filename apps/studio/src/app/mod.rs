@@ -1216,6 +1216,8 @@ impl Studio {
         // The mode the arrow beside Play chose (ADR 0011 §8).
         let mode = self.team.play_mode;
         let hosting = self.team.is_hosting();
+        // Team Create Play's game, on the port after the session's so it can be forwarded (#639).
+        let play_port = self.team.play_port();
         let name = self.settings.settings().profile.shown_name().to_owned();
         let count = self.team.store.clients;
         let waker = self.team.waker();
@@ -1233,19 +1235,37 @@ impl Studio {
             PlayMode::TeamCreate if !hosting => {
                 Err("Team Create Play needs a session this Studio hosts: host the project first.".to_owned())
             }
-            PlayMode::TeamCreate => editor
-                .play_server(
-                    PlayKind::TeamCreate,
-                    0,
-                    &name,
-                    graphics,
-                    log,
-                    number,
-                    clear_output,
-                    None,
-                    waker,
-                )
-                .map(Some),
+            PlayMode::TeamCreate => match play_port {
+                None => Err(
+                    "Team Create Play serves its game on the port after the session's: host on a port below 65535."
+                        .to_owned(),
+                ),
+                Some(play_port) => editor
+                    .play_server(
+                        PlayKind::TeamCreate,
+                        play_port,
+                        &name,
+                        graphics,
+                        log,
+                        number,
+                        clear_output,
+                        None,
+                        waker,
+                    )
+                    .map(Some)
+                    // The listener's errors name the port ("port 7351 is already in use; …"): say where it comes
+                    // from, since the port typed is the session's.
+                    .map_err(|error| {
+                        if error.contains(&format!("port {play_port}")) {
+                            format!(
+                                "Team Create Play serves its game on the port after the session's, and {error}. \
+                                 Hosting on another port moves both."
+                            )
+                        } else {
+                            error
+                        }
+                    }),
+            },
             PlayMode::Clients => editor
                 .play_server(
                     PlayKind::Clients(count),
@@ -9408,6 +9428,7 @@ skip_sign_in = true
 
     mod team_create;
     mod team_play;
+    mod team_play_port;
     mod team_projects;
     mod team_scene;
     mod team_scripts;

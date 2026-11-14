@@ -45,6 +45,11 @@ use store::{Role, TeamProject, TeamStore};
 /// The engine version peers must share.
 pub const ENGINE: &str = env!("CARGO_PKG_VERSION");
 
+/// The port Team Create Play serves its game on for a session hosted on `session` (#639): the next one up.
+pub fn play_port_after(session: u16) -> Option<u16> {
+    session.checked_add(1)
+}
+
 /// A hosted session.
 pub struct Hosting {
     /// The session over TCP.
@@ -261,6 +266,16 @@ impl TeamCreate {
     /// The waker the window is woken through, for the play servers and clients a session starts.
     pub fn waker(&self) -> Waker {
         Arc::clone(&self.waker)
+    }
+
+    /// The port Team Create Play serves its game on while this Studio hosts (#639): the one after the session's, so
+    /// someone hosting over the internet forwards two known ports rather than one that changes with every game.
+    /// `None` when not hosting, or when the session's port is the last there is.
+    pub fn play_port(&self) -> Option<u16> {
+        match &self.session {
+            Session::Hosting(hosting) => play_port_after(hosting.server.port()),
+            _ => None,
+        }
     }
 
     /// Tells everyone in the hosted session that Team Create Play started on `port` (or stopped, with `None`).
