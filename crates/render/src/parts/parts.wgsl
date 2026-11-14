@@ -194,9 +194,10 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
 }
 
 // How open to the sky a point is, 0 to 1 (#615): Lighting.OutdoorAmbient lights only that much of it. The sky map holds
-// the nearest surface above each point; a point under something is closed. The point moves out along its normal first
-// (a wall's outside is open, its inside under a roof is not), and a tent of taps softens the edge of an opening
-// over a few texels. Past the map, everything is open, faded in over its last tenth.
+// the nearest surface above each point; a point under something is closed. A tent of 5×5 taps a texel apart on a
+// coarse map fades an opening's edge out over several studs (#625). The point moves out along its normal first (a
+// wall's outside is open, its inside under a roof is not); a wall's, by the filter's reach as well, so the wall's own
+// top, beside it in the map, does not close it. Past the map, everything is open, faded in over its last tenth.
 fn sky_open(position: vec3<f32>, n: vec3<f32>) -> f32 {
     if frame.sky_params.x < 0.5 {
         return 1.0;
@@ -205,11 +206,11 @@ fn sky_open(position: vec3<f32>, n: vec3<f32>) -> f32 {
     if depth >= frame.sky_range.x {
         return 1.0;
     }
-    let p = position + n * frame.sky_params.z;
+    let p = position + n * (frame.sky_params.z + frame.sky_range.z * length(n.xz));
     let clip = frame.sky_matrix * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
     let reference = clip.z - frame.sky_params.w;
-    let spread = frame.sky_params.y * 1.25;
+    let spread = frame.sky_params.y;
     var open = 0.0;
     for (var y = -2; y <= 2; y += 1) {
         for (var x = -2; x <= 2; x += 1) {

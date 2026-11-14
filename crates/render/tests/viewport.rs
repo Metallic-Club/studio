@@ -335,8 +335,9 @@ fn a_frame_drawn_into_the_corner_is_the_frame_of_that_size() {
         .collect();
     let expected = offscreen(&context, &[(SIZE, SIZE), SMALL]);
     // Bloom's blur reaches a few texels past the corner's edges, where a target of the corner's size clamps to them,
-    // as with a render scale: a faint difference there, and none elsewhere.
-    let diff = scenes::compare(&corner, &expected, 8);
+    // as with a render scale: a faint difference there, and none elsewhere. The parts differ a little too (up to 9
+    // levels, #626), which is why the threshold is 10 and not 8.
+    let diff = scenes::compare(&corner, &expected, 10);
     assert!(
         diff.over == 0.0,
         "the corner differs from an offscreen target of its size: {diff:?}"

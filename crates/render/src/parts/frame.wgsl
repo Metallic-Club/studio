@@ -69,8 +69,8 @@ struct Frame {
     // rgb: Lighting.Ambient, light added evenly everywhere, indoors too (#615).
     ambient: vec4<f32>,
     // The sky map (#615): camera-relative positions to its clip space; x: 1 when there is one, y: one texel in map
-    // coordinates, z: the lookup's normal offset in metres, w: its depth bias; and the view depth it ends at (x) and
-    // starts fading out at (y).
+    // coordinates, z: the lookup's normal offset in metres, w: its depth bias; and the view depth it ends at (x),
+    // starts fading out at (y), and how far its filter reaches from a point in metres (z, #625).
     sky_matrix: mat4x4<f32>,
     sky_params: vec4<f32>,
     sky_range: vec4<f32>,
