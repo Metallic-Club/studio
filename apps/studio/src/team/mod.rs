@@ -15,10 +15,13 @@
 //! Nothing here blocks the frame: the transport's threads do the waiting, and [`TeamCreate::update`] only moves what
 //! they received.
 
+pub mod live;
 pub mod menu;
 pub mod page;
+pub mod presence;
 pub mod probe;
 pub mod store;
+pub mod viewport;
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -32,7 +35,7 @@ use metallic_engine::metallic_net::collab::{ClientLink, HostServer};
 use metallic_engine::metallic_net::identity::{Identity, User, UserId};
 use metallic_engine::metallic_net::registry_fingerprint;
 use metallic_engine::metallic_net::transport::{self, Waker};
-use metallic_engine::metallic_project::{Project, save_scene};
+use metallic_engine::metallic_project::{Project, SceneIds, save_scene};
 
 use crate::editor::EditorState;
 use store::{Role, TeamProject, TeamStore};
@@ -50,6 +53,8 @@ pub struct Hosting {
     pub addresses: Vec<IpAddr>,
     /// When hosting started.
     pub started: Instant,
+    /// The scene and presence sync, while the hosted project is open.
+    pub live: Option<live::HostLive>,
 }
 
 /// A join under way.
@@ -76,6 +81,8 @@ pub struct Joined {
     pub port: u16,
     /// The participant's copy of the project, open in the editor.
     pub copy: PathBuf,
+    /// The scene and presence sync over the copy.
+    pub live: Option<live::ClientLive>,
 }
 
 /// Where Team Create is.
@@ -315,7 +322,7 @@ impl TeamCreate {
     }
 
     /// Starts hosting `editor`'s project as `identity` on the port the form gives.
-    pub fn host(&mut self, editor: &EditorState, identity: Identity) -> Result<(), String> {
+    pub fn host(&mut self, editor: &mut EditorState, identity: Identity) -> Result<(), String> {
         if self.is_active() {
             return Err("Leave the current session first.".to_owned());
         }
@@ -352,11 +359,13 @@ impl TeamCreate {
             last_used: 0,
         });
         self.note = None;
+        let live = live::HostLive::new(editor)?;
         self.session = Session::Hosting(Box::new(Hosting {
             server,
             project: path,
             addresses,
             started: Instant::now(),
+            live: Some(live),
         }));
         Ok(())
     }
@@ -394,17 +403,23 @@ impl TeamCreate {
         let Session::Hosting(mut hosting) = std::mem::take(&mut self.session) else {
             return;
         };
-        if let Some(editor) = editor
-            && editor.path() == hosting.project
-            && editor.is_modified()
-            && !editor.is_playing()
-            && let Err(error) = editor.save()
-        {
-            log::warn!("team create: could not save at the end of the session: {error}");
-            self.note = Some(Note {
-                error: true,
-                text: format!("The session ended, but the project was not saved: {error}"),
-            });
+        let editor = editor.filter(|editor| editor.path() == hosting.project);
+        if let Some(editor) = editor {
+            // Everything edited so far is the host's and saved; then the sync lets go of the scene.
+            if let Some(mut live) = hosting.live.take() {
+                live.flush(editor, &mut hosting.server.host);
+                live.release(editor);
+            }
+            if editor.is_modified()
+                && !editor.is_playing()
+                && let Err(error) = editor.save()
+            {
+                log::warn!("team create: could not save at the end of the session: {error}");
+                self.note = Some(Note {
+                    error: true,
+                    text: format!("The session ended, but the project was not saved: {error}"),
+                });
+            }
         }
         hosting.server.host.end("The host ended the session.");
         hosting.server.flush();
@@ -417,18 +432,32 @@ impl TeamCreate {
         }
     }
 
-    /// Leaves the joined session (or stops joining).
-    pub fn leave(&mut self) {
+    /// Leaves the joined session (or stops joining); `editor`, the participant's copy if it is still open, stops
+    /// syncing.
+    pub fn leave(&mut self, editor: Option<&mut EditorState>) {
         match std::mem::take(&mut self.session) {
             Session::Joining(mut joining) => joining.link.leave(),
-            Session::Joined(mut joined) => joined.link.leave(),
+            Session::Joined(mut joined) => {
+                if let (Some(live), Some(editor)) = (joined.live.take(), editor)
+                    && editor.path() == joined.copy
+                {
+                    live.release(editor);
+                }
+                joined.link.leave();
+            }
             other => self.session = other,
         }
     }
 
     /// Moves what the network brought since the last frame, and says what Studio has to do about it. `editor` is
-    /// the open project, if one is open; `opening` the project opening, if one is.
-    pub fn update(&mut self, mut editor: Option<&mut EditorState>, opening: Option<&Path>) -> Vec<Request> {
+    /// the open project, if one is open; `opening` the project opening, if one is; `open` the scripts whose tabs are
+    /// open (others see them as open).
+    pub fn update(
+        &mut self,
+        mut editor: Option<&mut EditorState>,
+        opening: Option<&Path>,
+        open: &[metallic_engine::metallic_core::Id],
+    ) -> Vec<Request> {
         let mut requests = Vec::new();
         if matches!(self.session, Session::Joining(_)) {
             if let Some(outcome) = self.join_frame_inner(editor.as_deref_mut(), opening) {
@@ -440,11 +469,12 @@ impl TeamCreate {
             Session::Idle | Session::Joining(_) => {}
             Session::Hosting(hosting) => {
                 let hosted = editor.as_deref_mut().filter(|editor| editor.path() == hosting.project);
-                host_frame(hosting, hosted);
+                host_frame(hosting, hosted, open);
             }
             Session::Joined(joined) => {
                 joined.link.receive();
                 let mut over = None;
+                let mut copy = editor.filter(|editor| editor.path() == joined.copy);
                 while let Some(event) = joined.link.client.next_event() {
                     match event {
                         ClientEvent::Ended(reason) => over = Some(("The session ended", reason)),
@@ -455,12 +485,30 @@ impl TeamCreate {
                             ))
                         }
                         ClientEvent::Refused(reason) => over = Some(("Disconnected from the host", reason)),
+                        ClientEvent::Op { kind, bytes, .. } => {
+                            if let (Some(live), Some(editor)) = (joined.live.as_mut(), copy.as_deref_mut())
+                                && !live.receive(editor, &mut joined.link.client, kind, &bytes)
+                            {
+                                over = Some((
+                                    "Disconnected from the host",
+                                    "The host sent an edit Studio could not read. Rejoin from Team Create.".to_owned(),
+                                ));
+                            }
+                        }
                         _ => {}
                     }
                 }
+                if over.is_none()
+                    && let (Some(live), Some(editor)) = (joined.live.as_mut(), copy.as_deref_mut())
+                {
+                    live.tick(editor, &mut joined.link.client, open);
+                }
                 joined.link.flush();
-                let still_open = editor.as_ref().is_some_and(|editor| editor.path() == joined.copy);
+                let still_open = copy.is_some();
                 if let Some((title, body)) = over {
+                    if let (Some(live), Some(editor)) = (joined.live.take(), copy) {
+                        live.release(editor);
+                    }
                     log::info!("team create: {title}: {body}");
                     self.note = Some(Note {
                         error: true,
@@ -470,7 +518,7 @@ impl TeamCreate {
                     requests.push(Request::Close { title, body });
                 } else if !still_open && opening != Some(joined.copy.as_path()) {
                     // The participant closed the copy: that is leaving.
-                    self.leave();
+                    self.leave(None);
                 }
             }
         }
@@ -557,16 +605,50 @@ impl TeamCreate {
         joining.link.flush();
         // The copy is open: what was held is applied from now on, and the host hears the participant is ready.
         if let Some(copy) = joining.copy.clone()
-            && editor.is_some_and(|editor| editor.path() == copy)
+            && let Some(editor) = editor.filter(|editor| editor.path() == copy)
         {
+            // The sync starts on the copy as it opened (the snapshot), then what the host sent meanwhile applies.
+            let me = joining.link.client.me().unwrap_or(UserId(0));
+            let live = match live::ClientLive::new(editor, me) {
+                Ok(live) => live,
+                Err(error) => {
+                    joining.link.leave();
+                    self.session = Session::Idle;
+                    let body = format!("Studio could not follow the scene: {error}");
+                    self.note = Some(Note {
+                        error: true,
+                        text: body.clone(),
+                    });
+                    requests.push(Request::Close {
+                        title: "Could not join",
+                        body,
+                    });
+                    return Some(requests);
+                }
+            };
             joining.link.client.loaded();
-            joining.link.flush();
             let Session::Joining(joining) = std::mem::take(&mut self.session) else {
                 return Some(requests);
             };
             let Joining { link, host, port, .. } = *joining;
             log::info!("team create: joined {host}:{port}");
-            self.session = Session::Joined(Box::new(Joined { link, host, port, copy }));
+            let mut joined = Joined {
+                link,
+                host,
+                port,
+                copy,
+                live: Some(live),
+            };
+            // The operations held since the snapshot, in order.
+            while let Some(event) = joined.link.client.next_event() {
+                if let ClientEvent::Op { kind, bytes, .. } = event
+                    && let Some(live) = joined.live.as_mut()
+                {
+                    live.receive(editor, &mut joined.link.client, kind, &bytes);
+                }
+            }
+            joined.link.flush();
+            self.session = Session::Joined(Box::new(joined));
         } else if joining.copy.is_some() && opening.is_none() && requests.is_empty() {
             // The copy failed to open (the projects page says why).
             joining.link.leave();
@@ -577,40 +659,73 @@ impl TeamCreate {
 }
 
 /// One frame of hosting: joins answered with a snapshot of `editor` (the hosted project, when it is open).
-fn host_frame(hosting: &mut Hosting, mut editor: Option<&mut EditorState>) {
+fn host_frame(
+    hosting: &mut Hosting,
+    mut editor: Option<&mut EditorState>,
+    open: &[metallic_engine::metallic_core::Id],
+) {
     let server = &mut hosting.server;
     server.receive();
     while let Some(event) = server.host.next_event() {
         match event {
-            HostEvent::JoinRequested { peer, user } => match editor.as_deref_mut().map(snapshot) {
-                Some(Ok(snapshot)) => {
-                    log::info!("team create: {} is joining", user.identity.name);
-                    server.host.admit(peer, &snapshot);
-                }
-                Some(Err(error)) => {
-                    log::warn!(
-                        "team create: could not send the project to {}: {error}",
-                        user.identity.name
-                    );
-                    server
-                        .host
-                        .refuse(peer, &format!("The host could not send the project: {error}"));
+            HostEvent::JoinRequested { peer, user } => match editor.as_deref_mut() {
+                Some(editor) => {
+                    // Every edit so far is sent first, so the snapshot and the live stream meet exactly.
+                    let ids = match hosting.live.as_mut() {
+                        Some(live) => {
+                            live.flush(editor, &mut server.host);
+                            Some(live.scene_ids())
+                        }
+                        None => None,
+                    };
+                    match snapshot(editor, ids) {
+                        Ok(snapshot) => {
+                            log::info!("team create: {} is joining", user.identity.name);
+                            server.host.admit(peer, &snapshot);
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "team create: could not send the project to {}: {error}",
+                                user.identity.name
+                            );
+                            server
+                                .host
+                                .refuse(peer, &format!("The host could not send the project: {error}"));
+                        }
+                    }
                 }
                 None => server.host.refuse(peer, "The host has no project open."),
             },
             HostEvent::Ready(id) => log::info!("team create: {id} has the project open"),
-            HostEvent::Left { user, reason } => log::info!("team create: {} left ({reason})", user.identity.name),
-            HostEvent::Op { .. } => {}
+            HostEvent::Left { user, reason } => {
+                log::info!("team create: {} left ({reason})", user.identity.name);
+                if let Some(live) = hosting.live.as_mut() {
+                    live.left(user.id);
+                }
+            }
+            HostEvent::Op { from, kind, bytes, .. } => {
+                if let (Some(live), Some(editor)) = (hosting.live.as_mut(), editor.as_deref_mut())
+                    && !live.receive(editor, &mut server.host, from, kind, &bytes)
+                {
+                    log::warn!("team create: {from} sent an edit that is not valid; dropping them");
+                    server.host.drop_user(from, "sent an edit that is not valid");
+                }
+            }
         }
+    }
+    if let (Some(live), Some(editor)) = (hosting.live.as_mut(), editor) {
+        live.tick(editor, &mut server.host, open);
     }
     server.flush();
 }
 
 /// The project as a joining participant gets it: every member as it is in memory, the start scene saved from the
 /// editor's scene as it is now.
-pub fn snapshot(editor: &mut EditorState) -> Result<ProjectSnapshot, String> {
+pub fn snapshot(editor: &mut EditorState, ids: Option<SceneIds>) -> Result<ProjectSnapshot, String> {
     let start_scene = editor.project.manifest().start_scene.clone();
-    let mut ids = editor.scene_ids.clone();
+    // The session's net ids as the copy's scene ids (a participant's sync starts from them); the file's own ids
+    // otherwise.
+    let mut ids = ids.unwrap_or_else(|| editor.scene_ids.clone());
     let scene = save_scene(&editor.dm, &mut ids).map_err(|error| error.to_string())?;
     let names: Vec<String> = editor.project.members().into_iter().map(str::to_owned).collect();
     let mut members = Vec::with_capacity(names.len() + 1);

@@ -41,11 +41,17 @@ pub fn registry_fingerprint(registry: &Registry) -> u64 {
 }
 
 /// FNV-1a, 64 bits: stable across builds and platforms, unlike the standard library's hasher.
-struct Fnv(u64);
+pub(crate) struct Fnv(pub(crate) u64);
 
 impl Fnv {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    pub(crate) fn bytes(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.byte(b);
+        }
     }
 
     fn byte(&mut self, byte: u8) {

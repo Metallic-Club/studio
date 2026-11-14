@@ -225,6 +225,32 @@ impl<'de> Deserialize<'de> for CFrame {
     }
 }
 
+impl CFrame {
+    /// Its seven stored numbers: position, then the rotation quaternion `[x, y, z, w]`, bit for bit (what a scene
+    /// file writes, and what Team Create sends).
+    pub fn to_array(self) -> [f32; 7] {
+        let p = self.position;
+        let [qx, qy, qz, qw] = self.rotation;
+        [p.x, p.y, p.z, qx, qy, qz, qw]
+    }
+
+    /// A frame from [`CFrame::to_array`]'s numbers, kept bit for bit when the rotation is already unit length (as
+    /// every stored one is) and normalized otherwise. `None` when a number is not finite or the rotation is zero.
+    pub fn from_array([px, py, pz, qx, qy, qz, qw]: [f32; 7]) -> Option<Self> {
+        let position = Vec3::new(px, py, pz);
+        if !position.is_finite() {
+            return None;
+        }
+        let rotation = Vec4::new(qx, qy, qz, qw);
+        let unit = rotation.is_finite() && (rotation.length_squared() - 1.0).abs() <= UNIT_TOLERANCE;
+        let rotation = if unit { Some(rotation) } else { rotation.try_normalize() }?;
+        Some(Self {
+            position,
+            rotation: rotation.to_array(),
+        })
+    }
+}
+
 /// How far a quaternion's squared length may be from 1 for reading to keep it as it is: a few `f32` roundings, as
 /// left by normalizing.
 const UNIT_TOLERANCE: f32 = 4.0 * f32::EPSILON;

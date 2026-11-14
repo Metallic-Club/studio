@@ -313,7 +313,11 @@ impl Studio {
             };
             self.team.end(editor);
         } else if self.team.is_active() {
-            self.team.leave();
+            let editor = match &mut self.editor {
+                Some(EditorScreen::Open(editor)) => Some(&mut **editor),
+                _ => None,
+            };
+            self.team.leave(editor);
         }
         self.editor = None;
         self.open_project = None;
@@ -337,7 +341,14 @@ impl Studio {
             Some(EditorScreen::Open(editor)) => Some(&mut **editor),
             _ => None,
         };
-        let requests = self.team.update(editor, opening.as_deref());
+        // The scripts with tabs open, which others see as open (#631).
+        let open: Vec<metallic_engine::metallic_core::Id> = self
+            .dock
+            .instance_panes()
+            .iter()
+            .filter_map(|pane| crate::code::script_of(pane))
+            .collect();
+        let requests = self.team.update(editor, opening.as_deref(), &open);
         for request in requests {
             match request {
                 crate::team::Request::Open(path) => {
@@ -405,7 +416,7 @@ impl Studio {
         use crate::team::menu::TeamAction;
         let profile = self.settings.settings().profile.clone();
         let result = match action {
-            TeamAction::Host => match &self.editor {
+            TeamAction::Host => match &mut self.editor {
                 Some(EditorScreen::Open(editor)) => {
                     let identity =
                         metallic_engine::metallic_net::identity::Identity::new(profile.shown_name(), profile.color);
@@ -436,7 +447,11 @@ impl Studio {
             }
             TeamAction::Leave => {
                 let copy = self.open_project.clone().filter(|path| self.team.is_copy(path));
-                self.team.leave();
+                let editor = match &mut self.editor {
+                    Some(EditorScreen::Open(editor)) => Some(&mut **editor),
+                    _ => None,
+                };
+                self.team.leave(editor);
                 if copy.is_some() {
                     self.show_projects();
                 }
@@ -9249,4 +9264,5 @@ skip_sign_in = true
 
     mod team_create;
     mod team_projects;
+    mod team_scene;
 }

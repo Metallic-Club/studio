@@ -15,7 +15,13 @@
 
 pub mod client;
 pub mod host;
+pub mod presence;
 pub mod protocol;
+pub mod scene;
+pub mod value;
+
+#[cfg(test)]
+mod scene_tests;
 
 use std::collections::BTreeMap;
 use std::time::Duration;

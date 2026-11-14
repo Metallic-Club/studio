@@ -348,6 +348,8 @@ impl Panel for Explorer {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        // Team Create's others (ADR 0011), for the editor's own tree: a running game's instances are not theirs.
+        let presence = (!cx.editor.is_playing() && !cx.editor.presence.is_empty()).then(|| cx.editor.presence.clone());
         // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
         let mut editor = cx.editor.scene();
         let mut added = None;
@@ -420,6 +422,12 @@ impl Panel for Explorer {
                 };
                 let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_height));
                 let action = row_ui(ui, editor.dm, *row, look);
+                // A dot per other user at the row's right edge, growing leftwards: who has it selected, or, for a
+                // script, who has it open.
+                if let Some(presence) = &presence {
+                    let dots = presence.dots(row.id, crate::code::is_script(editor.dm, row.id));
+                    paint_dots(ui, rect, &dots);
+                }
                 // While rows are dragged, the row under the pointer shows where they would land.
                 if editor.explorer.dragging
                     && let Some(at) = pointer.filter(|at| rect.contains(*at))
@@ -769,6 +777,32 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
         RowAction::Select
     } else {
         RowAction::None
+    }
+}
+
+/// The gap between Team Create's dots in a row (ADR 0011), and their radius.
+const USER_DOT_GAP: f32 = 9.0;
+const USER_DOT: f32 = 3.5;
+
+/// Team Create's dots in the row at `rect` (ADR 0011): one per other user, in their colours, from the row's right edge
+/// leftwards, each ringed with the panel's colour so neighbours read apart.
+fn paint_dots(ui: &Ui, rect: Rect, dots: &[[u8; 3]]) {
+    if dots.is_empty() {
+        return;
+    }
+    let ring = current_colors(ui.ctx()).palette.panel;
+    let painter = ui.painter().with_clip_rect(rect);
+    for (i, [r, g, b]) in dots.iter().enumerate() {
+        let centre = egui::pos2(
+            rect.right() - space::S4 - USER_DOT - i as f32 * USER_DOT_GAP,
+            rect.center().y,
+        );
+        painter.circle(
+            centre,
+            USER_DOT,
+            Color32::from_rgb(*r, *g, *b),
+            egui::Stroke::new(1.0, ring),
+        );
     }
 }
 

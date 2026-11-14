@@ -58,6 +58,10 @@ pub struct EditorState {
     pub parts: crate::viewport::index::PartIndex,
     /// The script editor's open files and requests (#528).
     pub scripts: crate::code::Scripts,
+    /// The other users of a Team Create session (ADR 0011), as the viewport and the Explorer show them.
+    pub presence: crate::team::presence::Shown,
+    /// Whether Team Create changed the scene since the last save: others' edits are no step of this history.
+    pub collab_changed: bool,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -100,6 +104,8 @@ impl EditorState {
             play: None,
             scripts: crate::code::Scripts::default(),
             parts: crate::viewport::index::PartIndex::new(),
+            presence: Default::default(),
+            collab_changed: false,
         }
     }
 
@@ -133,7 +139,7 @@ impl EditorState {
 
     /// Whether the project has changes not saved: in its files, or to its scene since it was saved or opened (#348).
     pub fn is_modified(&self) -> bool {
-        self.project.is_modified() || !self.history.is_saved()
+        self.project.is_modified() || !self.history.is_saved() || self.collab_changed
     }
 
     /// Selects `id` alone (or nothing), and shows it in the Explorer.
@@ -160,6 +166,7 @@ impl EditorState {
             .save(&self.dm, &mut self.project, &self.scene_ids)?;
         self.project.save().map_err(|error| error.to_string())?;
         self.history.mark_saved();
+        self.collab_changed = false;
         log::info!("projects: saved {}", self.project.path().display());
         Ok(())
     }

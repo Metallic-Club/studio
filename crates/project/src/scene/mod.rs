@@ -131,6 +131,17 @@ impl SceneIds {
         self.ids.is_empty()
     }
 
+    /// Every instance with an id, and its id, in no order.
+    pub fn iter(&self) -> impl Iterator<Item = (Id, u64)> + '_ {
+        self.ids.iter().map(|(&instance, &id)| (instance, id))
+    }
+
+    /// Gives `instance` the scene id `id`, for a save that must use ids chosen elsewhere (Team Create's net ids, so
+    /// a participant's copy has them). Ids given out later stay above it.
+    pub fn assign(&mut self, instance: Id, id: u64) {
+        self.insert(instance, id);
+    }
+
     /// Records that `instance` has the scene id `id`.
     fn insert(&mut self, instance: Id, id: u64) {
         self.ids.insert(instance, id);
