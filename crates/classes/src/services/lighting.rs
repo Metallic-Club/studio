@@ -1,9 +1,14 @@
 //! `Lighting`: the sun, the sky and the light that fills the scene.
 //!
-//! Names and meanings follow Roblox where Roblox has the property (`ClockTime`, `Brightness`, `Ambient`,
-//! `OutdoorAmbient`, `GeographicLatitude`, `GlobalShadows`, `GetSunDirection`, `GetMoonDirection`). The sky is Metallic's own: Roblox
-//! draws it from a `Sky` object's textures, Metallic from a gradient between `SkyColor` overhead and `HorizonColor`
-//! at the horizon, so a game gets a sky without any assets (a textured sky can come later, on top).
+//! Names, groups, defaults and meanings follow Roblox's (#600): `Ambient`, `Brightness`, `ColorShift_Bottom`,
+//! `ColorShift_Top`, `EnvironmentDiffuseScale`, `EnvironmentSpecularScale`, `GlobalShadows`, `OutdoorAmbient`,
+//! `ShadowSoftness`, `ClockTime`, `GeographicLatitude`, `TimeOfDay`, `ExposureCompensation`, `FogColor`, `FogEnd`,
+//! `FogStart` and the methods. Roblox's `Technology`, `LightingStyle` and `PrioritizeLightingQuality` choose between
+//! its renderers, which Metallic does not have, so they are left out.
+//!
+//! The sky is Metallic's own: Roblox draws it from a `Sky` object's textures, Metallic from a gradient between
+//! `SkyColor` overhead and `HorizonColor` at the horizon, so a game gets a sky without any assets (a textured sky can
+//! come later, on top).
 //!
 //! # Where the sun is
 //!
@@ -126,67 +131,157 @@ fn get_moon_direction(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptEr
     Ok((-sun_of(call.dm, call.this)).into())
 }
 
+/// Lighting's properties in Roblox's groups (#600): Appearance, Data, Exposure and Fog, each group's properties in
+/// alphabetical order as Roblox Studio lists them; then Metallic's own sky, which Roblox keeps in a `Sky` object.
 static PROPS: &[PropMeta] = &[
-    PropMeta::number("ClockTime", 14.0)
-        .wrap(0.0, 24.0)
-        .widget(Widget::Slider)
+    PropMeta::color3("Ambient", 0.0, 0.0, 0.0)
         .visual()
-        .group("Sun")
+        .group("Appearance")
         .order(0)
         .desc(
-            "The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap \
-             around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can \
-             simply add to it to run the day.",
-        ),
-    PropMeta::string("TimeOfDay", "14:00:00")
-        .computed(time_of_day_get, Some(time_of_day_set))
-        .derived_from(&["ClockTime"])
-        .flags(PropFlags::NO_SAVE)
-        .group("Sun")
-        .order(1)
-        .desc(
-            "ClockTime written as hours, minutes and seconds, such as \"14:30:00\" (hours 0-23, seconds optional \
-             when writing). Setting it sets ClockTime; a text that is not a time is an error.",
+            "Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and \
+             nights brighter.",
         ),
     PropMeta::number("Brightness", 2.0)
         // No upper limit (#481), as for the other lights (#406).
         .range(0.0, f64::INFINITY)
         .widget(Widget::Drag { speed: 0.05 })
         .visual()
-        .group("Sun")
-        .order(2)
+        .group("Appearance")
+        .order(1)
         .desc(
             "How strong the sunlight is (and the moonlight, at night). 0 turns the sun off; there is no upper \
              limit.",
         ),
+    PropMeta::color3("ColorShift_Bottom", 0.0, 0.0, 0.0)
+        .visual()
+        .group("Appearance")
+        .order(2)
+        .desc(
+            "Light of this colour on the sides of surfaces facing away from the sun (or the moon), as strong as \
+             its light. Black, the default, adds none.",
+        ),
+    PropMeta::color3("ColorShift_Top", 0.0, 0.0, 0.0)
+        .visual()
+        .group("Appearance")
+        .order(3)
+        .desc(
+            "A colour added to the sunlight (or moonlight) on surfaces facing it, as strong as its light. Black, the \
+             default, leaves the light as it is.",
+        ),
+    PropMeta::number("EnvironmentDiffuseScale", 1.0)
+        .range(0.0, 1.0)
+        .widget(Widget::Slider)
+        .visual()
+        .group("Appearance")
+        .order(4)
+        .desc(
+            "How much of the sky's light surfaces take from all around, 0 to 1: at 0 only the sun, Ambient and the \
+             lights light them.",
+        ),
+    PropMeta::number("EnvironmentSpecularScale", 1.0)
+        .range(0.0, 1.0)
+        .widget(Widget::Slider)
+        .visual()
+        .group("Appearance")
+        .order(5)
+        .desc(
+            "How much of the sky shiny surfaces reflect, 0 to 1: at 0 they reflect only the sun and the lights.",
+        ),
+    PropMeta::boolean("GlobalShadows", true)
+        .visual()
+        .group("Appearance")
+        .order(6)
+        .desc(
+            "Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own \
+             CastShadow. Turning it off saves the cost of drawing the shadows.",
+        ),
+    PropMeta::color3("OutdoorAmbient", 0.5, 0.5, 0.5)
+        .visual()
+        .group("Appearance")
+        .order(7)
+        .desc(
+            "The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night \
+             and is bluer then.",
+        ),
+    PropMeta::number("ShadowSoftness", 0.2)
+        .range(0.0, 1.0)
+        .widget(Widget::Slider)
+        .visual()
+        .group("Appearance")
+        .order(8)
+        .desc("How soft the edges of the sun's shadows are, from 0 (sharpest) to 1 (softest).",),
+    PropMeta::number("ClockTime", 14.0)
+        .wrap(0.0, 24.0)
+        .widget(Widget::Slider)
+        .visual()
+        .group("Data")
+        .order(0)
+        .desc(
+            "The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap \
+             around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can \
+             simply add to it to run the day.",
+        ),
     PropMeta::number("GeographicLatitude", DEFAULT_LATITUDE)
         .range(-90.0, 90.0)
         .visual()
-        .group("Sun")
-        .order(3)
+        .group("Data")
+        .order(1)
         .desc(
             "Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it \
              passes straight overhead at noon, further north it stays lower in the south.",
+        ),
+    PropMeta::string("TimeOfDay", "14:00:00")
+        .computed(time_of_day_get, Some(time_of_day_set))
+        .derived_from(&["ClockTime"])
+        .flags(PropFlags::NO_SAVE)
+        .group("Data")
+        .order(2)
+        .desc(
+            "ClockTime written as hours, minutes and seconds, such as \"14:30:00\" (hours 0-23, seconds optional \
+             when writing). Setting it sets ClockTime; a text that is not a time is an error.",
         ),
     PropMeta::vector3("SunDirection", 0.0, 1.0, 0.0)
         .computed(sun_direction_get, None)
         .derived_from(&["ClockTime", "GeographicLatitude"])
         .read_only()
         .flags(PropFlags::NO_SAVE)
-        .group("Sun")
-        .order(4)
+        .group("Data")
+        .order(3)
         .desc(
             "The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. \
              It points below the horizon at night, when the moon, opposite it, lights the scene.",
         ),
-    PropMeta::boolean("GlobalShadows", true)
+    PropMeta::number("ExposureCompensation", 0.0)
+        .range(-3.0, 3.0)
+        .widget(Widget::Slider)
         .visual()
-        .group("Sun")
-        .order(5)
+        .group("Exposure")
+        .order(0)
         .desc(
-            "Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own \
-             CastShadow. Turning it off saves the cost of drawing the shadows.",
+            "Makes the whole picture brighter or darker, in stops from -3 to 3: each stop doubles or halves it. 0 \
+             leaves it as it is.",
         ),
+    PropMeta::color3("FogColor", 0.75, 0.75, 0.75)
+        .visual()
+        .group("Fog")
+        .order(0)
+        .desc("The colour things fade to in the distance, and the sky becomes, when there is fog.",),
+    PropMeta::number("FogEnd", 100_000.0)
+        .range(0.0, 100_000.0)
+        .visual()
+        .group("Fog")
+        .order(1)
+        .desc(
+            "How far away, in studs, the fog hides everything. At 100000, the most and the default, there is no \
+             fog.",
+        ),
+    PropMeta::number("FogStart", 0.0)
+        .range(0.0, 100_000.0)
+        .visual()
+        .group("Fog")
+        .order(2)
+        .desc("How far away, in studs, the fog begins: nearer than this, nothing is fogged.",),
     PropMeta::color3("SkyColor", 0.53, 0.72, 0.95)
         .visual()
         .group("Sky")
@@ -197,22 +292,6 @@ static PROPS: &[PropMeta] = &[
         .group("Sky")
         .order(1)
         .desc("The colour of the sky at the horizon in the middle of the day; the sky fades to it from SkyColor."),
-    PropMeta::color3("OutdoorAmbient", 0.5, 0.5, 0.5)
-        .visual()
-        .group("Ambient")
-        .order(0)
-        .desc(
-            "The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night \
-             and is bluer then.",
-        ),
-    PropMeta::color3("Ambient", 0.0, 0.0, 0.0)
-        .visual()
-        .group("Ambient")
-        .order(1)
-        .desc(
-            "Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and \
-             nights brighter.",
-        ),
 ];
 
 /// The direction the sun and moon methods return.

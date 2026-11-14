@@ -235,6 +235,14 @@ struct FrameUniforms {
     shadow_see_through: [f32; 4],
     /// x: the shading view ([`ShadingView`], #478) the fragment shader draws.
     view: [f32; 4],
+    /// rgb: light on surfaces facing away from the sun or moon (`ColorShift_Bottom`, #600).
+    color_shift_bottom: [f32; 4],
+    /// rgb: the fog's colour; w: 1 when there is fog (#600).
+    fog_color: [f32; 4],
+    /// x, y: where the fog starts and is whole, in studs; z: how far the sky is for it.
+    fog_range: [f32; 4],
+    /// x, y: the environment's diffuse and specular scales; z: the shadow filter's spread; w: the exposure (#600).
+    environment: [f32; 4],
 }
 
 /// The frame group's entries a frame without local lights binds: the frame uniform, the materials, the sun's shadow
@@ -323,6 +331,10 @@ impl FrameUniforms {
             lights_atlas: local.atlas,
             shadow_see_through: shadow.see_through,
             view: [0.0; 4],
+            color_shift_bottom: vec4(light.color_shift_bottom),
+            fog_color: vec4w(light.fog_color, if light.fog { 1.0 } else { 0.0 }),
+            fog_range: [light.fog_start, light.fog_end, crate::lighting::SKY_FOG_DISTANCE, 0.0],
+            environment: light.environment,
         }
     }
 }

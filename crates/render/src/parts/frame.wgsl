@@ -58,6 +58,14 @@ struct Frame {
     shadow_see_through: vec4<f32>,
     // x: the shading view (parts/shading.rs, #478): 0 shaded, 1 unlit, 2 lighting only, 3 light density.
     view: vec4<f32>,
+    // rgb: light on surfaces facing away from the sun or moon (Lighting.ColorShift_Bottom, #600).
+    color_shift_bottom: vec4<f32>,
+    // rgb: the fog's colour; w: 1 when there is fog (#600).
+    fog_color: vec4<f32>,
+    // x, y: where the fog starts and is whole, in studs; z: how far the sky is for it.
+    fog_range: vec4<f32>,
+    // x, y: the environment's diffuse and specular scales; z: the shadow filter's spread; w: the exposure.
+    environment: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -76,4 +84,19 @@ fn encode(color: vec3<f32>) -> vec3<f32> {
         return linear_to_srgb(color);
     }
     return color;
+}
+
+// How much of the fog's colour a point `distance` away takes (Lighting.FogStart and FogEnd, #600): none before the
+// start, all of it from the end on, linearly between.
+fn fog_amount(distance: f32) -> f32 {
+    if frame.fog_color.w < 0.5 {
+        return 0.0;
+    }
+    let range = max(frame.fog_range.y - frame.fog_range.x, 1e-3);
+    return clamp((distance - frame.fog_range.x) / range, 0.0, 1.0);
+}
+
+// `color` seen through the fog from `distance` away, at the frame's exposure (Lighting.ExposureCompensation, #600).
+fn finish(color: vec3<f32>, distance: f32) -> vec3<f32> {
+    return mix(color, frame.fog_color.rgb, fog_amount(distance)) * frame.environment.w;
 }

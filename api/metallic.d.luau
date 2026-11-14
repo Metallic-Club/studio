@@ -607,26 +607,44 @@ end
 
 --- Controls how the scene is lit: the time of day, the sun and moon, the colours of the sky and the ambient light.
 declare extern type Lighting extends Instance with
-    --- The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can simply add to it to run the day.
-    ClockTime: number
-    --- ClockTime written as hours, minutes and seconds, such as "14:30:00" (hours 0-23, seconds optional when writing). Setting it sets ClockTime; a text that is not a time is an error.
-    TimeOfDay: string
+    --- Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and nights brighter.
+    Ambient: Color3
     --- How strong the sunlight is (and the moonlight, at night). 0 turns the sun off; there is no upper limit.
     Brightness: number
-    --- Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it passes straight overhead at noon, further north it stays lower in the south.
-    GeographicLatitude: number
-    --- The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. It points below the horizon at night, when the moon, opposite it, lights the scene.
-    read SunDirection: Vector3
+    --- Light of this colour on the sides of surfaces facing away from the sun (or the moon), as strong as its light. Black, the default, adds none.
+    ColorShift_Bottom: Color3
+    --- A colour added to the sunlight (or moonlight) on surfaces facing it, as strong as its light. Black, the default, leaves the light as it is.
+    ColorShift_Top: Color3
+    --- How much of the sky's light surfaces take from all around, 0 to 1: at 0 only the sun, Ambient and the lights light them.
+    EnvironmentDiffuseScale: number
+    --- How much of the sky shiny surfaces reflect, 0 to 1: at 0 they reflect only the sun and the lights.
+    EnvironmentSpecularScale: number
     --- Whether the sun, and the moon at night, cast shadows. Each part can still opt out with its own CastShadow. Turning it off saves the cost of drawing the shadows.
     GlobalShadows: boolean
+    --- The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night and is bluer then.
+    OutdoorAmbient: Color3
+    --- How soft the edges of the sun's shadows are, from 0 (sharpest) to 1 (softest).
+    ShadowSoftness: number
+    --- The time of day in hours, which places the sun: 6 is sunrise, 12 is noon, 18 is sunset. Values wrap around the clock instead of stopping at the ends: 25 becomes 1 and -1 becomes 23, so a script can simply add to it to run the day.
+    ClockTime: number
+    --- Where on Earth the game is, in degrees north of the equator. It sets how high the sun climbs: at 0 it passes straight overhead at noon, further north it stays lower in the south.
+    GeographicLatitude: number
+    --- ClockTime written as hours, minutes and seconds, such as "14:30:00" (hours 0-23, seconds optional when writing). Setting it sets ClockTime; a text that is not a time is an error.
+    TimeOfDay: string
+    --- The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. It points below the horizon at night, when the moon, opposite it, lights the scene.
+    read SunDirection: Vector3
+    --- Makes the whole picture brighter or darker, in stops from -3 to 3: each stop doubles or halves it. 0 leaves it as it is.
+    ExposureCompensation: number
+    --- The colour things fade to in the distance, and the sky becomes, when there is fog.
+    FogColor: Color3
+    --- How far away, in studs, the fog hides everything. At 100000, the most and the default, there is no fog.
+    FogEnd: number
+    --- How far away, in studs, the fog begins: nearer than this, nothing is fogged.
+    FogStart: number
     --- The colour of the sky overhead in the middle of the day. It also tints the light from the sky.
     SkyColor: Color3
     --- The colour of the sky at the horizon in the middle of the day; the sky fades to it from SkyColor.
     HorizonColor: Color3
-    --- The light the sky gives outdoors, from above, filling what the sun does not reach. It dims at night and is bluer then.
-    OutdoorAmbient: Color3
-    --- Light added evenly everywhere, indoors and out, at every time of day: raise it to keep dark places and nights brighter.
-    Ambient: Color3
     --- Returns the time of day in minutes since midnight, which is ClockTime times 60.
     function GetMinutesAfterMidnight(self): number
     --- Sets the time of day to this many minutes after midnight. Like ClockTime it wraps around the day, so 1500 is 01:00.

@@ -34,6 +34,10 @@ use metallic_core::{Color3, DataModel, Id, PropId, Value};
 /// The sun's radiance per unit of `Brightness`, linear. The default `Brightness` of 2 gives about 2.3: a white
 /// surface facing the noon sun reflects about 0.73 of it, plus the sky's ambient.
 pub const SUN_RADIANCE: f32 = 1.15;
+/// `FogEnd` from which there is no fog: Roblox's default, 100,000 studs.
+pub const NO_FOG: f32 = 100_000.0;
+/// How far the sky is, for the fog (#600): with `FogEnd` well short of it, the sky is the fog's colour.
+pub const SKY_FOG_DISTANCE: f32 = 10_000.0;
 /// The moon's radiance per unit of `Brightness`: about 1/16 of the sun.
 pub const MOON_RADIANCE: f32 = 0.07;
 /// The hemisphere ambient's sky side per unit of `OutdoorAmbient` (decoded to linear).
@@ -87,10 +91,30 @@ pub struct SceneLighting {
     pub horizon_color: Color3,
     /// `GlobalShadows`: the sun (or moon) casts shadows ([`crate::shadow`]).
     pub global_shadows: bool,
+    /// `ColorShift_Top`: added to the sunlight (and moonlight) on surfaces facing it (#600).
+    pub color_shift_top: Color3,
+    /// `ColorShift_Bottom`: light of this colour on surfaces facing away from the sun (or moon) (#600).
+    pub color_shift_bottom: Color3,
+    /// `EnvironmentDiffuseScale`: how much of the sky's diffuse light (the hemisphere ambient) surfaces take, 0 to 1.
+    pub environment_diffuse_scale: f32,
+    /// `EnvironmentSpecularScale`: how much of the sky surfaces reflect, 0 to 1.
+    pub environment_specular_scale: f32,
+    /// `ShadowSoftness`: how soft the sun's shadow edges are, 0 to 1 ([`crate::shadow`]).
+    pub shadow_softness: f32,
+    /// `ExposureCompensation`: the frame's exposure in stops, -3 to 3.
+    pub exposure_compensation: f32,
+    /// `FogColor`: the colour things fade to with distance.
+    pub fog_color: Color3,
+    /// `FogStart` and `FogEnd`: the distances the fog starts at and is whole at, in studs. No fog from
+    /// [`NO_FOG`] on, Roblox's default.
+    pub fog_start: f32,
+    /// See [`SceneLighting::fog_start`].
+    pub fog_end: f32,
 }
 
 impl Default for SceneLighting {
-    /// `Lighting`'s defaults: 14:00 at 41.733° north (the sun high in the south-west), `Brightness` 2, no
+    /// `Lighting`'s defaults: 14:00 at 41.733° north (the sun high in the south-west), `Brightness` 2, no colour shifts,
+    /// the whole environment, a 0.2 shadow softness, no exposure change, no fog, no
     /// `Ambient`, a mid-grey `OutdoorAmbient`, a light blue sky and shadows on.
     fn default() -> Self {
         Self {
@@ -101,6 +125,15 @@ impl Default for SceneLighting {
             sky_color: Color3::new(0.53, 0.72, 0.95),
             horizon_color: Color3::new(0.8, 0.88, 0.96),
             global_shadows: true,
+            color_shift_top: Color3::new(0.0, 0.0, 0.0),
+            color_shift_bottom: Color3::new(0.0, 0.0, 0.0),
+            environment_diffuse_scale: 1.0,
+            environment_specular_scale: 1.0,
+            shadow_softness: 0.2,
+            exposure_compensation: 0.0,
+            fog_color: Color3::new(0.75, 0.75, 0.75),
+            fog_start: 0.0,
+            fog_end: NO_FOG,
         }
     }
 }
@@ -122,6 +155,17 @@ pub(crate) struct ResolvedLighting {
     pub sun_halo: Vec3,
     pub moon_disc: Vec3,
     pub moon_cos_radius: f32,
+    /// Light on surfaces facing away from the sun or moon (`ColorShift_Bottom`), at the light's strength.
+    pub color_shift_bottom: Vec3,
+    /// The fog's colour, and whether there is fog.
+    pub fog_color: Vec3,
+    pub fog: bool,
+    /// Where the fog starts and is whole, in studs.
+    pub fog_start: f32,
+    pub fog_end: f32,
+    /// The environment's diffuse and specular scales, the shadow filter's spread (1 at the default softness) and
+    /// the exposure as a factor.
+    pub environment: [f32; 4],
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -154,10 +198,21 @@ impl SceneLighting {
 
         let sun_tint = SUN_LOW.lerp(SUN_HIGH, smoothstep(0.0, 0.45, e));
         let sun_radiance = sun_tint * brightness * SUN_RADIANCE;
-        let (light_direction, light_color) = if e >= 0.0 {
-            (sun, sun_radiance * smoothstep(0.0, 0.15, e))
+        // The light's strength without its colour, for the colour shifts (#600).
+        let strength = if e >= 0.0 {
+            brightness * SUN_RADIANCE * smoothstep(0.0, 0.15, e)
         } else {
-            (-sun, MOON_TINT * brightness * MOON_RADIANCE * smoothstep(0.0, 0.15, -e))
+            brightness * MOON_RADIANCE * smoothstep(0.0, 0.15, -e)
+        };
+        let shift_top = self.color_shift_top.to_linear().max(Vec3::ZERO) * strength;
+        let shift_bottom = self.color_shift_bottom.to_linear().max(Vec3::ZERO) * strength;
+        let (light_direction, light_color) = if e >= 0.0 {
+            (sun, sun_radiance * smoothstep(0.0, 0.15, e) + shift_top)
+        } else {
+            (
+                -sun,
+                MOON_TINT * brightness * MOON_RADIANCE * smoothstep(0.0, 0.15, -e) + shift_top,
+            )
         };
 
         let sky = self.sky_color.to_linear().max(Vec3::ZERO);
@@ -166,6 +221,8 @@ impl SceneLighting {
         let level = NIGHT_AMBIENT + (1.0 - NIGHT_AMBIENT) * day;
         let outdoor = self.outdoor_ambient.to_linear().max(Vec3::ZERO) * OUTDOOR_AMBIENT_SCALE * tint * level;
         let flat = self.ambient.to_linear().max(Vec3::ZERO);
+        let fog_start = finite_or(self.fog_start, 0.0).max(0.0);
+        let fog_end = finite_or(self.fog_end, NO_FOG).max(fog_start);
 
         let horizon = NIGHT_HORIZON.lerp(self.horizon_color.to_linear().max(Vec3::ZERO), day);
         let twilight = smoothstep(-0.2, 0.0, e) * (1.0 - smoothstep(0.0, 0.3, e));
@@ -186,6 +243,18 @@ impl SceneLighting {
             sun_halo: sun_radiance * SUN_HALO * sun_visible,
             moon_disc: MOON_TINT * brightness * MOON_DISC * moon_visible,
             moon_cos_radius: MOON_RADIUS_DEG.to_radians().cos(),
+            color_shift_bottom: shift_bottom,
+            fog_color: self.fog_color.to_linear().max(Vec3::ZERO),
+            fog: fog_end < NO_FOG,
+            fog_start,
+            fog_end,
+            environment: [
+                finite_or(self.environment_diffuse_scale, 1.0).clamp(0.0, 1.0),
+                finite_or(self.environment_specular_scale, 1.0).clamp(0.0, 1.0),
+                // 0.2, the default, is the filter as it was; 0 half as wide and 1 three times as wide.
+                0.5 + 2.5 * finite_or(self.shadow_softness, 0.2).clamp(0.0, 1.0),
+                2f32.powf(finite_or(self.exposure_compensation, 0.0).clamp(-3.0, 3.0)),
+            ],
         }
     }
 }
@@ -202,6 +271,15 @@ struct LightingProps {
     sky_color: Option<PropId>,
     horizon_color: Option<PropId>,
     global_shadows: Option<PropId>,
+    color_shift_top: Option<PropId>,
+    color_shift_bottom: Option<PropId>,
+    environment_diffuse_scale: Option<PropId>,
+    environment_specular_scale: Option<PropId>,
+    shadow_softness: Option<PropId>,
+    exposure_compensation: Option<PropId>,
+    fog_color: Option<PropId>,
+    fog_start: Option<PropId>,
+    fog_end: Option<PropId>,
 }
 
 /// Reads [`SceneLighting`] from a `Lighting` instance, looking its property ids up by name only when the instance
@@ -233,6 +311,15 @@ impl LightingReader {
                     sky_color: id("SkyColor"),
                     horizon_color: id("HorizonColor"),
                     global_shadows: id("GlobalShadows"),
+                    color_shift_top: id("ColorShift_Top"),
+                    color_shift_bottom: id("ColorShift_Bottom"),
+                    environment_diffuse_scale: id("EnvironmentDiffuseScale"),
+                    environment_specular_scale: id("EnvironmentSpecularScale"),
+                    shadow_softness: id("ShadowSoftness"),
+                    exposure_compensation: id("ExposureCompensation"),
+                    fog_color: id("FogColor"),
+                    fog_start: id("FogStart"),
+                    fog_end: id("FogEnd"),
                 };
                 self.props = Some(props);
                 props
@@ -240,6 +327,10 @@ impl LightingReader {
         };
         let defaults = SceneLighting::default();
         let color = |prop: Option<PropId>, default| prop.and_then(|p| dm.color3(lighting, p).ok()).unwrap_or(default);
+        let number = |prop: Option<PropId>, default: f32| {
+            prop.and_then(|p| dm.number(lighting, p).ok())
+                .map_or(default, |n| n as f32)
+        };
         SceneLighting {
             sun_direction: props
                 .sun_direction
@@ -260,6 +351,15 @@ impl LightingReader {
                 .global_shadows
                 .and_then(|p| dm.bool(lighting, p).ok())
                 .unwrap_or(defaults.global_shadows),
+            color_shift_top: color(props.color_shift_top, defaults.color_shift_top),
+            color_shift_bottom: color(props.color_shift_bottom, defaults.color_shift_bottom),
+            environment_diffuse_scale: number(props.environment_diffuse_scale, defaults.environment_diffuse_scale),
+            environment_specular_scale: number(props.environment_specular_scale, defaults.environment_specular_scale),
+            shadow_softness: number(props.shadow_softness, defaults.shadow_softness),
+            exposure_compensation: number(props.exposure_compensation, defaults.exposure_compensation),
+            fog_color: color(props.fog_color, defaults.fog_color),
+            fog_start: number(props.fog_start, defaults.fog_start),
+            fog_end: number(props.fog_end, defaults.fog_end),
         }
     }
 }
@@ -317,11 +417,71 @@ mod tests {
         assert_eq!(read.outdoor_ambient, Color3::new(0.4, 0.4, 0.4));
         assert_eq!(read.sky_color, Color3::new(0.2, 0.3, 0.9));
         assert_eq!(read.horizon_color, Color3::new(0.9, 0.8, 0.7));
+        // Roblox's (#600).
+        set(&mut dm, "ColorShift_Top", Value::Color3(Color3::new(0.3, 0.2, 0.1)));
+        set(&mut dm, "ColorShift_Bottom", Value::Color3(Color3::new(0.1, 0.2, 0.3)));
+        set(&mut dm, "EnvironmentDiffuseScale", Value::Number(0.25));
+        set(&mut dm, "EnvironmentSpecularScale", Value::Number(0.5));
+        set(&mut dm, "ShadowSoftness", Value::Number(1.0));
+        set(&mut dm, "ExposureCompensation", Value::Number(-1.0));
+        set(&mut dm, "FogColor", Value::Color3(Color3::new(0.5, 0.6, 0.7)));
+        set(&mut dm, "FogStart", Value::Number(10.0));
+        set(&mut dm, "FogEnd", Value::Number(200.0));
+        let read = reader.read(&dm, id);
+        assert_eq!(read.color_shift_top, Color3::new(0.3, 0.2, 0.1));
+        assert_eq!(read.color_shift_bottom, Color3::new(0.1, 0.2, 0.3));
+        assert_eq!(
+            (read.environment_diffuse_scale, read.environment_specular_scale),
+            (0.25, 0.5)
+        );
+        assert_eq!((read.shadow_softness, read.exposure_compensation), (1.0, -1.0));
+        assert_eq!(read.fog_color, Color3::new(0.5, 0.6, 0.7));
+        assert_eq!((read.fog_start, read.fog_end), (10.0, 200.0));
         set(&mut dm, "ClockTime", Value::Number(18.0));
         assert!(reader.read(&dm, id).sun_direction.abs_diff_eq(Vec3::NEG_X, 1e-5));
         // Another instance without the properties reads as the defaults.
         let folder = dm.create(dm.registry().class_id("Folder").unwrap()).unwrap();
         assert_eq!(reader.read(&dm, folder), SceneLighting::default());
+    }
+
+    /// #600: the colour shifts, the environment's scales, the shadows' softness, the exposure and the fog, as the
+    /// shaders get them; the defaults change nothing.
+    #[test]
+    fn roblox_s_lighting_properties_resolve_for_the_shaders() {
+        let plain = SceneLighting::default().resolve();
+        assert_eq!(
+            plain.environment,
+            [1.0, 1.0, 1.0, 1.0],
+            "the defaults are the look as it was"
+        );
+        assert!(!plain.fog && plain.color_shift_bottom == Vec3::ZERO);
+        let shifted = SceneLighting {
+            color_shift_top: Color3::new(1.0, 0.0, 0.0),
+            color_shift_bottom: Color3::new(0.0, 0.0, 1.0),
+            environment_diffuse_scale: 0.0,
+            environment_specular_scale: 2.0,
+            shadow_softness: 1.0,
+            exposure_compensation: -2.0,
+            fog_end: 300.0,
+            fog_start: 400.0,
+            ..SceneLighting::default()
+        }
+        .resolve();
+        assert!(shifted.light_color.x > plain.light_color.x + 1.0, "{shifted:?}");
+        assert_eq!(shifted.light_color.y, plain.light_color.y);
+        assert!(shifted.color_shift_bottom.z > 1.0 && shifted.color_shift_bottom.x == 0.0);
+        assert_eq!(shifted.environment, [0.0, 1.0, 3.0, 0.25], "clamped to their ranges");
+        assert!(shifted.fog);
+        assert_eq!(
+            (shifted.fog_start, shifted.fog_end),
+            (400.0, 400.0),
+            "the end is never before the start"
+        );
+        let fog_off = SceneLighting {
+            fog_end: NO_FOG,
+            ..SceneLighting::default()
+        };
+        assert!(!fog_off.resolve().fog);
     }
 
     #[test]

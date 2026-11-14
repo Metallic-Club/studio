@@ -159,7 +159,8 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
     let clip = frame.shadow_matrices[cascade] * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
     let reference = clip.z - frame.shadow_biases[cascade];
-    let texel = frame.shadow_params.z;
+    // Lighting.ShadowSoftness spreads the taps (#600): 1 at its default.
+    let texel = frame.shadow_params.z * frame.environment.z;
     let reach = i32(frame.shadow_params.y);
     var lit = 0.0;
     for (var y = -reach; y <= reach; y += 1) {
@@ -238,8 +239,14 @@ fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     let light = frame.light_color.rgb * n_dot_l * shadow;
 
     var out: Shaded;
-    out.body = diffuse / PI * light + diffuse * hemisphere(n.y) + albedo * row.surface.z;
-    out.specular = distribution * visibility * fresnel * light + env_brdf(f0, roughness, n_dot_v) * hemisphere(reflect(-v, n).y);
+    // Lighting.EnvironmentDiffuseScale and EnvironmentSpecularScale scale the sky's light, ColorShift_Bottom lights
+    // the side away from the sun (#600).
+    let away = max(-dot(n, l), 0.0);
+    out.body = diffuse / PI * (light + frame.color_shift_bottom.rgb * away)
+        + diffuse * hemisphere(n.y) * frame.environment.x
+        + albedo * row.surface.z;
+    out.specular = distribution * visibility * fresnel * light
+        + env_brdf(f0, roughness, n_dot_v) * hemisphere(reflect(-v, n).y) * frame.environment.y;
     // Frames that draw no local light use pipelines made with lights_off.wgsl, whose `local_lighting` adds nothing
     // and binds nothing (parts/mod.rs).
     let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);
@@ -291,7 +298,7 @@ fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(encode(view_color(in, albedo, view)), 1.0);
     }
     let s = shade(in, albedo);
-    return vec4<f32>(encode(s.body + s.specular), 1.0);
+    return vec4<f32>(encode(finish(s.body + s.specular, length(in.position))), 1.0);
 }
 
 // Premultiplied alpha. Glass keeps its reflections at full strength while its body fades.
@@ -306,7 +313,10 @@ fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
     let s = shade(in, albedo);
     let glass = material_row(in.material).surface.w > 0.5;
     let specular = select(s.specular * alpha, s.specular, glass);
-    return vec4<f32>(encode(s.body * alpha + specular), alpha);
+    // Through the fog (#600) the surface gives way to the fog's colour, as much as it covers.
+    let lit = s.body * alpha + specular;
+    let fogged = mix(lit, frame.fog_color.rgb * alpha, fog_amount(length(in.position)));
+    return vec4<f32>(encode(fogged * frame.environment.w), alpha);
 }
 
 // The wireframe view's lines (#478): each part's colour, lifted a little so dark parts still show on the sky.
