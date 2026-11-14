@@ -97,6 +97,12 @@ pub fn is_a(dm: &DataModel, id: Id, class: &str) -> bool {
         .is_some_and(|class| dm.is_a(id, class).unwrap_or(false))
 }
 
+/// Whether `id` is outlined when selected or under the pointer (#616): a part or a model. A camera, a service or a
+/// folder has no place of its own to outline, even with parts inside it.
+pub fn is_outlined(dm: &DataModel, id: Id) -> bool {
+    is_a(dm, id, "BasePart") || is_a(dm, id, "Model")
+}
+
 /// A part's box: its `CFrame` and `Size`. `None` for anything that is not a part.
 pub fn part_box(dm: &DataModel, id: Id) -> Option<Bounds> {
     if !is_a(dm, id, "BasePart") {
