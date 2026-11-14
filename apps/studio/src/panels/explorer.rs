@@ -394,7 +394,6 @@ impl Panel for Explorer {
         let pointer = ui.input(|input| input.pointer.interact_pos());
         let mut menu = None;
         let mut renamed = None;
-        let mut recolored = None;
         let renaming = editor
             .explorer
             .renaming
@@ -451,7 +450,6 @@ impl Panel for Explorer {
                     RowAction::Renamed(name) => renamed = Some((row.id, Some(name))),
                     RowAction::KeepName => renamed = Some((row.id, None)),
                     RowAction::Insert => editor.explorer.open_insert(row.id),
-                    RowAction::IconColor(color) => recolored = Some((row.id, color)),
                 }
             }
         });
@@ -516,22 +514,6 @@ impl Panel for Explorer {
                 editor.selection.set_only(Some(id));
             }
             editor.tree_edit(edit);
-        }
-        if let Some((id, color)) = recolored {
-            // The selected folders when the row is one of them, else the row.
-            let folders: Vec<Id> = if editor.selection.contains(id) {
-                let folder = editor.dm.registry().class_id("Folder");
-                editor
-                    .selection
-                    .ids()
-                    .iter()
-                    .copied()
-                    .filter(|&id| folder.is_some_and(|folder| editor.dm.is_a(id, folder).unwrap_or(false)))
-                    .collect()
-            } else {
-                vec![id]
-            };
-            editor.set_icon_color(&folders, color);
         }
         if let Some(id) = open_script {
             cx.editor.open_script(id);
@@ -642,8 +624,6 @@ enum RowAction {
     Insert,
     /// A drag started on it (#353).
     Drag,
-    /// A colour for its folder icon from its menu (#603), or its own back with `None`.
-    IconColor(Option<[u8; 3]>),
 }
 
 /// One row on its stripe (#274): the caret, the class icon and the name (a text field while it is renamed, #351); a
@@ -757,11 +737,6 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
         return RowAction::Insert;
     }
     let mut insert = false;
-    let mut recolor = None;
-    let is_folder = dm
-        .registry()
-        .class_id("Folder")
-        .is_some_and(|folder| dm.is_a(row.id, folder).unwrap_or(false));
     let mut chosen = None;
     response.context_menu(|ui| {
         if ui.button("Insert Object\u{2026}").clicked() {
@@ -777,21 +752,11 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
                 ui.close();
             }
         }
-        // A folder's icon colour (#603).
-        if is_folder {
-            ui.separator();
-            ui.menu_button("Icon colour", |ui| {
-                let current = icon_color.map(|color| [color.r(), color.g(), color.b()]);
-                recolor = icon_color_menu(ui, row.id, current);
-            });
-        }
     });
     if response.drag_started() && !renaming {
         RowAction::Drag
     } else if insert {
         RowAction::Insert
-    } else if let Some(color) = recolor {
-        RowAction::IconColor(color)
     } else if let Some(edit) = chosen {
         RowAction::Menu(edit)
     } else if response.secondary_clicked() && !selected {
@@ -805,48 +770,6 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
     } else {
         RowAction::None
     }
-}
-
-/// The colours a folder's icon can take from its menu (#603), the profile's palette.
-const ICON_COLORS: [[u8; 3]; 8] = crate::profile::COLORS;
-
-/// A folder's Icon colour submenu (#603): the palette's swatches, the colour picker for one of its own, and Reset.
-/// The picker starts from its colour now, `current`. Returns the colour chosen (`Some(None)`: back to its class's own).
-fn icon_color_menu(ui: &mut Ui, id: Id, current: Option<[u8; 3]>) -> Option<Option<[u8; 3]>> {
-    let mut chosen = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = space::S2;
-        for color in ICON_COLORS {
-            let [r, g, b] = color;
-            let (rect, response) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
-            let name = format!("Icon colour #{r:02x}{g:02x}{b:02x}");
-            response.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
-            ui.painter()
-                .circle_filled(rect.center(), 7.0, Color32::from_rgb(r, g, b));
-            if response.hovered() {
-                let ring = current_colors(ui.ctx()).palette.text;
-                ui.painter()
-                    .circle_stroke(rect.center(), 9.5, egui::Stroke::new(1.5, ring));
-            }
-            if response.clicked() {
-                chosen = Some(Some(color));
-            }
-        }
-    });
-    let picker = egui::Id::unique("metallic.explorer.icon_color").with(id);
-    let mut rgb = ui
-        .data(|data| data.get_temp::<[u8; 3]>(picker))
-        .or(current)
-        .unwrap_or(ICON_COLORS[0]);
-    if super::color_picker::picker(ui, picker.with("picker"), &mut rgb) {
-        chosen = Some(Some(rgb));
-    }
-    ui.data_mut(|data| data.insert_temp(picker, rgb));
-    if ui.button("Reset icon colour").clicked() {
-        chosen = Some(None);
-        ui.close();
-    }
-    chosen
 }
 
 /// Where dragged rows would land on `rect` (#353): an accent outline round the row for inside it, an accent line along

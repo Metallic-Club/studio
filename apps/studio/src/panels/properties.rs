@@ -116,6 +116,8 @@ pub enum Source {
     Property(PropId),
     /// The active instance's attribute of this name (#591).
     Attribute(String),
+    /// The selected folders' icon colour in the Explorer (#618): Studio's, not the game's.
+    IconColor,
 }
 
 /// A group of properties, in the order the panel lists them.
@@ -312,6 +314,40 @@ pub fn attribute_rows(dm: &DataModel, id: Id) -> Vec<PropertyRow> {
             )
         })
         .collect()
+}
+
+/// The row a folder's icon colour is edited with (#618): Studio's, kept beside the scene, not a property of the game.
+static ICON_COLOR: PropMeta = PropMeta::color3("IconColor", 0.0, 0.0, 0.0).label("Icon Color").desc(
+    "The colour of the folder's icon in the Explorer. It is Studio's, kept with the project: scripts don't see it. \
+         Right-click the name to reset it.",
+);
+
+/// The Icon Color rows (#618) when every one of `ids` is a folder: each one's colour from `colors`, or `default` (a
+/// folder icon's own) for one without.
+pub fn icon_color_rows(
+    dm: &DataModel,
+    colors: &super::explorer::colors::IconColors,
+    ids: &[Id],
+    default: Color3,
+) -> Option<Vec<PropertyRow>> {
+    let folder = dm.registry().class_id("Folder")?;
+    if ids.is_empty() || !ids.iter().all(|&id| dm.is_a(id, folder).unwrap_or(false)) {
+        return None;
+    }
+    // The active instance's first, as the panel's other rows.
+    let all: Vec<Value> = ids
+        .iter()
+        .rev()
+        .map(|&id| Value::Color3(colors.get(id).map_or(default, |[r, g, b]| Color3::from_rgb_u8(r, g, b))))
+        .collect();
+    Some(value_rows(
+        ICON_COLOR.label,
+        ICON_COLOR.name,
+        &ICON_COLOR,
+        &all,
+        &Source::IconColor,
+        true,
+    ))
 }
 
 /// The types a new attribute can have (#591), as Roblox names them, in its order.
@@ -703,6 +739,14 @@ impl Panel for Properties {
             .attributes(id)
             .map(|list| list.iter().map(|(name, _)| name.to_string()).collect())
             .unwrap_or_default();
+        // A folder's icon colour (#618): Studio's, edited here as a property is.
+        let folder_colour = dm
+            .registry()
+            .class_id("Folder")
+            .map(|folder| class_icon(dm.registry(), folder).color(&current_colors(ui.ctx())))
+            .map_or(Color3::new(0.8, 0.8, 0.8), |c| Color3::from_rgb_u8(c.r(), c.g(), c.b()));
+        let icon_rows = icon_color_rows(dm, &scene.explorer.icon_colors, &ids, folder_colour);
+        let mut reset_icon = false;
         ScrollArea::vertical()
             .id_salt("properties.rows")
             .auto_shrink([false, false])
@@ -715,6 +759,13 @@ impl Panel for Properties {
                     let drawn = rows_ui(ui, dm, &group.rows, &mut open, share, &taken, picking.as_ref());
                     edits.extend(drawn.edits);
                     pick |= drawn.pick;
+                    ui.add_space(space::S5);
+                }
+                if let Some(rows) = &icon_rows {
+                    section_label(ui, "Appearance");
+                    let drawn = rows_ui(ui, dm, rows, &mut open, share, &taken, None);
+                    edits.extend(drawn.edits);
+                    reset_icon |= drawn.reset;
                     ui.add_space(space::S5);
                 }
                 let mut bottom = ui.cursor().top();
@@ -760,7 +811,22 @@ impl Panel for Properties {
                         log::warn!("properties: {error}");
                     }
                 }
+                Source::IconColor => {
+                    for &target in &ids {
+                        let current = scene
+                            .explorer
+                            .icon_colors
+                            .get(target)
+                            .map_or(folder_colour, |[r, g, b]| Color3::from_rgb_u8(r, g, b));
+                        if let Some(Value::Color3(color)) = values::apply(&edit, part, &Value::Color3(current)) {
+                            scene.set_icon_color(&[target], Some(color.to_rgb_u8()));
+                        }
+                    }
+                }
             }
+        }
+        if reset_icon {
+            scene.set_icon_color(&ids, None);
         }
         if pick {
             scene.explorer.parent_pick = match picking {
@@ -796,6 +862,8 @@ struct Drawn {
     action: Option<AttributeAction>,
     /// The Parent row's value was clicked: start or stop picking a parent (#599).
     pick: bool,
+    /// The Icon Color row's menu asked to reset it (#618).
+    reset: bool,
 }
 
 /// Draws `rows` (a group's) touching and striped, a part's row only while every row it opens from is `open` (#417),
@@ -843,6 +911,7 @@ fn rows_ui(
                 open.insert(row.key.clone());
             }
             drawn.pick |= out.pick;
+            drawn.reset |= out.reset;
             if out.action.is_some() {
                 drawn.action = out.action;
             }
@@ -861,6 +930,8 @@ struct RowOut {
     action: Option<AttributeAction>,
     /// The Parent row's value was clicked (#599).
     pick: bool,
+    /// Its menu asked to reset the icon colour (#618).
+    reset: bool,
 }
 
 /// How far a part's row is indented per level.
@@ -888,6 +959,7 @@ fn row_ui(
         toggled: false,
         action: None,
         pick: false,
+        reset: false,
     };
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
@@ -973,6 +1045,17 @@ fn row_ui(
         let response = ui.interact(name_cell, ui.scope_id().with("attribute"), Sense::click());
         response.widget_info(|| WidgetInfo::labeled(Role::Label, true, format!("Attribute {attribute}")));
         out.action = attribute_menu(&response, attribute, taken);
+    }
+    if let (Source::IconColor, 0) = (&row.source, row.depth) {
+        // Back to a folder icon's own colour (#618).
+        let response = ui.interact(name_cell, ui.scope_id().with("icon colour"), Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(Role::Label, true, "Icon Color options"));
+        Popup::context_menu(&response).show(|ui| {
+            if ui.button("Reset to default").clicked() {
+                out.reset = true;
+                ui.close();
+            }
+        });
     }
     let mut pick_clicked = false;
     let typed = ui
