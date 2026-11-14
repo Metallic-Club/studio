@@ -260,27 +260,28 @@ struct FrameUniforms {
 const SUN_ENTRIES: usize = 8;
 
 /// The sky map (#615): one cascade lit from straight overhead, out to 160 studs of the view, and no see-through
-/// casters (light through glass is not the sky's). Coarse on purpose (#625): at 192² a texel is a stud and a half or
-/// so, and the shader counts a point open only where most of the filter's 5×5 taps are (#642), so the open side of a
-/// roof's edge fades out over about four studs, as Roblox's 4-stud voxels do, while the covered side stays covered.
-/// The taps' two texels plus the compare's one are what the casters' slope bias (3 texels) covers, so slopes in the
-/// open stay open. The receiver offsets are in texels: over half a stud, and a quarter of one.
+/// casters (light through glass is not the sky's). At 512² a texel is under a stud; the shader's narrow 3×3 filter
+/// counts a point open only where most of it is (#642, #648), so an edge between open and covered is a smooth ramp
+/// about a stud wide, all of it on the open side: it neither reaches through a thin wall into a room nor darkens open
+/// ground beside a part. The ground's light, on what faces down, looks wider (`sky_open` in parts.wgsl). The taps'
+/// texel plus the compare's one are within what the casters' slope bias (3 texels) covers, so slopes in the open stay
+/// open. The receiver offsets are in texels.
 const SKY_SETTINGS: ShadowSettings = ShadowSettings {
     enabled: true,
     cascades: 1,
-    resolution: 192,
+    resolution: 512,
     distance: 160.0,
     split_lambda: 0.75,
     dynamic_cascades: 1,
-    filter_radius: 2,
+    filter_radius: 1,
     depth_bias: 0.15,
     normal_offset: 0.4,
     see_through: false,
 };
 
-/// How far the sky map's filter reaches from a point, in texels (#625): two taps a texel apart, and the compare's
-/// half texel past the last.
-const SKY_FILTER_REACH: f32 = 2.5;
+/// How far the sky map's filter reaches from a point, in texels (#625, #648): a tap a texel out, and the compare's half
+/// texel past it.
+const SKY_FILTER_REACH: f32 = 1.5;
 
 /// The local lights' uniform array (`local_lights` in lights.wgsl).
 const LIGHTS_SIZE: u64 = 64 * MAX_GPU_LIGHTS as u64;
@@ -1432,7 +1433,7 @@ impl PartRenderer {
                 sky.offsets[0],
                 sky.biases[0],
             ],
-            sky_range: [sky.splits[0], sky.params[3], sky_texel * SKY_FILTER_REACH, 0.0],
+            sky_range: [sky.splits[0], sky.params[3], sky_texel * SKY_FILTER_REACH, sky_texel],
             ..FrameUniforms::new(
                 camera,
                 aspect,

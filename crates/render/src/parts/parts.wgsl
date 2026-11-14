@@ -131,10 +131,6 @@ fn env_brdf(f0: vec3<f32>, roughness: f32, n_dot_v: f32) -> vec3<f32> {
     return f0 * ab.x + ab.y;
 }
 
-fn hemisphere(direction_y: f32) -> vec3<f32> {
-    return mix(frame.ground_ambient.rgb, frame.sky_ambient.rgb, clamp(direction_y * 0.5 + 0.5, 0.0, 1.0));
-}
-
 // How much of the sun (or moon) reaches a point: 1 lit, 0 in shadow. `position` is camera-relative, `n` the unit
 // normal and `n_dot_l` its cosine to the light. The cascade is the first whose slice of the view the point is in;
 // the point moves along its normal by the cascade's offset, scaled by 1 − N·L (only grazing receivers need it), and
@@ -193,42 +189,68 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
     return mix(visible, 1.0, fade);
 }
 
-// How open to the sky a point is, 0 to 1 (#615): Lighting.OutdoorAmbient lights only that much of it. The sky map holds
-// the nearest surface above each point; a point under something is closed. The map is only a height map, so it cannot
-// tell a wall from an open side (#642): a filter that let open ground beyond a wall count lit the room behind it along
-// every edge. So a point is open only where most of the area around it is: a box of 5×5 taps a texel apart, of which
-// half open is still closed, and the rest fades in smoothly. Covered places stay covered right up to their walls, and
-// the open side of an edge darkens over a few studs as it nears what covers it (#625). The point moves out along its
-// normal first (a wall's outside is open, its inside under a roof is not); a wall's, by the filter's reach as well, so
-// the wall's own top, beside it in the map, does not close it. Never down (#642): under a ball, the floor would close
-// its underside, in a hard line where the moved point went below it. Past the map, everything is open, faded in over
-// its last tenth.
-fn sky_open(position: vec3<f32>, n: vec3<f32>) -> f32 {
-    if frame.sky_params.x < 0.5 {
-        return 1.0;
-    }
-    let depth = dot(position, frame.view_forward.xyz);
-    if depth >= frame.sky_range.x {
-        return 1.0;
-    }
-    let out = vec3<f32>(n.x, max(n.y, 0.0), n.z);
-    let p = position + out * (frame.sky_params.z + frame.sky_range.z * length(n.xz));
+// The share of a box of (2 × `reach` + 1)² taps, `step` texels apart, around `p` (camera-relative) that has nothing above
+// it in the sky map: 0 to 1. Every tap weighs the same: a tent changes fastest at its middle, just where the shaping
+// in `sky_open` starts, and the edge would start with a step.
+fn sky_share(p: vec3<f32>, reach: i32, step: f32) -> f32 {
     let clip = frame.sky_matrix * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
     let reference = clip.z - frame.sky_params.w;
-    let spread = frame.sky_params.y;
-    // Every tap weighs the same: a tent changes fastest at its middle, just where the shaping below starts, and the
-    // open side would start with a step.
+    let spread = frame.sky_params.y * step;
     var open = 0.0;
-    for (var y = -2; y <= 2; y += 1) {
-        for (var x = -2; x <= 2; x += 1) {
+    for (var y = -reach; y <= reach; y += 1) {
+        for (var x = -reach; x <= reach; x += 1) {
             let at = uv + vec2<f32>(f32(x), f32(y)) * spread;
             open += textureSampleCompareLevel(sky_map, shadow_sampler, at, 0, reference);
         }
     }
-    let shaped = smoothstep(0.5, 1.0, open / 25.0);
+    let side = f32(2 * reach + 1);
+    return open / (side * side);
+}
+
+// How open a point is to the sky's light (#615), 0 to 1: Lighting.OutdoorAmbient lights only that much of it. The sky
+// map holds the nearest surface above each point; a point under something is closed. It is only a height map, so it
+// cannot tell a wall from an open side, nor a ball's underside from a ceiling: both have their own part above them.
+// So the two halves of the sky's light are kept apart (#648):
+//
+// - x, what comes down from the sky, onto what faces up and sideways: open where the point itself is, and closed under
+//   anything. A narrow box of 3×3 taps, of which half open is still closed (#642), so it never reaches through a wall
+//   into a room, and darkens open ground beside a part over about a stud only (#648; four studs before). The point
+//   moves out along its normal first (a wall's outside is open, its inside under a roof is not); a wall's, by the
+//   filter's reach as well, so the wall's own top, beside it in the map, does not close it. Never down: under a ball,
+//   the floor would close its underside in a hard line (#642).
+// - y, what the ground throws back up, onto what faces down: open where the ground around the point is, a box of 5×5
+//   taps two texels apart, from the point moved out sideways by as much. A ball's underside sees the open ground round
+//   it; a ceiling sees the room's covered floor, and stays dark however near a wall, as more than half of what it sees
+//   is still covered.
+//
+// Past the map, everything is open, faded in over its last tenth.
+fn sky_open(position: vec3<f32>, n: vec3<f32>) -> vec2<f32> {
+    if frame.sky_params.x < 0.5 {
+        return vec2<f32>(1.0);
+    }
+    let depth = dot(position, frame.view_forward.xyz);
+    if depth >= frame.sky_range.x {
+        return vec2<f32>(1.0);
+    }
+    let lift = frame.sky_params.z;
+    let out = vec3<f32>(n.x, max(n.y, 0.0), n.z);
+    let above = position + out * (lift + frame.sky_range.z * length(n.xz));
+    let sky = smoothstep(0.5, 1.0, sky_share(above, 1, 1.0));
+    let around = position + vec3<f32>(n.x, 0.0, n.z) * (frame.sky_range.w * GROUND_REACH) + vec3<f32>(0.0, lift, 0.0);
+    let ground = smoothstep(0.6, 1.0, sky_share(around, 2, 2.0));
     let fade = smoothstep(frame.sky_range.y, frame.sky_range.x, depth);
-    return mix(shaped, 1.0, fade);
+    return mix(vec2<f32>(sky, ground), vec2<f32>(1.0), fade);
+}
+
+// How far the ground's taps reach from a point, in texels: two taps two texels apart, and the compare's half texel.
+const GROUND_REACH: f32 = 4.5;
+
+// The sky's light on a surface facing `n` (or, for its reflections, looking along `n`): the sky's half where the sky
+// reaches, the ground's where the ground around is open (`open`, from `sky_open`).
+fn sky_light(n_y: f32, open: vec2<f32>) -> vec3<f32> {
+    let up = clamp(n_y * 0.5 + 0.5, 0.0, 1.0);
+    return frame.sky_ambient.rgb * (up * open.x) + frame.ground_ambient.rgb * ((1.0 - up) * open.y);
 }
 
 // `v` scaled to unit length, or 0 when it has none (where `normalize` divides 0 by 0).
@@ -285,10 +307,10 @@ fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     // The sky's light only where the sky reaches; Ambient everywhere (#615).
     let open = sky_open(in.position, n);
     out.body = diffuse / PI * (light + frame.color_shift_bottom.rgb * away)
-        + diffuse * (hemisphere(n.y) * open * frame.environment.x + frame.ambient.rgb)
+        + diffuse * (sky_light(n.y, open) * frame.environment.x + frame.ambient.rgb)
         + albedo * row.surface.z;
     out.specular = distribution * visibility * fresnel * light
-        + env_brdf(f0, roughness, n_dot_v) * (hemisphere(reflect(-v, n).y) * open + frame.ambient.rgb) * frame.environment.y;
+        + env_brdf(f0, roughness, n_dot_v) * (sky_light(reflect(-v, n).y, open) + frame.ambient.rgb) * frame.environment.y;
     // Frames that draw no local light use pipelines made with lights_off.wgsl, whose `local_lighting` adds nothing
     // and binds nothing (parts/mod.rs).
     let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);

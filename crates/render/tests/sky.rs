@@ -447,7 +447,7 @@ fn outdoor_ambient_lights_only_what_the_sky_reaches() {
     );
 }
 
-/// #625: the floor goes from open to covered under a roof's edge in a smooth ramp several studs wide, not a step;
+/// #625, #648: the floor goes from open to covered under a roof's edge in a smooth ramp, not a step, out in the open;
 /// and a block's outside wall in the open is not darkened by the block itself.
 #[test]
 fn the_sky_fades_out_smoothly_under_a_roof() {
@@ -501,30 +501,35 @@ fn the_sky_fades_out_smoothly_under_a_roof() {
     eprintln!("floor across the edge, every 0.2 studs from x = -8: {profile:?}");
     let (under, open) = (profile[0], profile[80]);
     assert!(under < open * 0.75, "under {under}, open {open}");
-    // Smooth: it never steps by more than a tenth of the whole change between neighbours a fifth of a stud apart
-    // (dithering moves a pixel by a level or two either way).
+    // Smooth: a ramp, not a step, rising all the way (dithering moves a pixel by a level or two either way). Since
+    // #648 it is about a stud wide: wider reached through thin walls (#642) or darkened open ground beside parts.
     let change = open - under;
     for (i, pair) in profile.windows(2).enumerate() {
+        let step = pair[1] - pair[0];
         assert!(
-            (pair[1] - pair[0]).abs() <= change * 0.1 + 6.0,
-            "a step of {} at x = {:.1}",
-            pair[1] - pair[0],
+            step >= -6.0 && step <= change * 0.4 + 6.0,
+            "a step of {step} at x = {:.1}",
             -8.0 + i as f32 * 0.2
         );
     }
-    // Wide: the floor is between 15% and 85% of the way from covered to open over at least 2 studs (it was under
-    // one before #625), all of it out in the open (#642): under the roof's edge the floor is as dark as deep under it.
-    assert!(
-        profile[38] <= under + 6.0,
-        "the sky reaches under the roof: {} at x = -0.4",
-        profile[38]
-    );
     let ramp = profile
         .iter()
         .filter(|&&v| v > under + change * 0.15 && v < open - change * 0.15)
         .count();
     eprintln!("{ramp} samples on the ramp");
-    assert!(ramp >= 10, "the ramp is {:.1} studs wide", ramp as f32 * 0.2);
+    assert!(ramp >= 3, "the ramp is {:.1} studs wide", ramp as f32 * 0.2);
+    // All of it out in the open (#642): just under the roof's edge the floor is as dark as deep under it, and a stud and
+    // a half out it is as bright as far out (#648).
+    assert!(
+        profile[39] <= under + 6.0,
+        "the sky reaches under the roof: {} at x = -0.2",
+        profile[39]
+    );
+    assert!(
+        profile[48] >= open - 6.0,
+        "the roof darkens the open floor: {} at x = 1.6",
+        profile[48]
+    );
     // The block's front wall, against the same wall with GlobalShadows off (nothing kept from the sky).
     let wall = level(&lit, wall_spot);
     set(&mut game, "GlobalShadows", Value::Bool(false));
@@ -630,6 +635,49 @@ fn outdoor_ambient_does_not_leak_into_a_closed_room() {
         assert!(
             here <= without + 4,
             "{what} is lit from outside: {here} against {without}"
+        );
+    }
+}
+
+/// #648: open ground right beside a part is as bright as open ground away from it, but for a thin line at the part's
+/// foot. It once darkened over about four studs, as if half covered.
+#[test]
+fn open_ground_beside_a_part_is_not_darkened() {
+    let Some(context) = gpu() else { return };
+    let mut game = Game::new();
+    game.part(
+        Look::new("Block", "Concrete", [160, 160, 160]),
+        Vec3::new(400.0, 2.0, 400.0),
+        CFrame::new(Vec3::new(0.0, -1.0, 0.0)),
+    );
+    // A tall block, its front face at z = -14.
+    game.part(
+        Look::new("Block", "Concrete", [160, 160, 160]),
+        Vec3::new(8.0, 12.0, 4.0),
+        CFrame::new(Vec3::new(0.0, 6.0, -16.0)),
+    );
+    let eye = Vec3::new(0.0, 6.0, 0.0);
+    game.set_camera(CFrame::look_at(eye, Vec3::new(0.0, 0.0, -12.0), Vec3::Y), 70.0);
+    let lighting = lighting_service(&game);
+    game.dm
+        .set_by_name(lighting, "Brightness", Value::Number(0.0))
+        .expect("Brightness");
+    let lit = render(&context, &mut game, PassSet::default().without(PassId::Bloom), 1);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sky-beside.png");
+    scenes::write_png(&out, SIZE, SIZE, &lit);
+    eprintln!("the block is in {}", out.display());
+    let level = |at: Vec3| {
+        let (x, y) = project(&game, at - eye);
+        let p = pixel(&lit, x as u32, y as u32);
+        i32::from(p[0]) + i32::from(p[1]) + i32::from(p[2])
+    };
+    let away = level(Vec3::new(0.0, 0.0, -6.0));
+    for gap in [1.5f32, 2.5, 4.0] {
+        let beside = level(Vec3::new(0.0, 0.0, -14.0 + gap));
+        eprintln!("the floor {gap} studs from the block: {beside}, away from it {away}");
+        assert!(
+            beside * 100 >= away * 95,
+            "the floor {gap} studs from the block is darkened: {beside} against {away}"
         );
     }
 }
