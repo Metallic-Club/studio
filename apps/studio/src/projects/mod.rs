@@ -447,7 +447,7 @@ impl Projects {
                     ui.add(Label::new(section_label("Projects", p.subtle)).selectable(false));
                 });
                 for (view, label) in [(View::Recent, "Recent"), (View::Templates, "Templates")] {
-                    if category_item(ui, label, self.view == view).clicked() {
+                    if category_item(ui, label, self.view == view, true).clicked() {
                         self.view = view;
                     }
                 }
