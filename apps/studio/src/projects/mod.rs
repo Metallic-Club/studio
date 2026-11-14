@@ -1,4 +1,4 @@
-//! The projects page (ADR 0009, Screens), Roblox-launcher-like in the website's style: a rail (Recent, Templates)
+//! The projects page (ADR 0009, Screens), Roblox-launcher-like in the website's style: a rail (Recent, Templates, Team Create)
 //! and a grid of cards with a blank thumbnail, the name, when it was last opened and a warning when the file is
 //! missing.
 //!
@@ -7,6 +7,9 @@
 //! - **Add** picks an existing `.mtproj` with the system's file dialog ([`dialog`]), adds it and opens it.
 //! - **Open** is a double-click, or Enter (the `projects.open` command) on the selected card. Right-click, Remove
 //!   takes a project off the list and leaves its file alone.
+//!
+//! Team Create's section (ADR 0011) is [`crate::team::page`]: projects hosted or joined, each probed for whether it is
+//! hosted now.
 //!
 //! The list is `projects.toml` in the config folder ([`list`]). Opening hands the project's path to the app, which
 //! moves to the Editor screen.
@@ -40,7 +43,7 @@ pub const RAIL_MARK: f32 = 28.0;
 /// The narrowest a card may be; the grid fits as many as it can and widens them to fill the row.
 const CARD_MIN_WIDTH: f32 = 200.0;
 /// A thumbnail's height to its width.
-const THUMBNAIL_ASPECT: f32 = 9.0 / 16.0;
+pub(crate) const THUMBNAIL_ASPECT: f32 = 9.0 / 16.0;
 /// The space between rows of cards: the website's game grid.
 const ROW_GAP: f32 = 26.0;
 /// The space under a thumbnail for the name and the line under it.
@@ -56,6 +59,8 @@ pub enum View {
     Recent,
     /// The templates a new project can start from.
     Templates,
+    /// The Team Create projects (ADR 0011): those the user hosts or joined, each checked for whether it is hosted now.
+    TeamCreate,
 }
 
 /// The New project dialog's fields.
@@ -378,6 +383,7 @@ impl Projects {
         mark: Option<&TextureHandle>,
         keymap: &Keymap,
         profile: &mut crate::settings::Profile,
+        team: &mut crate::team::TeamCreate,
     ) -> Option<PathBuf> {
         let p = current_colors(ui.ctx()).palette;
         let full = ui.max_rect();
@@ -391,9 +397,10 @@ impl Projects {
         let mut open = ui
             .scope_builder(
                 UiBuilder::new().max_rect(content).layout(Layout::top_down(Align::Min)),
-                |ui| self.content(ui, keymap),
+                |ui| self.content(ui, keymap, team),
             )
             .inner;
+        crate::team::page::join_dialog(ui.ctx(), team);
         if self.new_project.is_some()
             && let Some(path) = self.new_project_dialog(ui.ctx())
         {
@@ -446,7 +453,11 @@ impl Projects {
                     ui.add_space(space::S5);
                     ui.add(Label::new(section_label("Projects", p.subtle)).selectable(false));
                 });
-                for (view, label) in [(View::Recent, "Recent"), (View::Templates, "Templates")] {
+                for (view, label) in [
+                    (View::Recent, "Recent"),
+                    (View::Templates, "Templates"),
+                    (View::TeamCreate, "Team Create"),
+                ] {
                     if category_item(ui, label, self.view == view, true).clicked() {
                         self.view = view;
                     }
@@ -460,11 +471,15 @@ impl Projects {
     }
 
     /// The header, the last error, and the grid of the view.
-    fn content(&mut self, ui: &mut Ui, keymap: &Keymap) -> Option<PathBuf> {
+    fn content(&mut self, ui: &mut Ui, keymap: &Keymap, team: &mut crate::team::TeamCreate) -> Option<PathBuf> {
         let p = current_colors(ui.ctx()).palette;
         let (title, line) = match self.view {
             View::Recent => ("Recent", "Your projects, the most recently opened first."),
             View::Templates => ("Templates", "Start a new project from one of these."),
+            View::TeamCreate => (
+                "Team Create",
+                "Projects you host or joined. A green one is hosted now and can be joined.",
+            ),
         };
         let tip = |label: &str, id: &str| match keymap.shortcut_text(id) {
             Some(keys) => format!("{label} ({keys})"),
@@ -485,6 +500,23 @@ impl Projects {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Clear of the settings gear in the window's corner.
                 ui.add_space(size::CONTROL + space::S5 + space::S4 - space::S9);
+                if self.view == View::TeamCreate {
+                    // Team Create's own actions: joining someone's project, and checking the hosts again now.
+                    if button(ui, ButtonKind::Primary, "Join by address")
+                        .on_hover_text("Join a project someone hosts, by their address and port")
+                        .clicked()
+                    {
+                        crate::team::page::open_join_dialog(ui.ctx());
+                    }
+                    if button(ui, ButtonKind::Secondary, "Check again")
+                        .on_hover_text("Ask each project's host whether it is hosted now")
+                        .clicked()
+                    {
+                        team.prober
+                            .refresh(&team.store.projects, std::time::Instant::now(), true);
+                    }
+                    return;
+                }
                 if button(ui, ButtonKind::Primary, "New project")
                     .on_hover_text(tip("Make a new project from a template", ids::PROJECTS_NEW))
                     .clicked()
@@ -509,6 +541,7 @@ impl Projects {
         match self.view {
             View::Recent => self.recent_grid(ui, &mut actions),
             View::Templates => self.template_grid(ui, &mut actions),
+            View::TeamCreate => crate::team::page::grid(ui, team),
         }
         for action in actions {
             match action {
@@ -699,7 +732,7 @@ impl Projects {
 }
 
 /// An uppercase section label in the website's style.
-fn section_label(label: &str, color: Color32) -> RichText {
+pub(crate) fn section_label(label: &str, color: Color32) -> RichText {
     RichText::new(label.to_uppercase())
         .font(fonts::named(fonts::STRONG, text::LABEL))
         .extra_letter_spacing(text::LABEL_TRACKING)
@@ -707,7 +740,7 @@ fn section_label(label: &str, color: Color32) -> RichText {
 }
 
 /// Lays `count` cards out in rows as wide as `ui`, inside a scroll area, and draws each with `draw(ui, index, rect)`.
-fn grid(ui: &mut Ui, count: usize, mut draw: impl FnMut(&mut Ui, usize, Rect)) {
+pub(crate) fn grid(ui: &mut Ui, count: usize, mut draw: impl FnMut(&mut Ui, usize, Rect)) {
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         // Room for the selected card's outline, which is drawn outside the card.
         let outline = size::ACCENT_BAR + 2.0;
@@ -739,7 +772,7 @@ fn grid(ui: &mut Ui, count: usize, mut draw: impl FnMut(&mut Ui, usize, Rect)) {
 
 /// A card in `rect`: a blank thumbnail (the accent's outline when `selected`), `name`, and `line` under it. Returns
 /// its response, which clicks anywhere on it reach.
-fn card(ui: &mut Ui, rect: Rect, id: Id, name: &str, line: &str, selected: bool) -> egui::Response {
+pub(crate) fn card(ui: &mut Ui, rect: Rect, id: Id, name: &str, line: &str, selected: bool) -> egui::Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let response = ui.interact(rect, id, Sense::click());

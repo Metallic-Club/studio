@@ -357,6 +357,49 @@ impl Studio {
         }
     }
 
+    /// Does what the projects page's Team Create section asked for this frame.
+    fn page_actions(&mut self) {
+        use crate::team::PageAction;
+        for action in std::mem::take(&mut self.team.page_actions) {
+            match action {
+                PageAction::Join(id) => {
+                    let Some(project) = self.team.store.get(id).cloned() else {
+                        continue;
+                    };
+                    if !self.team.prober.reach(id).is_available() {
+                        // Only a project hosted now can be opened by a participant.
+                        continue;
+                    }
+                    let profile = self.settings.settings().profile.clone();
+                    let name = match self.team.form.name.trim() {
+                        "" => profile.shown_name().to_owned(),
+                        typed => typed.to_owned(),
+                    };
+                    let identity = metallic_engine::metallic_net::identity::Identity::new(&name, profile.color);
+                    let address = match project.host.parse::<std::net::Ipv6Addr>() {
+                        Ok(_) => format!("[{}]:{}", project.host, project.port),
+                        Err(_) => format!("{}:{}", project.host, project.port),
+                    };
+                    if let Err(error) = self.team.join(&address, identity, Some(id)) {
+                        self.team.note = Some(crate::team::Note {
+                            error: true,
+                            text: error,
+                        });
+                    }
+                }
+                PageAction::OpenOwned { path, port, host } => {
+                    if host {
+                        self.team.form.port = port.to_string();
+                        self.team.host_after_open = Some(path.clone());
+                    }
+                    self.open(path);
+                }
+                PageAction::JoinAddress => self.team_action(crate::team::menu::TeamAction::Join),
+                PageAction::Forget(id) => self.team.store.forget(id),
+            }
+        }
+    }
+
     /// Does what the Team Create menu asked for.
     fn team_action(&mut self, action: crate::team::menu::TeamAction) {
         use crate::team::menu::TeamAction;
@@ -583,9 +626,11 @@ impl Studio {
             Screen::Projects => {
                 let mark = self.mark(&ctx, RAIL_MARK);
                 let profile = &mut self.settings.settings_mut().profile;
-                if let Some(path) = self.projects.show(ui, Some(&mark), &self.keymap, profile) {
+                let team = &mut self.team;
+                if let Some(path) = self.projects.show(ui, Some(&mark), &self.keymap, profile, team) {
                     self.open(path);
                 }
+                self.page_actions();
             }
             Screen::Editor => self.editor_ui(ui),
         }
@@ -748,6 +793,10 @@ impl Studio {
                 }
                 let editor = EditorState::new(*opened, Arc::clone(&self.log));
                 self.editor = Some(EditorScreen::Open(Box::new(editor)));
+                // The projects page's Open and host (ADR 0011): hosting starts once the owner's file is open.
+                if self.team.host_after_open.take() == self.open_project {
+                    self.team_action(crate::team::menu::TeamAction::Host);
+                }
                 None
             }
             Some(Err(error)) => {
@@ -9199,4 +9248,5 @@ skip_sign_in = true
     }
 
     mod team_create;
+    mod team_projects;
 }
