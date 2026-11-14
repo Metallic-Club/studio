@@ -13,7 +13,7 @@ mod support;
 use std::path::PathBuf;
 
 use metallic_core::glam::Vec3;
-use metallic_core::{CFrame, Id, Value};
+use metallic_core::{CFrame, Color3, Id, Value};
 use metallic_render::scene::{InstanceBinding, RenderComponents};
 use metallic_render::{
     CameraReader, ContextOptions, DrawStats, GpuScene, LightingReader, LodSettings, OffscreenTarget, PassId, PassSet,
@@ -67,6 +67,20 @@ fn rows(clock: f64, parts: bool) -> Game {
     game.dm
         .set_by_name(lighting_service(&game), "ClockTime", Value::Number(clock))
         .expect("ClockTime");
+    game
+}
+
+/// [`rows`] lit by `Ambient` alone, no `OutdoorAmbient`: the sky map (#615) then keeps nothing from the parts, so
+/// what the sun's shadows do is all that differs between two frames.
+fn flat_rows(clock: f64, parts: bool) -> Game {
+    let mut game = rows(clock, parts);
+    let lighting = lighting_service(&game);
+    game.dm
+        .set_by_name(lighting, "OutdoorAmbient", Value::Color3(Color3::new(0.0, 0.0, 0.0)))
+        .expect("OutdoorAmbient");
+    game.dm
+        .set_by_name(lighting, "Ambient", Value::Color3(Color3::new(0.45, 0.45, 0.45)))
+        .expect("Ambient");
     game
 }
 
@@ -225,12 +239,12 @@ fn coarser_shadows_put_no_acne_on_their_receivers() {
     let Some(context) = gpu() else { return };
     // Noon: each part's shadow falls on the floor beside it, never on another part, so on the parts' own pixels the
     // sun's shadow can only darken a lit surface by shadowing itself.
-    let parts_only = |look: Look2| render(&context, &mut rows(12.0, true), look).0;
+    let parts_only = |look: Look2| render(&context, &mut flat_rows(12.0, true), look).0;
     let unshadowed = Look2 {
         shadows: ShadowSettings::OFF,
         ..Look2::levels(LodSettings::default())
     };
-    let (bare, _) = render(&context, &mut rows(12.0, false), unshadowed);
+    let (bare, _) = render(&context, &mut flat_rows(12.0, false), unshadowed);
     for (name, lod) in [
         ("medium", LodSettings::MEDIUM),
         ("low", LodSettings::LOW),

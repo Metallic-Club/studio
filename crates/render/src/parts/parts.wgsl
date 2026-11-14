@@ -26,6 +26,8 @@ const MATERIAL_ROWS: u32 = 256u;
 // The sun's shadow cascades, one layer each, and a comparison sampler that filters four depth tests bilinearly.
 @group(0) @binding(2) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(3) var shadow_sampler: sampler_comparison;
+// What is above each point (#615): the sky map, a one-cascade shadow map lit from straight overhead.
+@group(0) @binding(13) var sky_map: texture_depth_2d_array;
 // The cascades' see-through maps (#491): the nearest see-through casters' depth and the light they let through.
 @group(0) @binding(8) var see_through_depth: texture_depth_2d_array;
 @group(0) @binding(9) var see_through_light: texture_2d_array<f32>;
@@ -191,6 +193,35 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
     return mix(visible, 1.0, fade);
 }
 
+// How open to the sky a point is, 0 to 1 (#615): Lighting.OutdoorAmbient lights only that much of it. The sky map holds
+// the nearest surface above each point; a point under something is closed. The point moves out along its normal first
+// (a wall's outside is open, its inside under a roof is not), and a tent of taps softens the edge of an opening
+// over a few texels. Past the map, everything is open, faded in over its last tenth.
+fn sky_open(position: vec3<f32>, n: vec3<f32>) -> f32 {
+    if frame.sky_params.x < 0.5 {
+        return 1.0;
+    }
+    let depth = dot(position, frame.view_forward.xyz);
+    if depth >= frame.sky_range.x {
+        return 1.0;
+    }
+    let p = position + n * frame.sky_params.z;
+    let clip = frame.sky_matrix * vec4<f32>(p, 1.0);
+    let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+    let reference = clip.z - frame.sky_params.w;
+    let spread = frame.sky_params.y * 1.25;
+    var open = 0.0;
+    for (var y = -2; y <= 2; y += 1) {
+        for (var x = -2; x <= 2; x += 1) {
+            let weight = f32(3 - abs(x)) * f32(3 - abs(y));
+            let at = uv + vec2<f32>(f32(x), f32(y)) * spread;
+            open += weight * textureSampleCompareLevel(sky_map, shadow_sampler, at, 0, reference);
+        }
+    }
+    let fade = smoothstep(frame.sky_range.y, frame.sky_range.x, depth);
+    return mix(open / 81.0, 1.0, fade);
+}
+
 // `v` scaled to unit length, or 0 when it has none (where `normalize` divides 0 by 0).
 fn unit_or_zero(v: vec3<f32>) -> vec3<f32> {
     return v * inverseSqrt(max(dot(v, v), 1e-30));
@@ -242,11 +273,13 @@ fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     // Lighting.EnvironmentDiffuseScale and EnvironmentSpecularScale scale the sky's light, ColorShift_Bottom lights
     // the side away from the sun (#600).
     let away = max(-dot(n, l), 0.0);
+    // The sky's light only where the sky reaches; Ambient everywhere (#615).
+    let open = sky_open(in.position, n);
     out.body = diffuse / PI * (light + frame.color_shift_bottom.rgb * away)
-        + diffuse * hemisphere(n.y) * frame.environment.x
+        + diffuse * (hemisphere(n.y) * open * frame.environment.x + frame.ambient.rgb)
         + albedo * row.surface.z;
     out.specular = distribution * visibility * fresnel * light
-        + env_brdf(f0, roughness, n_dot_v) * hemisphere(reflect(-v, n).y) * frame.environment.y;
+        + env_brdf(f0, roughness, n_dot_v) * (hemisphere(reflect(-v, n).y) * open + frame.ambient.rgb) * frame.environment.y;
     // Frames that draw no local light use pipelines made with lights_off.wgsl, whose `local_lighting` adds nothing
     // and binds nothing (parts/mod.rs).
     let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);
