@@ -113,8 +113,9 @@ A dropdown beside Play in the top bar: **Play Solo** (the default: Server and Ga
 **Team Create Play** (the host runs one server; every participant joins it as a player), **Multiple Clients** (a
 local server in the Server view and N Player processes, `Player1`..`PlayerN`, that connect by themselves). The server
 replicates its data model (but `ServerStorage` and `ServerScriptService`) to clients through
-`metallic_net::replication`; each client owns its character's movement. Stop ends the server, the clients and the
-processes.
+`metallic_net::replication`; each client owns its character's movement. Nothing built in moves a character or points
+the camera at it (#638): the game's own controller does, and the client sends where its character is. Stop ends the
+server, the clients and the processes.
 
 ### 9. Security
 

@@ -285,10 +285,7 @@ fn connect(mut config: PlayerConfig, address: &str, name: &str) -> ExitCode {
             metallic_engine::StdOutput,
         )
         .map_err(|error| error.to_string())?;
-        eprintln!(
-            "Joined as {}. WASD to walk, Space and Shift up and down, Q and E turn.",
-            welcome.name
-        );
+        eprintln!("Joined as {}.", welcome.name);
         player.set_frame_hook(RemoteGame::new(client).hook());
         player.run().map(drop).map_err(|error| error.to_string())
     })();
