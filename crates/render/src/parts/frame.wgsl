@@ -66,6 +66,14 @@ struct Frame {
     fog_range: vec4<f32>,
     // x, y: the environment's diffuse and specular scales; z: the shadow filter's spread; w: the exposure.
     environment: vec4<f32>,
+    // rgb: Lighting.Ambient, light added evenly everywhere, indoors too (#615).
+    ambient: vec4<f32>,
+    // The sky map (#615): camera-relative positions to its clip space; x: 1 when there is one, y: one texel in map
+    // coordinates, z: the lookup's normal offset in metres, w: its depth bias; and the view depth it ends at (x) and
+    // starts fading out at (y).
+    sky_matrix: mat4x4<f32>,
+    sky_params: vec4<f32>,
+    sky_range: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

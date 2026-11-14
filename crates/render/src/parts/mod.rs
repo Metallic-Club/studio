@@ -100,7 +100,7 @@ pub use shading::ShadingView;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use metallic_core::glam::Vec3;
+use metallic_core::glam::{Mat4, Vec3};
 
 use crate::context::DescriptorHeapTurn;
 use crate::context::Submitter;
@@ -243,11 +243,36 @@ struct FrameUniforms {
     fog_range: [f32; 4],
     /// x, y: the environment's diffuse and specular scales; z: the shadow filter's spread; w: the exposure (#600).
     environment: [f32; 4],
+    /// rgb: `Ambient`, light added evenly everywhere, indoors too (#615).
+    ambient: [f32; 4],
+    /// Camera-relative positions to the sky map's clip space (#615).
+    sky_matrix: [[f32; 4]; 4],
+    /// x: 1 when there is a sky map; y: one texel in map coordinates; z: the lookup's normal offset in metres; w: its
+    /// depth bias.
+    sky_params: [f32; 4],
+    /// x: the view depth the sky map ends at; y: where it starts fading out.
+    sky_range: [f32; 4],
 }
 
 /// The frame group's entries a frame without local lights binds: the frame uniform, the materials, the sun's shadow
-/// maps and their sampler.
-const SUN_ENTRIES: usize = 7;
+/// maps and their sampler, their see-through maps, and the sky map (#615).
+const SUN_ENTRIES: usize = 8;
+
+/// The sky map (#615): one cascade lit from straight overhead, out to 160 studs of the view, 1024² (a texel of about a
+/// third of a stud), its filter as wide as the cascades' widest, and no see-through casters (light through glass is
+/// not the sky's).
+const SKY_SETTINGS: ShadowSettings = ShadowSettings {
+    enabled: true,
+    cascades: 1,
+    resolution: 1024,
+    distance: 160.0,
+    split_lambda: 0.75,
+    dynamic_cascades: 1,
+    filter_radius: 2,
+    depth_bias: 0.5,
+    normal_offset: 1.5,
+    see_through: false,
+};
 
 /// The local lights' uniform array (`local_lights` in lights.wgsl).
 const LIGHTS_SIZE: u64 = 64 * MAX_GPU_LIGHTS as u64;
@@ -335,6 +360,10 @@ impl FrameUniforms {
             fog_color: vec4w(light.fog_color, if light.fog { 1.0 } else { 0.0 }),
             fog_range: [light.fog_start, light.fog_end, crate::lighting::SKY_FOG_DISTANCE, 0.0],
             environment: light.environment,
+            ambient: vec4(light.ambient),
+            sky_matrix: Mat4::IDENTITY.to_cols_array_2d(),
+            sky_params: [0.0; 4],
+            sky_range: [0.0; 4],
         }
     }
 }
@@ -515,6 +544,9 @@ pub struct PartRenderer {
     pulled_layout: Option<wgpu::BindGroupLayout>,
     /// The sun's shadow maps, which the frame group samples.
     shadows: ShadowMaps,
+    /// What is above each point the camera sees (#615): a one-cascade shadow map lit from straight overhead, which
+    /// keeps OutdoorAmbient out of enclosed places.
+    sky: ShadowMaps,
     /// The point and spot lights, which the frame group reads.
     lights: LocalLights,
     shaders: Arc<Shaders>,
@@ -657,6 +689,17 @@ impl PartRenderer {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            // The sky map (#615): what is above each point, a one-layer depth array.
+            wgpu::BindGroupLayoutEntry {
+                binding: 13,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
             // The local lights (`crate::lights`): their uniform array, the cluster texture, the shadow tiles and
             // the shadow atlas.
             uniform(4, wgpu::ShaderStages::FRAGMENT, LIGHTS_SIZE),
@@ -704,7 +747,8 @@ impl PartRenderer {
             },
         ];
         // The pipelines of frames with local lights bind all of it; the sky and the pipelines of frames without
-        // (lights_off.wgsl) bind the sun's entries alone (the first seven), so such a frame binds nothing of the lights'.
+        // (lights_off.wgsl) bind the sun's entries and the sky map alone (the first eight), so such a frame binds nothing of
+        // the lights'.
         let layouts_turn = DescriptorHeapTurn::take();
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("metallic parts frame"),
@@ -849,6 +893,14 @@ impl PartRenderer {
             cache,
             &see_placeholder,
         );
+        let mut sky = ShadowMaps::new(
+            (device, queue, maker),
+            binding,
+            instance_layout.as_ref(),
+            cache,
+            &see_placeholder,
+        );
+        sky.configure(SKY_SETTINGS);
         let lights = LocalLights::new(
             (device, queue, maker),
             binding,
@@ -858,7 +910,7 @@ impl PartRenderer {
             &see_placeholder,
         );
         drop(turn);
-        let sun_group = frame_group_without_lights(device, &sun_layout, &frame_buffer, &materials, &shadows);
+        let sun_group = frame_group_without_lights(device, &sun_layout, &frame_buffer, &materials, (&shadows, &sky));
         let frame_group_lights = lights.revision();
         let lighting = SceneLighting::default();
         Self {
@@ -882,6 +934,7 @@ impl PartRenderer {
             instance_layout,
             pulled_layout,
             shadows,
+            sky,
             lights,
             shaders,
             targets: vec![first],
@@ -1126,7 +1179,7 @@ impl PartRenderer {
             &self.sun_layout,
             &self.frame_buffer,
             &self.materials,
-            &self.shadows,
+            (&self.shadows, &self.sky),
         );
     }
 
@@ -1184,7 +1237,7 @@ impl PartRenderer {
                 &self.frame_layout,
                 &self.frame_buffer,
                 &self.materials,
-                &self.shadows,
+                (&self.shadows, &self.sky),
                 Some(lights),
             )
         });
@@ -1237,6 +1290,40 @@ impl PartRenderer {
             // A settings change's new maps took over this frame.
             self.rebuild_frame_group();
         }
+    }
+
+    /// Fits, culls and uploads the sky map for a frame (#615): what is above each point `camera` sees, a shadow map lit
+    /// from straight overhead, so OutdoorAmbient lights only what the sky reaches. Drawn while `Lighting` has global
+    /// shadows and outdoor light to keep out (with neither, everything is open). Call it after
+    /// [`PartRenderer::prepare_shadows`], which takes the scene's shadow-caster changes this map does not need.
+    pub(crate) fn prepare_sky(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &mut GpuScene,
+        camera: Option<&Camera>,
+        (width, height): (u32, u32),
+        lod: &LodView,
+    ) {
+        let wanted = self.lighting.global_shadows
+            && (self.resolved.sky_ambient.max_element() > 0.0 || self.resolved.ground_ambient.max_element() > 0.0);
+        let aspect = width as f32 / height.max(1) as f32;
+        if self
+            .sky
+            .prepare(encoder, scene, camera, aspect, wanted.then_some(Vec3::Y), lod)
+        {
+            self.rebuild_frame_group();
+        }
+    }
+
+    /// The sky map to draw its casters into this frame, when it is drawn (#615).
+    pub(crate) fn sky_target(&self) -> Option<&wgpu::TextureView> {
+        self.sky.caster_target(0)
+    }
+
+    /// Records the sky map's casters into `render_pass`, a depth pass into its [`PartRenderer::sky_target`] (#615).
+    pub(crate) fn draw_sky(&mut self, render_pass: &mut wgpu::RenderPass<'_>) {
+        // Not the sun's shadows: not counted with them.
+        let _ = self.sky.draw(0, &self.meshes, render_pass);
     }
 
     /// Cascade `cascade`'s see-through maps to draw into this frame (depth, light), when it draws them (#491).
@@ -1322,8 +1409,19 @@ impl PartRenderer {
             ShadingView::Wireframe => ShadingView::Shaded,
             view => view,
         };
+        // What is above each point (#615): the sky map's one cascade, when it is drawn.
+        let sky = self.sky.frame();
+        let sky_on = sky.params[0] > 0.0;
         let uniforms = FrameUniforms {
             view: [view.number(), 0.0, 0.0, 0.0],
+            sky_matrix: sky.matrices[0].to_cols_array_2d(),
+            sky_params: [
+                if sky_on { 1.0 } else { 0.0 },
+                sky.params[2],
+                sky.offsets[0],
+                sky.biases[0],
+            ],
+            sky_range: [sky.splits[0], sky.params[3], 0.0, 0.0],
             ..FrameUniforms::new(
                 camera,
                 aspect,
@@ -1591,7 +1689,7 @@ fn frame_group_without_lights(
     layout: &wgpu::BindGroupLayout,
     frame: &wgpu::Buffer,
     materials: &MaterialTable,
-    shadows: &ShadowMaps,
+    shadows: (&ShadowMaps, &ShadowMaps),
 ) -> wgpu::BindGroup {
     frame_group(device, layout, frame, materials, shadows, None)
 }
@@ -1603,7 +1701,7 @@ fn frame_group(
     layout: &wgpu::BindGroupLayout,
     frame: &wgpu::Buffer,
     materials: &MaterialTable,
-    shadows: &ShadowMaps,
+    (shadows, sky): (&ShadowMaps, &ShadowMaps),
     lights: Option<LightBindings<'_>>,
 ) -> wgpu::BindGroup {
     let (see_depth, see_light, see_sampler) = shadows.see_through_views();
@@ -1636,6 +1734,11 @@ fn frame_group(
             binding: 10,
             resource: wgpu::BindingResource::Sampler(see_sampler),
         },
+        // What is above each point (#615): the sky map, sampled with the shadows' comparison sampler.
+        wgpu::BindGroupEntry {
+            binding: 13,
+            resource: wgpu::BindingResource::TextureView(sky.sample_view()),
+        },
     ];
     let Some(lights) = lights else {
         return device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1644,7 +1747,7 @@ fn frame_group(
             entries: &sun,
         });
     };
-    let [e0, e1, e2, e3, e8, e9, e10] = sun;
+    let [e0, e1, e2, e3, e8, e9, e10, e13] = sun;
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic parts frame"),
         layout,
@@ -1656,6 +1759,7 @@ fn frame_group(
             e8,
             e9,
             e10,
+            e13,
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: lights.lights.as_entire_binding(),

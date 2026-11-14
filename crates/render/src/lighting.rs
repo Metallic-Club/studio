@@ -19,7 +19,10 @@
 //! - **The hemisphere ambient** (light from the sky above and the ground below): `OutdoorAmbient` ×
 //!   [`OUTDOOR_AMBIENT_SCALE`], tinted towards `SkyColor` by day. At night it keeps [`NIGHT_AMBIENT`] of its day
 //!   level and turns blue. The ground side is the sky side times [`GROUND_BOUNCE`] (light bounced off the ground).
-//! - **`Ambient`** is added evenly to both sides at every hour: the floor a game sets for dark places and nights.
+//!   It lights only what the sky reaches (#615): a map of what is above each point the camera sees (a
+//!   [`crate::shadow`] map lit from straight overhead) leaves it out of enclosed places.
+//! - **`Ambient`** is added evenly everywhere at every hour, indoors too: the floor a game sets for dark places and
+//!   nights.
 //! - **The sky**: `SkyColor` overhead and `HorizonColor` at the horizon by day, night colours ([`NIGHT_ZENITH`],
 //!   [`NIGHT_HORIZON`]) by night, a darker band below the horizon, an orange glow towards the sun at twilight, and
 //!   the sun and moon discs.
@@ -145,6 +148,8 @@ pub(crate) struct ResolvedLighting {
     pub light_color: Vec3,
     pub sky_ambient: Vec3,
     pub ground_ambient: Vec3,
+    /// `Ambient`: light added evenly everywhere, indoors too (the sky's light above is only where it reaches, #615).
+    pub ambient: Vec3,
     pub sky_zenith: Vec3,
     pub sky_horizon: Vec3,
     pub sky_ground: Vec3,
@@ -231,8 +236,9 @@ impl SceneLighting {
         ResolvedLighting {
             light_direction,
             light_color,
-            sky_ambient: outdoor + flat,
-            ground_ambient: outdoor * GROUND_BOUNCE + flat,
+            sky_ambient: outdoor,
+            ground_ambient: outdoor * GROUND_BOUNCE,
+            ambient: flat,
             sky_zenith: NIGHT_ZENITH.lerp(sky, day),
             sky_horizon: horizon,
             sky_ground: horizon * BELOW_HORIZON,
@@ -556,12 +562,10 @@ mod tests {
         }
         .resolve();
         let floor = Color3::new(0.5, 0.5, 0.5).to_linear();
-        assert!(raised.sky_ambient.abs_diff_eq(base.resolve().sky_ambient + floor, 1e-5));
-        assert!(
-            raised
-                .ground_ambient
-                .abs_diff_eq(base.resolve().ground_ambient + floor, 1e-5)
-        );
+        // Ambient is its own term (#615): everywhere, indoors too, while the sky's light above is only where it reaches.
+        assert!(raised.ambient.abs_diff_eq(floor, 1e-5));
+        assert_eq!(raised.sky_ambient, base.resolve().sky_ambient);
+        assert_eq!(raised.ground_ambient, base.resolve().ground_ambient);
         let dark = SceneLighting {
             brightness: 0.0,
             ..SceneLighting::default()

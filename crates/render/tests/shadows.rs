@@ -340,7 +340,10 @@ fn cast_shadow_and_global_shadows_turn_shadows_off() {
         .set_by_name(lighting, "GlobalShadows", Value::Bool(false))
         .expect("GlobalShadows");
     let global_off = render(&context, &mut built.game, ShadowSettings::default());
-    assert_eq!(scenes::compare(&global_off, &off, 0).max, 0);
+    // GlobalShadows also keeps OutdoorAmbient from being kept out of enclosed places (#615), which the renderer's
+    // shadow settings do not: the image without shadows to compare with has it off too.
+    let no_shadows = render(&context, &mut built.game, ShadowSettings::OFF);
+    assert_eq!(scenes::compare(&global_off, &no_shadows, 0).max, 0);
 }
 
 /// #122, #491: a see-through part's shadow lets light through by its Transparency, getting lighter smoothly as it

@@ -1305,6 +1305,8 @@ impl Renderer {
             self.hurry_lights();
         }
         self.parts.prepare_shadows(&mut encoder, scene, camera, size, &lod);
+        // After the sun's, which take the scene's caster changes (#615).
+        self.parts.prepare_sky(&mut encoder, scene, camera, size, &lod);
         self.shadow_in_use = u8::try_from(self.parts.shadow_stats().cascades).unwrap_or(0);
         // After the upload, which may have replaced the buffers the bind groups use.
         self.parts.prepare(
@@ -1317,6 +1319,7 @@ impl Renderer {
         );
         self.prepare_overlay();
         self.record_shadow_passes(&mut encoder, slot);
+        self.record_sky_pass(&mut encoder);
         self.record_light_shadow_pass(&mut encoder, slot);
         self.record_passes(&mut encoder, target, slot, Some(scene));
         self.end_frame(encoder, slot)
@@ -1394,6 +1397,32 @@ impl Renderer {
             multiview_mask: None,
         });
         self.parts.draw_light_see_through(true, &mut render_pass);
+    }
+
+    /// Records the sky map's pass when it is drawn this frame (#615): one depth pass of what is above each point the
+    /// camera sees, before the frame's passes that sample it. Untimed: it is a shadow cascade's sort of cost.
+    fn record_sky_pass(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let Some(view) = self.parts.sky_target() else {
+            return;
+        };
+        let mut render_pass = encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sky map"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+            .forget_lifetime();
+        self.parts.draw_sky(&mut render_pass);
     }
 
     /// Records the shadow passes of this frame, before the frame's passes that sample the maps: a depth pass for

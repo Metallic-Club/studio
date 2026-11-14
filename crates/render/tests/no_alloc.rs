@@ -168,7 +168,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const WARM_UP: usize = 30;
 const FRAMES: usize = 100;
 /// The size of the frame uniform the parts and the sky read (`Frame` in `src/parts/frame.wgsl`).
-const FRAME_UNIFORM_SIZE: u64 = 912;
+const FRAME_UNIFORM_SIZE: u64 = 1024;
 /// The shadow cascades the shadowed parts frames draw, all of them every frame.
 const CASCADES: usize = 3;
 /// What the shadowed parts frames draw: three cascades, each holding every caster, so a sun that moves every
@@ -1758,11 +1758,14 @@ fn reading_changed_lighting_allocates_nothing() {
     assert_eq!(grown, 0, "the heap grew");
 }
 
-/// The lighting of frame `frame`: the sun moving through the day, so every frame resolves new lighting.
+/// The lighting of frame `frame`: the sun moving through the day, so every frame resolves new lighting, and no
+/// OutdoorAmbient.
 fn moving_sun(frame: usize) -> SceneLighting {
     let angle = frame as f32 * 0.02;
     SceneLighting {
         sun_direction: Vec3::new(angle.cos(), angle.sin().abs() + 0.05, 0.3),
+        // No sky light to keep out, so no sky map (#615): the hand-written frames these are measured against draw none.
+        outdoor_ambient: metallic_core::Color3::new(0.0, 0.0, 0.0),
         ..SceneLighting::default()
     }
 }
@@ -2571,6 +2574,11 @@ impl HandParts {
                     entries.push(wgpu::BindGroupEntry {
                         binding: 10,
                         resource: wgpu::BindingResource::Sampler(&see_sampler),
+                    });
+                    // The sky map (#615), not drawn in these frames: a placeholder.
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: wgpu::BindingResource::TextureView(&see_depth),
                     });
                 }
                 device.create_bind_group(&wgpu::BindGroupDescriptor {

@@ -392,3 +392,57 @@ fn fog_exposure_and_the_environment_change_the_image() {
     eprintln!("floor: plain {}, no environment {}", floor(&plain), floor(&unlit));
     assert!(floor(&unlit) < floor(&plain), "the floor lost the sky's light");
 }
+
+/// #615: OutdoorAmbient lights only what the sky reaches. Under a roof (the sun off, so only the ambient lights the
+/// floor) the floor gets Ambient alone, darker than the open floor beside it; with GlobalShadows off nothing is kept
+/// from the sky, as in Roblox.
+#[test]
+fn outdoor_ambient_lights_only_what_the_sky_reaches() {
+    let Some(context) = gpu() else { return };
+    let set = |game: &mut Game, name: &str, value: Value| {
+        let lighting = lighting_service(game);
+        game.dm.set_by_name(lighting, name, value).expect(name);
+    };
+    let mut game = Game::new();
+    game.part(
+        Look::new("Block", "Concrete", [160, 160, 160]),
+        Vec3::new(400.0, 2.0, 400.0),
+        CFrame::new(Vec3::new(0.0, -1.0, 0.0)),
+    );
+    // A roof over the left half of the view, 6 studs up.
+    game.part(
+        Look::new("Block", "Plastic", [160, 160, 160]),
+        Vec3::new(20.0, 1.0, 40.0),
+        CFrame::new(Vec3::new(-10.0, 6.5, -20.0)),
+    );
+    let eye = Vec3::new(0.0, 3.0, 4.0);
+    game.set_camera(CFrame::look_at(eye, Vec3::new(0.0, 0.0, -12.0), Vec3::Y), 70.0);
+    set(&mut game, "Brightness", Value::Number(0.0));
+    set(
+        &mut game,
+        "Ambient",
+        Value::Color3(metallic_core::Color3::new(0.15, 0.15, 0.15)),
+    );
+    let spots = [-8.0f32, 8.0].map(|x| project(&game, Vec3::new(x, 0.0, -12.0) - eye));
+    let floor_at = |pixels: &[[u8; 4]], x: f32| {
+        let (px, py) = if x < 0.0 { spots[0] } else { spots[1] };
+        let p = pixel(pixels, px as u32, py as u32);
+        f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])
+    };
+    let lit = render(&context, &mut game, PassSet::default(), 1);
+    let (under, open) = (floor_at(&lit, -8.0), floor_at(&lit, 8.0));
+    eprintln!("floor under the roof {under}, in the open {open}");
+    assert!(
+        under < open * 0.75,
+        "the roof keeps the sky's light off the floor under it"
+    );
+    assert!(under > 30.0, "Ambient still lights it");
+    set(&mut game, "GlobalShadows", Value::Bool(false));
+    let flat = render(&context, &mut game, PassSet::default(), 1);
+    let (under, open) = (floor_at(&flat, -8.0), floor_at(&flat, 8.0));
+    eprintln!("without GlobalShadows: under {under}, open {open}");
+    assert!(
+        (under - open).abs() < 8.0,
+        "without GlobalShadows the sky reaches everywhere"
+    );
+}
