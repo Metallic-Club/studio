@@ -312,15 +312,16 @@ pub(crate) fn opening_overlay(ui: &mut Ui, name: &str, step: usize) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 }
 
-/// The top bar: the menus ([`MENUS`]), the play controls and the gear (raised while the Settings window is
-/// open, `settings_open`). The project's name is the window's title ([`super::Studio::window_title`]). Returns what was
-/// asked for.
+/// The top bar: the menus ([`MENUS`]), the play controls, the gear (raised while the Settings window is
+/// open, `settings_open`) and the profile button, which edits `profile` (#602). The project's name is the window's title
+/// ([`super::Studio::window_title`]). Returns what was asked for.
 pub(crate) fn top_bar(
     ui: &mut Ui,
     editor: &EditorState,
     dock: &Dock,
     keymap: &Keymap,
     settings_open: bool,
+    profile: &mut crate::settings::Profile,
 ) -> Option<MenuAction> {
     let p = current_colors(ui.ctx()).palette;
     let rect = ui.max_rect();
@@ -385,6 +386,9 @@ pub(crate) fn top_bar(
                 if gear(ui, settings_open).on_hover_text(tip).clicked() {
                     action = Some(MenuAction::Settings);
                 }
+                // Beside the gear, the profile (#602).
+                ui.add_space(space::S1);
+                crate::profile::button(ui, profile, 30.0);
                 ui.add_space(space::S4);
                 let (divider, _) = ui.allocate_exact_size(vec2(size::BORDER, TITLE_HEIGHT - 8.0), Sense::hover());
                 ui.painter().rect_filled(divider, CornerRadius::ZERO, p.border);

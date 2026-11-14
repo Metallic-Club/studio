@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Label, Layout, Modal, Rect, RichText, Role, ScrollArea,
-    Sense, Stroke, StrokeKind, TextEdit, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
+    Align, Color32, CornerRadius, Frame, Id, Label, Layout, Modal, Rect, RichText, Role, ScrollArea, Sense, Stroke,
+    StrokeKind, TextEdit, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use metallic_engine::metallic_project::{PROJECT_EXTENSION, Project, Template};
 
@@ -369,14 +369,21 @@ impl Projects {
         }
     }
 
-    /// Draws the page filling `ui`, with `mark` at the top of the rail and `keymap`'s shortcuts in the tooltips.
+    /// Draws the page filling `ui`, with `mark` at the top of the rail, `profile`'s button at its foot (#602) and
+    /// `keymap`'s shortcuts in the tooltips.
     /// Returns the project to open, if one was opened.
-    pub fn show(&mut self, ui: &mut Ui, mark: Option<&TextureHandle>, keymap: &Keymap) -> Option<PathBuf> {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        mark: Option<&TextureHandle>,
+        keymap: &Keymap,
+        profile: &mut crate::settings::Profile,
+    ) -> Option<PathBuf> {
         let p = current_colors(ui.ctx()).palette;
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, p.bg);
         let rail = Rect::from_min_max(full.min, pos2(full.left() + RAIL_WIDTH, full.bottom()));
-        ui.scope_builder(UiBuilder::new().max_rect(rail), |ui| self.rail(ui, mark));
+        ui.scope_builder(UiBuilder::new().max_rect(rail), |ui| self.rail(ui, mark, profile));
         let content = Rect::from_min_max(
             pos2(rail.right() + space::S9, full.top() + space::S8),
             pos2(full.right() - space::S9, full.bottom()),
@@ -395,8 +402,9 @@ impl Projects {
         open
     }
 
-    /// The rail: the mark and wordmark, then Recent and Templates, and the offline line at the bottom.
-    fn rail(&mut self, ui: &mut Ui, mark: Option<&TextureHandle>) {
+    /// The rail: the mark and wordmark, then Recent and Templates, and the profile button at the bottom (#602), which
+    /// says Studio is working offline.
+    fn rail(&mut self, ui: &mut Ui, mark: Option<&TextureHandle>, profile: &mut crate::settings::Profile) {
         let p = current_colors(ui.ctx()).palette;
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, p.panel);
@@ -445,13 +453,10 @@ impl Projects {
                 }
             },
         );
-        ui.painter().text(
-            pos2(inner.left() + space::S5, inner.bottom()),
-            Align2::LEFT_BOTTOM,
-            "Working offline",
-            FontId::proportional(text::SMALL),
-            p.subtle,
-        );
+        let foot = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 40.0), inner.max);
+        ui.scope_builder(UiBuilder::new().max_rect(foot), |ui| {
+            crate::profile::rail_button(ui, profile, foot.width());
+        });
     }
 
     /// The header, the last error, and the grid of the view.
