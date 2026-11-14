@@ -9411,4 +9411,5 @@ skip_sign_in = true
     mod team_projects;
     mod team_scene;
     mod team_scripts;
+    mod team_shots;
 }
