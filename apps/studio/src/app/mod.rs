@@ -2673,7 +2673,7 @@ mod tests {
         harness
     }
 
-    /// #603: a folder's icon colour from its menu in the Explorer: one undo step, kept by a duplicate, saved with the
+    /// #603, #618: a folder's icon colour from its Properties: one undo step, kept by a duplicate, saved with the
     /// project (not in the scene) and back when it is opened again.
     #[test]
     fn a_folder_s_icon_colour_is_picked_undone_copied_and_saved() {
@@ -2695,25 +2695,28 @@ mod tests {
         settle(&mut harness);
         let color =
             |harness: &Harness<'_, Test>, id| harness.state().studio.editor().unwrap().explorer.icon_colors.get(id);
-        harness
-            .get_by_role_and_label(Role::TreeItem, "Folder")
-            .click_secondary();
+        // In the folder's Properties (#618), as any colour: typed as its channels.
+        harness.get_by_role_and_label(Role::TreeItem, "Folder").click();
         settle(&mut harness);
-        harness.get_by_label("Icon colour").click();
-        settle(&mut harness);
-        harness
-            .get_by_role_and_label(Role::Button, "Icon colour #10a37f")
-            .click();
-        settle(&mut harness);
+        type_into(&mut harness, "Icon Color", "16, 163, 127");
         assert_eq!(color(&harness, folder), Some([16, 163, 127]));
-        harness.key_press(Key::Escape);
-        settle(&mut harness);
         harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
         settle(&mut harness);
         assert_eq!(color(&harness, folder), None, "one undo step");
         harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
         settle(&mut harness);
         assert_eq!(color(&harness, folder), Some([16, 163, 127]), "and redone");
+        // Reset from its name's menu, then put back.
+        harness
+            .get_by_role_and_label(Role::Label, "Icon Color options")
+            .click_secondary();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::Button, "Reset to default").click();
+        settle(&mut harness);
+        assert_eq!(color(&harness, folder), None, "reset");
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(color(&harness, folder), Some([16, 163, 127]), "a reset is undone");
 
         // A duplicate takes it along.
         harness.get_by_role_and_label(Role::TreeItem, "Folder").click();

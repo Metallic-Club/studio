@@ -1,8 +1,8 @@
-//! Folders' icon colours (#603): a colour of the user's choosing for a folder's icon in the Explorer. They are
-//! Studio's, not the game's: scripts and Properties never see them. They are kept in the project as
-//! `.studio/explorer.json` (the editor's own data, which is neither an asset nor packed into the game), by each
-//! folder's stable id in the start scene ([`SceneIds`]), so they follow a folder through renames and moves; copies
-//! made in Studio (duplicate, copy and paste) take the colour along.
+//! Folders' icon colours (#603): a colour of the user's choosing for a folder's icon in the Explorer, set from its
+//! Icon Color row in Properties (#618). They are Studio's, not the game's: scripts never see them. They are kept in the
+//! project as `.studio/explorer.json` (the editor's own data, which is neither an asset nor packed into the game), by
+//! each folder's stable id in the start scene ([`SceneIds`]), so they follow a folder through renames and moves;
+//! copies made in Studio (duplicate, copy and paste) take the colour along.
 
 use std::collections::{BTreeMap, HashMap};
 
