@@ -109,21 +109,24 @@ fn two_users_type_into_one_script_at_once_see_each_other_and_undo_only_their_own
     assert!(both.starts_with("-- Ada was here\nlocal door"), "{both}");
     assert!(both.ends_with("door.Name = \"Front\"\n"), "{both}");
 
-    // Each sees the other's cursor, with their name, where it is.
+    // Each sees the other's cursor, with their name, where it is. Carets travel apart from the edits, so one of Bob's
+    // from before his typing landed can arrive first (#646): wait for the one after it (`until` fails the test if it
+    // never comes).
+    let end = both.chars().count();
+    let caret = |s: &Studio, name: &str| {
+        s.editor().and_then(|e| {
+            e.scripts
+                .collab
+                .remote
+                .get(DOOR)
+                .and_then(|carets| carets.iter().find(|c| c.name == name).cloned())
+        })
+    };
     until(&mut a, &mut b, |a, b| {
-        let seen = |s: &Studio, name: &str| {
-            s.editor().is_some_and(|e| {
-                e.scripts
-                    .collab
-                    .remote
-                    .get(DOOR)
-                    .is_some_and(|carets| carets.iter().any(|c| c.name == name))
-            })
-        };
-        seen(a, "Bob") && seen(b, "Ada")
+        caret(a, "Bob").is_some_and(|bob| bob.head == end) && caret(b, "Ada").is_some()
     });
-    let bob = editor(&mut a).scripts.collab.remote[DOOR][0].clone();
-    assert_eq!(bob.head, both.chars().count(), "Bob's cursor is after what he typed");
+    let bob = caret(&a.state().studio, "Bob").expect("Bob's caret");
+    assert_eq!(bob.head, end, "Bob's cursor is after what he typed");
     // Drawn without trouble.
     settle(&mut a);
     settle(&mut b);
