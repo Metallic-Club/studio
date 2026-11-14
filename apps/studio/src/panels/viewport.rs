@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use egui::emath::GuiRounding;
-use egui::{Align2, FontId, Painter, Sense, Stroke, Ui};
+use egui::{Align2, FontId, Painter, Rect, Sense, Stroke, Ui};
 use metallic_engine::metallic_core::{DataModel, Id};
 use metallic_engine::metallic_render::ShadingView;
 use metallic_engine::perf::StatsViewer;
@@ -25,12 +25,17 @@ use crate::theme::tokens::text;
 use crate::theme::{current_colors, fonts};
 use crate::viewport::index::PartIndex;
 use crate::viewport::light_icons;
+use crate::viewport::lines::Lines;
 use crate::viewport::pick::{self, EDGES};
 use crate::viewport::tools;
 use crate::viewport::{SpeedChange, View, ViewportState};
 
 /// How thick the selection's outline is, in points.
 const OUTLINE: f32 = 1.5;
+/// A box less than this many points across on screen is outlined as a dot (#597): its edges would lie on one another.
+const TINY: f32 = 4.0;
+/// Up to how many selected instances the outlines are anti-aliased (#597).
+const SMOOTH_UP_TO: usize = 1_000;
 /// How long the speed readout stays after the wheel last changed a speed (#385).
 const SPEED_NOTE: Duration = Duration::from_millis(900);
 
@@ -38,9 +43,9 @@ const SPEED_NOTE: Duration = Duration::from_millis(900);
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport;
 
-/// Draws `id`'s outline box (a part's own, a model's round its parts), or a light's reach (#523), with `stroke`. A
+/// Adds `id`'s outline box (a part's own, a model's round its parts), or a light's reach (#523), with `stroke` to `lines`. A
 /// light's reach is drawn over everything when `on_top`, else hidden where parts are in front of it (#572).
-fn outline(painter: &Painter, view: &View, dm: &DataModel, parts: &PartIndex, id: Id, stroke: Stroke, on_top: bool) {
+fn outline(lines: &mut Lines, view: &View, dm: &DataModel, parts: &PartIndex, id: Id, stroke: Stroke, on_top: bool) {
     // A light's reach (#523): it has no box of its own.
     for line in light_icons::range_lines(dm, id) {
         let pieces = if on_top {
@@ -50,7 +55,7 @@ fn outline(painter: &Painter, view: &View, dm: &DataModel, parts: &PartIndex, id
         };
         for [a, b] in pieces {
             if let Some(line) = view.segment(a, b) {
-                painter.line_segment(line, stroke);
+                lines.segment(line, stroke);
             }
         }
     }
@@ -58,9 +63,28 @@ fn outline(painter: &Painter, view: &View, dm: &DataModel, parts: &PartIndex, id
         return;
     };
     let corners = bounds.corners();
-    for (a, b) in EDGES {
-        if let Some(line) = view.segment(corners[a], corners[b]) {
-            painter.line_segment(line, stroke);
+    match view.project_all(corners) {
+        // In front of the camera: each corner turned once, the box left out when it is wholly off the panel.
+        Some(screen) => {
+            let area = Rect::from_points(&screen);
+            if !lines.meets(area) {
+                return;
+            }
+            if area.width() < TINY && area.height() < TINY {
+                lines.dot(area.center(), stroke);
+                return;
+            }
+            for (a, b) in EDGES {
+                lines.segment([screen[a], screen[b]], stroke);
+            }
+        }
+        // Partly behind it: each edge cut at the near plane.
+        None => {
+            for (a, b) in EDGES {
+                if let Some(line) = view.segment(corners[a], corners[b]) {
+                    lines.segment(line, stroke);
+                }
+            }
         }
     }
 }
@@ -315,10 +339,15 @@ impl Panel for Viewport {
             let painter = ui.painter().with_clip_rect(rect);
             let accent = current_colors(ui.ctx()).accent;
             let on_top = cx.settings.viewport.light_lines_on_top;
+            // Every outline in one mesh (#597): thousands selected draw thousands of boxes.
+            let mut lines = Lines::new(rect, ui.ctx().pixels_per_point());
+            lines.reserve(editor.selection.len() * EDGES.len());
+            // A selection this large is drawn with sharp lines, half the geometry (#597).
+            lines.set_smooth(editor.selection.len() <= SMOOTH_UP_TO);
             // Under the pointer, faintly, while a tool is active (#466).
             if let Some(id) = hovered.filter(|&id| gizmo.tool.is_some() && !editor.selection.contains(id)) {
                 outline(
-                    &painter,
+                    &mut lines,
                     &view,
                     &editor.dm,
                     &editor.parts,
@@ -329,7 +358,7 @@ impl Panel for Viewport {
             }
             for &id in editor.selection.ids() {
                 outline(
-                    &painter,
+                    &mut lines,
                     &view,
                     &editor.dm,
                     &editor.parts,
@@ -338,6 +367,9 @@ impl Panel for Viewport {
                     on_top,
                 );
             }
+            if !lines.is_empty() {
+                painter.add(lines.into_shape());
+            }
             light_icons::paint(
                 &painter,
                 &lights,
@@ -345,7 +377,8 @@ impl Panel for Viewport {
                 hovered,
                 &current_colors(ui.ctx()),
             );
-            tools::paint(&painter, &view, &editor.scene(), &gizmo, snap);
+            let revision = editor.parts.revision();
+            tools::paint(&painter, &view, &editor.scene(), revision, &mut gizmo, snap);
             let gizmo_mode = gizmo.select_mode;
             editor.viewport.gizmo = gizmo;
             note(&painter, rect, &editor.viewport, gizmo_mode, &cx.settings.viewport);

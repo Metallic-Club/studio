@@ -14,6 +14,8 @@ use metallic_engine::metallic_core::{DataModel, Id};
 pub struct Selection {
     /// In the order they were picked; the last is the active one. Never twice the same.
     items: Vec<Id>,
+    /// The same instances, to answer "is it selected" without a walk (#597): the Explorer asks for every row it draws.
+    chosen: HashSet<Id>,
 }
 
 impl Selection {
@@ -24,17 +26,13 @@ impl Selection {
 
     /// `id` alone, or nothing.
     pub fn only(id: Option<Id>) -> Self {
-        Self {
-            items: id.into_iter().collect(),
-        }
+        Self::of(id)
     }
 
     /// `ids`, in that order, the last active (each once).
     pub fn of(ids: impl IntoIterator<Item = Id>) -> Self {
         let mut selection = Self::new();
-        for id in ids {
-            selection.add(id);
-        }
+        selection.extend(ids);
         selection
     }
 
@@ -50,7 +48,7 @@ impl Selection {
 
     /// Whether `id` is selected.
     pub fn contains(&self, id: Id) -> bool {
-        self.items.contains(&id)
+        self.chosen.contains(&id)
     }
 
     /// The active instance: the last picked.
@@ -71,17 +69,55 @@ impl Selection {
     /// Selects nothing.
     pub fn clear(&mut self) {
         self.items.clear();
+        self.chosen.clear();
     }
 
     /// Adds `id` and makes it the active one (moving it last if it was selected already).
     pub fn add(&mut self, id: Id) {
-        self.items.retain(|&item| item != id);
+        if !self.chosen.insert(id) {
+            if self.items.last() == Some(&id) {
+                return;
+            }
+            self.items.retain(|&item| item != id);
+        }
         self.items.push(id);
+    }
+
+    /// Adds each of `ids` in turn, the last becoming the active one: linear in how many there are, as long as few of
+    /// them were selected already.
+    pub fn extend(&mut self, ids: impl IntoIterator<Item = Id>) {
+        let mut again = HashSet::new();
+        for id in ids {
+            if self.chosen.insert(id) {
+                self.items.push(id);
+            } else {
+                // Moved last: taken out below, all at once, then put back in order.
+                again.insert(id);
+                self.items.push(id);
+            }
+        }
+        if !again.is_empty() {
+            // Keep each one's last place only.
+            let mut seen = HashSet::new();
+            let mut kept: Vec<Id> = self.items.iter().rev().copied().filter(|id| seen.insert(*id)).collect();
+            kept.reverse();
+            self.items = kept;
+        }
     }
 
     /// Takes `id` out; the one picked before it becomes active if it was.
     pub fn remove(&mut self, id: Id) {
-        self.items.retain(|&item| item != id);
+        if self.chosen.remove(&id) {
+            self.items.retain(|&item| item != id);
+        }
+    }
+
+    /// Takes each of `ids` out, in one pass over the selection.
+    pub fn remove_all(&mut self, ids: impl IntoIterator<Item = Id>) {
+        let gone: HashSet<Id> = ids.into_iter().filter(|id| self.chosen.remove(id)).collect();
+        if !gone.is_empty() {
+            self.items.retain(|item| !gone.contains(item));
+        }
     }
 
     /// Ctrl-click: adds `id` as the active one, or takes it out if it is selected.
@@ -100,20 +136,23 @@ impl Selection {
         let root = dm.root();
         self.items
             .retain(|&id| dm.contains(id) && root.is_some_and(|root| dm.is_descendant_of(id, root).unwrap_or(false)));
-        self.items.len() != before
+        if self.items.len() == before {
+            return false;
+        }
+        self.chosen = self.items.iter().copied().collect();
+        true
     }
 
     /// The selected instances that are not inside another selected one, in selection order: what moving, copying and
     /// deleting act on (a child goes with its parent, so it must not go twice).
     pub fn top_level(&self, dm: &DataModel) -> Vec<Id> {
-        let chosen: HashSet<Id> = self.items.iter().copied().collect();
         self.items
             .iter()
             .copied()
             .filter(|&id| {
                 let mut at = dm.parent(id).ok().flatten();
                 while let Some(parent) = at {
-                    if chosen.contains(&parent) {
+                    if self.chosen.contains(&parent) {
                         return false;
                     }
                     at = dm.parent(parent).ok().flatten();
@@ -157,6 +196,35 @@ mod tests {
             })
             .collect();
         (dm, workspace, parts)
+    }
+
+    /// #597: adding and taking out many at once keeps the order and the active one, as one by one would.
+    #[test]
+    fn many_added_or_taken_out_at_once_keep_their_order() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let folder = dm.registry().class_id("Folder").unwrap();
+        let ids: Vec<Id> = (0..6).map(|_| dm.create(folder).unwrap()).collect();
+        let mut selection = Selection::of(ids[..3].iter().copied());
+        // Again, with one already in: it moves last, as `add` would move it.
+        selection.extend([ids[3], ids[1], ids[4]]);
+        let mut one_by_one = Selection::of(ids[..3].iter().copied());
+        for id in [ids[3], ids[1], ids[4]] {
+            one_by_one.add(id);
+        }
+        assert_eq!(selection, one_by_one);
+        assert_eq!(selection.ids(), [ids[0], ids[2], ids[3], ids[1], ids[4]]);
+        assert!(selection.contains(ids[1]) && !selection.contains(ids[5]));
+        selection.remove_all([ids[4], ids[0], ids[5]]);
+        assert_eq!(selection.ids(), [ids[2], ids[3], ids[1]]);
+        assert_eq!(selection.active(), Some(ids[1]));
+        assert!(!selection.contains(ids[0]));
+        // 20,000 at once, then all taken out: quick, and nothing left.
+        let many: Vec<Id> = (0..20_000).map(|_| dm.create(folder).unwrap()).collect();
+        let mut big = Selection::of(many.iter().copied());
+        assert_eq!(big.len(), 20_000);
+        assert_eq!(big.active(), many.last().copied());
+        big.remove_all(many.iter().copied());
+        assert!(big.is_empty() && !big.contains(many[0]));
     }
 
     #[test]

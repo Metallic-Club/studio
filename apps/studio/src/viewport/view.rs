@@ -67,6 +67,22 @@ impl View {
         (v.z <= -NEAR).then(|| self.screen(v, size))
     }
 
+    /// Where each of `points` appears on the screen, if every one is in front of the camera: one turn of the view for
+    /// all of them (#597: a selection's boxes, corner by corner).
+    pub fn project_all<const N: usize>(&self, points: [Vec3; N]) -> Option<[Pos2; N]> {
+        let size = self.size()?;
+        let inverse = self.rot.inverse();
+        let mut out = [Pos2::ZERO; N];
+        for (point, screen) in points.into_iter().zip(&mut out) {
+            let v = inverse * (point - self.pos);
+            if v.z > -NEAR {
+                return None;
+            }
+            *screen = self.screen(v, size);
+        }
+        Some(out)
+    }
+
     /// The part of the line from `a` to `b` in front of the camera, on the screen.
     pub fn segment(&self, a: Vec3, b: Vec3) -> Option<[Pos2; 2]> {
         let size = self.size()?;

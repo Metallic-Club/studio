@@ -134,6 +134,8 @@ pub struct Gizmo {
     pub select_mode: SelectMode,
     /// The selecting drag in progress.
     gesture: Option<Gesture>,
+    /// Where the handles stand and for what, as last worked out (#597).
+    placed: Placed,
 }
 
 impl Default for Gizmo {
@@ -145,6 +147,7 @@ impl Default for Gizmo {
             drag: None,
             select_mode: SelectMode::default(),
             gesture: None,
+            placed: Placed::default(),
         }
     }
 }
@@ -437,9 +440,8 @@ pub fn interact(
         }
         return true;
     }
-    let targets = targets(scene.dm, scene.selection);
     let tool = gizmo.handles();
-    let frame = frame_for(scene.dm, tool, gizmo.local, &targets, view.pos);
+    let frame = gizmo.place(scene.dm, scene.selection, parts.revision(), view.pos);
     gizmo.hover = frame
         .zip(response.hover_pos())
         .and_then(|(frame, at)| hit(tool, &frame, view, at));
@@ -451,7 +453,7 @@ pub fn interact(
             .zip(origin)
             .and_then(|(frame, at)| Some((frame, hit(tool, &frame, view, at)?)));
         gizmo.drag = match (handle, ray) {
-            (Some((frame, handle)), Some(ray)) => begin_drag(scene.dm, handle, frame, ray, &targets),
+            (Some((frame, handle)), Some(ray)) => begin_drag(scene.dm, handle, frame, ray, &gizmo.placed.targets),
             (None, Some(ray)) => {
                 // Off the handles, a selecting drag (#467), or a drag on a selected part carries the selection (#358).
                 let on_selected = pick::pick(scene.dm, parts, ray).is_some_and(|id| scene.selection.contains(id));
@@ -471,7 +473,7 @@ pub fn interact(
 
 /// Draws the tool's gizmo for the selection, or while dragging the drag's measurement (the handles step aside),
 /// a ring's marked every `snap.turn_step`.
-pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo, snap: Snap) {
+pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, revision: u64, gizmo: &mut Gizmo, snap: Snap) {
     let accent = crate::theme::current_colors(painter.ctx()).accent;
     if let Some(gesture) = &gizmo.gesture {
         gesture.paint(painter, accent);
@@ -495,15 +497,50 @@ pub fn paint(painter: &Painter, view: &View, scene: &Scene<'_>, gizmo: &Gizmo, s
         }
         return;
     }
-    let targets = targets(scene.dm, scene.selection);
-    let Some(frame) = frame_for(scene.dm, gizmo.handles(), gizmo.local, &targets, view.pos) else {
+    let Some(frame) = gizmo.place(scene.dm, scene.selection, revision, view.pos) else {
         return;
     };
     match gizmo.handles() {
         Tool::Move => moving::paint(painter, view, &frame, gizmo.hover),
-        Tool::Scale => scale::paint(painter, view, &frame, gizmo.hover, targets.len() > 1),
+        Tool::Scale => scale::paint(painter, view, &frame, gizmo.hover, gizmo.placed.targets.len() > 1),
         Tool::Rotate => rotate::paint(painter, view, &frame, gizmo.hover),
         Tool::Select => {}
+    }
+}
+
+/// What the gizmo acts on and where its handles stand, as last worked out (#597): for the same selection of the same
+/// scene with the same tool, the same, without reading every selected instance again each frame.
+#[derive(Clone, Debug, Default)]
+struct Placed {
+    /// The selection, the scene's revision ([`crate::viewport::index::PartIndex::revision`]), the handles and whether
+    /// they are local, as they were.
+    key: Option<(Vec<Id>, u64, Tool, bool)>,
+    targets: Vec<Id>,
+    /// The handles' frame, its length for no camera in particular.
+    frame: Option<Frame>,
+}
+
+impl Gizmo {
+    /// The handles' frame for `selection` in `dm` at the scene's `revision`, seen from `camera`; worked out again only
+    /// when one of them (or the tool) changed.
+    fn place(&mut self, dm: &DataModel, selection: &Selection, revision: u64, camera: Vec3) -> Option<Frame> {
+        let tool = self.handles();
+        let fresh = self.placed.key.as_ref().is_some_and(|(ids, seen, was, local)| {
+            *seen == revision && *was == tool && *local == self.local && ids.as_slice() == selection.ids()
+        });
+        if !fresh {
+            let targets = targets(dm, selection);
+            let frame = frame_for(dm, tool, self.local, &targets, camera);
+            self.placed = Placed {
+                key: Some((selection.ids().to_vec(), revision, tool, self.local)),
+                targets,
+                frame,
+            };
+        }
+        self.placed.frame.map(|frame| Frame {
+            len: gizmo::handle_len(camera, frame.origin),
+            ..frame
+        })
     }
 }
 
