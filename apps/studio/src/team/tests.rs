@@ -39,7 +39,7 @@ fn joining_nothing_ends_with_a_reason_and_no_session() {
             start.elapsed() < std::time::Duration::from_secs(15),
             "the join never failed"
         );
-        team.update(None, None);
+        team.update(None, None, &[]);
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let note = team.note.clone().expect("a reason");

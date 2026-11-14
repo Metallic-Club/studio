@@ -16,3 +16,7 @@ metallic_core.workspace = true
 getrandom.workspace = true
 log.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Scene sync's tests run real games: the built-in classes.
+metallic_classes.workspace = true

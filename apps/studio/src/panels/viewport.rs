@@ -387,8 +387,16 @@ impl Panel for Viewport {
                     on_top,
                 );
             }
+            // Team Create (ADR 0011): what the others have selected, in their colours.
+            crate::team::viewport::outlines(&mut lines, &view, &editor.dm, &editor.presence);
             if !lines.is_empty() {
                 painter.add(lines.into_shape());
+            }
+            // And where they look from.
+            let now = std::time::Instant::now();
+            crate::team::viewport::cameras(&painter, &view, &editor.presence, now);
+            if editor.presence.gliding(now) {
+                ui.ctx().request_repaint();
             }
             light_icons::paint(
                 &painter,
