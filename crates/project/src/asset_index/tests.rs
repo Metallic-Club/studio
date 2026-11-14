@@ -44,6 +44,8 @@ fn new_members_get_new_ids_in_path_order_and_metadata_is_skipped() {
                 ("assets.json", b"{}"),
                 ("Scripts/Hello.luau", b"print('hi')"),
                 ("Assets/grass.png", b"png"),
+                // The editor's own data (#603) is not an asset either.
+                (".studio/explorer.json", b"{}"),
             ]),
             counter(0),
         )

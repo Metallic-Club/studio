@@ -85,6 +85,16 @@ pub enum Change {
         /// Its value after.
         new: Option<Value>,
     },
+    /// `id`'s icon colour in the Explorer (#603) went from `old` to `new`; `None` is its class's own. Studio's, not the
+    /// game's: [`Applied::icon_colors`] says what to set.
+    IconColor {
+        /// The instance.
+        id: Id,
+        /// Its colour before.
+        old: Option<[u8; 3]>,
+        /// Its colour after.
+        new: Option<[u8; 3]>,
+    },
     /// `id` moved from `old` to `new`: a new instance comes from no parent, a deleted one goes to none.
     Parent {
         /// The instance.
@@ -100,7 +110,10 @@ impl Change {
     /// The instance it changed.
     pub fn id(&self) -> Id {
         match self {
-            Change::Prop { id, .. } | Change::Attribute { id, .. } | Change::Parent { id, .. } => *id,
+            Change::Prop { id, .. }
+            | Change::Attribute { id, .. }
+            | Change::Parent { id, .. }
+            | Change::IconColor { id, .. } => *id,
         }
     }
 
@@ -110,6 +123,7 @@ impl Change {
             Change::Prop { old, new, .. } => old == new,
             Change::Attribute { old, new, .. } => old == new,
             Change::Parent { old, new, .. } => old == new,
+            Change::IconColor { old, new, .. } => old == new,
         }
     }
 
@@ -121,6 +135,8 @@ impl Change {
                 dm.set_attribute(*id, name, if back { old } else { new }.clone())
             }
             Change::Parent { id, old, new } => if back { old } else { new }.restore(dm, *id),
+            // Not the data model's: the scene sets it from [`Applied::icon_colors`].
+            Change::IconColor { .. } => Ok(()),
         }
     }
 }
@@ -147,7 +163,7 @@ impl Step {
             && self.changes.iter().all(|change| match change {
                 Change::Prop { .. } => true,
                 Change::Attribute { old, new, .. } => old.is_some() && new.is_some(),
-                Change::Parent { .. } => false,
+                Change::Parent { .. } | Change::IconColor { .. } => false,
             })
     }
 
@@ -192,6 +208,8 @@ pub struct Applied {
     pub edited: bool,
     /// The changes that could not be replayed, and why.
     pub problems: Vec<String>,
+    /// The icon colours (#603) to set, in order: the Explorer's, not the data model's.
+    pub icon_colors: Vec<(Id, Option<[u8; 3]>)>,
 }
 
 /// A scene's undo history.
@@ -233,6 +251,17 @@ impl History {
                 return;
             }
             self.noted.insert((*id, *prop), self.pending.len());
+        }
+        // A colour dragged through the picker is one change (#603): its first old colour and its last new one.
+        if let Change::IconColor { id, new, .. } = &change
+            && let Some(Change::IconColor { new: mine, .. }) = self
+                .pending
+                .iter_mut()
+                .rev()
+                .find(|mine| matches!(mine, Change::IconColor { id: i, .. } if i == id))
+        {
+            *mine = *new;
+            return;
         }
         self.pending.push(change);
     }
@@ -299,7 +328,11 @@ impl History {
     pub fn undo(&mut self, dm: &mut DataModel) -> Option<Applied> {
         let step = self.undo.pop()?;
         let mut problems = Vec::new();
+        let mut icon_colors = Vec::new();
         for change in step.changes.iter().rev() {
+            if let Change::IconColor { id, old, .. } = change {
+                icon_colors.push((*id, *old));
+            }
             if let Err(error) = change.apply(dm, true) {
                 problems.push(error.to_string());
             }
@@ -308,6 +341,7 @@ impl History {
             selection: step.selection.as_ref().map(|(before, _)| before.clone()),
             edited: !step.changes.is_empty(),
             problems,
+            icon_colors,
         };
         if let Some(selection) = &applied.selection {
             self.selection.clone_from(selection);
@@ -320,7 +354,11 @@ impl History {
     pub fn redo(&mut self, dm: &mut DataModel) -> Option<Applied> {
         let step = self.redo.pop()?;
         let mut problems = Vec::new();
+        let mut icon_colors = Vec::new();
         for change in &step.changes {
+            if let Change::IconColor { id, new, .. } = change {
+                icon_colors.push((*id, *new));
+            }
             if let Err(error) = change.apply(dm, false) {
                 problems.push(error.to_string());
             }
@@ -329,6 +367,7 @@ impl History {
             selection: step.selection.as_ref().map(|(_, after)| after.clone()),
             edited: !step.changes.is_empty(),
             problems,
+            icon_colors,
         };
         if let Some(selection) = &applied.selection {
             self.selection.clone_from(selection);

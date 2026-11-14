@@ -15,6 +15,7 @@
 //! a property's value (`Anchored=true`, `Transparency>0.5`, `Material=Plastic`); `!=`, `<`, `>`, `<=` and `>=`
 //! compare too. The button beside the search box adds common filters, and one per class in the game, with a click.
 
+pub mod colors;
 pub mod query;
 
 use std::collections::{BTreeSet, HashSet};
@@ -63,6 +64,8 @@ pub struct ExplorerState {
     last_click: Option<(Id, f64)>,
     /// The selection's new parent is being picked (#599): the next click on a row, or on a part in the viewport, is it.
     pub parent_pick: Option<ParentPick>,
+    /// The folders' icon colours (#603), Studio's and not the game's.
+    pub icon_colors: colors::IconColors,
 }
 
 /// Picking a new parent for the selection (#599), from the Parent row in Properties: the next row clicked in the
@@ -391,6 +394,7 @@ impl Panel for Explorer {
         let pointer = ui.input(|input| input.pointer.interact_pos());
         let mut menu = None;
         let mut renamed = None;
+        let mut recolored = None;
         let renaming = editor
             .explorer
             .renaming
@@ -409,6 +413,11 @@ impl Panel for Explorer {
                     searching,
                     renaming: renaming == Some(row.id),
                     stripe: shades.fill(index),
+                    icon_color: editor
+                        .explorer
+                        .icon_colors
+                        .get(row.id)
+                        .map(|[r, g, b]| Color32::from_rgb(r, g, b)),
                 };
                 let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_height));
                 let action = row_ui(ui, editor.dm, *row, look);
@@ -442,6 +451,7 @@ impl Panel for Explorer {
                     RowAction::Renamed(name) => renamed = Some((row.id, Some(name))),
                     RowAction::KeepName => renamed = Some((row.id, None)),
                     RowAction::Insert => editor.explorer.open_insert(row.id),
+                    RowAction::IconColor(color) => recolored = Some((row.id, color)),
                 }
             }
         });
@@ -506,6 +516,22 @@ impl Panel for Explorer {
                 editor.selection.set_only(Some(id));
             }
             editor.tree_edit(edit);
+        }
+        if let Some((id, color)) = recolored {
+            // The selected folders when the row is one of them, else the row.
+            let folders: Vec<Id> = if editor.selection.contains(id) {
+                let folder = editor.dm.registry().class_id("Folder");
+                editor
+                    .selection
+                    .ids()
+                    .iter()
+                    .copied()
+                    .filter(|&id| folder.is_some_and(|folder| editor.dm.is_a(id, folder).unwrap_or(false)))
+                    .collect()
+            } else {
+                vec![id]
+            };
+            editor.set_icon_color(&folders, color);
         }
         if let Some(id) = open_script {
             cx.editor.open_script(id);
@@ -584,6 +610,8 @@ struct Look {
     renaming: bool,
     /// Its stripe.
     stripe: Color32,
+    /// Its icon's own colour (#603), if it has one.
+    icon_color: Option<Color32>,
 }
 
 /// The items of a row's menu, in order, with whether each needs something to move (not a service) or the clipboard.
@@ -614,6 +642,8 @@ enum RowAction {
     Insert,
     /// A drag started on it (#353).
     Drag,
+    /// A colour for its folder icon from its menu (#603), or its own back with `None`.
+    IconColor(Option<[u8; 3]>),
 }
 
 /// One row on its stripe (#274): the caret, the class icon and the name (a text field while it is renamed, #351); a
@@ -626,6 +656,7 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
         searching,
         renaming,
         stripe,
+        icon_color,
     } = look;
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
@@ -670,14 +701,14 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
             .class_of(row.id)
             .map_or(Icon::ExplorerInstance, |class| class_icon(dm.registry(), class));
         let x = caret.right() + space::S1;
-        // Its group's colour (#231), selected or not (#300).
+        // Its group's colour (#231), selected or not (#300), or its own (#603).
         icons::paint_at(
             ui.painter(),
             pos2(x, rect.center().y),
             Align2::LEFT_CENTER,
             class_icon,
             text::BODY,
-            class_icon.color(&colors),
+            icon_color.unwrap_or_else(|| class_icon.color(&colors)),
         );
         let font = if selected {
             fonts::named(fonts::STRONG, text::BODY)
@@ -726,6 +757,11 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
         return RowAction::Insert;
     }
     let mut insert = false;
+    let mut recolor = None;
+    let is_folder = dm
+        .registry()
+        .class_id("Folder")
+        .is_some_and(|folder| dm.is_a(row.id, folder).unwrap_or(false));
     let mut chosen = None;
     response.context_menu(|ui| {
         if ui.button("Insert Object\u{2026}").clicked() {
@@ -741,11 +777,21 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
                 ui.close();
             }
         }
+        // A folder's icon colour (#603).
+        if is_folder {
+            ui.separator();
+            ui.menu_button("Icon colour", |ui| {
+                let current = icon_color.map(|color| [color.r(), color.g(), color.b()]);
+                recolor = icon_color_menu(ui, row.id, current);
+            });
+        }
     });
     if response.drag_started() && !renaming {
         RowAction::Drag
     } else if insert {
         RowAction::Insert
+    } else if let Some(color) = recolor {
+        RowAction::IconColor(color)
     } else if let Some(edit) = chosen {
         RowAction::Menu(edit)
     } else if response.secondary_clicked() && !selected {
@@ -759,6 +805,48 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
     } else {
         RowAction::None
     }
+}
+
+/// The colours a folder's icon can take from its menu (#603), the profile's palette.
+const ICON_COLORS: [[u8; 3]; 8] = crate::profile::COLORS;
+
+/// A folder's Icon colour submenu (#603): the palette's swatches, the colour picker for one of its own, and Reset.
+/// The picker starts from its colour now, `current`. Returns the colour chosen (`Some(None)`: back to its class's own).
+fn icon_color_menu(ui: &mut Ui, id: Id, current: Option<[u8; 3]>) -> Option<Option<[u8; 3]>> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = space::S2;
+        for color in ICON_COLORS {
+            let [r, g, b] = color;
+            let (rect, response) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+            let name = format!("Icon colour #{r:02x}{g:02x}{b:02x}");
+            response.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
+            ui.painter()
+                .circle_filled(rect.center(), 7.0, Color32::from_rgb(r, g, b));
+            if response.hovered() {
+                let ring = current_colors(ui.ctx()).palette.text;
+                ui.painter()
+                    .circle_stroke(rect.center(), 9.5, egui::Stroke::new(1.5, ring));
+            }
+            if response.clicked() {
+                chosen = Some(Some(color));
+            }
+        }
+    });
+    let picker = egui::Id::unique("metallic.explorer.icon_color").with(id);
+    let mut rgb = ui
+        .data(|data| data.get_temp::<[u8; 3]>(picker))
+        .or(current)
+        .unwrap_or(ICON_COLORS[0]);
+    if super::color_picker::picker(ui, picker.with("picker"), &mut rgb) {
+        chosen = Some(Some(rgb));
+    }
+    ui.data_mut(|data| data.insert_temp(picker, rgb));
+    if ui.button("Reset icon colour").clicked() {
+        chosen = Some(None);
+        ui.close();
+    }
+    chosen
 }
 
 /// Where dragged rows would land on `rect` (#353): an accent outline round the row for inside it, an accent line along

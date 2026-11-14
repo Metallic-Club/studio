@@ -530,7 +530,13 @@ fn write_pak(project: &mut Project, temp: &Path, pak: &Path) -> Result<(), Proje
         source,
     };
     let too_large = |what: String| save(io::Error::new(io::ErrorKind::InvalidInput, what));
-    let members: Vec<String> = project.members().into_iter().map(str::to_owned).collect();
+    // The editor's own data (#603) is not the game's.
+    let members: Vec<String> = project
+        .members()
+        .into_iter()
+        .filter(|member| !crate::asset_index::is_editor_data(member))
+        .map(str::to_owned)
+        .collect();
     let count = u32::try_from(members.len()).map_err(|_| too_large("more members than a pak holds".to_owned()))?;
     let mut out = BufWriter::new(File::create(temp).map_err(save)?);
     // The header is written last, once the index's place is known.

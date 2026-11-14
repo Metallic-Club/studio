@@ -2673,6 +2673,81 @@ mod tests {
         harness
     }
 
+    /// #603: a folder's icon colour from its menu in the Explorer: one undo step, kept by a duplicate, saved with the
+    /// project (not in the scene) and back when it is opened again.
+    #[test]
+    fn a_folder_s_icon_colour_is_picked_undone_copied_and_saved() {
+        let mut harness = editing(settings_file("editor-folder-colour", None), "Colour Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        let folder = {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let workspace = editor
+                .dm
+                .service(editor.dm.registry().class_id("Workspace").unwrap())
+                .unwrap();
+            let folder = editor
+                .dm
+                .create(editor.dm.registry().class_id("Folder").unwrap())
+                .unwrap();
+            editor.dm.set_parent(folder, Some(workspace)).unwrap();
+            folder
+        };
+        settle(&mut harness);
+        let color =
+            |harness: &Harness<'_, Test>, id| harness.state().studio.editor().unwrap().explorer.icon_colors.get(id);
+        harness
+            .get_by_role_and_label(Role::TreeItem, "Folder")
+            .click_secondary();
+        settle(&mut harness);
+        harness.get_by_label("Icon colour").click();
+        settle(&mut harness);
+        harness
+            .get_by_role_and_label(Role::Button, "Icon colour #10a37f")
+            .click();
+        settle(&mut harness);
+        assert_eq!(color(&harness, folder), Some([16, 163, 127]));
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        settle(&mut harness);
+        assert_eq!(color(&harness, folder), None, "one undo step");
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        settle(&mut harness);
+        assert_eq!(color(&harness, folder), Some([16, 163, 127]), "and redone");
+
+        // A duplicate takes it along.
+        harness.get_by_role_and_label(Role::TreeItem, "Folder").click();
+        settle(&mut harness);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::D);
+        settle(&mut harness);
+        let copy = harness.state().studio.editor().unwrap().selection.active().unwrap();
+        assert_ne!(copy, folder);
+        assert_eq!(color(&harness, copy), Some([16, 163, 127]));
+
+        // Saved beside the scene, and back once the project is opened again.
+        let path = {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            editor.save().unwrap();
+            assert!(editor.project.contains(".studio/explorer.json"));
+            editor.path().to_path_buf()
+        };
+        harness.state_mut().studio.open(path);
+        wait_open(&mut harness);
+        let editor = harness.state().studio.editor().unwrap();
+        let workspace = editor
+            .dm
+            .service(editor.dm.registry().class_id("Workspace").unwrap())
+            .unwrap();
+        let folders: Vec<_> = editor
+            .dm
+            .children(workspace)
+            .unwrap()
+            .filter(|&id| editor.dm.name(id) == Ok("Folder"))
+            .map(|id| editor.explorer.icon_colors.get(id))
+            .collect();
+        assert_eq!(folders, [Some([16, 163, 127]); 2]);
+    }
+
     /// Studio given `project` on the command line, run past its splash on the settings at `path`.
     fn launched_with(path: PathBuf, project: PathBuf) -> Harness<'static, Test> {
         let mut harness = harness(steps_reading(path));

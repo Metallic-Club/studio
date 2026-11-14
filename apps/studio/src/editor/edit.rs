@@ -126,6 +126,9 @@ impl Scene<'_> {
         for problem in &applied.problems {
             log::warn!("history: a change could not be replayed: {problem}");
         }
+        for (id, color) in applied.icon_colors {
+            self.explorer.icon_colors.set(id, color);
+        }
         if let Some(selection) = applied.selection {
             *self.selection = selection;
         }
@@ -189,7 +192,11 @@ impl Scene<'_> {
         for id in self.movable_selection() {
             let parent = self.dm.parent(id).ok().flatten();
             let before = self.dm.next_sibling(id).ok().flatten();
-            match self.dm.clone_tree(id) {
+            let cloned = self.dm.clone_tree(id);
+            if let Ok(Some(copy)) = cloned {
+                self.explorer.icon_colors.copy_tree(self.dm, id, copy);
+            }
+            match cloned {
                 Ok(Some(copy)) => match self.move_to(copy, parent, before) {
                     Ok(()) => copies.push(copy),
                     Err(error) => log::warn!("edit: could not duplicate: {error}"),
@@ -222,7 +229,11 @@ impl Scene<'_> {
         self.clipboard.game = Some(self.dm.uid());
         self.clipboard.items = originals
             .into_iter()
-            .filter_map(|id| self.dm.clone_tree(id).ok().flatten())
+            .filter_map(|id| {
+                let copy = self.dm.clone_tree(id).ok().flatten()?;
+                self.explorer.icon_colors.copy_tree(self.dm, id, copy);
+                Some(copy)
+            })
             .collect();
         self.clipboard.items.len()
     }
@@ -261,7 +272,11 @@ impl Scene<'_> {
         };
         let mut pasted = Vec::new();
         for item in self.clipboard.items.clone() {
-            match self.dm.clone_tree(item) {
+            let cloned = self.dm.clone_tree(item);
+            if let Ok(Some(copy)) = cloned {
+                self.explorer.icon_colors.copy_tree(self.dm, item, copy);
+            }
+            match cloned {
                 Ok(Some(copy)) => match self.move_to(copy, Some(parent), None) {
                     Ok(()) => pasted.push(copy),
                     Err(error) => log::warn!("edit: could not paste: {error}"),
@@ -361,6 +376,18 @@ impl Scene<'_> {
             return Some(format!("{} can't go inside itself.", name(inside)));
         }
         None
+    }
+
+    /// Gives `ids` the icon colour `color` in the Explorer (#603), or their class's own back with `None`, as part of
+    /// the action under way. Studio's, not the game's: the data model does not change.
+    pub fn set_icon_color(&mut self, ids: &[Id], color: Option<[u8; 3]>) {
+        for &id in ids {
+            let old = self.explorer.icon_colors.get(id);
+            if old != color {
+                self.explorer.icon_colors.set(id, color);
+                self.history.note(Change::IconColor { id, old, new: color });
+            }
+        }
     }
 
     /// Renames `id` to `name` (trimmed; an empty name leaves it as it was).
