@@ -512,14 +512,19 @@ fn the_sky_fades_out_smoothly_under_a_roof() {
             -8.0 + i as f32 * 0.2
         );
     }
-    // Wide: the floor is between 15% and 85% of the way from covered to open over at least 3 studs (it was under
-    // one before #625).
+    // Wide: the floor is between 15% and 85% of the way from covered to open over at least 2 studs (it was under
+    // one before #625), all of it out in the open (#642): under the roof's edge the floor is as dark as deep under it.
+    assert!(
+        profile[38] <= under + 6.0,
+        "the sky reaches under the roof: {} at x = -0.4",
+        profile[38]
+    );
     let ramp = profile
         .iter()
         .filter(|&&v| v > under + change * 0.15 && v < open - change * 0.15)
         .count();
     eprintln!("{ramp} samples on the ramp");
-    assert!(ramp >= 15, "the ramp is {:.1} studs wide", ramp as f32 * 0.2);
+    assert!(ramp >= 10, "the ramp is {:.1} studs wide", ramp as f32 * 0.2);
     // The block's front wall, against the same wall with GlobalShadows off (nothing kept from the sky).
     let wall = level(&lit, wall_spot);
     set(&mut game, "GlobalShadows", Value::Bool(false));
@@ -527,4 +532,104 @@ fn the_sky_fades_out_smoothly_under_a_roof() {
     let open_wall = level(&flat, wall_spot);
     eprintln!("the block's wall {wall}, without GlobalShadows {open_wall}");
     assert!(wall > open_wall * 0.9, "the block darkens its own outside wall");
+}
+
+/// #642: a ball resting in the open shades smoothly down to the floor. Its lower half once dropped to black across
+/// a hard horizontal line, where the sky map's lookup, moved down along the normal, went under the floor.
+#[test]
+fn a_ball_in_the_open_shades_smoothly_to_the_floor() {
+    let Some(context) = gpu() else { return };
+    let mut game = Game::new();
+    game.part(
+        Look::new("Block", "Concrete", [99, 95, 98]),
+        Vec3::new(400.0, 2.0, 400.0),
+        CFrame::new(Vec3::new(0.0, -1.0, 0.0)),
+    );
+    let centre = Vec3::new(0.0, 5.0, -14.0);
+    game.part(
+        Look::new("Ball", "SmoothPlastic", [255, 0, 0]),
+        Vec3::splat(10.0),
+        CFrame::new(centre),
+    );
+    let eye = Vec3::new(0.0, 4.0, 2.0);
+    game.set_camera(CFrame::look_at(eye, Vec3::new(0.0, 4.0, -14.0), Vec3::Y), 70.0);
+    // Late afternoon: the sun low in the west, lighting the ball's left side.
+    set_clock_time(&mut game, 17.6);
+    let lit = render(&context, &mut game, PassSet::default().without(PassId::Bloom), 1);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sky-ball.png");
+    scenes::write_png(&out, SIZE, SIZE, &lit);
+    eprintln!("the ball is in {}", out.display());
+    // Down the ball's right side, from its middle to near its outline, a pixel at a time.
+    let (_, top) = project(&game, centre - eye);
+    let (_, bottom) = project(&game, centre - Vec3::new(0.0, 4.0, 0.0) - eye);
+    let (x, _) = project(&game, centre + Vec3::new(2.5, 0.0, 0.0) - eye);
+    let column: Vec<u8> = (top as u32..bottom as u32)
+        .map(|y| pixel(&lit, x as u32, y)[0])
+        .collect();
+    eprintln!("red down the ball: {column:?}");
+    for (i, pair) in column.windows(2).enumerate() {
+        let step = i32::from(pair[1]) - i32::from(pair[0]);
+        assert!(step.abs() <= 8, "a step of {step} {i} pixels down the ball");
+    }
+}
+
+/// #642: a closed room's floor, walls and ceiling get no OutdoorAmbient, right up to the walls. It once leaked through
+/// the walls along every edge, where the sky map's filter reached past them to the open ground outside.
+#[test]
+fn outdoor_ambient_does_not_leak_into_a_closed_room() {
+    let Some(context) = gpu() else { return };
+    let mut game = Game::new();
+    let grey = |game: &mut Game, size: Vec3, at: Vec3| {
+        game.part(
+            Look::new("Block", "SmoothPlastic", [160, 160, 160]),
+            size,
+            CFrame::new(at),
+        );
+    };
+    grey(&mut game, Vec3::new(400.0, 2.0, 400.0), Vec3::new(0.0, -1.0, 0.0));
+    // A 20-stud room: walls a stud thick and 8 high, and a roof.
+    grey(&mut game, Vec3::new(1.0, 8.0, 22.0), Vec3::new(-10.5, 4.0, 0.0));
+    grey(&mut game, Vec3::new(1.0, 8.0, 22.0), Vec3::new(10.5, 4.0, 0.0));
+    grey(&mut game, Vec3::new(22.0, 8.0, 1.0), Vec3::new(0.0, 4.0, -10.5));
+    grey(&mut game, Vec3::new(22.0, 8.0, 1.0), Vec3::new(0.0, 4.0, 10.5));
+    grey(&mut game, Vec3::new(22.0, 1.0, 22.0), Vec3::new(0.0, 8.5, 0.0));
+    let eye = Vec3::new(0.0, 4.0, 8.0);
+    game.set_camera(CFrame::look_at(eye, Vec3::new(0.0, 1.0, -10.0), Vec3::Y), 90.0);
+    let set = |game: &mut Game, name: &str, value: Value| {
+        let lighting = lighting_service(game);
+        game.dm.set_by_name(lighting, name, value).expect(name);
+    };
+    let grey_light = |level: f32| Value::Color3(metallic_core::Color3::new(level, level, level));
+    set(&mut game, "Brightness", Value::Number(0.0));
+    set(&mut game, "Ambient", grey_light(0.1));
+    let passes = PassSet::default().without(PassId::Bloom);
+    let lit = render(&context, &mut game, passes, 1);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sky-room.png");
+    scenes::write_png(&out, SIZE, SIZE, &lit);
+    eprintln!("the room is in {}", out.display());
+    // The same room with no OutdoorAmbient at all: whatever the first has more of came from outside.
+    set(&mut game, "OutdoorAmbient", grey_light(0.0));
+    let dark = render(&context, &mut game, passes, 1);
+    let level = |pixels: &[[u8; 4]], at: Vec3| {
+        let (x, y) = project(&game, at - eye);
+        let p = pixel(pixels, x as u32, y as u32);
+        i32::from(p[0]) + i32::from(p[1]) + i32::from(p[2])
+    };
+    // The middle of the floor, and the floor, walls and ceiling half a stud from the edges and corners.
+    for (what, at) in [
+        ("the middle of the floor", Vec3::new(0.0, 0.0, -2.0)),
+        ("the floor by the back wall", Vec3::new(0.0, 0.0, -9.5)),
+        ("the floor by the left wall", Vec3::new(-9.5, 0.0, -4.0)),
+        ("the floor in the back corner", Vec3::new(9.5, 0.0, -9.5)),
+        ("the back wall by the corner", Vec3::new(9.5, 3.0, -10.0)),
+        ("the back wall at the floor", Vec3::new(0.0, 0.5, -10.0)),
+        ("the ceiling by the back wall", Vec3::new(0.0, 8.0, -9.5)),
+    ] {
+        let (here, without) = (level(&lit, at), level(&dark, at));
+        eprintln!("{what}: {here}, without OutdoorAmbient {without}");
+        assert!(
+            here <= without + 4,
+            "{what} is lit from outside: {here} against {without}"
+        );
+    }
 }
