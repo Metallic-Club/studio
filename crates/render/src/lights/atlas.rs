@@ -153,6 +153,8 @@ struct TileKey {
     face: u8,
     clip: [u32; 16],
     lod: u32,
+    /// The camera's distance the casters' levels are chosen by ([`light_distance`], #614), as bits.
+    near: u32,
 }
 
 impl TileKey {
@@ -162,6 +164,7 @@ impl TileKey {
             face: face as u8,
             clip: view.clip.to_cols_array().map(f32::to_bits),
             lod: lod.distance().to_bits(),
+            near: lod.slack().to_bits(),
         }
     }
 }
@@ -171,6 +174,13 @@ impl TileKey {
 /// moving camera draws a kept tile again only when that doubles or halves.
 fn lod_distance(light_to_camera: f32, range: f32) -> f32 {
     (light_to_camera + range).max(1.0).log2().ceil().exp2()
+}
+
+/// The camera's distance from a light as its tiles choose their casters' levels by ([`LodView::around`], #614):
+/// rounded up to a quarter power of two, so it is never less than it is and a moving camera draws a kept tile again
+/// only when it changes by a fifth or so.
+fn light_distance(light_to_camera: f32) -> f32 {
+    ((light_to_camera.max(0.25).log2() * 4.0).ceil() / 4.0).exp2()
 }
 
 /// What a tile's map holds.
@@ -820,7 +830,22 @@ impl ShadowAtlas {
                     .map(|slot| entry(slot.region, slot.slot));
                 let reach = light.range;
                 let center = light.position - origin;
-                let tile_lod = lod.for_shadow(lod_distance(center.distance(camera_offset), reach));
+                // Each caster by its own distance from the light plus the camera's (#614), rather than by the farthest
+                // the light reaches: with a long Range that drew a ball near the camera as a four- or eight-sided one.
+                // Kept from the light's first tile while it is still at least the distance and not much more, so a
+                // camera moving about a step's edge does not draw the tiles again each time it crosses it.
+                let distance = center.distance(camera_offset);
+                let kept = shadowed
+                    .tiles
+                    .first()
+                    .and_then(|&tile| self.caches.get(usize::from(tile)))
+                    .filter(|cache| cache.valid && cache.key.light == (light.id.index(), light.id.generation()))
+                    .map(|cache| f32::from_bits(cache.key.near))
+                    .filter(|&near| near >= distance && near <= distance * 1.5);
+                let near = kept.unwrap_or_else(|| light_distance(distance));
+                let tile_lod = lod
+                    .for_shadow(lod_distance(center.distance(camera_offset), reach))
+                    .around(center, near);
                 for (face, view) in views.iter().take(n).enumerate() {
                     let tile = shadowed.tiles[face];
                     let (x, y) = (u32::from(tile) % self.per_row, u32::from(tile) / self.per_row);
@@ -1241,6 +1266,35 @@ mod tests {
 
     use super::*;
     use crate::scene::LightKind;
+
+    /// #614: a light's tiles take a ball next to the light by about the light's distance from the camera, not by the
+    /// farthest the light reaches (which drew it as a four- or eight-sided ball under a long-reaching light), and never
+    /// finer than the camera draws it; the distance moves in steps of a fifth or so.
+    #[test]
+    fn a_light_s_tiles_take_a_ball_beside_it_by_the_light_s_distance() {
+        use crate::lod::LodSettings;
+
+        let camera = LodView::for_camera(500.0, &LodSettings::MEDIUM);
+        let (eye, light) = (Vec3::new(0.0, 4.0, 14.0), Vec3::new(4.0, 3.0, 3.0));
+        let ball = (Vec3::new(0.0, 2.0, 0.0), 2.0 * 3f32.sqrt());
+        let class = crate::lod::lod_class(crate::scene::MeshKind::BALL);
+        let reach = 150.0;
+        let old = camera.for_shadow(lod_distance(light.distance(eye), reach));
+        let near = light_distance(light.distance(eye));
+        let tile = old.around(light, near);
+        let (was, now) = (
+            old.choose_caster(class, ball.1, ball.0),
+            tile.choose_caster(class, ball.1, ball.0),
+        );
+        let drawn = camera.choose(class, ball.1 * ball.1, (ball.0 - eye).length_squared(), 0);
+        assert!(was >= 2 && now < was, "old {was}, now {now}");
+        assert!(now >= drawn, "never finer than the camera draws it: {now} < {drawn}");
+        // Never less than the distance, and the same over small moves.
+        for d in [0.3f32, 1.0, 7.5, 12.0, 100.0] {
+            assert!(light_distance(d) >= d && light_distance(d) < d * 1.2, "{d}");
+        }
+        assert_eq!(light_distance(12.0), light_distance(12.5));
+    }
 
     fn point(at: Vec3) -> SceneLight {
         SceneLight {
