@@ -58,9 +58,12 @@
 //!   camera than the slice's far depth over the cosine of the view's corner angle ([`CullView::with_caster_lod`]); a
 //!   caster of radius `r` is chosen as if its centre were that far plus `r`, at the coarse side of the hysteresis
 //!   band. That needs no camera position, so the cached map stays valid as the camera moves;
-//! - a **local light's tile** is looked up by points the light reaches, no farther from the camera than the
-//!   light's distance from it plus its range, rounded up to a power of two so a moving camera redraws a cached tile
-//!   only when that doubles or halves.
+//! - a **local light's tile** takes each caster as if it were its distance from the light plus the light's distance
+//!   from the camera ([`LodView::around`], #614): never nearer than it is, so never finer than the camera draws it,
+//!   and for a caster beside the light about as fine. That distance is rounded up to a quarter power of two and kept
+//!   while it is at most half as much again, so a moving camera rarely draws a kept tile again. Chosen by the farthest
+//!   the light reaches instead, a ball near the camera under a long-reaching light cast the shadow of a four- or
+//!   eight-sided one.
 //!
 //! The cached levels follow from the cascade's slice and the camera's projection only (and are drawn again when the
 //! projection or the settings change). They are as fine as the shadow map can show: a far cascade's texels are about
@@ -194,6 +197,8 @@ pub struct LodView {
     /// For a shadow view that chooses each caster by its own distance from the camera (#598): where the camera is,
     /// in the scene's coordinates.
     eye: Option<Vec3>,
+    /// Added to each caster's distance from `eye` ([`LodView::around`], #614): 0 when `eye` is the camera.
+    slack: f32,
     enabled: bool,
 }
 
@@ -206,6 +211,7 @@ impl LodView {
         }; CLASSES],
         distance: 0.0,
         eye: None,
+        slack: 0.0,
         enabled: false,
     };
 
@@ -237,6 +243,7 @@ impl LodView {
             limits,
             distance: 0.0,
             eye: None,
+            slack: 0.0,
             enabled: true,
         }
     }
@@ -258,7 +265,26 @@ impl LodView {
         if !self.enabled || self.distance <= 0.0 || !eye.is_finite() {
             return self;
         }
-        Self { eye: Some(eye), ..self }
+        Self {
+            eye: Some(eye),
+            slack: 0.0,
+            ..self
+        }
+    }
+
+    /// The same shadow view choosing each caster as if it were its distance from `point` plus `reach` from the camera
+    /// (#614): with the camera at most `reach` from `point`, never nearer than it is, so never finer than the camera
+    /// draws it, and as fine as that bound allows. A local light's tiles use it with the light as `point`: a caster
+    /// next to the light is chosen by about the light's own distance, not by the farthest the light reaches.
+    pub fn around(self, point: Vec3, reach: f32) -> Self {
+        if !self.enabled || self.distance <= 0.0 || !point.is_finite() || !(reach.is_finite() && reach >= 0.0) {
+            return self;
+        }
+        Self {
+            eye: Some(point),
+            slack: reach,
+            ..self
+        }
     }
 
     /// Whether the view chooses levels at all.
@@ -267,9 +293,15 @@ impl LodView {
         self.enabled
     }
 
-    /// Where a shadow view that chooses each caster by its own distance sees them from ([`LodView::seen_from`]).
+    /// Where a shadow view that chooses each caster by its own distance measures it from ([`LodView::seen_from`],
+    /// [`LodView::around`]).
     pub fn eye(&self) -> Option<Vec3> {
         self.eye
+    }
+
+    /// What a shadow view adds to each caster's distance from its point ([`LodView::around`]); 0 otherwise.
+    pub fn slack(&self) -> f32 {
+        self.slack
     }
 
     /// The distance a shadow view chooses at; 0 for a camera's view.
@@ -306,11 +338,14 @@ impl LodView {
 
     /// The level a shadow view draws a part of class `class` with a bounding sphere of radius `radius` centred at
     /// `center` (scene coordinates) at: as if it were [`LodView::distance`] plus its radius from the camera, or, seen
-    /// from an eye ([`LodView::seen_from`]), as far as it is.
+    /// from an eye ([`LodView::seen_from`], [`LodView::around`]), as far as it is from it plus the view's slack.
     #[inline]
     pub(crate) fn choose_caster(&self, class: u8, radius: f32, center: Vec3) -> u8 {
         let d2 = match self.eye {
-            Some(eye) => (center - eye).length_squared(),
+            Some(eye) => {
+                let d = (center - eye).length() + self.slack;
+                d * d
+            }
             None => {
                 let d = self.distance + radius;
                 d * d
