@@ -24,7 +24,7 @@ use egui::{
     WidgetInfo, pos2, vec2,
 };
 use metallic_engine::metallic_core::glam::Vec3;
-use metallic_engine::metallic_core::{CFrame, Color3, DataModel, PropMeta, PropType, Value, Widget};
+use metallic_engine::metallic_core::{CFrame, Color3, DataModel, PropMeta, PropType, Value};
 
 use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
@@ -198,7 +198,7 @@ pub fn edit(
     match shown(value, part) {
         Value::Bool(on) => checkbox(ui, on, mixed.whole, label).map(|on| Edit::Whole(Value::Bool(on))),
         Value::Int(n) => {
-            let speed = drag_speed(meta, 1.0);
+            let speed = WHOLE_STEP;
             let field = Number {
                 range: meta.range,
                 speed,
@@ -209,7 +209,7 @@ pub fn edit(
         Value::Number(n) => {
             let field = Number {
                 range: meta.range,
-                speed: drag_speed(meta, 0.1),
+                speed: DECIMAL_STEP,
                 whole: false,
             };
             number(ui, n, field, label, width, mixed.whole).map(|n| Edit::Whole(Value::Number(n)))
@@ -335,15 +335,13 @@ fn labelled(response: &Response, kind: Role, label: &str) {
     response.widget_info(|| WidgetInfo::labeled(kind, response.enabled(), label));
 }
 
-/// How fast a number field changes per point dragged: the property's own, a two-hundredth of its range when both its
-/// ends are finite (an endless one would make every drag infinite, #452), or `fallback`.
-fn drag_speed(meta: &PropMeta, fallback: f64) -> f64 {
-    match (meta.widget, meta.range) {
-        (Widget::Drag { speed }, _) => f64::from(speed),
-        (_, Some((min, max))) if max > min && (max - min).is_finite() => (max - min) / 200.0,
-        _ => fallback,
-    }
-}
+/// How much a decimal number changes per point dragged (#613): the same for every property, whatever its range (a
+/// two-hundredth of the range made FogEnd jump by 500 a point and Transparency creep).
+const DECIMAL_STEP: f64 = 0.1;
+/// How much a whole number, an angle or a colour channel changes per point dragged.
+const WHOLE_STEP: f64 = 1.0;
+/// How many times faster a drag with Shift goes, and how many times finer one with Alt.
+const FAST: f64 = 10.0;
 
 /// How many points of a smooth (trackpad) scroll make one wheel notch.
 const NOTCH: f32 = 40.0;
@@ -448,8 +446,8 @@ pub fn edit_component(
     let field = Number {
         range: if colour { Some((0.0, 255.0)) } else { meta.range },
         speed: match (colour, part) {
-            (true, _) | (false, Part::Orientation) => 1.0,
-            _ => drag_speed(meta, 0.1),
+            (true, _) | (false, Part::Orientation) => WHOLE_STEP,
+            _ => DECIMAL_STEP,
         },
         whole: colour,
     };
@@ -486,7 +484,8 @@ impl Number {
 }
 
 /// A single number as plain text `width` wide (#381), a dash when `mixed`: dragged left it goes down and right it goes
-/// up (the resize pointer over it says so), from where the drag began; clicked, it is a text field to type in, as the
+/// up (the resize pointer over it says so), from where the drag began, by a set amount a point (#613: Shift ten times
+/// faster, Alt ten times finer); clicked, it is a text field to type in, as the
 /// others. A [`Widget::Slider`] property gets one too (#379): a value is typed or dragged, never slid. Returns the
 /// new value.
 fn number(ui: &mut Ui, n: f64, field: Number, label: &str, width: f32, mixed: bool) -> Option<f64> {
@@ -519,7 +518,17 @@ fn number(ui: &mut Ui, n: f64, field: Number, label: &str, width: f32, mixed: bo
     }
     if response.dragged() {
         let (from, moved) = ui.data(|data| data.get_temp::<(f64, f64)>(start)).unwrap_or((n, 0.0));
-        let moved = moved + f64::from(response.drag_delta().x) * field.speed;
+        // Shift ten times faster, Alt ten times finer (#613).
+        let pace = ui.input(|input| {
+            if input.modifiers.shift {
+                FAST
+            } else if input.modifiers.alt {
+                1.0 / FAST
+            } else {
+                1.0
+            }
+        });
+        let moved = moved + f64::from(response.drag_delta().x) * field.speed * pace;
         ui.data_mut(|data| data.insert_temp(start, (from, moved)));
         let x = field.kept(from + moved);
         return (x != n).then_some(x);
@@ -676,7 +685,8 @@ mod tests {
 
     #[test]
     fn a_number_drags_left_down_and_right_up_from_where_it_began() {
-        static SPEED: PropMeta = PropMeta::number("WalkSpeed", 16.0).widget(Widget::Drag { speed: 0.5 });
+        // A tenth of a unit a point (#613), whatever the property.
+        static SPEED: PropMeta = PropMeta::number("WalkSpeed", 16.0).range(0.0, 100_000.0);
         let mut harness = editor(&SPEED, Value::Number(16.0), Mixed::default());
         let field = harness.get_by_role_and_label(Role::SpinButton, "Value").rect();
         let at = field.left_center() + vec2(10.0, 0.0);
@@ -686,20 +696,20 @@ mod tests {
         harness.run();
         assert_eq!(
             *harness.state(),
-            Some(Edit::Whole(Value::Number(26.0))),
-            "20 points right, half a unit each"
+            Some(Edit::Whole(Value::Number(18.0))),
+            "20 points right, a tenth each, though the range is 100,000 wide"
         );
         harness.hover_at(at - vec2(10.0, 0.0));
         harness.run();
         assert_eq!(
             *harness.state(),
-            Some(Edit::Whole(Value::Number(11.0))),
+            Some(Edit::Whole(Value::Number(15.0))),
             "from where it began, not the last frame"
         );
         harness.drop_at(at - vec2(10.0, 0.0));
         harness.run();
         // An Int stays whole.
-        static COUNT: PropMeta = PropMeta::int("Count", 3).widget(Widget::Drag { speed: 0.1 });
+        static COUNT: PropMeta = PropMeta::int("Count", 3);
         let mut harness = editor(&COUNT, Value::Int(3), Mixed::default());
         let field = harness.get_by_role_and_label(Role::SpinButton, "Value").rect();
         let at = field.left_center() + vec2(10.0, 0.0);
@@ -707,14 +717,32 @@ mod tests {
         harness.run();
         harness.hover_at(at + vec2(24.0, 0.0));
         harness.run();
-        assert_eq!(*harness.state(), Some(Edit::Whole(Value::Int(5))));
+        assert_eq!(*harness.state(), Some(Edit::Whole(Value::Int(27))), "one a point");
     }
 
+    /// #613: Shift drags ten times faster and Alt ten times finer.
+    #[test]
+    fn shift_drags_faster_and_alt_finer() {
+        static VALUE: PropMeta = PropMeta::number("Value", 0.0);
+        for (modifiers, expected) in [(egui::Modifiers::SHIFT, 20.0), (egui::Modifiers::ALT, 0.2)] {
+            let mut harness = editor(&VALUE, Value::Number(0.0), Mixed::default());
+            let field = harness.get_by_role_and_label(Role::SpinButton, "Value").rect();
+            let at = field.left_center() + vec2(10.0, 0.0);
+            harness.drag_at(at);
+            harness.run();
+            harness.event(egui::Event::ModifiersChanged(modifiers));
+            harness.hover_at(at + vec2(20.0, 0.0));
+            harness.run();
+            let Some(Edit::Whole(Value::Number(n))) = *harness.state() else {
+                panic!("a drag edits it");
+            };
+            assert!((n - expected).abs() < 1e-9, "{modifiers:?}: {n}");
+        }
+    }
     #[test]
     fn a_number_with_no_upper_limit_drags_by_finite_steps() {
         // A range with no upper end and no speed of its own (#452): a drag gave infinity, which the data model refused.
         static SCALE: PropMeta = PropMeta::number("Scale", 1.0).range(0.001, f64::INFINITY);
-        assert!(drag_speed(&SCALE, 0.1).is_finite());
         let mut harness = editor(&SCALE, Value::Number(1.0), Mixed::default());
         let field = harness.get_by_role_and_label(Role::SpinButton, "Value").rect();
         let at = field.left_center() + vec2(10.0, 0.0);
@@ -732,7 +760,7 @@ mod tests {
     fn a_slider_property_is_a_field_kept_in_its_range() {
         static BRIGHTNESS: PropMeta = PropMeta::number("Brightness", 0.5)
             .range(0.0, 1.0)
-            .widget(Widget::Slider);
+            .widget(metallic_engine::metallic_core::Widget::Slider);
         let mut harness = editor(&BRIGHTNESS, Value::Number(0.5), Mixed::default());
         assert!(harness.query_by_role(Role::Slider).is_none());
         let field = harness.get_by_role_and_label(Role::SpinButton, "Value");
