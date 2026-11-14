@@ -327,6 +327,42 @@ impl Scene<'_> {
         moving.len()
     }
 
+    /// Makes `parent` the selection's parent, as picked from the Parent row (#599): as an Explorer drop does, inside
+    /// it last, as part of the action under way. Picking ends when it moved; otherwise it goes on and says why not.
+    pub fn pick_parent(&mut self, parent: Id) {
+        match self.why_not_parent(parent) {
+            Some(reason) => {
+                if let Some(pick) = &mut self.explorer.parent_pick {
+                    pick.refused = Some(reason);
+                }
+            }
+            None => {
+                self.move_selection(parent, None);
+                self.explorer.set_expanded(parent, true);
+                self.explorer.parent_pick = None;
+            }
+        }
+    }
+
+    /// Why the selection cannot go inside `parent`, if it cannot.
+    fn why_not_parent(&self, parent: Id) -> Option<String> {
+        let moving = self.movable_selection();
+        let name = |id: Id| self.dm.name(id).unwrap_or_default().to_owned();
+        if moving.is_empty() {
+            return Some("The selection can't move: services stay where they are.".to_owned());
+        }
+        if self.dm.root() == Some(parent) {
+            return Some("Only services go directly in the game.".to_owned());
+        }
+        if let Some(&inside) = moving
+            .iter()
+            .find(|&&id| id == parent || self.dm.is_descendant_of(parent, id).unwrap_or(true))
+        {
+            return Some(format!("{} can't go inside itself.", name(inside)));
+        }
+        None
+    }
+
     /// Renames `id` to `name` (trimmed; an empty name leaves it as it was).
     pub fn rename(&mut self, id: Id, name: &str) -> Result<(), DmError> {
         let name = name.trim();

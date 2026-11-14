@@ -299,7 +299,25 @@ impl Panel for Viewport {
             let hovered = response.hover_pos().filter(|_| !on_gizmo).and_then(under);
             let modifiers = ui.input(|input| input.modifiers);
             // Alt means "select": it passes through a gizmo's handle to what is behind (#482).
-            if response.clicked() && (modifiers.alt || !on_gizmo) {
+            // Picking a parent from the Parent row (#599): what a click would select (Alt: the part itself) is the
+            // parent, and the selection stays.
+            let picking = editor.explorer.parent_pick.is_some();
+            if picking && response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+            if picking && response.clicked() {
+                let at = response.interact_pointer_pos();
+                let target = if modifiers.alt {
+                    at.and_then(|at| view.ray(at))
+                        .and_then(|ray| pick::nearest_part(&editor.dm, &editor.parts, ray))
+                        .map(|(part, _)| part)
+                } else {
+                    at.and_then(under)
+                };
+                if let Some(target) = target {
+                    editor.scene().pick_parent(target);
+                }
+            } else if response.clicked() && (modifiers.alt || !on_gizmo) {
                 let adding = modifiers.command || modifiers.shift;
                 let at = response.interact_pointer_pos();
                 if let Some(light) = at.and_then(|at| light_icons::icon_at(&lights, at)) {
@@ -344,8 +362,9 @@ impl Panel for Viewport {
             lines.reserve(editor.selection.len() * EDGES.len());
             // A selection this large is drawn with sharp lines, half the geometry (#597).
             lines.set_smooth(editor.selection.len() <= SMOOTH_UP_TO);
-            // Under the pointer, faintly, while a tool is active (#466).
-            if let Some(id) = hovered.filter(|&id| gizmo.tool.is_some() && !editor.selection.contains(id)) {
+            // Under the pointer, faintly, while a tool is active (#466) or a parent is picked (#599).
+            if let Some(id) = hovered.filter(|&id| (gizmo.tool.is_some() || picking) && !editor.selection.contains(id))
+            {
                 outline(
                     &mut lines,
                     &view,
