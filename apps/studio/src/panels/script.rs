@@ -176,6 +176,28 @@ impl Panel for ScriptEditor {
             Ok(None)
         };
         let find_at = editor.scripts.find.at.get(&script).cloned();
+        // Team Create (#631): in a file others edit too, the cursor goes where their edits (or an undo) moved it, and
+        // undo and redo are the session's, which take back only this user's own edits.
+        let shared = editor.scripts.collab.members.contains(&member);
+        if shared {
+            if let Some((tail, head)) = editor.scripts.collab.moves.remove(&member) {
+                code::view::place_selection(ui.ctx(), id, tail, head);
+            }
+            if focused {
+                let (undo, redo) = ui.input_mut(|input| {
+                    let redo = input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
+                        || input.consume_key(Modifiers::COMMAND, Key::Y);
+                    let undo = input.consume_key(Modifiers::COMMAND, Key::Z);
+                    (undo, redo)
+                });
+                if undo {
+                    editor.scripts.collab.requests.push((member.clone(), false));
+                }
+                if redo {
+                    editor.scripts.collab.requests.push((member.clone(), true));
+                }
+            }
+        }
         let text = editor.scripts.text(&mut editor.project, &member);
         // While the list or the find bar shows, Escape is theirs: the field keeps the keyboard.
         let output = code::view::show(
@@ -192,6 +214,20 @@ impl Panel for ScriptEditor {
             popup.open || find_open,
         );
         let mut changed = output.changed || taken;
+        if shared {
+            // Where this user's cursor is, for the others (and for keeping it on its code through their edits).
+            let collab = &mut editor.scripts.collab;
+            if output.response.has_focus()
+                && let Some((tail, head)) = code::view::selection_ends(ui.ctx(), id)
+            {
+                collab.cursor = Some((member.clone(), tail, head));
+            } else if collab.cursor.as_ref().is_some_and(|(file, _, _)| *file == member) {
+                collab.cursor = None;
+            }
+            if let Some(carets) = collab.remote.get(&member) {
+                paint_carets(ui, &output, carets);
+            }
+        }
         if find_open {
             let step = editor
                 .scripts
@@ -578,4 +614,35 @@ fn list(ui: &Ui, id: Id, place: egui::Pos2, completion: &Completion, selected: &
 /// The id of `script`'s code field.
 pub fn field_id(script: code::ScriptId) -> Id {
     Id::unique("metallic.script").with(script)
+}
+
+/// The others' cursors in this field (Team Create, #631), over the code: each user's selection lightly in their
+/// colour, the line they are typing on lit, and a caret with their name on it.
+fn paint_carets(ui: &Ui, output: &code::view::ViewOutput, carets: &[code::RemoteCaret]) {
+    let painter = ui.painter().with_clip_rect(output.code);
+    let font = egui::FontId::proportional(text::SMALL);
+    for caret in carets {
+        let [r, g, b] = caret.color;
+        let color = egui::Color32::from_rgb(r, g, b);
+        let (from, to) = (caret.tail.min(caret.head), caret.tail.max(caret.head));
+        if from < to {
+            for rect in code::view::char_rects(&output.galley, output.galley_pos, from..to) {
+                painter.rect_filled(rect, 0.0, color.gamma_multiply(0.22));
+            }
+        }
+        let at = output.galley.pos_from_cursor(CCursor::new(caret.head));
+        let at = at.translate(output.galley_pos.to_vec2());
+        if caret.typing {
+            let line = egui::Rect::from_x_y_ranges(output.code.x_range(), at.y_range());
+            painter.rect_filled(line, 0.0, color.gamma_multiply(0.08));
+        }
+        painter.line_segment([at.left_top(), at.left_bottom()], egui::Stroke::new(2.0, color));
+        let galley = painter.layout_no_wrap(caret.name.clone(), font.clone(), egui::Color32::WHITE);
+        let tag = egui::Rect::from_min_size(
+            egui::pos2(at.left(), at.top() - galley.size().y - 2.0),
+            galley.size() + egui::vec2(6.0, 2.0),
+        );
+        painter.rect_filled(tag, 3.0, color);
+        painter.galley(tag.min + egui::vec2(3.0, 1.0), galley, egui::Color32::WHITE);
+    }
 }

@@ -67,6 +67,8 @@ pub struct Scripts {
     pub find: find::FindBar,
     /// The search across every script (#555).
     pub search: find::Search,
+    /// Team Create's side of the editor (ADR 0011, #631): what the session and the code fields tell each other.
+    pub collab: Collab,
 }
 
 /// A file's analysis and diagnostics, and what they were made from.
@@ -497,5 +499,49 @@ mod tests {
             new_member("Door", |member| taken.contains(&member)),
             "Scripts/Door3.luau"
         );
+    }
+}
+
+/// Another user's cursor in a script (#631), in characters of the text as it is now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteCaret {
+    /// Their name.
+    pub name: String,
+    /// Their colour.
+    pub color: [u8; 3],
+    /// Where their cursor is.
+    pub head: usize,
+    /// The other end of their selection (`head` when none).
+    pub tail: usize,
+    /// Whether they typed in the last moment.
+    pub typing: bool,
+}
+
+/// What Team Create (ADR 0011, #631) and the code fields tell each other, a frame apart.
+#[derive(Clone, Debug, Default)]
+pub struct Collab {
+    /// The script files that are collaborative documents now: their undo and redo are the session's.
+    pub members: std::collections::HashSet<String>,
+    /// Undo (`false`) and redo (`true`) asked for in a collaborative file, for the session to do.
+    pub requests: Vec<(String, bool)>,
+    /// The focused field's file and selection (tail, head), in characters.
+    pub cursor: Option<(String, usize, usize)>,
+    /// When the user last typed in each file.
+    pub typed: HashMap<String, std::time::Instant>,
+    /// A selection (tail, head) the session moved a field's cursor to (others' edits, an undo), for the field to take.
+    pub moves: HashMap<String, (usize, usize)>,
+    /// The others' cursors, by file.
+    pub remote: HashMap<String, Vec<RemoteCaret>>,
+}
+
+impl Scripts {
+    /// The text of `member` set to `text` by Team Create: kept in `project` as typed text is, checked again.
+    pub fn set_from_session(&mut self, project: &mut Project, member: &str, text: String) {
+        self.replace_text(project, member, text);
+    }
+
+    /// The texts read so far, by file.
+    pub fn loaded(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.texts.iter().map(|(member, text)| (member.as_str(), text.as_str()))
     }
 }

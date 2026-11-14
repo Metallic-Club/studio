@@ -486,7 +486,7 @@ fn below_last_line(ui: &Ui, id: Id, field: Rect, galley: &Galley, galley_pos: Po
 
 /// The rectangles on the screen covering the characters `range` of the code `galley` lays out at `galley_pos`: one per
 /// row it spans, a line's end showing as a space's width.
-fn char_rects(galley: &Galley, galley_pos: Pos2, range: Range<usize>) -> Vec<Rect> {
+pub(crate) fn char_rects(galley: &Galley, galley_pos: Pos2, range: Range<usize>) -> Vec<Rect> {
     let (from, to) = (CCursor::new(range.start), CCursor::new(range.end.max(range.start)));
     let (first, last) = (galley.layout_from_cursor(from).row, galley.layout_from_cursor(to).row);
     let a = galley.pos_from_cursor(from);
@@ -567,6 +567,22 @@ pub fn select(ctx: &egui::Context, id: Id, chars: Range<usize>) {
     state.store(ctx, id);
     ctx.data_mut(|data| data.insert_temp(id.with("show"), chars.end));
     ctx.request_repaint();
+}
+
+/// Puts the field `id`'s selection from `tail` to its cursor `head` (characters) without scrolling or taking the
+/// keyboard: where Team Create moved it when others' edits or an undo changed the text (#631).
+pub fn place_selection(ctx: &egui::Context, id: Id, tail: usize, head: usize) {
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::two(CCursor::new(tail), CCursor::new(head))));
+    state.store(ctx, id);
+}
+
+/// The field `id`'s selection as its two ends, the other end then the cursor, in characters.
+pub fn selection_ends(ctx: &egui::Context, id: Id) -> Option<(usize, usize)> {
+    let range = TextEditState::load(ctx, id)?.cursor.char_range()?;
+    Some((range.secondary.index.0, range.primary.index.0))
 }
 
 /// What is selected in the field `id`, as characters, first to last (empty at the cursor).

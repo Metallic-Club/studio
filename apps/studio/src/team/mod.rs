@@ -21,6 +21,7 @@ pub mod page;
 pub mod presence;
 pub mod probe;
 pub mod store;
+pub mod text;
 pub mod viewport;
 
 use std::net::IpAddr;
@@ -682,6 +683,9 @@ fn host_frame(
                         Ok(snapshot) => {
                             log::info!("team create: {} is joining", user.identity.name);
                             server.host.admit(peer, &snapshot);
+                            if let Some(live) = hosting.live.as_mut() {
+                                live.joined(user.id, &mut server.host);
+                            }
                         }
                         Err(error) => {
                             log::warn!(

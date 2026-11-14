@@ -9265,4 +9265,5 @@ skip_sign_in = true
     mod team_create;
     mod team_projects;
     mod team_scene;
+    mod team_scripts;
 }
