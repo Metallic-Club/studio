@@ -1,0 +1,646 @@
+//! Team Create in Offline Mode (ADR 0011): hosting the open project on a port, joining one by address, and the
+//! session's state between frames.
+//!
+//! - **Host.** [`TeamCreate::host`] listens on the port the menu shows (saved in `team_create.toml`). A participant's
+//!   join asks for a snapshot, made at once from the open project ([`snapshot`]): its members as they are in memory,
+//!   unsaved edits included, and the start scene saved from the editor's scene as it is this frame. The host's own
+//!   file is the project; nothing about the session is written into it.
+//! - **Join.** [`TeamCreate::join`] connects in the background. The project arrives in chunks, is written as a
+//!   participant's copy in Studio's cache folder ([`Project::from_members`]), and is opened like any project; once
+//!   it is open, what the host sent meanwhile is applied and the host is told the participant is ready. The copy is
+//!   never the project: Save is the host's.
+//! - **Leaving.** Disconnect, End session, closing the project or the host going away all end it cleanly; a
+//!   participant whose host vanished is taken back to the projects page with the reason.
+//!
+//! Nothing here blocks the frame: the transport's threads do the waiting, and [`TeamCreate::update`] only moves what
+//! they received.
+
+pub mod menu;
+pub mod store;
+
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
+
+use metallic_engine::metallic_net::collab::client::{Client, ClientEvent};
+use metallic_engine::metallic_net::collab::host::{Host, HostConfig, HostEvent, ProjectSnapshot};
+use metallic_engine::metallic_net::collab::protocol::{DEFAULT_PORT, ProjectId, SessionInfo};
+use metallic_engine::metallic_net::collab::{ClientLink, HostServer};
+use metallic_engine::metallic_net::identity::{Identity, User, UserId};
+use metallic_engine::metallic_net::registry_fingerprint;
+use metallic_engine::metallic_net::transport::{self, Waker};
+use metallic_engine::metallic_project::{Project, save_scene};
+
+use crate::editor::EditorState;
+use store::{Role, TeamProject, TeamStore};
+
+/// The engine version peers must share.
+pub const ENGINE: &str = env!("CARGO_PKG_VERSION");
+
+/// A hosted session.
+pub struct Hosting {
+    /// The session over TCP.
+    pub server: HostServer,
+    /// The project hosted: the host's own file.
+    pub project: PathBuf,
+    /// This machine's addresses others can join at.
+    pub addresses: Vec<IpAddr>,
+    /// When hosting started.
+    pub started: Instant,
+}
+
+/// A join under way.
+pub struct Joining {
+    /// The session over TCP.
+    pub link: ClientLink,
+    /// The address as typed: host and port.
+    pub host: String,
+    /// The port.
+    pub port: u16,
+    /// Bytes of the project received, of the total, once it is arriving.
+    pub progress: Option<(u64, u64)>,
+    /// The participant's copy, once written and opening.
+    pub copy: Option<PathBuf>,
+}
+
+/// A joined session.
+pub struct Joined {
+    /// The session over TCP.
+    pub link: ClientLink,
+    /// The host's address.
+    pub host: String,
+    /// The port.
+    pub port: u16,
+    /// The participant's copy of the project, open in the editor.
+    pub copy: PathBuf,
+}
+
+/// Where Team Create is.
+#[derive(Default)]
+pub enum Session {
+    /// No session.
+    #[default]
+    Idle,
+    /// Hosting the open project.
+    Hosting(Box<Hosting>),
+    /// Joining a host.
+    Joining(Box<Joining>),
+    /// In a host's session.
+    Joined(Box<Joined>),
+}
+
+/// Something Studio has to do for Team Create.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Request {
+    /// Open the participant's copy at this path.
+    Open(PathBuf),
+    /// The participant's session is over: close the copy and tell them why.
+    Close {
+        /// The notice's title.
+        title: &'static str,
+        /// Why.
+        body: String,
+    },
+}
+
+/// Something the menu says until the next action: an error, or why the last session ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    /// Whether it is an error.
+    pub error: bool,
+    /// What to say.
+    pub text: String,
+}
+
+/// The fields the menu edits.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Form {
+    /// The port to host on, as typed.
+    pub port: String,
+    /// The address to join, as typed.
+    pub address: String,
+    /// The name to join as; empty for the profile's.
+    pub name: String,
+}
+
+/// Team Create's state: the saved choices, the session, and what the menu shows.
+pub struct TeamCreate {
+    /// The saved choices and projects.
+    pub store: TeamStore,
+    session: Session,
+    waker: Waker,
+    /// Where participants' copies are written.
+    cache: PathBuf,
+    /// What the menu says.
+    pub note: Option<Note>,
+    /// The menu's fields.
+    pub form: Form,
+}
+
+impl std::fmt::Debug for TeamCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TeamCreate")
+            .field("session", &self.status_line())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TeamCreate {
+    /// Team Create with `store`'s choices, waking the window through `waker`, writing participants' copies under
+    /// `cache`.
+    pub fn new(store: TeamStore, waker: Waker, cache: PathBuf) -> Self {
+        let form = Form {
+            port: store.port.to_string(),
+            address: store.address.clone(),
+            name: String::new(),
+        };
+        Self {
+            store,
+            session: Session::Idle,
+            waker,
+            cache,
+            note: None,
+            form,
+        }
+    }
+
+    /// Team Create kept in memory, its copies in the system's temporary folder: for tests.
+    pub fn in_memory() -> Self {
+        Self::new(
+            TeamStore::in_memory(),
+            transport::no_waker(),
+            std::env::temp_dir().join("metallic-team-create"),
+        )
+    }
+
+    /// Wakes the window through `waker` from now on (the shell's event loop).
+    pub fn set_waker(&mut self, waker: Waker) {
+        self.waker = waker;
+    }
+
+    /// Writes participants' copies under `cache` from now on.
+    pub fn set_cache(&mut self, cache: PathBuf) {
+        self.cache = cache;
+    }
+
+    /// Uses `store` (read once the splash is done).
+    pub fn set_store(&mut self, store: TeamStore) {
+        self.form.port = store.port.to_string();
+        self.form.address.clone_from(&store.address);
+        self.store = store;
+    }
+
+    /// The session.
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    /// The session, to change.
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    /// Whether a session is hosted, being joined or joined.
+    pub fn is_active(&self) -> bool {
+        !matches!(self.session, Session::Idle)
+    }
+
+    /// Whether this Studio hosts a session.
+    pub fn is_hosting(&self) -> bool {
+        matches!(self.session, Session::Hosting(_))
+    }
+
+    /// Whether `path` is a participant's copy (open or opening) of a session joined now.
+    pub fn is_copy(&self, path: &Path) -> bool {
+        match &self.session {
+            Session::Joined(joined) => joined.copy == path,
+            Session::Joining(joining) => joining.copy.as_deref() == Some(path),
+            _ => false,
+        }
+    }
+
+    /// Whether `path` is in the folder participants' copies are written to: never a project to host.
+    pub fn is_in_cache(&self, path: &Path) -> bool {
+        path.starts_with(&self.cache)
+    }
+
+    /// The users of the session, with whether each has the project open: empty without one.
+    pub fn users(&self) -> Vec<(User, bool)> {
+        match &self.session {
+            Session::Idle => Vec::new(),
+            Session::Hosting(hosting) => {
+                let host = &hosting.server.host;
+                host.users()
+                    .into_iter()
+                    .map(|user| {
+                        let ready = host.is_ready(user.id);
+                        (user, ready)
+                    })
+                    .collect()
+            }
+            Session::Joining(joining) => with_ready(&joining.link.client),
+            Session::Joined(joined) => with_ready(&joined.link.client),
+        }
+    }
+
+    /// The session's description, once there is one.
+    pub fn info(&self) -> Option<&SessionInfo> {
+        match &self.session {
+            Session::Idle => None,
+            Session::Hosting(hosting) => Some(hosting.server.host.info()),
+            Session::Joining(joining) => joining.link.client.session(),
+            Session::Joined(joined) => joined.link.client.session(),
+        }
+    }
+
+    /// This user's id in the session.
+    pub fn me(&self) -> Option<UserId> {
+        match &self.session {
+            Session::Idle => None,
+            Session::Hosting(_) => Some(UserId::HOST),
+            Session::Joining(joining) => joining.link.client.me(),
+            Session::Joined(joined) => joined.link.client.me(),
+        }
+    }
+
+    /// One line on where the session is, as the menu and logs say it.
+    pub fn status_line(&self) -> String {
+        match &self.session {
+            Session::Idle => "Not in a session".to_owned(),
+            Session::Hosting(hosting) => format!("Hosting on port {}", hosting.server.port()),
+            Session::Joining(joining) => match (&joining.copy, joining.progress) {
+                (Some(_), _) => "Opening the project…".to_owned(),
+                (None, Some((received, total))) if total > 0 => {
+                    format!("Receiving the project… {}%", received * 100 / total)
+                }
+                (None, _) if joining.link.client.session().is_some() => "Receiving the project…".to_owned(),
+                (None, _) => format!("Connecting to {}:{}…", joining.host, joining.port),
+            },
+            Session::Joined(joined) => format!("Connected to {}:{}", joined.host, joined.port),
+        }
+    }
+
+    /// Starts hosting `editor`'s project as `identity` on the port the form gives.
+    pub fn host(&mut self, editor: &EditorState, identity: Identity) -> Result<(), String> {
+        if self.is_active() {
+            return Err("Leave the current session first.".to_owned());
+        }
+        if self.is_in_cache(editor.path()) {
+            return Err("This is a copy of someone else's project: only its owner can host it.".to_owned());
+        }
+        let port = parse_port(&self.form.port)?;
+        let path = editor.path().to_path_buf();
+        let project = self.store.id_for_owned(&path);
+        let config = HostConfig {
+            info: SessionInfo {
+                session: random_u64(),
+                project,
+                project_name: editor.name().to_owned(),
+                host_name: identity.name.clone(),
+            },
+            host: identity.clone(),
+            engine: ENGINE.to_owned(),
+            fingerprint: registry_fingerprint(editor.dm.registry()),
+        };
+        let server = HostServer::start(port, Host::new(config), Arc::clone(&self.waker)).map_err(capitalise)?;
+        let port = server.port();
+        let addresses = transport::local_addresses();
+        log::info!("team create: hosting {} on port {port}", editor.name());
+        self.store.port = port;
+        self.store.remember(TeamProject {
+            id: project,
+            name: editor.name().to_owned(),
+            owner: identity.name,
+            role: Role::Owner,
+            path: Some(path.clone()),
+            host: addresses.first().map(IpAddr::to_string).unwrap_or_default(),
+            port,
+            last_used: 0,
+        });
+        self.note = None;
+        self.session = Session::Hosting(Box::new(Hosting {
+            server,
+            project: path,
+            addresses,
+            started: Instant::now(),
+        }));
+        Ok(())
+    }
+
+    /// Starts joining the host at `address` (`host:port`, the default port if none) as `identity`, expecting
+    /// `project` when the user joined it before.
+    pub fn join(&mut self, address: &str, identity: Identity, project: Option<ProjectId>) -> Result<(), String> {
+        if self.is_active() {
+            return Err("Leave the current session first.".to_owned());
+        }
+        let (host, port) = transport::parse_address(address, DEFAULT_PORT).map_err(capitalise)?;
+        log::info!("team create: joining {host}:{port} as {}", identity.name);
+        // The participant's classes are this build's built-in ones: the host must have the same.
+        let registry = metallic_engine::metallic_classes::shared_registry()
+            .map_err(|error| format!("Studio's classes did not load: {error}"))?;
+        let fingerprint = registry_fingerprint(&registry);
+        let client = Client::join(identity, project, ENGINE, fingerprint);
+        let link = ClientLink::connect(&host, port, client, Arc::clone(&self.waker));
+        self.store.address = address.trim().to_owned();
+        self.store.save_or_log();
+        self.note = None;
+        self.session = Session::Joining(Box::new(Joining {
+            link,
+            host,
+            port,
+            progress: None,
+            copy: None,
+        }));
+        Ok(())
+    }
+
+    /// Ends the hosted session: saves `editor`'s project if it has changes (the session's edits are the host's to
+    /// keep), tells everyone, and stops listening.
+    pub fn end(&mut self, editor: Option<&mut EditorState>) {
+        let Session::Hosting(mut hosting) = std::mem::take(&mut self.session) else {
+            return;
+        };
+        if let Some(editor) = editor
+            && editor.path() == hosting.project
+            && editor.is_modified()
+            && !editor.is_playing()
+            && let Err(error) = editor.save()
+        {
+            log::warn!("team create: could not save at the end of the session: {error}");
+            self.note = Some(Note {
+                error: true,
+                text: format!("The session ended, but the project was not saved: {error}"),
+            });
+        }
+        hosting.server.host.end("The host ended the session.");
+        hosting.server.flush();
+        log::info!("team create: ended the session");
+        if self.note.is_none() {
+            self.note = Some(Note {
+                error: false,
+                text: "The session ended.".to_owned(),
+            });
+        }
+    }
+
+    /// Leaves the joined session (or stops joining).
+    pub fn leave(&mut self) {
+        match std::mem::take(&mut self.session) {
+            Session::Joining(mut joining) => joining.link.leave(),
+            Session::Joined(mut joined) => joined.link.leave(),
+            other => self.session = other,
+        }
+    }
+
+    /// Moves what the network brought since the last frame, and says what Studio has to do about it. `editor` is
+    /// the open project, if one is open; `opening` the project opening, if one is.
+    pub fn update(&mut self, mut editor: Option<&mut EditorState>, opening: Option<&Path>) -> Vec<Request> {
+        let mut requests = Vec::new();
+        if matches!(self.session, Session::Joining(_)) {
+            if let Some(outcome) = self.join_frame_inner(editor.as_deref_mut(), opening) {
+                requests.extend(outcome);
+            }
+            return requests;
+        }
+        match &mut self.session {
+            Session::Idle | Session::Joining(_) => {}
+            Session::Hosting(hosting) => {
+                let hosted = editor.as_deref_mut().filter(|editor| editor.path() == hosting.project);
+                host_frame(hosting, hosted);
+            }
+            Session::Joined(joined) => {
+                joined.link.receive();
+                let mut over = None;
+                while let Some(event) = joined.link.client.next_event() {
+                    match event {
+                        ClientEvent::Ended(reason) => over = Some(("The session ended", reason)),
+                        ClientEvent::Broken(reason) => {
+                            over = Some((
+                                "Disconnected from the host",
+                                format!("{reason}. Rejoin from Team Create."),
+                            ))
+                        }
+                        ClientEvent::Refused(reason) => over = Some(("Disconnected from the host", reason)),
+                        _ => {}
+                    }
+                }
+                joined.link.flush();
+                let still_open = editor.as_ref().is_some_and(|editor| editor.path() == joined.copy);
+                if let Some((title, body)) = over {
+                    log::info!("team create: {title}: {body}");
+                    self.note = Some(Note {
+                        error: true,
+                        text: body.clone(),
+                    });
+                    self.session = Session::Idle;
+                    requests.push(Request::Close { title, body });
+                } else if !still_open && opening != Some(joined.copy.as_path()) {
+                    // The participant closed the copy: that is leaving.
+                    self.leave();
+                }
+            }
+        }
+        requests
+    }
+
+    fn join_frame_inner(&mut self, editor: Option<&mut EditorState>, opening: Option<&Path>) -> Option<Vec<Request>> {
+        let Session::Joining(joining) = &mut self.session else {
+            return None;
+        };
+        let mut requests = Vec::new();
+        joining.link.receive();
+        let mut failed = None;
+        while let Some(event) = joining.link.client.next_event() {
+            match event {
+                ClientEvent::Welcomed { session, .. } => {
+                    log::info!("team create: welcomed into {}", session.project_name);
+                    self.store.remember(TeamProject {
+                        id: session.project,
+                        name: session.project_name.clone(),
+                        owner: session.host_name.clone(),
+                        role: Role::Participant,
+                        path: None,
+                        host: joining.host.clone(),
+                        port: joining.port,
+                        last_used: 0,
+                    });
+                }
+                ClientEvent::Progress { received, total } => joining.progress = Some((received, total)),
+                ClientEvent::Project(project) => {
+                    let name = joining
+                        .link
+                        .client
+                        .session()
+                        .map_or_else(|| "Project".to_owned(), |s| s.project_name.clone());
+                    let id = joining.link.client.session().map_or(ProjectId(0), |s| s.project);
+                    let path = copy_path(&self.cache, id, &name);
+                    let written = std::fs::create_dir_all(path.parent().unwrap_or(&self.cache))
+                        .map_err(|error| error.to_string())
+                        .and_then(|()| {
+                            Project::from_members(
+                                &path,
+                                project
+                                    .members
+                                    .iter()
+                                    .map(|(member, bytes)| (member.as_str(), &bytes[..])),
+                            )
+                            .map(drop)
+                            .map_err(|error| error.to_string())
+                        });
+                    match written {
+                        Ok(()) => {
+                            joining.copy = Some(path.clone());
+                            requests.push(Request::Open(path));
+                        }
+                        Err(error) => {
+                            failed = Some(format!("Could not keep the project on this computer: {error}"));
+                        }
+                    }
+                }
+                ClientEvent::Refused(reason) => failed = Some(reason),
+                ClientEvent::Ended(reason) => failed = Some(reason),
+                ClientEvent::Broken(reason) => failed = Some(capitalise(reason)),
+                ClientEvent::Users | ClientEvent::Op { .. } => {}
+            }
+        }
+        if let Some(reason) = failed {
+            log::warn!("team create: could not join: {reason}");
+            joining.link.leave();
+            self.note = Some(Note {
+                error: true,
+                text: reason.clone(),
+            });
+            let was_opening = joining.copy.is_some();
+            self.session = Session::Idle;
+            if was_opening {
+                requests.push(Request::Close {
+                    title: "Could not join",
+                    body: reason,
+                });
+            }
+            return Some(requests);
+        }
+        joining.link.flush();
+        // The copy is open: what was held is applied from now on, and the host hears the participant is ready.
+        if let Some(copy) = joining.copy.clone()
+            && editor.is_some_and(|editor| editor.path() == copy)
+        {
+            joining.link.client.loaded();
+            joining.link.flush();
+            let Session::Joining(joining) = std::mem::take(&mut self.session) else {
+                return Some(requests);
+            };
+            let Joining { link, host, port, .. } = *joining;
+            log::info!("team create: joined {host}:{port}");
+            self.session = Session::Joined(Box::new(Joined { link, host, port, copy }));
+        } else if joining.copy.is_some() && opening.is_none() && requests.is_empty() {
+            // The copy failed to open (the projects page says why).
+            joining.link.leave();
+            self.session = Session::Idle;
+        }
+        Some(requests)
+    }
+}
+
+/// One frame of hosting: joins answered with a snapshot of `editor` (the hosted project, when it is open).
+fn host_frame(hosting: &mut Hosting, mut editor: Option<&mut EditorState>) {
+    let server = &mut hosting.server;
+    server.receive();
+    while let Some(event) = server.host.next_event() {
+        match event {
+            HostEvent::JoinRequested { peer, user } => match editor.as_deref_mut().map(snapshot) {
+                Some(Ok(snapshot)) => {
+                    log::info!("team create: {} is joining", user.identity.name);
+                    server.host.admit(peer, &snapshot);
+                }
+                Some(Err(error)) => {
+                    log::warn!(
+                        "team create: could not send the project to {}: {error}",
+                        user.identity.name
+                    );
+                    server
+                        .host
+                        .refuse(peer, &format!("The host could not send the project: {error}"));
+                }
+                None => server.host.refuse(peer, "The host has no project open."),
+            },
+            HostEvent::Ready(id) => log::info!("team create: {id} has the project open"),
+            HostEvent::Left { user, reason } => log::info!("team create: {} left ({reason})", user.identity.name),
+            HostEvent::Op { .. } => {}
+        }
+    }
+    server.flush();
+}
+
+/// The project as a joining participant gets it: every member as it is in memory, the start scene saved from the
+/// editor's scene as it is now.
+pub fn snapshot(editor: &mut EditorState) -> Result<ProjectSnapshot, String> {
+    let start_scene = editor.project.manifest().start_scene.clone();
+    let mut ids = editor.scene_ids.clone();
+    let scene = save_scene(&editor.dm, &mut ids).map_err(|error| error.to_string())?;
+    let names: Vec<String> = editor.project.members().into_iter().map(str::to_owned).collect();
+    let mut members = Vec::with_capacity(names.len() + 1);
+    for name in names {
+        if name == start_scene {
+            continue;
+        }
+        let bytes = editor.project.read(&name).map_err(|error| error.to_string())?;
+        members.push((name, Arc::from(bytes)));
+    }
+    members.push((start_scene.clone(), Arc::from(scene.text.into_bytes())));
+    Ok(ProjectSnapshot { members, start_scene })
+}
+
+/// Where a participant's copy of project `id`, called `name`, is written under `cache`.
+pub fn copy_path(cache: &Path, id: ProjectId, name: &str) -> PathBuf {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || " -_".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    let safe = safe.trim();
+    let file = if safe.is_empty() { "Project" } else { safe };
+    cache.join(id.to_hex()).join(format!("{file}.mtproj"))
+}
+
+fn with_ready(client: &Client) -> Vec<(User, bool)> {
+    client
+        .users()
+        .iter()
+        .map(|user| (user.clone(), client.is_ready(user.id)))
+        .collect()
+}
+
+/// `text` as a port: 1 to 65535.
+pub fn parse_port(text: &str) -> Result<u16, String> {
+    match text.trim().parse::<u16>() {
+        Ok(port) if port > 0 => Ok(port),
+        _ => Err(format!(
+            "\u{201C}{}\u{201D} is not a port: use a number from 1 to 65535.",
+            text.trim()
+        )),
+    }
+}
+
+fn capitalise(text: impl Into<String>) -> String {
+    let text = text.into();
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => text,
+    }
+}
+
+fn random_u64() -> u64 {
+    ProjectId::random().0 as u64
+}
+
+#[cfg(test)]
+mod tests;

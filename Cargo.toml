@@ -22,6 +22,7 @@ metallic_luau = { path = "crates/luau" }
 metallic_render = { path = "crates/render" }
 metallic_physics = { path = "crates/physics" }
 metallic_project = { path = "crates/project" }
+metallic_net = { path = "crates/net" }
 # Without its `window` feature (winit, gilrs): a dedicated server gets user paths only. `metallic_engine`'s `render`
 # feature turns it on (#92).
 metallic_platform = { path = "crates/platform", default-features = false }

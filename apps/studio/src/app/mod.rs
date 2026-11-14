@@ -158,6 +158,8 @@ pub struct Studio {
     game_had_input: bool,
     /// Game sessions started so far: each gets the next number.
     sessions: u64,
+    /// Team Create (ADR 0011): the session hosted or joined, and its saved choices.
+    team: crate::team::TeamCreate,
 }
 
 impl std::fmt::Debug for Studio {
@@ -188,6 +190,7 @@ impl Studio {
             editor: None,
             open_after_splash: None,
             add_to_recent: false,
+            team: crate::team::TeamCreate::in_memory(),
             dock: Dock::in_memory(panels::PANELS),
             toolbar: Toolbar::in_memory(panels::PANELS),
             main_layout: None,
@@ -285,13 +288,124 @@ impl Studio {
         &mut self.dock
     }
 
-    /// Goes to the projects page, looking at the projects' files again. A project open is closed.
+    /// Team Create (ADR 0011): the session hosted or joined, and its saved choices.
+    pub fn team(&self) -> &crate::team::TeamCreate {
+        &self.team
+    }
+
+    /// Team Create, to change.
+    pub fn team_mut(&mut self) -> &mut crate::team::TeamCreate {
+        &mut self.team
+    }
+
+    /// Wakes the window through `waker` when the network brings something (the shell's event loop).
+    pub fn set_waker(&mut self, waker: metallic_engine::metallic_net::transport::Waker) {
+        self.team.set_waker(waker);
+    }
+
+    /// Goes to the projects page, looking at the projects' files again. A project open is closed: closing the
+    /// hosted project ends its Team Create session (saving it first), and closing a participant's copy leaves.
     fn show_projects(&mut self) {
+        if self.team.is_hosting() {
+            let editor = match &mut self.editor {
+                Some(EditorScreen::Open(editor)) => Some(&mut **editor),
+                _ => None,
+            };
+            self.team.end(editor);
+        } else if self.team.is_active() {
+            self.team.leave();
+        }
         self.editor = None;
         self.open_project = None;
         self.add_to_recent = false;
         self.projects.refresh();
         self.screen = Screen::Projects;
+    }
+
+    /// One frame of Team Create: moves what the network brought, and opens or closes a participant's copy as it asks.
+    /// While a session runs the frame is drawn again at least a few times a second, so a peer's change shows even
+    /// when the shell has no waker (tests) or the window is idle.
+    fn team_frame(&mut self, ctx: &egui::Context) {
+        if !self.team.is_active() {
+            return;
+        }
+        let opening = match &self.editor {
+            Some(EditorScreen::Opening(_)) => self.open_project.clone(),
+            _ => None,
+        };
+        let editor = match &mut self.editor {
+            Some(EditorScreen::Open(editor)) => Some(&mut **editor),
+            _ => None,
+        };
+        let requests = self.team.update(editor, opening.as_deref());
+        for request in requests {
+            match request {
+                crate::team::Request::Open(path) => {
+                    self.add_to_recent = false;
+                    self.open(path);
+                }
+                crate::team::Request::Close { title, body } => {
+                    if self.editor.is_some() {
+                        self.show_projects();
+                    }
+                    self.notices.push(Notice { title, body });
+                }
+            }
+        }
+        if self.team.is_active() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
+
+    /// Does what the Team Create menu asked for.
+    fn team_action(&mut self, action: crate::team::menu::TeamAction) {
+        use crate::team::menu::TeamAction;
+        let profile = self.settings.settings().profile.clone();
+        let result = match action {
+            TeamAction::Host => match &self.editor {
+                Some(EditorScreen::Open(editor)) => {
+                    let identity =
+                        metallic_engine::metallic_net::identity::Identity::new(profile.shown_name(), profile.color);
+                    let result = self.team.host(editor, identity);
+                    if result.is_ok() {
+                        self.team.store.save_or_log();
+                    }
+                    result
+                }
+                _ => Err("Open a project to host it.".to_owned()),
+            },
+            TeamAction::Join => {
+                let name = match self.team.form.name.trim() {
+                    "" => profile.shown_name().to_owned(),
+                    typed => typed.to_owned(),
+                };
+                let identity = metallic_engine::metallic_net::identity::Identity::new(&name, profile.color);
+                let address = self.team.form.address.clone();
+                self.team.join(&address, identity, None)
+            }
+            TeamAction::End => {
+                let editor = match &mut self.editor {
+                    Some(EditorScreen::Open(editor)) => Some(&mut **editor),
+                    _ => None,
+                };
+                self.team.end(editor);
+                Ok(())
+            }
+            TeamAction::Leave => {
+                let copy = self.open_project.clone().filter(|path| self.team.is_copy(path));
+                self.team.leave();
+                if copy.is_some() {
+                    self.show_projects();
+                }
+                Ok(())
+            }
+        };
+        if let Err(error) = result {
+            self.team.note = Some(crate::team::Note {
+                error: true,
+                text: error,
+            });
+        }
     }
 
     /// Goes to the Editor screen and starts opening the project at `path` behind the progress overlay.
@@ -452,6 +566,10 @@ impl Studio {
             // After the keymap took the play controls, before any panel sees a key.
             self.hand_off_input(&ctx);
         }
+        if self.screen != Screen::Splash {
+            // What the network brought, before anything is drawn from the scene.
+            self.team_frame(&ctx);
+        }
         let before = (self.screen != Screen::Splash).then(|| self.settings.settings().clone());
         match self.screen {
             Screen::Splash => self.splash(ui, now),
@@ -521,11 +639,12 @@ impl Studio {
         }
         let full = ui.max_rect();
         let bar = Rect::from_min_size(full.min, vec2(full.width(), editor::BAR_HEIGHT));
-        let action = ui
+        let (action, team_action) = ui
             .scope_builder(UiBuilder::new().max_rect(bar), |ui| {
                 let settings_open = self.settings_window.is_open();
                 let profile = &mut self.settings.settings_mut().profile;
-                editor::top_bar(ui, editor, &self.dock, &self.keymap, settings_open, profile)
+                let team = &mut self.team;
+                editor::top_bar(ui, editor, &self.dock, &self.keymap, settings_open, profile, team)
             })
             .inner;
         // The toolbar under the menu bar (#232).
@@ -573,6 +692,9 @@ impl Studio {
             if crate::code::script_of(&pane).is_none_or(|script| !crate::code::in_game(&cx.editor.dm, script)) {
                 self.dock.close(&pane);
             }
+        }
+        if let Some(action) = team_action {
+            self.team_action(action);
         }
         if let Some(action) = action {
             self.menu_action(action);
@@ -987,6 +1109,15 @@ impl Studio {
 
     /// Saves the open project, telling the user if it failed.
     fn save(&mut self) {
+        // A participant's copy is not the project: the host saves it (ADR 0011).
+        if self.open_project.as_deref().is_some_and(|path| self.team.is_copy(path)) {
+            self.notices.push(Notice {
+                title: "The host saves this project",
+                body: "You joined this project through Team Create: your edits reach the host, who saves them."
+                    .to_owned(),
+            });
+            return;
+        }
         let Some(editor) = self.editor_mut() else {
             return;
         };
@@ -1384,6 +1515,13 @@ impl Studio {
                 });
             }
             self.projects.set_list(list);
+            self.team.set_store(std::mem::take(&mut loaded.team));
+            // Participants' copies go in Studio's cache folder (tests keep theirs in the temporary folder).
+            if !cfg!(test)
+                && let Some(paths) = crate::folders::user_paths()
+            {
+                self.team.set_cache(paths.cache_dir().join("team-create"));
+            }
             self.projects.set_templates(std::mem::take(&mut loaded.templates));
             self.projects.set_games_folder(loaded.games_folder.clone());
             self.dock = std::mem::take(&mut loaded.layout);
@@ -9059,4 +9197,6 @@ skip_sign_in = true
         assert_eq!(studio.screen(), Screen::Editor);
         write_png(&out.join("217-viewport.png"), offscreen.read());
     }
+
+    mod team_create;
 }

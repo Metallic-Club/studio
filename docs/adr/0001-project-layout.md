@@ -81,7 +81,7 @@ studio/                         Metallic-Club/studio (the one repo)
 
 | Crate | When |
 |---|---|
-| `crates/net` | M10, multiplayer |
+| `crates/net` | made for Team Create (#628, [ADR 0011](0011-team-create.md)), on `metallic_core` alone; `metallic_engine` re-exports it |
 | 2D physics and 2D classes | when 2D starts. Nothing in this layout has to move for it |
 | `crates/audio`, game UI | not planned yet |
 | `platforms/<os>/` packaging (Gradle, Xcode) | M9, when that platform is worked on |

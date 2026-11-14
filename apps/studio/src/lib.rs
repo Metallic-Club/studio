@@ -36,6 +36,7 @@ pub mod panels;
 pub mod profile;
 pub mod projects;
 pub mod settings;
+pub mod team;
 pub mod theme;
 pub mod toolbar;
 pub mod viewport;
