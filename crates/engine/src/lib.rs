@@ -192,3 +192,5 @@ pub use metallic_script;
 // The Luau backend, so Studio's script editor checks code with the compiler the game runs it with (#530).
 #[cfg(feature = "luau")]
 pub use metallic_luau;
+// Networking (Team Create, and later game replication), so apps host and join sessions through the engine.
+pub use metallic_net;

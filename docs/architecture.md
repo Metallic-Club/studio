@@ -19,6 +19,7 @@ class is one file; none of those systems change. ([ADR 0002](adr/0002-object-mod
 | `metallic_render` | `crates/render` | the `wgpu` renderer and graphics quality settings |
 | `metallic_physics` | `crates/physics` | the bridge to the Metallic Box3D fork |
 | `metallic_project` | `crates/project` | project manifest, scenes, assets, `game.pak` |
+| `metallic_net` | `crates/net` | the transport, Team Create sessions, scene and text sync, game replication ([ADR 0011](adr/0011-team-create.md)) |
 | `metallic_platform` | `crates/platform` | window, input, paths, OS glue (the only crate with OS-specific code) |
 | `metallic_engine` | `crates/engine` | the runtime loop; wires everything above; what apps depend on |
 | `metallic_player` | `apps/player` | runs games; a library (embedded by Studio and Launcher) plus a binary |
@@ -41,7 +42,8 @@ class is one file; none of those systems change. ([ADR 0002](adr/0002-object-mod
  model     ─────────────── metallic_core ──────────────────────────
 ```
 
-- Dependencies point down only. Subsystems never depend on each other; `metallic_engine` joins them.
+- Dependencies point down only. Subsystems never depend on each other; `metallic_engine` joins them. `metallic_net`
+  (not drawn) is one more subsystem on `metallic_core`, which the engine re-exports.
 - `metallic_core` depends only on small portable crates.
 - Classes *declare* components (`SpotLightEmitter`); subsystems *implement* them by name. That is why the object
   model builds without a GPU, and why a server is simply the engine without the `render` feature.
@@ -133,3 +135,9 @@ pub static CLASS: ClassDesc = ClassDesc::new("SpotLight", Some("Light"))
 
 Enums go in the file of the class that owns them (`pub static ENUMS`, such as `Material` in `base_part.rs`). Every
 class, member, component and enum needs a description; a test fails otherwise.
+
+## Team Create
+
+Several Studios edit one project: one hosts it on a port, others join by address. The host is the authority; the
+transport, the session logic, scene sync and text sync are separate pieces in `metallic_net`, so a cloud-hosted
+session can reuse all but the transport. ([ADR 0011](adr/0011-team-create.md))

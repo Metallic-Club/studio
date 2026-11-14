@@ -24,6 +24,7 @@ profile-with-tracy = ["profiling/profile-with-tracy"]
 
 [dependencies]
 metallic_core.workspace = true
+metallic_net.workspace = true
 metallic_classes.workspace = true
 metallic_script.workspace = true
 metallic_project.workspace = true

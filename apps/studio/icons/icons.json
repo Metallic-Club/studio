@@ -310,6 +310,10 @@
       "file": "toolbar/square.svg",
       "color": "run"
     },
+    "toolbar.team_create": {
+      "file": "toolbar/users.svg",
+      "color": "studio"
+    },
     "toolbar.undo": {
       "file": "toolbar/undo-2.svg",
       "color": "studio"

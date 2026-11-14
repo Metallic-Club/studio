@@ -24,6 +24,7 @@ const ALLOWED_WORKSPACE_DEPS: &[(&str, &[&str])] = &[
     ("metallic_render", &["metallic_core"]),
     ("metallic_physics", &["metallic_core"]),
     ("metallic_project", &["metallic_core"]),
+    ("metallic_net", &["metallic_core"]),
     ("metallic_luau", &["metallic_core", "metallic_script"]),
     (
         "metallic_engine",
@@ -36,6 +37,7 @@ const ALLOWED_WORKSPACE_DEPS: &[(&str, &[&str])] = &[
             "metallic_render",
             "metallic_physics",
             "metallic_luau",
+            "metallic_net",
         ],
     ),
     ("metallic_player", &["metallic_engine"]),
@@ -499,14 +501,14 @@ mod tests {
     #[test]
     fn unknown_package_is_reported() {
         let packages = vec![
-            pkg("metallic_net", &[("metallic_core", None)]),
+            pkg("metallic_audio", &[("metallic_core", None)]),
             pkg("metallic_core", &[]),
         ];
         let violations = check_packages(&packages);
         assert_eq!(
             violations,
             vec![Violation::UnknownPackage {
-                package: "metallic_net".to_owned()
+                package: "metallic_audio".to_owned()
             }]
         );
         assert!(violations[0].to_string().contains("add it to the table"));

@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use egui::{ColorImage, ImmediateViewport, ViewportBuilder, ViewportId, ViewportInfo};
@@ -27,7 +27,7 @@ use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderSurf
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{DeviceEvent, DeviceId, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::monitor::MonitorHandle;
 use winit::window::{CursorGrabMode, Icon, Window, WindowAttributes, WindowId};
 
@@ -50,9 +50,18 @@ const VIEWPORT_POLL: std::time::Duration = std::time::Duration::from_millis(16);
 /// Opens Studio's window and runs it until it is closed. Call it on the main thread. `open` is a project to open
 /// straight into the editor once the splash is done (the command line's).
 pub fn run(open: Option<PathBuf>) -> Result<(), StudioError> {
-    let event_loop = EventLoop::new()?;
+    let event_loop = EventLoop::<Wake>::with_user_event().build()?;
+    // Team Create's network threads wake the loop when something arrives (ADR 0011).
+    let proxy: Mutex<EventLoopProxy<Wake>> = Mutex::new(event_loop.create_proxy());
+    let waker: metallic_engine::metallic_net::transport::Waker = Arc::new(move || {
+        if let Ok(proxy) = proxy.lock() {
+            // A closed loop has nothing left to wake.
+            let _ = proxy.send_event(Wake);
+        }
+    });
     let mut shell = Shell {
         open,
+        waker: Some(waker),
         ..Shell::default()
     };
     event_loop.run_app(&mut shell)?;
@@ -69,7 +78,13 @@ struct Shell {
     error: Option<StudioError>,
     /// The project to open after the splash, until the window takes it.
     open: Option<PathBuf>,
+    /// Wakes the loop from Team Create's network threads, until the window takes it.
+    waker: Option<metallic_engine::metallic_net::transport::Waker>,
 }
+
+/// The loop's own event: something arrived on the network, so draw again.
+#[derive(Clone, Copy, Debug)]
+struct Wake;
 
 /// What the main window shares with the windows of their own (#331): the UI renderer, whose textures serve every
 /// window, and those windows. Drawing a window of its own happens inside the main window's interface pass, so this is
@@ -129,13 +144,25 @@ struct StudioWindow {
     normal_place: Option<crate::settings::WindowPlace>,
 }
 
-impl ApplicationHandler for Shell {
+impl ApplicationHandler<Wake> for Shell {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: Wake) {
+        if let Some(window) = self.window.as_mut() {
+            window.repaint_at = None;
+            window.window.request_redraw();
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
         match StudioWindow::open(event_loop, self.open.take()) {
-            Ok(window) => self.window = Some(window),
+            Ok(mut window) => {
+                if let Some(waker) = self.waker.take() {
+                    window.studio.set_waker(waker);
+                }
+                self.window = Some(window);
+            }
             Err(error) => {
                 self.error = Some(error);
                 event_loop.exit();

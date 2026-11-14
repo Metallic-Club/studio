@@ -164,6 +164,50 @@ impl Project {
         Self::open(path)
     }
 
+    /// Writes a project at `path` holding exactly `members` (path and contents), replacing a file already there, and
+    /// opens it: a participant's copy of a project another Studio hosts (Team Create, ADR 0011). The archive is
+    /// written crash-safely, like [`Project::save`].
+    ///
+    /// Refuses an unsafe member path ([`check_member_path`]), a path given twice and a set without `metallic.toml`,
+    /// before anything is written.
+    pub fn from_members<'a>(
+        path: impl AsRef<Path>,
+        members: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+    ) -> Result<Self, ProjectError> {
+        let path = path.as_ref();
+        let members: Vec<(&str, &[u8])> = members.into_iter().collect();
+        let mut seen = std::collections::BTreeSet::new();
+        for (member, _) in &members {
+            check_member_path(member).map_err(|reason| ProjectError::UnsafeMember {
+                path: path.to_path_buf(),
+                member: (*member).to_owned(),
+                reason,
+            })?;
+            if !seen.insert(*member) {
+                return Err(ProjectError::UnsafeMember {
+                    path: path.to_path_buf(),
+                    member: (*member).to_owned(),
+                    reason: "it is given twice",
+                });
+            }
+        }
+        if !seen.contains(MANIFEST_FILE) {
+            return Err(ProjectError::MissingManifest {
+                path: path.to_path_buf(),
+            });
+        }
+        write_archive(path, |writer| {
+            for (member, bytes) in members.iter().filter(|(m, _)| *m == MANIFEST_FILE) {
+                write_member(writer, member, bytes)?;
+            }
+            for (member, bytes) in members.iter().filter(|(m, _)| *m != MANIFEST_FILE) {
+                write_member(writer, member, bytes)?;
+            }
+            Ok(())
+        })?;
+        Self::open(path)
+    }
+
     /// The project's file.
     pub fn path(&self) -> &Path {
         &self.path

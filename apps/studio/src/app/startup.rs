@@ -40,6 +40,9 @@ pub struct Loaded {
     /// The editor's toolbar, read from `toolbar.json` beside the settings (the default one in memory if Studio has no
     /// config folder).
     pub toolbar: crate::toolbar::Toolbar,
+    /// Team Create's choices and projects, read from `team_create.toml` beside the settings (in memory without a config
+    /// folder).
+    pub team: crate::team::store::TeamStore,
 }
 
 impl std::fmt::Debug for Loaded {
@@ -52,6 +55,7 @@ impl std::fmt::Debug for Loaded {
             .field("games_folder", &self.games_folder)
             .field("layout", &self.layout)
             .field("toolbar", &self.toolbar)
+            .field("team", &self.team)
             .finish()
     }
 }
@@ -188,8 +192,13 @@ impl Startup {
 /// Studio's startup steps, on the render device the splash is drawn with.
 pub fn studio_steps(context: RenderContext) -> Vec<Step> {
     vec![
-        Step::new("Preparing folders", |_| {
+        Step::new("Preparing folders", |loaded| {
             crate::folders::prepare();
+            // Team Create's choices and projects, beside the settings.
+            loaded.team = match crate::folders::user_paths() {
+                Some(paths) => crate::team::store::TeamStore::load(paths.config_dir().join(crate::team::store::FILE)),
+                None => crate::team::store::TeamStore::in_memory(),
+            };
         }),
         settings_step(studio_settings_path()),
         Step::new("Starting the renderer", move |loaded| {

@@ -382,3 +382,43 @@ fn member_paths_are_checked() {
         assert!(check_member_path(bad).is_err(), "{bad:?}");
     }
 }
+
+/// Team Create (ADR 0011): a participant's copy is a project of exactly the members the host sent.
+#[test]
+fn a_project_from_members_opens_replaces_an_old_copy_and_refuses_unsafe_paths() {
+    let dir = scratch("from_members");
+    let path = dir.join("Copy.mtproj");
+    let manifest = manifest();
+    let scene = scene();
+    let members: [(&str, &[u8]); 3] = [
+        (START, &scene),
+        (MANIFEST_FILE, &manifest),
+        ("Scripts/Door.luau", b"print('door')"),
+    ];
+    let mut project = Project::from_members(&path, members).expect("the copy opens");
+    assert_eq!(project.read_text("Scripts/Door.luau").unwrap(), "print('door')");
+    let mut dm = game();
+    project.load_start_scene(&mut dm).expect("its scene loads");
+    drop(project);
+    // A later join writes over the old copy.
+    let members: [(&str, &[u8]); 2] = [(START, &scene), (MANIFEST_FILE, &manifest)];
+    let project = Project::from_members(&path, members).expect("replaced");
+    assert!(!project.contains("Scripts/Door.luau"));
+    drop(project);
+    for bad in ["../evil.luau", "/abs", "a/../../b"] {
+        let members: [(&str, &[u8]); 2] = [(MANIFEST_FILE, &manifest), (bad, b"x")];
+        assert!(
+            matches!(
+                Project::from_members(dir.join("Bad.mtproj"), members),
+                Err(ProjectError::UnsafeMember { .. })
+            ),
+            "{bad}"
+        );
+    }
+    let members: [(&str, &[u8]); 1] = [(START, &scene)];
+    assert!(matches!(
+        Project::from_members(dir.join("NoManifest.mtproj"), members),
+        Err(ProjectError::MissingManifest { .. })
+    ));
+    assert!(!dir.join("Bad.mtproj").exists() && !dir.join("NoManifest.mtproj").exists());
+}

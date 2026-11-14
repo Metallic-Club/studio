@@ -1699,6 +1699,7 @@ dependencies = [
  "metallic_classes",
  "metallic_core",
  "metallic_luau",
+ "metallic_net",
  "metallic_physics",
  "metallic_platform",
  "metallic_project",
@@ -1727,6 +1728,16 @@ dependencies = [
  "metallic_core",
  "metallic_script",
  "mlua",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "metallic_net"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "log",
+ "metallic_core",
  "thiserror 2.0.21",
 ]
 

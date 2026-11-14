@@ -312,9 +312,10 @@ pub(crate) fn opening_overlay(ui: &mut Ui, name: &str, step: usize) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 }
 
-/// The top bar: the menus ([`MENUS`]), the play controls, the gear (raised while the Settings window is
-/// open, `settings_open`) and the profile button, which edits `profile` (#602). The project's name is the window's title
-/// ([`super::Studio::window_title`]). Returns what was asked for.
+/// The top bar: the menus ([`MENUS`]), the play controls, Team Create's button (ADR 0011), the gear (raised while the
+/// Settings window is open, `settings_open`) and the profile button, which edits `profile` (#602). The project's name
+/// is the window's title ([`super::Studio::window_title`]). Returns what was asked for, of the menus and of Team
+/// Create's.
 pub(crate) fn top_bar(
     ui: &mut Ui,
     editor: &EditorState,
@@ -322,7 +323,9 @@ pub(crate) fn top_bar(
     keymap: &Keymap,
     settings_open: bool,
     profile: &mut crate::settings::Profile,
-) -> Option<MenuAction> {
+    team: &mut crate::team::TeamCreate,
+) -> (Option<MenuAction>, Option<crate::team::menu::TeamAction>) {
+    let mut team_action = None;
     let p = current_colors(ui.ctx()).palette;
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, p.header);
@@ -389,6 +392,17 @@ pub(crate) fn top_bar(
                 // Beside the gear, the profile (#602).
                 ui.add_space(space::S1);
                 crate::profile::button(ui, profile, 30.0);
+                // Left of the profile, after a small divider, Team Create (ADR 0011).
+                ui.add_space(space::S2);
+                let (small, _) = ui.allocate_exact_size(vec2(size::BORDER, TITLE_HEIGHT - 14.0), Sense::hover());
+                ui.painter().rect_filled(small, CornerRadius::ZERO, p.border);
+                ui.add_space(space::S2);
+                let facts = crate::team::menu::EditorFacts {
+                    project: Some(editor.name()),
+                    modified: editor.is_modified() && !team.is_copy(editor.path()),
+                    profile: (profile.shown_name(), profile.color),
+                };
+                team_action = crate::team::menu::button(ui, team, facts, TITLE_HEIGHT);
                 ui.add_space(space::S4);
                 let (divider, _) = ui.allocate_exact_size(vec2(size::BORDER, TITLE_HEIGHT - 8.0), Sense::hover());
                 ui.painter().rect_filled(divider, CornerRadius::ZERO, p.border);
@@ -426,7 +440,7 @@ pub(crate) fn top_bar(
             });
         },
     );
-    action
+    (action, team_action)
 }
 
 /// How a play control's icon is drawn (#302): the theme's, which the toolbar's play tools share (#325).

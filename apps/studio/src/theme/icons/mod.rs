@@ -305,6 +305,8 @@ icons! {
     ToolbarStop = "toolbar.stop", Run, "square";
     /// The gear that opens Settings.
     ToolbarSettings = "toolbar.settings", Studio, "settings";
+    /// The top bar's Team Create button (ADR 0011), and Team Create projects on the projects page.
+    ToolbarTeamCreate = "toolbar.team_create", Studio, "users";
     /// The toolbar's Save tool.
     ToolbarSave = "toolbar.save", Studio, "save";
     /// The toolbar's Close project tool.
