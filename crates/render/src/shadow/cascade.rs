@@ -84,7 +84,8 @@ pub(crate) struct CascadeFit {
     pub(crate) texel: f32,
     /// The depth range of the map in metres (depth 0 to 1).
     pub(crate) depth_range: f32,
-    /// How the cascade chooses its casters' levels of detail ([`crate::lod`]): as the camera would for a receiver
+    /// How the cascade chooses its casters' levels of detail ([`crate::lod`]): a cascade drawn again every frame as the
+    /// camera draws each caster (#598), a cached one as the camera would for a receiver
     /// as far from it as a point that looks this cascade up can be, the slice's far corner.
     pub(crate) lod: LodView,
 }
@@ -210,7 +211,12 @@ pub(crate) fn fit_cascades(
             depth_range,
             // A point looks this cascade up while its view depth is below `b`, so it is at most `b` over the cosine
             // of the view's corner angle from the camera: the far corner of the slice.
-            lod: lod.for_shadow(around_camera),
+            // Maps drawn again whenever the camera moves take each caster at its own distance (#598).
+            lod: if cached {
+                lod.for_shadow(around_camera)
+            } else {
+                lod.for_shadow(around_camera).seen_from(eye)
+            },
         };
     }
     count
@@ -237,6 +243,14 @@ pub(crate) struct CascadeCache {
     pub(crate) revision: u64,
     /// The layout of the cascades' lists then (a new layout draws everything again).
     pub(crate) layout: u64,
+    /// Where the camera was for the casters' levels, as bits, when they follow it ([`LodView::seen_from`], #598).
+    pub(crate) eye: Option<[u32; 3]>,
+}
+
+/// Where `fit`'s casters' levels are chosen from, as bits: a map whose casters follow the camera is drawn again when it
+/// moves.
+fn eye_bits(fit: &CascadeFit) -> Option<[u32; 3]> {
+    fit.lod.eye().map(|eye| eye.to_array().map(f32::to_bits))
 }
 
 /// What a frame knows when it decides which cascades to draw.
@@ -254,7 +268,12 @@ impl CascadeCache {
     /// drawn whenever anything in the scene changed; a cached one only when a static caster changed inside it. Both
     /// are drawn when they moved, the light turned, or the scene was rebuilt or re-based.
     pub(crate) fn needs_redraw(&self, fit: &CascadeFit, dynamic: bool, scene: &SceneState<'_>) -> bool {
-        if !self.valid || self.key != fit.key || self.epoch != scene.epoch || self.layout != scene.layout {
+        if !self.valid
+            || self.key != fit.key
+            || self.epoch != scene.epoch
+            || self.layout != scene.layout
+            || self.eye != eye_bits(fit)
+        {
             return true;
         }
         if dynamic {
@@ -274,6 +293,7 @@ impl CascadeCache {
             epoch: scene.epoch,
             revision: scene.revision,
             layout: scene.layout,
+            eye: eye_bits(fit),
         }
     }
 }
@@ -464,6 +484,63 @@ mod tests {
         // At 70° on 16:9 the far slice's sphere reaches back to the camera, so the cached cascade is centred on it.
         assert_eq!(fa[2].key, fb[2].key);
         assert_ne!(fa[0].key, fb[0].key);
+    }
+
+    /// #598: a cascade drawn again every frame takes a ball near the camera at the camera's own level, not at the
+    /// coarsest level anything in its slice could be drawn at, so the ball's shadow is round; a cached cascade's
+    /// levels stay independent of where the camera is.
+    #[test]
+    fn a_redrawn_cascade_takes_each_caster_at_the_camera_s_level() {
+        use crate::cull::{CullSettings, CullView};
+        use crate::lod::{LodSettings, caster_level};
+        use crate::scene::MeshKind;
+
+        let eye = Vec3::new(0.0, 4.0, 10.0);
+        let camera = camera(eye, Vec3::ZERO);
+        let view = CullView::for_camera(&camera, Vec3::ZERO, 1280, 800, &CullSettings::default())
+            .with_lod(&LodSettings::MEDIUM);
+        let settings = ShadowSettings {
+            enabled: true,
+            cascades: 2,
+            dynamic_cascades: 1,
+            distance: 192.0,
+            ..ShadowSettings::OFF
+        };
+        let mut fits = [CascadeFit::default(); MAX_CASCADES];
+        let sun = Vec3::new(-0.5, 0.65, 0.58).normalize();
+        assert_eq!(
+            fit_cascades(&camera, 1.6, Vec3::ZERO, sun, &settings, &view.lod, &mut fits),
+            2
+        );
+        // A 4-stud ball 10 studs off: the camera draws it at full detail.
+        let (center, radius) = (Vec3::new(0.0, 2.0, 0.0), 2.0 * 3f32.sqrt());
+        let drawn = view.lod.choose(
+            1,
+            radius * radius,
+            (center - eye).length_squared(),
+            crate::lod::COARSEST,
+        );
+        assert_eq!(drawn, 0);
+        let redrawn = fits[0].cull_view();
+        assert_eq!(redrawn.lod.eye(), Some(eye));
+        assert_eq!(caster_level(&redrawn, MeshKind::BALL, radius, center), 0);
+        // As the slice's far corner would choose it, the shadow was a coarser ball.
+        let by_slice = CullView {
+            lod: view.lod.for_shadow(redrawn.lod.distance()),
+            ..redrawn
+        };
+        assert!(caster_level(&by_slice, MeshKind::BALL, radius, center) > 0);
+        // Far off, the redrawn cascade's caster is coarse again, as the camera draws it.
+        let far = Vec3::new(0.0, 2.0, -150.0);
+        assert_eq!(
+            usize::from(
+                view.lod
+                    .choose(1, radius * radius, (far - eye).length_squared(), crate::lod::COARSEST)
+            ),
+            caster_level(&redrawn, MeshKind::BALL, radius, far)
+        );
+        // The cached cascade does not follow the camera.
+        assert_eq!(fits[1].cull_view().lod.eye(), None);
     }
 
     #[test]

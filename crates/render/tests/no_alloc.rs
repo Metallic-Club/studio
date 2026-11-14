@@ -2947,7 +2947,9 @@ fn expected_shadows(
                 && (settings.see_through || !metallic_render::scene::is_see_through(i))
         };
         for instance in dynamic.iter().filter(casts) {
-            let level = metallic_render::lod::caster_level(&far, instance.mesh(), bounding_radius(instance));
+            // The far cascade is cached: its levels do not depend on where a caster is (#598).
+            let level =
+                metallic_render::lod::caster_level(&far, instance.mesh(), bounding_radius(instance), Vec3::ZERO);
             kinds[usize::from(instance.mesh().0)][level] += 1;
         }
         kinds

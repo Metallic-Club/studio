@@ -602,7 +602,7 @@ fn push_with_level(view: &CullView, item: &mut Item, remember: bool, out: &mut V
         }
         level
     } else {
-        view.lod.choose_caster(item.class(), item.radius)
+        view.lod.choose_caster(item.class(), item.radius, item.center)
     };
     out.push_level(item.entry, item.list, level);
 }

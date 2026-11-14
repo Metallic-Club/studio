@@ -695,11 +695,20 @@ mod tests {
         let shadow = shadow.with_caster_lod(&view.lod, 50.0);
         assert_eq!(shadow.lod.distance(), 50.0);
         // A 1 m ball (bounding radius √3/2) 50 m from a 1000-pixel camera is 17 pixels across: level 2.
-        assert_eq!(lod::caster_level(&shadow, MeshKind::BALL, 0.866), 2);
-        assert_eq!(lod::caster_level(&shadow, MeshKind::BLOCK, 0.866), 0);
-        assert_eq!(lod::caster_level(&view, MeshKind::BALL, 0.866), 0, "not a shadow view");
+        assert_eq!(lod::caster_level(&shadow, MeshKind::BALL, 0.866, Vec3::ZERO), 2);
+        assert_eq!(lod::caster_level(&shadow, MeshKind::BLOCK, 0.866, Vec3::ZERO), 0);
         assert_eq!(
-            lod::caster_level(&shadow.with_caster_lod(&off.lod, 50.0), MeshKind::BALL, 0.866),
+            lod::caster_level(&view, MeshKind::BALL, 0.866, Vec3::ZERO),
+            0,
+            "not a shadow view"
+        );
+        assert_eq!(
+            lod::caster_level(
+                &shadow.with_caster_lod(&off.lod, 50.0),
+                MeshKind::BALL,
+                0.866,
+                Vec3::ZERO
+            ),
             0
         );
     }

@@ -46,19 +46,25 @@
 //! own shadow, never behind it; the other way round, a finer caster in the map would stand up to one segment's
 //! sagitta in front of a coarse receiver and shadow its own lit side (acne the receivers' small biases cannot hide).
 //!
-//! So each shadow view draws a caster at the **coarsest level the camera could be drawing it at** where that view's
-//! shadow is looked up, which needs no state and no camera position:
+//! So each shadow view draws a caster no finer than the camera draws it:
 //!
-//! - a **sun cascade** is looked up by points whose view depth is within its slice, so no farther from the camera
-//!   than the slice's far depth over the cosine of the view's corner angle ([`CullView::with_caster_lod`]); a caster
-//!   of radius `r` is chosen as if its centre were that far plus `r`, at the coarse side of the hysteresis band;
+//! - a **sun cascade drawn again every frame** (the nearest ones, [`crate::ShadowSettings::dynamic_cascades`]) takes
+//!   each caster at the level the camera's view would choose for it at its own distance, at the coarse side of the
+//!   hysteresis band ([`LodView::seen_from`], #598): the level the camera draws it at, or one coarser while it is in a
+//!   band. Choosing by the slice's far end instead drew a ball near the camera as an 8- or 16-sided one, whose
+//!   shadow had straight sides and corners. These maps follow the camera already, so they are drawn again when it
+//!   moves;
+//! - a **cached sun cascade** is looked up by points whose view depth is within its slice, so no farther from the
+//!   camera than the slice's far depth over the cosine of the view's corner angle ([`CullView::with_caster_lod`]); a
+//!   caster of radius `r` is chosen as if its centre were that far plus `r`, at the coarse side of the hysteresis
+//!   band. That needs no camera position, so the cached map stays valid as the camera moves;
 //! - a **local light's tile** is looked up by points the light reaches, no farther from the camera than the
 //!   light's distance from it plus its range, rounded up to a power of two so a moving camera redraws a cached tile
 //!   only when that doubles or halves.
 //!
-//! These levels follow from the cascade's slice and the camera's projection only, so a cached cascade stays valid as
-//! the camera moves (and is drawn again when the projection or the settings change). They are as fine as the shadow
-//! map can show: a cascade's texels are about as large as the screen's pixels at the slice's far end.
+//! The cached levels follow from the cascade's slice and the camera's projection only (and are drawn again when the
+//! projection or the settings change). They are as fine as the shadow map can show: a far cascade's texels are about
+//! as large as the screen's pixels at the slice's far end.
 //!
 //! # Debug view
 //!
@@ -67,6 +73,8 @@
 //! vertex's level from its index alone: three numbers in the frame uniform, no per-draw state.
 
 use std::f32::consts::PI;
+
+use metallic_core::glam::Vec3;
 
 use crate::cull::CullView;
 use crate::scene::MeshKind;
@@ -183,6 +191,9 @@ pub struct LodView {
     limits: [ClassLimits; CLASSES],
     /// 0 for a camera's view; otherwise the distance a shadow view chooses at.
     distance: f32,
+    /// For a shadow view that chooses each caster by its own distance from the camera (#598): where the camera is,
+    /// in the scene's coordinates.
+    eye: Option<Vec3>,
     enabled: bool,
 }
 
@@ -194,6 +205,7 @@ impl LodView {
             coarser: [0.0; MAX_LOD_LEVELS - 1],
         }; CLASSES],
         distance: 0.0,
+        eye: None,
         enabled: false,
     };
 
@@ -224,6 +236,7 @@ impl LodView {
         Self {
             limits,
             distance: 0.0,
+            eye: None,
             enabled: true,
         }
     }
@@ -236,10 +249,27 @@ impl LodView {
         Self { distance, ..self }
     }
 
+    /// The same shadow view choosing each caster by its own distance from the camera at `eye` (scene coordinates),
+    /// at the coarse side of the band (#598): the level the camera draws it at, or one coarser within the band, so
+    /// its shadow is as round as the part and still never finer than the part receiving it. For maps drawn again
+    /// whenever the camera moves; a cached map keeps [`LodView::for_shadow`]'s levels, which do not depend on where
+    /// the camera is.
+    pub fn seen_from(self, eye: Vec3) -> Self {
+        if !self.enabled || self.distance <= 0.0 || !eye.is_finite() {
+            return self;
+        }
+        Self { eye: Some(eye), ..self }
+    }
+
     /// Whether the view chooses levels at all.
     #[inline]
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Where a shadow view that chooses each caster by its own distance sees them from ([`LodView::seen_from`]).
+    pub fn eye(&self) -> Option<Vec3> {
+        self.eye
     }
 
     /// The distance a shadow view chooses at; 0 for a camera's view.
@@ -274,23 +304,31 @@ impl LodView {
         level
     }
 
-    /// The level a shadow view draws a part of class `class` with a bounding sphere of radius `radius` at.
+    /// The level a shadow view draws a part of class `class` with a bounding sphere of radius `radius` centred at
+    /// `center` (scene coordinates) at: as if it were [`LodView::distance`] plus its radius from the camera, or, seen
+    /// from an eye ([`LodView::seen_from`]), as far as it is.
     #[inline]
-    pub(crate) fn choose_caster(&self, class: u8, radius: f32) -> u8 {
-        let d = self.distance + radius;
-        self.choose(class, radius * radius, d * d, COARSEST)
+    pub(crate) fn choose_caster(&self, class: u8, radius: f32, center: Vec3) -> u8 {
+        let d2 = match self.eye {
+            Some(eye) => (center - eye).length_squared(),
+            None => {
+                let d = self.distance + radius;
+                d * d
+            }
+        };
+        self.choose(class, radius * radius, d2, COARSEST)
     }
 }
 
-/// The level `view` draws an instance of `kind` with a bounding sphere of `radius` at, when `view` is a shadow view
-/// ([`CullView::with_caster_lod`]): for tools and tests that mirror the renderer's shadow draws. A camera's view
-/// remembers each instance's level, so its levels come from its cull alone.
-pub fn caster_level(view: &CullView, kind: MeshKind, radius: f32) -> usize {
+/// The level `view` draws an instance of `kind` with a bounding sphere of `radius` centred at `center` at, when `view`
+/// is a shadow view ([`CullView::with_caster_lod`]): for tools and tests that mirror the renderer's shadow draws. A
+/// camera's view remembers each instance's level, so its levels come from its cull alone.
+pub fn caster_level(view: &CullView, kind: MeshKind, radius: f32, center: Vec3) -> usize {
     let class = lod_class(kind);
     if class == CLASS_NONE || !view.lod.enabled() || view.lod.distance() <= 0.0 {
         return 0;
     }
-    usize::from(view.lod.choose_caster(class, radius))
+    usize::from(view.lod.choose_caster(class, radius, center))
 }
 
 #[cfg(test)]
@@ -421,6 +459,44 @@ mod tests {
         assert_eq!(NEW, COARSEST);
     }
 
+    /// #598: seen from the camera, a caster takes the level the camera draws it at, at the band's coarse side, so it is
+    /// never finer than the part receiving its own shadow, whatever level that part's hysteresis left it at.
+    #[test]
+    fn a_shadow_view_seen_from_the_camera_follows_each_caster_s_own_distance() {
+        let camera = view(1.0);
+        let eye = Vec3::new(3.0, 1.0, -2.0);
+        let shadow = camera.for_shadow(120.0).seen_from(eye);
+        assert_eq!(shadow.eye(), Some(eye));
+        assert_eq!(
+            camera.seen_from(eye).eye(),
+            None,
+            "a camera's view has no caster distance"
+        );
+        for radius in [0.1f32, 0.5, 1.0, 2.0, 5.0, 20.0] {
+            let mut levels = Vec::new();
+            for step in 0..=400 {
+                let d = (radius + 300.0) * step as f32 / 400.0;
+                let center = eye + Vec3::new(0.6, 0.0, 0.8) * d;
+                let caster = shadow.choose_caster(CLASS_BALL, radius, center);
+                for previous in [COARSEST, 0, 1, 2, 3] {
+                    let drawn = camera.choose(CLASS_BALL, radius * radius, d * d, previous);
+                    assert!(
+                        drawn <= caster,
+                        "r {radius} d {d} previous {previous}: {drawn} > {caster}"
+                    );
+                }
+                // At most the band away from what the camera chooses fresh.
+                assert!(caster <= camera.choose(CLASS_BALL, radius * radius, d * d, COARSEST));
+                levels.push(caster);
+            }
+            // Nearer is never coarser.
+            assert!(
+                levels.windows(2).all(|pair| pair[0] <= pair[1]),
+                "r {radius}: {levels:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_shadow_view_is_never_finer_than_the_camera_where_it_is_looked_up() {
         let camera = view(1.0);
@@ -429,7 +505,7 @@ mod tests {
         assert_eq!(camera.for_shadow(0.0), LodView::OFF);
         assert_eq!(LodView::OFF.for_shadow(10.0), LodView::OFF);
         for radius in [0.1f32, 0.5, 1.0, 2.0, 5.0, 20.0] {
-            let caster = shadow.choose_caster(CLASS_BALL, radius);
+            let caster = shadow.choose_caster(CLASS_BALL, radius, Vec3::ZERO);
             // Any receiver centre within 120 m + r of the eye, at any level its hysteresis allows, is drawn at the
             // caster's level or finer.
             for step in 0..=200 {
