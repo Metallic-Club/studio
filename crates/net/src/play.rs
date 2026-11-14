@@ -1,5 +1,5 @@
 //! Multiplayer playtesting (ADR 0011 §8): a game server replicating its world to clients, each client a player with
-//! a character it moves.
+//! a character that the game's own code moves (nothing here drives it, #638).
 //!
 //! - **The server** runs the game (its `Script`s) and owns the world. Everything a save writes but the server-only
 //!   services' subtrees replicates to every client through scene sync ([`Scope::Replicated`]), in the server's
@@ -7,9 +7,10 @@
 //! - **Joining**: `Hello` (versions, the registry's fingerprint, the player's name) → the server makes the player a
 //!   character in the Workspace → `Welcome` (the player's number, their character, the client scripts' sources, and
 //!   the whole replicated world) → live scene operations.
-//! - **Characters**: a part per player, named for them. The client moves its own and sends where it is
-//!   ([`Move`](ClientMsg::Move)) 20 times a second; the server checks the move, places the character and replicates
-//!   it to the others; the client never takes the server's word for its own character's place.
+//! - **Characters**: a part per player, named for them. Whatever moves the client's own (the game's controller), the
+//!   client sends where it is ([`Move`](ClientMsg::Move)) 20 times a second; the server checks the move, places the
+//!   character and replicates it to the others; the client never takes the server's word for its own character's
+//!   place.
 //! - **Leaving or crashing**: the connection closes, the character goes, the others see it go. A client that crashes
 //!   never takes the server down.
 

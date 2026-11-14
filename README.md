@@ -50,7 +50,7 @@ Flags (`cargo run -p metallic_player --release -- --help`):
 |---|---|
 | `--scene <name>` | the built-in game to run: `demo`, or a stress scene (`parts_10k`, `parts_50k`, `parts_100k`, `many_lights`, `overdraw`, `mobile`, `see_through_10k`; see [docs/perf.md](docs/perf.md#stress-scenes)) |
 | `--project <file.mtproj>` | runs a project in place of a built-in game: its start scene, with its scripts (below) |
-| `--connect <host:port>` | joins a game server as a player (Studio's Multiple Clients and Team Create Play, ADR 0011): WASD walk, Space and Shift up and down, Q and E turn |
+| `--connect <host:port>` | joins a game server as a player (Studio's Multiple Clients and Team Create Play, ADR 0011); nothing built in moves the player's character: the game's own scripts do |
 | `--name <name>` | the player's name with `--connect` (default `Player`) |
 | `--preset <name>` | `low`, `medium`, `high`, `ultra` or `auto` for this run, in place of the settings file's preset (below) |
 | `--bench <frames>` | runs that many frames after a 30-frame warm-up, with no frame cap (vsync still paces it), then prints frame times (p50, p99, 1% low), script, physics and render CPU time, GPU time per pass and the draws per pass as JSON on stdout and exits |

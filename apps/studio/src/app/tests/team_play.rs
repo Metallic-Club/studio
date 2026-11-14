@@ -9,10 +9,12 @@ use std::time::{Duration, Instant};
 use egui::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use metallic_engine::InputEvent;
 use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{CFrame, DataModel, Value};
 use metallic_engine::metallic_net::play::Connecting;
 use metallic_engine::metallic_net::transport::no_waker;
+use metallic_engine::metallic_platform::{ButtonState, Key, KeyCode, KeyEvent, WindowEvent, WindowId};
 
 use super::team_create::{host, join, joined, until};
 use super::*;
@@ -22,6 +24,19 @@ use crate::team::PlayMode;
 fn named(dm: &DataModel, name: &str) -> Option<metallic_engine::metallic_core::Id> {
     let ws = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
     dm.children(ws).unwrap().find(|&id| dm.name(id).unwrap() == name)
+}
+
+fn key_w(state: ButtonState) -> InputEvent {
+    InputEvent::Window {
+        window: WindowId::from_raw(1),
+        event: WindowEvent::Key(KeyEvent {
+            key_code: KeyCode::KeyW,
+            key: Key::Character("w".into()),
+            text: None,
+            state,
+            repeat: false,
+        }),
+    }
 }
 
 fn press_play(harness: &mut Harness<'_, Test>) {
@@ -94,7 +109,39 @@ fn team_create_play_puts_the_host_and_a_participant_in_one_game_and_stop_ends_it
         };
         has_both(a) && has_both(b)
     });
-    // Ada moves her character: Bob sees it there.
+    // Nothing built in drives a character (#638): held W leaves Ada's where the server placed it.
+    let spawn = |s: &Studio| {
+        let p = s.editor().and_then(|e| e.play.as_ref()).unwrap();
+        let dm = p.game_player().engine().data_model();
+        dm.get_by_name(named(dm, "Ada").unwrap(), "CFrame").unwrap()
+    };
+    let before = spawn(&a.state().studio);
+    a.state_mut()
+        .studio
+        .editor_mut()
+        .unwrap()
+        .play
+        .as_mut()
+        .unwrap()
+        .game_player_mut()
+        .engine_mut()
+        .push_input(key_w(ButtonState::Pressed));
+    for _ in 0..10 {
+        a.step();
+        b.step();
+    }
+    assert_eq!(spawn(&a.state().studio), before, "held W does not move the character");
+    a.state_mut()
+        .studio
+        .editor_mut()
+        .unwrap()
+        .play
+        .as_mut()
+        .unwrap()
+        .game_player_mut()
+        .engine_mut()
+        .push_input(key_w(ButtonState::Released));
+    // Ada's own code moves her character (as a game's controller would): Bob sees it there.
     let to = Vec3::new(4.0, 6.0, -8.0);
     {
         let session = a.state_mut().studio.editor_mut().unwrap().play.as_mut().unwrap();
