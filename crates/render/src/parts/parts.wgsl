@@ -194,10 +194,15 @@ fn sun_visibility(position: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> f32 {
 }
 
 // How open to the sky a point is, 0 to 1 (#615): Lighting.OutdoorAmbient lights only that much of it. The sky map holds
-// the nearest surface above each point; a point under something is closed. A tent of 5×5 taps a texel apart on a
-// coarse map fades an opening's edge out over several studs (#625). The point moves out along its normal first (a
-// wall's outside is open, its inside under a roof is not); a wall's, by the filter's reach as well, so the wall's own
-// top, beside it in the map, does not close it. Past the map, everything is open, faded in over its last tenth.
+// the nearest surface above each point; a point under something is closed. The map is only a height map, so it cannot
+// tell a wall from an open side (#642): a filter that let open ground beyond a wall count lit the room behind it along
+// every edge. So a point is open only where most of the area around it is: a box of 5×5 taps a texel apart, of which
+// half open is still closed, and the rest fades in smoothly. Covered places stay covered right up to their walls, and
+// the open side of an edge darkens over a few studs as it nears what covers it (#625). The point moves out along its
+// normal first (a wall's outside is open, its inside under a roof is not); a wall's, by the filter's reach as well, so
+// the wall's own top, beside it in the map, does not close it. Never down (#642): under a ball, the floor would close
+// its underside, in a hard line where the moved point went below it. Past the map, everything is open, faded in over
+// its last tenth.
 fn sky_open(position: vec3<f32>, n: vec3<f32>) -> f32 {
     if frame.sky_params.x < 0.5 {
         return 1.0;
@@ -206,21 +211,24 @@ fn sky_open(position: vec3<f32>, n: vec3<f32>) -> f32 {
     if depth >= frame.sky_range.x {
         return 1.0;
     }
-    let p = position + n * (frame.sky_params.z + frame.sky_range.z * length(n.xz));
+    let out = vec3<f32>(n.x, max(n.y, 0.0), n.z);
+    let p = position + out * (frame.sky_params.z + frame.sky_range.z * length(n.xz));
     let clip = frame.sky_matrix * vec4<f32>(p, 1.0);
     let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
     let reference = clip.z - frame.sky_params.w;
     let spread = frame.sky_params.y;
+    // Every tap weighs the same: a tent changes fastest at its middle, just where the shaping below starts, and the
+    // open side would start with a step.
     var open = 0.0;
     for (var y = -2; y <= 2; y += 1) {
         for (var x = -2; x <= 2; x += 1) {
-            let weight = f32(3 - abs(x)) * f32(3 - abs(y));
             let at = uv + vec2<f32>(f32(x), f32(y)) * spread;
-            open += weight * textureSampleCompareLevel(sky_map, shadow_sampler, at, 0, reference);
+            open += textureSampleCompareLevel(sky_map, shadow_sampler, at, 0, reference);
         }
     }
+    let shaped = smoothstep(0.5, 1.0, open / 25.0);
     let fade = smoothstep(frame.sky_range.y, frame.sky_range.x, depth);
-    return mix(open / 81.0, 1.0, fade);
+    return mix(shaped, 1.0, fade);
 }
 
 // `v` scaled to unit length, or 0 when it has none (where `normalize` divides 0 by 0).

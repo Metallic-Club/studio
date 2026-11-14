@@ -260,14 +260,15 @@ struct FrameUniforms {
 const SUN_ENTRIES: usize = 8;
 
 /// The sky map (#615): one cascade lit from straight overhead, out to 160 studs of the view, and no see-through
-/// casters (light through glass is not the sky's). Coarse on purpose (#625): at 256² a texel is over a stud, so the
-/// filter's 5×5 taps, a texel apart, fade the sky out smoothly over several studs under a roof's edge, as Roblox's
-/// 4-stud voxels do. The taps' two texels plus the compare's one are what the casters' slope bias (3 texels) covers,
-/// so slopes in the open stay open. The receiver offsets are in texels: about half a stud, and a fifth of one.
+/// casters (light through glass is not the sky's). Coarse on purpose (#625): at 192² a texel is a stud and a half or
+/// so, and the shader counts a point open only where most of the filter's 5×5 taps are (#642), so the open side of a
+/// roof's edge fades out over about four studs, as Roblox's 4-stud voxels do, while the covered side stays covered.
+/// The taps' two texels plus the compare's one are what the casters' slope bias (3 texels) covers, so slopes in the
+/// open stay open. The receiver offsets are in texels: over half a stud, and a quarter of one.
 const SKY_SETTINGS: ShadowSettings = ShadowSettings {
     enabled: true,
     cascades: 1,
-    resolution: 256,
+    resolution: 192,
     distance: 160.0,
     split_lambda: 0.75,
     dynamic_cascades: 1,
