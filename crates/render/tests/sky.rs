@@ -354,15 +354,16 @@ fn fog_exposure_and_the_environment_change_the_image() {
         sky[0] > 200 && sky[1] < 40 && sky[2] < 40,
         "the sky is the fog: {sky:?}"
     );
-    assert_eq!(
-        near,
-        pixel(&plain, SIZE / 2, SIZE - 4),
-        "nearer than FogStart, nothing changes"
+    // Within rounding: adapters differ by a level here and there (WARP on CI did).
+    let close = |a: &[u8; 4], b: &[u8; 4]| a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= 2);
+    assert!(
+        close(&near, &pixel(&plain, SIZE / 2, SIZE - 4)),
+        "nearer than FogStart, nothing changes: {near:?}"
     );
     set(&mut game, "FogEnd", Value::Number(100_000.0));
-    assert_eq!(
-        render(&context, &mut game, PassSet::default(), 1),
-        plain,
+    let unfogged = render(&context, &mut game, PassSet::default(), 1);
+    assert!(
+        unfogged.iter().zip(&plain).all(|(a, b)| close(a, b)),
         "no fog at FogEnd 100000"
     );
 
