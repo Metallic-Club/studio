@@ -446,3 +446,85 @@ fn outdoor_ambient_lights_only_what_the_sky_reaches() {
         "without GlobalShadows the sky reaches everywhere"
     );
 }
+
+/// #625: the floor goes from open to covered under a roof's edge in a smooth ramp several studs wide, not a step;
+/// and a block's outside wall in the open is not darkened by the block itself.
+#[test]
+fn the_sky_fades_out_smoothly_under_a_roof() {
+    let Some(context) = gpu() else { return };
+    let set = |game: &mut Game, name: &str, value: Value| {
+        let lighting = lighting_service(game);
+        game.dm.set_by_name(lighting, name, value).expect(name);
+    };
+    let mut game = Game::new();
+    game.part(
+        Look::new("Block", "Concrete", [160, 160, 160]),
+        Vec3::new(400.0, 2.0, 400.0),
+        CFrame::new(Vec3::new(0.0, -1.0, 0.0)),
+    );
+    // A roof over everything left of x = 0, 6 studs up.
+    game.part(
+        Look::new("Block", "Plastic", [160, 160, 160]),
+        Vec3::new(40.0, 1.0, 60.0),
+        CFrame::new(Vec3::new(-20.0, 6.5, -20.0)),
+    );
+    // A block in the open on the right, its front wall facing the camera.
+    game.part(
+        Look::new("Block", "Concrete", [160, 160, 160]),
+        Vec3::new(6.0, 6.0, 6.0),
+        CFrame::new(Vec3::new(9.0, 3.0, -20.0)),
+    );
+    let eye = Vec3::new(0.0, 4.0, 4.0);
+    game.set_camera(CFrame::look_at(eye, Vec3::new(0.0, 0.0, -12.0), Vec3::Y), 70.0);
+    set(&mut game, "Brightness", Value::Number(0.0));
+    set(
+        &mut game,
+        "Ambient",
+        Value::Color3(metallic_core::Color3::new(0.1, 0.1, 0.1)),
+    );
+    // Where the floor across the roof's edge (every fifth of a stud from x = -8 to 8) and the block's front wall (2
+    // studs up) land on the target.
+    let floor_spots: Vec<(f32, f32)> = (-40..=40)
+        .map(|i| project(&game, Vec3::new(i as f32 * 0.2, 0.0, -12.0) - eye))
+        .collect();
+    let wall_spot = project(&game, Vec3::new(9.0, 2.0, -17.0) - eye);
+    let level = |pixels: &[[u8; 4]], (px, py): (f32, f32)| {
+        let p = pixel(pixels, px as u32, py as u32);
+        f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])
+    };
+    let passes = PassSet::default().without(PassId::Bloom);
+    let lit = render(&context, &mut game, passes, 1);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sky-edge.png");
+    scenes::write_png(&out, SIZE, SIZE, &lit);
+    eprintln!("the roof's edge is in {}", out.display());
+    let profile: Vec<f32> = floor_spots.iter().map(|&at| level(&lit, at)).collect();
+    eprintln!("floor across the edge, every 0.2 studs from x = -8: {profile:?}");
+    let (under, open) = (profile[0], profile[80]);
+    assert!(under < open * 0.75, "under {under}, open {open}");
+    // Smooth: it never steps by more than a tenth of the whole change between neighbours a fifth of a stud apart
+    // (dithering moves a pixel by a level or two either way).
+    let change = open - under;
+    for (i, pair) in profile.windows(2).enumerate() {
+        assert!(
+            (pair[1] - pair[0]).abs() <= change * 0.1 + 6.0,
+            "a step of {} at x = {:.1}",
+            pair[1] - pair[0],
+            -8.0 + i as f32 * 0.2
+        );
+    }
+    // Wide: the floor is between 15% and 85% of the way from covered to open over at least 3 studs (it was under
+    // one before #625).
+    let ramp = profile
+        .iter()
+        .filter(|&&v| v > under + change * 0.15 && v < open - change * 0.15)
+        .count();
+    eprintln!("{ramp} samples on the ramp");
+    assert!(ramp >= 15, "the ramp is {:.1} studs wide", ramp as f32 * 0.2);
+    // The block's front wall, against the same wall with GlobalShadows off (nothing kept from the sky).
+    let wall = level(&lit, wall_spot);
+    set(&mut game, "GlobalShadows", Value::Bool(false));
+    let flat = render(&context, &mut game, passes, 1);
+    let open_wall = level(&flat, wall_spot);
+    eprintln!("the block's wall {wall}, without GlobalShadows {open_wall}");
+    assert!(wall > open_wall * 0.9, "the block darkens its own outside wall");
+}

@@ -250,7 +250,8 @@ struct FrameUniforms {
     /// x: 1 when there is a sky map; y: one texel in map coordinates; z: the lookup's normal offset in metres; w: its
     /// depth bias.
     sky_params: [f32; 4],
-    /// x: the view depth the sky map ends at; y: where it starts fading out.
+    /// x: the view depth the sky map ends at; y: where it starts fading out; z: how far its filter reaches from a
+    /// point, in metres (#625).
     sky_range: [f32; 4],
 }
 
@@ -258,21 +259,27 @@ struct FrameUniforms {
 /// maps and their sampler, their see-through maps, and the sky map (#615).
 const SUN_ENTRIES: usize = 8;
 
-/// The sky map (#615): one cascade lit from straight overhead, out to 160 studs of the view, 1024² (a texel of about a
-/// third of a stud), its filter as wide as the cascades' widest, and no see-through casters (light through glass is
-/// not the sky's).
+/// The sky map (#615): one cascade lit from straight overhead, out to 160 studs of the view, and no see-through
+/// casters (light through glass is not the sky's). Coarse on purpose (#625): at 256² a texel is over a stud, so the
+/// filter's 5×5 taps, a texel apart, fade the sky out smoothly over several studs under a roof's edge, as Roblox's
+/// 4-stud voxels do. The taps' two texels plus the compare's one are what the casters' slope bias (3 texels) covers,
+/// so slopes in the open stay open. The receiver offsets are in texels: about half a stud, and a fifth of one.
 const SKY_SETTINGS: ShadowSettings = ShadowSettings {
     enabled: true,
     cascades: 1,
-    resolution: 1024,
+    resolution: 256,
     distance: 160.0,
     split_lambda: 0.75,
     dynamic_cascades: 1,
     filter_radius: 2,
-    depth_bias: 0.5,
-    normal_offset: 1.5,
+    depth_bias: 0.15,
+    normal_offset: 0.4,
     see_through: false,
 };
+
+/// How far the sky map's filter reaches from a point, in texels (#625): two taps a texel apart, and the compare's
+/// half texel past the last.
+const SKY_FILTER_REACH: f32 = 2.5;
 
 /// The local lights' uniform array (`local_lights` in lights.wgsl).
 const LIGHTS_SIZE: u64 = 64 * MAX_GPU_LIGHTS as u64;
@@ -1412,6 +1419,9 @@ impl PartRenderer {
         // What is above each point (#615): the sky map's one cascade, when it is drawn.
         let sky = self.sky.frame();
         let sky_on = sky.params[0] > 0.0;
+        // A texel in metres: one in map coordinates is two in clip space, which a metre along the map's x axis moves
+        // by the length of the matrix's first row.
+        let sky_texel = 2.0 * sky.params[2] / sky.matrices[0].row(0).truncate().length().max(f32::MIN_POSITIVE);
         let uniforms = FrameUniforms {
             view: [view.number(), 0.0, 0.0, 0.0],
             sky_matrix: sky.matrices[0].to_cols_array_2d(),
@@ -1421,7 +1431,7 @@ impl PartRenderer {
                 sky.offsets[0],
                 sky.biases[0],
             ],
-            sky_range: [sky.splits[0], sky.params[3], 0.0, 0.0],
+            sky_range: [sky.splits[0], sky.params[3], sky_texel * SKY_FILTER_REACH, 0.0],
             ..FrameUniforms::new(
                 camera,
                 aspect,
