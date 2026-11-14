@@ -160,6 +160,10 @@ pub struct Studio {
     sessions: u64,
     /// Team Create (ADR 0011): the session hosted or joined, and its saved choices.
     team: crate::team::TeamCreate,
+    /// Starts Multiple Clients' client processes (ADR 0011 §8): the Player app, or a test's stand-in.
+    launcher: crate::editor::multi::Launcher,
+    /// Joining the host's Team Create Play, until its server answers.
+    joining_play: Option<metallic_engine::metallic_net::play::Connecting>,
 }
 
 impl std::fmt::Debug for Studio {
@@ -191,6 +195,8 @@ impl Studio {
             open_after_splash: None,
             add_to_recent: false,
             team: crate::team::TeamCreate::in_memory(),
+            launcher: crate::editor::multi::player_launcher(),
+            joining_play: None,
             dock: Dock::in_memory(panels::PANELS),
             toolbar: Toolbar::in_memory(panels::PANELS),
             main_layout: None,
@@ -361,11 +367,89 @@ impl Studio {
                     }
                     self.notices.push(Notice { title, body });
                 }
+                crate::team::Request::JoinPlay { host, port } => {
+                    // The host's Team Create Play: this Studio joins it as a player of its own.
+                    if !self.is_playing() {
+                        let name = self
+                            .team
+                            .users()
+                            .into_iter()
+                            .find(|(u, _)| Some(u.id) == self.team.me());
+                        let name = name.map_or_else(|| "Player".to_owned(), |(u, _)| u.identity.name);
+                        let fingerprint = metallic_engine::metallic_classes::shared_registry()
+                            .map(|registry| metallic_engine::metallic_net::registry_fingerprint(&registry))
+                            .unwrap_or_default();
+                        log::info!("play: joining the host's game at {host}:{port}");
+                        self.joining_play = Some(metallic_engine::metallic_net::play::Connecting::start(
+                            &host,
+                            port,
+                            &name,
+                            crate::team::ENGINE,
+                            fingerprint,
+                            self.team.waker(),
+                        ));
+                    }
+                }
+                crate::team::Request::StopPlay => {
+                    self.joining_play = None;
+                    self.stop();
+                }
             }
+        }
+        self.join_play();
+        // A shared game whose server went: back to editing, saying why.
+        if let Some(why) = self.editor().and_then(EditorState::play_ended).map(str::to_owned) {
+            self.stop();
+            self.notices.push(Notice {
+                title: "The game ended",
+                body: why,
+            });
         }
         if self.team.is_active() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
+    }
+
+    /// The host's Team Create Play being joined: once its server welcomes this Studio, the game starts in the Game
+    /// tab; if it cannot be joined, the user is told why.
+    fn join_play(&mut self) {
+        let Some(connecting) = self.joining_play.as_mut() else {
+            return;
+        };
+        let welcome = match connecting.poll() {
+            Ok(None) => return,
+            Ok(Some(welcome)) => Ok(welcome),
+            Err(error) => Err(error),
+        };
+        let Some(connecting) = self.joining_play.take() else {
+            return;
+        };
+        let graphics = self.settings.settings().rendering.clone();
+        let log = Arc::clone(&self.log);
+        self.sessions += 1;
+        let number = self.sessions;
+        let started = welcome.and_then(|welcome| match self.editor_mut() {
+            Some(editor) => editor.play_joined(&welcome, connecting, graphics, log, number),
+            None => Err("no project is open".to_owned()),
+        });
+        match started {
+            Ok(()) => {
+                self.dock.open(panels::ids::GAME);
+                self.dock.set_focused(Some(panels::ids::GAME));
+            }
+            Err(error) => {
+                log::warn!("play: could not join the host's game: {error}");
+                self.notices.push(Notice {
+                    title: "Could not join the host's game",
+                    body: error,
+                });
+            }
+        }
+    }
+
+    /// Starts Multiple Clients' client processes with `launcher` from now on (a test's stand-in for the Player app).
+    pub fn set_launcher(&mut self, launcher: crate::editor::multi::Launcher) {
+        self.launcher = launcher;
     }
 
     /// Does what the projects page's Team Create section asked for this frame.
@@ -1036,7 +1120,7 @@ impl Studio {
             return None;
         }
         let session = self.editor()?.play.as_ref()?;
-        Some((session.player.cursor(), session.view.rect?))
+        Some((session.game_player().cursor(), session.view.rect?))
     }
 
     /// The frame's hand-off to the game (ADR 0010 §4): when it takes or lets go of the input, it gets the focus or
@@ -1052,7 +1136,8 @@ impl Studio {
             self.game_had_input = false;
             return;
         };
-        let engine = session.player.engine_mut();
+        let game_rect = session.view.rect;
+        let engine = session.game_player_mut().engine_mut();
         if has_input != self.game_had_input {
             let events = if has_input {
                 self.game_input.take(ctx.input(|input| input.modifiers))
@@ -1067,7 +1152,7 @@ impl Studio {
         if !has_input {
             return;
         }
-        let Some(rect) = session.view.rect else {
+        let Some(rect) = game_rect else {
             return;
         };
         // A click anywhere but the Game tab (a menu, the top bar, a panel) takes the input back.
@@ -1128,16 +1213,66 @@ impl Studio {
         let log = Arc::clone(&self.log);
         self.sessions += 1;
         let number = self.sessions;
+        // The mode the arrow beside Play chose (ADR 0011 §8).
+        let mode = self.team.play_mode;
+        let hosting = self.team.is_hosting();
+        let name = self.settings.settings().profile.shown_name().to_owned();
+        let count = self.team.store.clients;
+        let waker = self.team.waker();
+        let launcher = Arc::clone(&self.launcher);
         let Some(editor) = self.editor_mut() else {
             return;
         };
         if editor.is_playing() {
             return;
         }
-        match editor.play(graphics, log, number, clear_output) {
-            Ok(()) => {
-                self.dock.open(panels::ids::GAME);
-                self.dock.set_focused(Some(panels::ids::GAME));
+        use crate::editor::multi::PlayKind;
+        use crate::team::PlayMode;
+        let started = match mode {
+            PlayMode::Solo => editor.play(graphics, log, number, clear_output).map(|()| None),
+            PlayMode::TeamCreate if !hosting => {
+                Err("Team Create Play needs a session this Studio hosts: host the project first.".to_owned())
+            }
+            PlayMode::TeamCreate => editor
+                .play_server(
+                    PlayKind::TeamCreate,
+                    0,
+                    &name,
+                    graphics,
+                    log,
+                    number,
+                    clear_output,
+                    None,
+                    waker,
+                )
+                .map(Some),
+            PlayMode::Clients => editor
+                .play_server(
+                    PlayKind::Clients(count),
+                    0,
+                    "",
+                    graphics,
+                    log,
+                    number,
+                    clear_output,
+                    Some(&launcher),
+                    waker,
+                )
+                .map(|_| None),
+        };
+        match started {
+            Ok(port) => {
+                if let Some(port) = port {
+                    self.team.announce_play(Some(port));
+                }
+                // Multiple Clients' players are windows of their own: Studio shows the server.
+                if mode == PlayMode::Clients {
+                    self.dock.open(panels::ids::VIEWPORT);
+                    self.dock.set_focused(Some(panels::ids::VIEWPORT));
+                } else {
+                    self.dock.open(panels::ids::GAME);
+                    self.dock.set_focused(Some(panels::ids::GAME));
+                }
             }
             Err(error) => {
                 log::warn!("play: the game could not start: {error}");
@@ -1152,6 +1287,15 @@ impl Studio {
     /// Ends the game session: the Game tab closes, the Viewport's comes to the front, and the scene is as it was
     /// before Play.
     fn stop(&mut self) {
+        // The host's Team Create Play: everyone goes back to editing.
+        let shared = self
+            .editor()
+            .and_then(|editor| editor.play.as_ref()?.net.as_ref().map(|net| net.kind))
+            == Some(crate::editor::multi::PlayKind::TeamCreate);
+        if shared {
+            self.team.announce_play(None);
+        }
+        self.joining_play = None;
         if self.editor_mut().is_some_and(EditorState::stop) {
             self.dock.close(panels::ids::GAME);
             self.dock.open(panels::ids::VIEWPORT);
@@ -9263,6 +9407,7 @@ skip_sign_in = true
     }
 
     mod team_create;
+    mod team_play;
     mod team_projects;
     mod team_scene;
     mod team_scripts;

@@ -40,6 +40,8 @@ pub struct PlaySession {
     pub explorer: ExplorerState,
     /// The undo history of the panels' edits of the running game (#348), dropped at Stop.
     pub history: History,
+    /// Multiplayer playtesting's side (ADR 0011 §8): the server and its clients; `None` for Play Solo.
+    pub net: Option<super::multi::Net>,
 }
 
 /// The scene the Explorer and Properties show and edit: the editor's, or the running game's while a session runs
@@ -149,6 +151,7 @@ impl EditorState {
             history: History::new(selection.clone()),
             selection,
             explorer,
+            net: None,
         });
         Ok(())
     }
@@ -182,6 +185,9 @@ impl EditorState {
         let Some(mut session) = self.play.take() else {
             return false;
         };
+        if let Some(net) = session.net.as_mut() {
+            net.stop();
+        }
         session.player.engine_mut().stop();
         log::info!("play: stopped");
         true
@@ -213,6 +219,60 @@ impl EditorState {
     pub fn tick(&mut self, dt: Duration) {
         if let Some(session) = self.play.as_mut() {
             session.player.frame(dt);
+            if let Some(net) = session.net.as_mut() {
+                net.tick(session.player.engine_mut().data_model_mut(), dt);
+                // A joined game whose server went (the host stopped) is over.
+                if net.kind == super::multi::PlayKind::Joined
+                    && session.player.engine().state() == RunState::Stopped
+                    && net.ended.is_none()
+                {
+                    net.ended = Some("The host stopped the game.".to_owned());
+                }
+            }
         }
+    }
+
+    /// Why the networked game ended by itself (its server went), if it did: Studio stops the session then.
+    pub fn play_ended(&self) -> Option<&str> {
+        self.play.as_ref()?.net.as_ref()?.ended.as_deref()
+    }
+}
+
+impl PlaySession {
+    /// The game the Game tab shows and takes input for: this Studio's client of the server in Team Create Play, the
+    /// session's game otherwise.
+    pub fn game_player(&self) -> &Player<ScriptOutput> {
+        self.net
+            .as_ref()
+            .and_then(|net| net.client.as_ref())
+            .unwrap_or(&self.player)
+    }
+
+    /// The Game tab's game, to change.
+    pub fn game_player_mut(&mut self) -> &mut Player<ScriptOutput> {
+        match self.net.as_mut().and_then(|net| net.client.as_mut()) {
+            Some(client) => client,
+            None => &mut self.player,
+        }
+    }
+
+    /// Whether there is a game for the Game tab: not with Multiple Clients, whose players are processes of their
+    /// own (Studio shows the server).
+    pub fn has_game_tab(&self) -> bool {
+        !matches!(
+            self.net.as_ref().map(|net| net.kind),
+            Some(super::multi::PlayKind::Clients(_))
+        )
+    }
+}
+
+impl PlaySession {
+    /// The Game tab's view and its game together.
+    pub fn view_and_game(&mut self) -> (&mut GameView, &mut Player<ScriptOutput>) {
+        let player = match self.net.as_mut().and_then(|net| net.client.as_mut()) {
+            Some(client) => client,
+            None => &mut self.player,
+        };
+        (&mut self.view, player)
     }
 }

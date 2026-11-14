@@ -22,8 +22,11 @@ pub struct ViewportRenderer {
     attached: bool,
     /// Why it could not attach; it does not try again.
     error: Option<String>,
-    /// The texture registered with egui-wgpu, and the target's generation it shows.
-    texture: Option<(egui::TextureId, u64)>,
+    /// The texture registered with egui-wgpu, and the target's generation and the source it shows (0 the editor's
+    /// scene, else the session drawn in the Server view).
+    texture: Option<(egui::TextureId, (u64, u64))>,
+    /// The Server view's renderer while a game runs, with the session it draws (ADR 0011 §8).
+    server: Option<(u64, SceneRenderer)>,
     /// The game drawn last ([`metallic_engine::metallic_core::DataModel::uid`]): another is a project opened.
     game: Option<u64>,
     /// The Rendering settings last applied.
@@ -86,29 +89,64 @@ impl ViewportRenderer {
             }
         }
         let wanted = viewport.pixels;
-        if let Some((width, height)) = wanted {
-            self.scene.resize_viewport(width, height);
-        }
-        self.scene.set_camera(Some(viewport.camera.camera()));
-        self.scene.render_viewport(&mut editor.dm, FrameStats::default());
-
-        let Some(target) = self.scene.viewport() else {
+        // While a game runs the viewport is its Server view (ADR 0011 §8): the running game's world (the server's,
+        // in networked play) from the editor camera, drawn by a renderer of its own that goes with the session.
+        let source = match editor.play.as_mut() {
+            Some(session) => {
+                if self.server.as_ref().map(|(number, _)| *number) != Some(session.number) {
+                    let mut scene = SceneRenderer::new(Default::default());
+                    if let Some(graphics) = &self.graphics {
+                        scene.set_graphics(graphics.clone());
+                    }
+                    scene.set_assets(editor.project.asset_reader());
+                    let (width, height) = wanted.unwrap_or((1, 1));
+                    if let Err(error) = scene.attach_viewport(context, width, height) {
+                        log::warn!("render: the Server view could not start: {error}");
+                        return false;
+                    }
+                    self.server = Some((session.number, scene));
+                }
+                let Some((_, scene)) = self.server.as_mut() else {
+                    return false;
+                };
+                if let Some((width, height)) = wanted {
+                    scene.resize_viewport(width, height);
+                }
+                scene.set_camera(Some(viewport.camera.camera()));
+                scene.render_viewport(session.player.engine_mut().data_model_mut(), FrameStats::default());
+                session.number
+            }
+            None => {
+                self.server = None;
+                if let Some((width, height)) = wanted {
+                    self.scene.resize_viewport(width, height);
+                }
+                self.scene.set_camera(Some(viewport.camera.camera()));
+                self.scene.render_viewport(&mut editor.dm, FrameStats::default());
+                0
+            }
+        };
+        let drawn = match &self.server {
+            Some((_, scene)) if source != 0 => scene,
+            _ => &self.scene,
+        };
+        let Some(target) = drawn.viewport() else {
             return false;
         };
         let generation = target.generation();
         let device = context.device();
         match self.texture {
-            Some((id, shown)) if shown == generation => viewport.texture = Some(id),
+            Some((id, shown)) if shown == (generation, source) => viewport.texture = Some(id),
             Some((id, _)) => {
                 let _turn = context.descriptor_heap_turn();
                 painter.update_egui_texture_from_wgpu_texture(device, target.view(), FILTER, id);
-                self.texture = Some((id, generation));
+                self.texture = Some((id, (generation, source)));
                 viewport.texture = Some(id);
             }
             None => {
                 let _turn = context.descriptor_heap_turn();
                 let id = painter.register_native_texture(device, target.view(), FILTER);
-                self.texture = Some((id, generation));
+                self.texture = Some((id, (generation, source)));
                 viewport.texture = Some(id);
             }
         }

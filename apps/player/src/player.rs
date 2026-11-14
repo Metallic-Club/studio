@@ -100,6 +100,9 @@ fn save_calibration(renderer: &RefCell<SceneRenderer>, config: &mut PlayerConfig
     }
 }
 
+/// What runs before each of a [`Player`]'s frames ([`Player::set_frame_hook`]), on its engine.
+pub type FrameHook<O> = Box<dyn FnMut(&mut Engine<O>)>;
+
 /// A game running in the engine: the embeddable Player.
 ///
 /// [`Player::new`] makes the engine (a standalone [`RunContext::Local`] game, windowed), loads the scene, installs
@@ -110,6 +113,8 @@ pub struct Player<O: OutputSink = StdOutput> {
     config: PlayerConfig,
     renderer: Rc<RefCell<SceneRenderer>>,
     stress: Option<StressScene>,
+    /// Runs before each frame: a networked game's client brings in the server's world and sends its own moves.
+    hook: Option<FrameHook<O>>,
 }
 
 impl Player<StdOutput> {
@@ -172,6 +177,7 @@ impl<O: OutputSink> Player<O> {
             config,
             renderer,
             stress,
+            hook: None,
         })
     }
 
@@ -190,7 +196,20 @@ impl<O: OutputSink> Player<O> {
         graphics: GraphicsSettings,
         output: O,
     ) -> Result<Self, PlayerError> {
-        let engine_config = EngineConfig::new(RunContext::Local)
+        Self::hosted_in(RunContext::Local, game, sources, graphics, output)
+    }
+
+    /// A player of `game` as [`Player::hosted`] makes one, but in `context`: a host's game server
+    /// ([`RunContext::Server`]: its `Script`s run) or a networked game's client ([`RunContext::Client`]: its
+    /// `LocalScript`s), for multiplayer playtesting (ADR 0011 §8).
+    pub fn hosted_in(
+        context: RunContext,
+        game: DataModel,
+        sources: impl SourceLoader + 'static,
+        graphics: GraphicsSettings,
+        output: O,
+    ) -> Result<Self, PlayerError> {
+        let engine_config = EngineConfig::new(context)
             .with_mode(EngineMode::Windowed)
             .with_studio(true)
             .with_sources(sources);
@@ -210,7 +229,52 @@ impl<O: OutputSink> Player<O> {
             config,
             renderer: Rc::new(RefCell::new(renderer)),
             stress: None,
+            hook: None,
         })
+    }
+
+    /// A player in its own window, as [`Player::with_output`] makes one, of `game` (already filled: a networked game's
+    /// world as its server sent it) in `context`, its scripts from `sources`: the binary's `--connect` client.
+    pub fn with_game(
+        config: PlayerConfig,
+        game: DataModel,
+        sources: impl SourceLoader + 'static,
+        context: RunContext,
+        output: O,
+    ) -> Result<Self, PlayerError> {
+        let engine_config = EngineConfig::new(context)
+            .with_mode(EngineMode::Windowed)
+            .with_sources(sources);
+        let mut engine = Engine::with_data_model(game, engine_config, output)?;
+        let mut config = config;
+        let mut renderer = SceneRenderer::new(ContextOptions {
+            pipeline_cache_dir: config.pipeline_cache.clone(),
+            ..ContextOptions::default()
+        });
+        renderer.set_overlay(config.overlay);
+        let graphics = config.effective_graphics();
+        if let Some(cap) = graphics.frame_cap {
+            config.frame_cap = (cap > 0).then_some(cap);
+        }
+        renderer.set_graphics(graphics);
+        renderer.set_frame_cap(config.frame_cap);
+        renderer.write_user_settings(engine.data_model_mut());
+        let renderer = Rc::new(RefCell::new(renderer));
+        engine.set_render_hook(Box::new(Rc::clone(&renderer)))?;
+        engine.start()?;
+        Ok(Self {
+            engine,
+            config,
+            renderer,
+            stress: None,
+            hook: None,
+        })
+    }
+
+    /// Runs `hook` on the engine before each frame from now on (in place of any before): a networked game's client
+    /// brings in its server's world and sends its own moves there.
+    pub fn set_frame_hook(&mut self, hook: FrameHook<O>) {
+        self.hook = Some(hook);
     }
 
     /// Draws into a `width` x `height` (physical pixels) texture on `context`'s device from now on: the host's device,
@@ -269,6 +333,9 @@ impl<O: OutputSink> Player<O> {
         self.renderer
             .borrow_mut()
             .write_user_settings(self.engine.data_model_mut());
+        if let Some(hook) = self.hook.as_mut() {
+            hook(&mut self.engine);
+        }
         let stats = self.engine.frame(real_dt);
         save_calibration(&self.renderer, &mut self.config);
         stats
@@ -293,6 +360,7 @@ impl<O: OutputSink> Player<O> {
             config: self.config,
             renderer: self.renderer,
             stress: self.stress,
+            hook: self.hook,
             first_frame: None,
             last_frame_end: None,
             shift: false,
@@ -328,6 +396,7 @@ pub struct PlayerApp<O: OutputSink = StdOutput> {
     config: PlayerConfig,
     renderer: Rc<RefCell<SceneRenderer>>,
     stress: Option<StressScene>,
+    hook: Option<FrameHook<O>>,
     first_frame: Option<Instant>,
     last_frame_end: Option<Instant>,
     /// Shift is held: F1 to F4 toggle the overlay's viewers one by one (#479).
@@ -441,6 +510,11 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
     }
 
     fn about_to_wait(&mut self, cx: &mut dyn EventLoopContext) {
+        // A game that ended (its script, or a networked game's server) closes its window.
+        if self.app.engine().state() == metallic_engine::RunState::Stopped {
+            cx.exit();
+            return;
+        }
         let before = self.app.engine().frame_count();
         if let Some(frames) = self.config.max_frames
             && before >= self.config.warmup_frames.saturating_add(frames)
@@ -454,6 +528,9 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
         self.renderer
             .borrow_mut()
             .write_user_settings(self.app.engine_mut().data_model_mut());
+        if let Some(hook) = self.hook.as_mut() {
+            hook(self.app.engine_mut());
+        }
         self.app.about_to_wait(cx);
         let frame = self.app.engine().frame_count();
         if frame == before {

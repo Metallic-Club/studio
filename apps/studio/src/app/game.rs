@@ -44,14 +44,15 @@ impl GameRenderer {
             painter.free_texture(&id);
             self.texture = None;
         }
-        let view = &mut session.view;
+        let number = session.number;
+        let (view, player) = session.view_and_game();
         if !std::mem::take(&mut view.shown) {
             return false;
         }
         let Some((width, height)) = view.pixels else {
             return false;
         };
-        let player = &mut session.player;
+
         if player.renderer().borrow().viewport().is_none() {
             if view.error.is_some() {
                 return false;
@@ -82,13 +83,13 @@ impl GameRenderer {
             Some((id, ..)) => {
                 let _turn = context.descriptor_heap_turn();
                 painter.update_egui_texture_from_wgpu_texture(device, target.view(), FILTER, id);
-                self.texture = Some((id, session.number, generation));
+                self.texture = Some((id, number, generation));
                 view.texture = Some(id);
             }
             None => {
                 let _turn = context.descriptor_heap_turn();
                 let id = painter.register_native_texture(device, target.view(), FILTER);
-                self.texture = Some((id, session.number, generation));
+                self.texture = Some((id, number, generation));
                 view.texture = Some(id);
             }
         }
