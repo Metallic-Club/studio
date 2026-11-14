@@ -14,10 +14,12 @@
 //! a relay would feed them the same events.
 
 pub mod client;
+pub mod docs;
 pub mod host;
 pub mod presence;
 pub mod protocol;
 pub mod scene;
+pub mod text;
 pub mod value;
 
 #[cfg(test)]
