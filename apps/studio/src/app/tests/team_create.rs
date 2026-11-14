@@ -11,7 +11,7 @@ use super::*;
 use crate::team::Session;
 
 /// A port nothing listens on now.
-fn free_port() -> u16 {
+pub(super) fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -20,7 +20,11 @@ fn free_port() -> u16 {
 }
 
 /// Steps both Studios until `done` holds, for at most twenty seconds.
-fn until(a: &mut Harness<'_, Test>, b: &mut Harness<'_, Test>, mut done: impl FnMut(&Studio, &Studio) -> bool) {
+pub(super) fn until(
+    a: &mut Harness<'_, Test>,
+    b: &mut Harness<'_, Test>,
+    mut done: impl FnMut(&Studio, &Studio) -> bool,
+) {
     let start = Instant::now();
     loop {
         a.step();
@@ -46,7 +50,7 @@ fn until(a: &mut Harness<'_, Test>, b: &mut Harness<'_, Test>, mut done: impl Fn
 }
 
 /// Opens the top bar's Team Create menu.
-fn open_menu(harness: &mut Harness<'_, Test>) {
+pub(super) fn open_menu(harness: &mut Harness<'_, Test>) {
     // Already open: its header says Offline.
     if harness.query_by_label("Offline").is_some() {
         return;
@@ -56,7 +60,7 @@ fn open_menu(harness: &mut Harness<'_, Test>) {
 }
 
 /// Hosts from `a`'s menu on a free port; returns it.
-fn host(a: &mut Harness<'_, Test>) -> u16 {
+pub(super) fn host(a: &mut Harness<'_, Test>) -> u16 {
     open_menu(a);
     let port = free_port();
     a.state_mut().studio.team_mut().form.port = port.to_string();
@@ -71,7 +75,7 @@ fn host(a: &mut Harness<'_, Test>) -> u16 {
 }
 
 /// Joins `port` on localhost from `b`'s menu as `name`.
-fn join(b: &mut Harness<'_, Test>, port: u16, name: &str) {
+pub(super) fn join(b: &mut Harness<'_, Test>, port: u16, name: &str) {
     // A new project counts as unsaved (#228), and joining would close it: saved first.
     if let Some(editor) = b.state_mut().studio.editor_mut()
         && editor.is_modified()
@@ -88,11 +92,11 @@ fn join(b: &mut Harness<'_, Test>, port: u16, name: &str) {
     settle(b);
 }
 
-fn joined(studio: &Studio) -> bool {
+pub(super) fn joined(studio: &Studio) -> bool {
     matches!(studio.team().session(), Session::Joined(_)) && studio.editor().is_some()
 }
 
-fn names(studio: &Studio) -> Vec<String> {
+pub(super) fn names(studio: &Studio) -> Vec<String> {
     studio
         .team()
         .users()

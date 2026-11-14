@@ -16,6 +16,8 @@
 //! they received.
 
 pub mod menu;
+pub mod page;
+pub mod probe;
 pub mod store;
 
 use std::net::IpAddr;
@@ -104,6 +106,26 @@ pub enum Request {
     },
 }
 
+/// What the projects page's Team Create section asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PageAction {
+    /// Join this project at the address it was last hosted at.
+    Join(ProjectId),
+    /// Open the owner's own project file, hosting it again on `port` once it is open when `host`.
+    OpenOwned {
+        /// The project's file.
+        path: PathBuf,
+        /// The port it was hosted on.
+        port: u16,
+        /// Whether to host it again.
+        host: bool,
+    },
+    /// Join the address the form holds (Join by address).
+    JoinAddress,
+    /// Forget this project.
+    Forget(ProjectId),
+}
+
 /// Something the menu says until the next action: an error, or why the last session ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Note {
@@ -136,6 +158,12 @@ pub struct TeamCreate {
     pub note: Option<Note>,
     /// The menu's fields.
     pub form: Form,
+    /// Whether each Team Create project is reachable now, for the projects page.
+    pub prober: probe::Prober,
+    /// What the projects page's Team Create section asked for this frame, for Studio to do.
+    pub page_actions: Vec<PageAction>,
+    /// The owner's project to host again once it is open (the projects page's Open and host).
+    pub host_after_open: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for TeamCreate {
@@ -150,6 +178,7 @@ impl TeamCreate {
     /// Team Create with `store`'s choices, waking the window through `waker`, writing participants' copies under
     /// `cache`.
     pub fn new(store: TeamStore, waker: Waker, cache: PathBuf) -> Self {
+        let prober_waker = Arc::clone(&waker);
         let form = Form {
             port: store.port.to_string(),
             address: store.address.clone(),
@@ -162,6 +191,9 @@ impl TeamCreate {
             cache,
             note: None,
             form,
+            prober: probe::Prober::new(Arc::clone(&prober_waker)),
+            page_actions: Vec::new(),
+            host_after_open: None,
         }
     }
 
@@ -176,6 +208,7 @@ impl TeamCreate {
 
     /// Wakes the window through `waker` from now on (the shell's event loop).
     pub fn set_waker(&mut self, waker: Waker) {
+        self.prober.set_waker(Arc::clone(&waker));
         self.waker = waker;
     }
 
