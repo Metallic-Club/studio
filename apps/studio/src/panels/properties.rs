@@ -42,7 +42,7 @@ use crate::keymap::Context;
 use crate::settings::window::section_label;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
-use crate::theme::{ButtonKind, current_colors, fonts};
+use crate::theme::{current_colors, fonts};
 
 /// The group of properties declared without one.
 const DEFAULT_GROUP: &str = "Data";
@@ -439,17 +439,58 @@ fn attribute_menu(response: &egui::Response, name: &str, taken: &[String]) -> Op
     action
 }
 
-/// The Add attribute button under the attributes (#591), and the form it opens: a name, a type and Add. Returns the
-/// attribute to add when one is asked for.
-fn add_attribute(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
+/// The Attributes section's header (#617): its label, as every group's, and a + at the right that opens the form to
+/// add one: a name, a type from a drop-down, and Add. Returns the attribute to add when one is asked for.
+fn attributes_header(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
     let id = egui::Id::unique("metallic.properties.add_attribute");
-    let button = crate::theme::button(ui, ButtonKind::Secondary, "Add attribute");
+    let p = current_colors(ui.ctx()).palette;
     let mut action = None;
-    let shown = Popup::menu(&button)
-        .id(id.with("menu"))
-        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+    let plus = ui
+        .horizontal(|ui| {
+            ui.label(
+                RichText::new("ATTRIBUTES")
+                    .font(fonts::named(fonts::STRONG, text::LABEL))
+                    .extra_letter_spacing(text::LABEL_TRACKING)
+                    .color(p.subtle),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Add attribute"));
+                if response.hovered() {
+                    ui.painter()
+                        .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface_hover);
+                }
+                icons::paint_at(
+                    ui.painter(),
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    Icon::UiAdd,
+                    text::BODY,
+                    if response.hovered() { p.text } else { p.subtle },
+                );
+                response.on_hover_text("Add an attribute")
+            })
+            .inner
+        })
+        .inner;
+    ui.add_space(space::S2);
+    let menu = id.with("menu");
+    // The type's drop-down list is a popup of its own: a click in it must not close the form, so the form closes
+    // itself, on Escape or a click outside both.
+    let listing = id.with("listing");
+    let was_listing = ui.data(|data| data.get_temp::<bool>(listing)).unwrap_or(false);
+    // Its own open state, not egui's memory, which holds one popup at a time: opening the type's list would close it.
+    let mut open = ui.data(|data| data.get_temp::<bool>(menu)).unwrap_or(false);
+    if plus.clicked() {
+        open = !open;
+    }
+    let shown = Popup::menu(&plus)
+        .id(menu)
+        .open_bool(&mut open)
+        .close_behavior(PopupCloseBehavior::IgnoreClicks)
         .show(|ui| {
             let (mut name, mut kind) = ui.data(|data| data.get_temp::<(String, usize)>(id)).unwrap_or_default();
+            ui.set_width(MENU_FIELD);
             let field = ui.add(
                 TextEdit::singleline(&mut name)
                     .id(id.with("name"))
@@ -461,15 +502,20 @@ fn add_attribute(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
             if let Some(problem) = problem.filter(|_| !name.is_empty()) {
                 field_note(ui, problem);
             }
-            // The types as buttons, one of them chosen: a drop-down would be a menu in a menu.
-            ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(MENU_FIELD);
-                for (index, &label) in ATTRIBUTE_TYPES.iter().enumerate() {
-                    if ui.selectable_label(kind == index, label).clicked() {
-                        kind = index;
+            let chosen = ATTRIBUTE_TYPES.get(kind).copied().unwrap_or("string");
+            let combo = egui::ComboBox::from_id_salt(id.with("type"))
+                .icon(crate::theme::combo_icon)
+                .selected_text(chosen)
+                .width(MENU_FIELD)
+                .show_ui(ui, |ui| {
+                    for (index, &label) in ATTRIBUTE_TYPES.iter().enumerate() {
+                        ui.selectable_value(&mut kind, index, label);
                     }
-                }
-            });
+                });
+            combo
+                .response
+                .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, "New attribute type"));
+            ui.data_mut(|data| data.insert_temp(listing, combo.inner.is_some()));
             let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
             let add = ui.add_enabled(problem.is_none(), Button::new("Add"));
             add.widget_info(|| WidgetInfo::labeled(Role::Button, problem.is_none(), "Add the attribute"));
@@ -481,9 +527,28 @@ fn add_attribute(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
             }
             ui.data_mut(|data| data.insert_temp(id, (name, kind)));
         });
-    if shown.is_none() {
-        ui.data_mut(|data| data.remove::<(String, usize)>(id));
+    match &shown {
+        Some(shown) => {
+            let (clicked, at, escape) = ui.input(|input| {
+                (
+                    input.pointer.any_click(),
+                    input.pointer.interact_pos(),
+                    input.key_pressed(Key::Escape),
+                )
+            });
+            let outside = at.is_some_and(|at| !shown.response.rect.contains(at));
+            if escape || (clicked && outside && !was_listing && !plus.clicked()) {
+                open = false;
+            }
+        }
+        None => {
+            ui.data_mut(|data| {
+                data.remove::<(String, usize)>(id);
+                data.remove::<bool>(listing);
+            });
+        }
     }
+    ui.data_mut(|data| data.insert_temp(menu, open));
     action
 }
 
@@ -654,17 +719,12 @@ impl Panel for Properties {
                 }
                 let mut bottom = ui.cursor().top();
                 if let Some(rows) = &attributes {
-                    section_label(ui, "Attributes");
+                    // Like every group, with a + at the right of its label (#617).
+                    let added = attributes_header(ui, &taken);
                     let drawn = rows_ui(ui, dm, rows, &mut open, share, &taken, None);
                     edits.extend(drawn.edits);
-                    attribute_action = drawn.action;
+                    attribute_action = drawn.action.or(added);
                     bottom = ui.cursor().top();
-                    if !rows.is_empty() {
-                        ui.add_space(space::S3);
-                    }
-                    if let Some(added) = add_attribute(ui, &taken) {
-                        attribute_action = Some(added);
-                    }
                     ui.add_space(space::S5);
                 }
                 ui.data_mut(|data| data.insert_temp(open_id(), open));

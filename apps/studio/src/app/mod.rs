@@ -3190,6 +3190,11 @@ mod tests {
         left_click(&mut harness, field);
         harness.event(egui::Event::Text("Speed".to_owned()));
         settle(&mut harness);
+        // The type from its drop-down (#617).
+        harness
+            .get_by_role_and_label(Role::ComboBox, "New attribute type")
+            .click();
+        settle(&mut harness);
         harness.get_by_label("number").click();
         settle(&mut harness);
         harness.get_by_role_and_label(Role::Button, "Add the attribute").click();
@@ -3232,6 +3237,17 @@ mod tests {
         assert_eq!(attribute(&harness, "Speed"), Some(Value::Number(0.0)));
         undo(&mut harness);
         assert_eq!(attribute(&harness, "Speed"), None, "never added");
+
+        // Esc closes the form without adding anything (#617).
+        harness.get_by_role_and_label(Role::Button, "Add attribute").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TextInput, "New attribute name");
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(
+            harness.query_by_label("New attribute name").is_none(),
+            "Esc closed the form"
+        );
     }
 
     #[test]
