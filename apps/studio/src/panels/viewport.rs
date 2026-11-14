@@ -59,7 +59,8 @@ fn outline(lines: &mut Lines, view: &View, dm: &DataModel, parts: &PartIndex, id
             }
         }
     }
-    let Some(bounds) = pick::outline_box(dm, id) else {
+    // Parts and models only (#616): the Camera or a service would outline everything inside it.
+    let Some(bounds) = pick::outline_box(dm, id).filter(|_| pick::is_outlined(dm, id)) else {
         return;
     };
     let corners = bounds.corners();

@@ -191,12 +191,14 @@ impl Gizmo {
     }
 }
 
-/// What the tools act on: the selection's instances that are not inside another selected one and have a pivot.
+/// What the tools act on: the selection's instances that are not inside another selected one and have a pivot, but the
+/// Camera.
 pub fn targets(dm: &DataModel, selection: &Selection) -> Vec<Id> {
     selection
         .top_level(dm)
         .into_iter()
-        .filter(|&id| is_movable(dm, id) && world_object::pivot(dm, id).is_ok())
+        // Not the Camera (#616): it is the editor's view, moved by flying, not by handles.
+        .filter(|&id| is_movable(dm, id) && world_object::pivot(dm, id).is_ok() && !pick::is_a(dm, id, "Camera"))
         .collect()
 }
 

@@ -3945,6 +3945,37 @@ mod tests {
         assert!(selected_names(&harness).is_empty());
     }
 
+    /// #616: a part or a model is outlined when selected; the Camera and a service are not, though parts are inside,
+    /// and the Move tool has no handles for the Camera.
+    #[test]
+    fn only_parts_and_models_are_outlined_and_the_camera_has_no_gizmo() {
+        let mut harness = editing(settings_file("editor-outlines", None), "Outline Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let outlined = |harness: &Harness<'_, Test>| {
+            let ink = current_colors(&harness.ctx).accent;
+            harness
+                .output()
+                .shapes
+                .iter()
+                .filter(|clipped| matches!(&clipped.shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == ink)))
+                .count()
+        };
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
+        settle(&mut harness);
+        assert!(outlined(&harness) > 0, "a part is outlined");
+        for name in ["Workspace", "Camera"] {
+            harness.get_by_role_and_label(Role::TreeItem, name).click();
+            settle(&mut harness);
+            assert_eq!(outlined(&harness), 0, "{name} is not outlined");
+        }
+        let editor = harness.state().studio.editor().unwrap();
+        assert!(
+            crate::viewport::tools::targets(&editor.dm, &editor.selection).is_empty(),
+            "no handles for the Camera"
+        );
+    }
+
     #[test]
     fn choosing_the_select_tool_again_turns_it_off_and_the_hover_outline_with_it() {
         let mut harness = editing(settings_file("editor-select-off", None), "Select Off Game");
