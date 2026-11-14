@@ -589,6 +589,8 @@ pub struct Listener {
     incoming: Receiver<Connection>,
     stop: Arc<AtomicBool>,
     local: SocketAddr,
+    /// The accepting thread, which owns the socket: joined on drop so the port is free again once the listener is.
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for Listener {
@@ -618,7 +620,7 @@ impl Listener {
         let (tx, incoming) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("net-listen".to_owned())
             .spawn(move || {
                 while !thread_stop.load(Ordering::Acquire) {
@@ -646,7 +648,12 @@ impl Listener {
                 }
             })
             .map_err(|error| error.to_string())?;
-        Ok(Self { incoming, stop, local })
+        Ok(Self {
+            incoming,
+            stop,
+            local,
+            thread: Some(thread),
+        })
     }
 
     /// The address it listens on.
@@ -661,8 +668,13 @@ impl Listener {
 }
 
 impl Drop for Listener {
+    /// Stops accepting and waits for the thread (at most one 40 ms nap) so the port is released by the time the
+    /// listener is gone (#639): a game served on a fixed port can start again right after Stop.
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -728,6 +740,20 @@ mod tests {
         }
         server.send(Channel::Presence, b"hi".to_vec());
         assert_eq!(wait(|| message(&mut client)), (Channel::Presence, b"hi".to_vec()));
+    }
+
+    /// #639: a dropped listener has released its port, so the same port can be listened on again at once (Team
+    /// Create Play's fixed port, started again right after Stop).
+    #[test]
+    fn a_dropped_listener_frees_its_port_at_once() {
+        let mut listener = Listener::bind_addr(([127, 0, 0, 1], 0).into(), Limits::default(), no_waker()).unwrap();
+        let addr = listener.local_addr();
+        // Taken while it listens.
+        assert!(Listener::bind_addr(addr, Limits::default(), no_waker()).is_err());
+        for _ in 0..5 {
+            drop(listener);
+            listener = Listener::bind_addr(addr, Limits::default(), no_waker()).unwrap();
+        }
     }
 
     #[test]

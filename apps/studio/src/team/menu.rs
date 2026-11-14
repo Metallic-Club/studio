@@ -161,7 +161,7 @@ fn idle(ui: &mut Ui, team: &mut TeamCreate, facts: EditorFacts<'_>) -> Option<Te
             let hint = match facts.project {
                 Some(name) => format!(
                     "Share \u{201C}{name}\u{201D} with people on your network, or over the internet with the port \
-                     forwarded on your router."
+                     and the one after it (Team Create Play's) forwarded on your router."
                 ),
                 None => "Open a project to host it.".to_owned(),
             };
@@ -259,6 +259,20 @@ fn active(ui: &mut Ui, team: &mut TeamCreate) -> Option<TeamAction> {
                 }
             });
         }
+        // These are this machine's addresses on its own network (#639): someone outside it needs the router's public
+        // address, with the session's port and Team Create Play's forwarded to this computer.
+        let ports = match crate::team::play_port_after(port) {
+            Some(play) => format!("TCP ports {port} and {play}"),
+            None => format!("TCP port {port}"),
+        };
+        ui.label(
+            RichText::new(format!(
+                "On your network. From outside it, people join at your public address, with {ports} forwarded \
+                 to this computer."
+            ))
+            .size(text::SMALL)
+            .color(p.subtle),
+        );
     }
     let users = team.users();
     if !users.is_empty() {
