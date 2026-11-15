@@ -71,12 +71,15 @@ pub fn local_changes(editor: &mut EditorState, docs: &impl Docs) -> Vec<(String,
         };
         let text = editor.scripts.text(&mut editor.project, &member).clone();
         if text != doc.text() {
-            let merge = editor
-                .scripts
-                .collab
-                .typed
-                .get(&member)
-                .is_some_and(|at| now.duration_since(*at) < MERGE_WITHIN);
+            // Typing joins the last step, unless the field started a new one (#654) or the user paused.
+            let new_step = editor.scripts.collab.steps.remove(&member);
+            let merge = !new_step
+                && editor
+                    .scripts
+                    .collab
+                    .typed
+                    .get(&member)
+                    .is_some_and(|at| now.duration_since(*at) < MERGE_WITHIN);
             changes.push((member.clone(), text, merge));
             editor.scripts.collab.typed.insert(member, now);
         }

@@ -5853,6 +5853,52 @@ mod tests {
         assert_eq!(line, 3, "on line 4");
     }
 
+    /// #654: undo takes typing back a word at a time, and backspacing is a step of its own; redo walks them forward.
+    #[test]
+    fn undo_and_redo_go_a_word_at_a_time() {
+        let mut harness = editing(settings_file("editor-script-undo", None), "Script Undo Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        add_bare_script(&mut harness, "Steps");
+        two_clicks(&mut harness, "Steps", 0.05);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.key_press(Key::Delete);
+        settle(&mut harness);
+        let text = |harness: &mut Harness<'static, Test>| {
+            harness
+                .state_mut()
+                .studio
+                .editor_mut()
+                .unwrap()
+                .project
+                .read_text("Scripts/Steps.luau")
+                .unwrap()
+        };
+        // A key a frame, fast, as typing is: egui's own undo would make one step of it all.
+        for c in "hello world foo".chars() {
+            harness.event(egui::Event::Text(c.to_string()));
+            harness.step();
+        }
+        harness.key_press(Key::Backspace);
+        harness.step();
+        harness.key_press(Key::Backspace);
+        harness.step();
+        assert_eq!(text(&mut harness), "hello world f");
+        let undo = |harness: &mut Harness<'static, Test>| {
+            harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+            harness.step();
+        };
+        undo(&mut harness);
+        assert_eq!(text(&mut harness), "hello world foo", "the backspaces first");
+        undo(&mut harness);
+        assert_eq!(text(&mut harness), "hello world");
+        undo(&mut harness);
+        assert_eq!(text(&mut harness), "hello");
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        harness.step();
+        assert_eq!(text(&mut harness), "hello world");
+    }
+
     /// #531: typing opens the list of what fits, Enter or a click takes a suggestion and Escape closes it; a name of
     /// the API says what it is under the pointer.
     #[test]
