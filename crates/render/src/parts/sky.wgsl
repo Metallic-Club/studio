@@ -45,16 +45,15 @@ fn sky_color(view: vec3<f32>) -> vec3<f32> {
     // Below the horizon the sky fades quickly to the ground colour.
     var color = mix(above + glow, frame.sky_ground.rgb, smoothstep(0.0, 0.12, -up));
 
-    // The discs are hidden by the horizon.
-    let over_horizon = smoothstep(-0.01, 0.01, up);
     // The halo: a wide faint part (c⁸, about 20° across) and a tight bright one (c²⁵⁶, about 4°) around the disc.
+    // The discs and the halo show wherever they are, below the horizon too (#672).
     let c = max(dot(view, sun), 0.0);
     let c2 = c * c;
     let c8 = c2 * c2 * c2 * c2;
     let c256 = pow(c8, 32.0);
-    color += frame.sun_halo.rgb * (0.12 * c8 + 0.5 * c256) * over_horizon;
-    color += frame.sun_disc.rgb * disc(view, sun, frame.sun.w) * over_horizon;
-    color += frame.moon_disc.rgb * disc(view, -sun, frame.moon_disc.w) * over_horizon;
+    color += frame.sun_halo.rgb * (0.12 * c8 + 0.5 * c256);
+    color += frame.sun_disc.rgb * disc(view, sun, frame.sun.w);
+    color += frame.moon_disc.rgb * disc(view, -sun, frame.moon_disc.w);
     return color;
 }
 

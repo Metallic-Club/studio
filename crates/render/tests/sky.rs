@@ -681,3 +681,36 @@ fn open_ground_beside_a_part_is_not_darkened() {
         );
     }
 }
+
+/// #672: just after sunset, with nothing but sky in view, the sun's disc is drawn below the horizon where it is.
+#[test]
+fn the_sun_shows_below_the_horizon() {
+    let Some(context) = gpu() else { return };
+    // Sky alone: no floor between the camera and the sun.
+    let mut game = Game::new();
+    let lighting = lighting_service(&game);
+    for name in ["SkyColor", "HorizonColor"] {
+        game.dm
+            .set_by_name(lighting, name, Value::Color3(metallic_core::Color3::new(0.0, 0.0, 0.0)))
+            .expect("sky colour");
+    }
+    set_clock_time(&mut game, 18.6);
+    let Ok(Value::Vector3(sun)) = game.dm.get_by_name(lighting, "SunDirection") else {
+        panic!("no SunDirection");
+    };
+    assert!(sun.y < -0.01, "the sun is below the horizon: {sun:?}");
+    let eye = Vec3::new(0.0, 3.0, 0.0);
+    game.set_camera(CFrame::look_at(eye, eye + sun, Vec3::Y), 70.0);
+    let pixels = render(&context, &mut game, PassSet::default(), 1);
+    let (px, py) = project(&game, sun);
+    let (x, y, count) = white_hot(&pixels, (px, py), 20.0);
+    eprintln!("{count} white-hot pixels around ({x:.1}, {y:.1}), the sun projected to ({px:.1}, {py:.1})");
+    assert!(
+        count >= 20,
+        "the sun is not drawn below the horizon: {count} white-hot pixels"
+    );
+    assert!(
+        (x - px).abs() <= 1.5 && (y - py).abs() <= 1.5,
+        "drawn at ({x:.1}, {y:.1})"
+    );
+}
