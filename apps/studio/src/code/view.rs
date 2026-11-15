@@ -821,8 +821,12 @@ fn pair_edit(text: &str, start: usize, end: usize, typed: char) -> Option<PairEd
             || (token.kind == super::lexer::TokenKind::Comment && !text[token.start..token.end].ends_with(']'));
         token.start < byte && (byte < token.end || (byte == token.end && open_ended))
     });
-    let in_comment = inside.as_ref().is_some_and(|token| token.kind == super::lexer::TokenKind::Comment);
-    let in_string = inside.as_ref().is_some_and(|token| token.kind == super::lexer::TokenKind::String);
+    let in_comment = inside
+        .as_ref()
+        .is_some_and(|token| token.kind == super::lexer::TokenKind::Comment);
+    let in_string = inside
+        .as_ref()
+        .is_some_and(|token| token.kind == super::lexer::TokenKind::String);
     if start != end {
         // A selection: wrapped in the pair, and still selected.
         let (open, close) = opener?;
@@ -887,9 +891,7 @@ fn pairs(ui: &Ui, id: Id, text: &mut String) -> bool {
     // Backspace between an empty pair.
     if start == end && start > 0 {
         let around = (text.chars().nth(start - 1), text.chars().nth(start));
-        let empty = PAIRS
-            .iter()
-            .any(|(open, close)| around == (Some(*open), Some(*close)));
+        let empty = PAIRS.iter().any(|(open, close)| around == (Some(*open), Some(*close)));
         if empty && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Backspace)) {
             replace_chars(ui.ctx(), id, &mut state, text, start - 1..start + 1, "");
             return true;
@@ -1613,7 +1615,11 @@ mod tests {
         assert_eq!(type_pair("local t = |", '{'), "local t = {|}");
         assert_eq!(type_pair("x[|", '['), "x[[|]");
         assert_eq!(type_pair("f(|)", '"'), "f(\"|\")");
-        assert_eq!(type_pair("f(\"hi|\")", '"'), "f(\"hi\"|)", "steps over the closing quote");
+        assert_eq!(
+            type_pair("f(\"hi|\")", '"'),
+            "f(\"hi\"|)",
+            "steps over the closing quote"
+        );
         assert_eq!(type_pair("print(|)", ')'), "print()|", "steps over the closer");
         assert_eq!(type_pair("|word", '('), "(|word", "not before a word");
         assert_eq!(type_pair("don|", '\''), "don'|", "not after a word");

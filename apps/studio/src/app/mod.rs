@@ -5853,6 +5853,52 @@ mod tests {
         assert_eq!(line, 3, "on line 4");
     }
 
+    /// #659: brackets and quotes are typed in pairs, the closer is stepped over, Backspace takes an empty pair, and a
+    /// selection typed over with `(` is wrapped and stays selected.
+    #[test]
+    fn brackets_close_themselves_and_wrap_a_selection() {
+        let mut harness = editing(settings_file("editor-script-pairs", None), "Script Pairs Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        add_bare_script(&mut harness, "Pairs");
+        two_clicks(&mut harness, "Pairs", 0.05);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.key_press(Key::Delete);
+        settle(&mut harness);
+        let text = |harness: &mut Harness<'static, Test>| {
+            harness
+                .state_mut()
+                .studio
+                .editor_mut()
+                .unwrap()
+                .project
+                .read_text("Scripts/Pairs.luau")
+                .unwrap()
+        };
+        let type_each = |harness: &mut Harness<'static, Test>, typed: &str| {
+            for c in typed.chars() {
+                harness.event(egui::Event::Text(c.to_string()));
+                harness.step();
+            }
+        };
+        type_each(&mut harness, "print(\"hi");
+        assert_eq!(text(&mut harness), "print(\"hi\")");
+        type_each(&mut harness, "\")");
+        assert_eq!(text(&mut harness), "print(\"hi\")", "the closers are stepped over");
+        type_each(&mut harness, " {");
+        assert_eq!(text(&mut harness), "print(\"hi\") {}");
+        harness.key_press(Key::Backspace);
+        harness.step();
+        assert_eq!(text(&mut harness), "print(\"hi\") ", "an empty pair goes in one");
+        // The whole line selected, then `(`: wrapped, and still selected.
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.step();
+        type_each(&mut harness, "(");
+        assert_eq!(text(&mut harness), "(print(\"hi\") )");
+        let field = crate::panels::script::field_id(harness.state().studio.editor().unwrap().scripts.focused.unwrap());
+        assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(1..13));
+    }
+
     /// #654: undo takes typing back a word at a time, and backspacing is a step of its own; redo walks them forward.
     #[test]
     fn undo_and_redo_go_a_word_at_a_time() {
