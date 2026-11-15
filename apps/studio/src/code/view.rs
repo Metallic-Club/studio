@@ -125,6 +125,7 @@ pub fn show(
     let font = font(settings);
     let row_height = settings.size * settings.line_spacing;
     let digit = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0'));
+    mark_undo_step(ui, id, text);
     let mut changed = keys(ui, id, text, settings);
     // Several cursors (#558): the field keeps Escape, which goes back to one.
     let several = !extras(ui.ctx(), id).is_empty();
@@ -1233,12 +1234,106 @@ pub fn replace_chars(
     range: std::ops::Range<usize>,
     with: &str,
 ) {
+    // An edit made for the field is a step of its own (#654): undo takes it back alone, before what was typed.
+    undo_point(state, text);
     let (start, end) = (byte_of(text, range.start), byte_of(text, range.end));
     text.replace_range(start..end, with);
     let at = range.start + with.chars().count();
     state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
+    undo_point(state, text);
     state.clone().store(ctx, id);
-    ctx.data_mut(|data| data.insert_temp(id.with("follow"), true));
+    ctx.data_mut(|data| {
+        data.insert_temp(id.with("follow"), true);
+        data.insert_temp(id.with("undo-step"), true);
+        data.remove::<EditKind>(id.with("undo-kind"));
+    });
+}
+
+/// What a frame's input does to a field's text, for where undo steps fall (#654).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditKind {
+    /// Letters, digits and `_`: a word being typed.
+    Word,
+    /// A space, punctuation, a new line, a paste: what ends a word.
+    Boundary,
+    /// Backspace or Delete.
+    Delete,
+}
+
+/// What the events of a frame do to the text, the last one that does anything.
+fn edit_kind(events: &[egui::Event]) -> Option<EditKind> {
+    let mut kind = None;
+    for event in events {
+        match event {
+            egui::Event::Text(typed) => {
+                let mut chars = typed.chars();
+                kind = match (chars.next(), chars.next()) {
+                    (Some(c), None) if c == '_' || c.is_alphanumeric() => Some(EditKind::Word),
+                    (Some(_), _) => Some(EditKind::Boundary),
+                    (None, _) => kind,
+                };
+            }
+            egui::Event::Paste(_) | egui::Event::Cut => kind = Some(EditKind::Boundary),
+            egui::Event::Key {
+                key: Key::Backspace | Key::Delete,
+                pressed: true,
+                ..
+            } => kind = Some(EditKind::Delete),
+            egui::Event::Key {
+                key: Key::Enter | Key::Tab,
+                pressed: true,
+                ..
+            } => kind = Some(EditKind::Boundary),
+            _ => {}
+        }
+    }
+    kind
+}
+
+/// Starts a new undo step in the field `id` before this frame's input when the input starts one (#654): egui's own
+/// undo makes a step only once the text has been still for a second, so a run of typing went in one. A step starts at
+/// a word's end (a space, punctuation or a new line after a word; each new line), at a switch between typing and
+/// deleting, and at a paste. Tells Team Create's shared undo too ([`take_undo_step`]).
+fn mark_undo_step(ui: &Ui, id: Id, text: &str) {
+    let Some(kind) = ui.input(|input| edit_kind(&input.events)) else {
+        return;
+    };
+    if !ui.memory(|memory| memory.has_focus(id)) {
+        return;
+    }
+    let last = ui.ctx().data(|data| data.get_temp::<EditKind>(id.with("undo-kind")));
+    let new_line = ui.input(|input| input.key_pressed(Key::Enter));
+    let step = match kind {
+        EditKind::Word => last == Some(EditKind::Delete),
+        EditKind::Boundary => last != Some(EditKind::Boundary) || new_line,
+        EditKind::Delete => last != Some(EditKind::Delete),
+    };
+    ui.ctx().data_mut(|data| data.insert_temp(id.with("undo-kind"), kind));
+    if !step {
+        return;
+    }
+    if let Some(mut state) = TextEditState::load(ui.ctx(), id) {
+        undo_point(&mut state, text);
+        state.store(ui.ctx(), id);
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(id.with("undo-step"), true));
+}
+
+/// Makes `text`, with `state`'s cursor, an undo point of the field (if it is not the last one already).
+fn undo_point(state: &mut TextEditState, text: &str) {
+    let Some(range) = state.cursor.char_range() else {
+        return;
+    };
+    let mut undoer = state.undoer();
+    undoer.add_undo(&(range, text.to_owned()));
+    state.set_undoer(undoer);
+}
+
+/// Whether the field `id` started a new undo step since this was last asked (#654): Team Create's shared undo, which
+/// keeps steps of its own, starts one there too.
+pub fn take_undo_step(ctx: &egui::Context, id: Id) -> bool {
+    ctx.data_mut(|data| data.remove_temp::<bool>(id.with("undo-step")))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
