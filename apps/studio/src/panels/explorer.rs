@@ -409,6 +409,7 @@ impl Panel for Explorer {
         let mut rename = None;
         let mut open_script = None;
         let mut dropped = None;
+        let mut dropped_files = None;
         let pointer = ui.input(|input| input.pointer.interact_pos());
         let mut menu = None;
         let mut renamed = None;
@@ -474,6 +475,7 @@ impl Panel for Explorer {
                     RowAction::Renamed(name) => renamed = Some((row.id, Some(name))),
                     RowAction::KeepName => renamed = Some((row.id, None)),
                     RowAction::Insert => editor.explorer.open_insert(row.id),
+                    RowAction::DropFiles(paths) => dropped_files = Some((row.id, paths)),
                 }
             }
         });
@@ -542,6 +544,17 @@ impl Panel for Explorer {
         }
         if let Some(id) = open_script {
             cx.editor.open_script(id);
+        }
+        // A script for each script file dropped on a row (#677), inside it.
+        if let Some((parent, paths)) = dropped_files {
+            for path in paths {
+                if crate::panels::assets::ScriptType::of(&path).is_some()
+                    && let Err(error) = cx.editor.script_from_file(&path, parent)
+                {
+                    log::warn!("explorer: could not add a script for {path}: {error}");
+                }
+            }
+            cx.editor.explorer.set_expanded(parent, true);
         }
     }
 }
@@ -658,6 +671,15 @@ enum RowAction {
     Insert,
     /// A drag started on it (#353).
     Drag,
+    /// Files dropped on it from the Assets panel (#677).
+    DropFiles(Vec<String>),
+}
+
+/// Whether one of `paths` is a script file, which a drop on a row makes a script of (#677).
+fn has_script(paths: &[String]) -> bool {
+    paths
+        .iter()
+        .any(|path| crate::panels::assets::ScriptType::of(path).is_some())
 }
 
 /// One row on its stripe (#274): the caret, the class icon and the name (a text field while it is renamed, #351); a
@@ -808,7 +830,18 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look, keys: &MenuKeys) ->
                 }
             }
         });
-    if response.drag_started() && !renaming {
+    // Script files dragged from the Assets panel (#677): an outline while they are over the row, scripts inside it
+    // when they are let go.
+    let scripts_over = response
+        .dnd_hover_payload::<crate::panels::assets::AssetDrag>()
+        .is_some_and(|drag| has_script(&drag.paths));
+    if scripts_over {
+        drop_marker(ui, response.rect, Drop::Into(row.id));
+    }
+    let scripts_dropped = crate::panels::assets::dropped_on(&response).filter(|paths| has_script(paths));
+    if let Some(paths) = scripts_dropped {
+        RowAction::DropFiles(paths)
+    } else if response.drag_started() && !renaming {
         RowAction::Drag
     } else if insert {
         RowAction::Insert

@@ -71,7 +71,9 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `asset.image` | An image in the Assets panel. | Panels and Assets: content | [`assets/image.svg`](https://lucide.dev/icons/image) | `asset.image.svg`, `asset.image.png` |
 | `asset.audio` | A sound in the Assets panel. | Panels and Assets: content | [`assets/music.svg`](https://lucide.dev/icons/music) | `asset.audio.svg`, `asset.audio.png` |
 | `asset.scene` | A scene in the Assets panel. | Explorer and Assets: parts, models, folders, cameras | [`assets/list-tree.svg`](https://lucide.dev/icons/list-tree) | `asset.scene.svg`, `asset.scene.png` |
-| `asset.script` | A script in the Assets panel. | Explorer and Assets: server scripts and server storage | [`assets/scroll.svg`](https://lucide.dev/icons/scroll) | `asset.script.svg`, `asset.script.png` |
+| `asset.script` | A Script file in the Assets panel (`.server.luau`, #677). | Explorer and Assets: server scripts and server storage | [`assets/scroll.svg`](https://lucide.dev/icons/scroll) | `asset.script.svg`, `asset.script.png` |
+| `asset.local_script` | A LocalScript file in the Assets panel (`.client.luau`, #677). | Explorer: local scripts | [`assets/scroll.svg`](https://lucide.dev/icons/scroll) | `asset.local_script.svg`, `asset.local_script.png` |
+| `asset.module_script` | A ModuleScript file in the Assets panel (`.luau`, #677). | Explorer: module scripts | [`assets/scroll-text.svg`](https://lucide.dev/icons/scroll-text) | `asset.module_script.svg`, `asset.module_script.png` |
 | `asset.folder` | A folder in the Assets panel (#676). | Explorer and Assets: parts, models, folders, cameras | [`assets/folder.svg`](https://lucide.dev/icons/folder) | `asset.folder.svg`, `asset.folder.png` |
 | `asset.file` | Any other file in the Assets panel. | Explorer and Assets: other | [`assets/file.svg`](https://lucide.dev/icons/file) | `asset.file.svg`, `asset.file.png` |
 | `toolbar.play` | Play, and Resume while paused. | Running the game | [`toolbar/play.svg`](https://lucide.dev/icons/play) | `toolbar.play.svg`, `toolbar.play.png` |

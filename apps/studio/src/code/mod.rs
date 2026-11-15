@@ -34,6 +34,7 @@ use metallic_engine::metallic_core::{DataModel, Id, Value};
 use metallic_engine::metallic_project::Project;
 
 use crate::editor::EditorState;
+use crate::panels::assets::ScriptType;
 use crate::viewport::pick::is_a;
 
 /// An instance that is a script.
@@ -336,16 +337,14 @@ pub fn source(dm: &DataModel, script: Id) -> String {
 
 /// What a new file holds: a ModuleScript's table, else a greeting, as Roblox Studio starts them.
 fn starter(dm: &DataModel, script: Id) -> &'static str {
-    if is_a(dm, script, "ModuleScript") {
-        "local module = {}\n\nreturn module\n"
-    } else {
-        "print(\"Hello world!\")\n"
-    }
+    ScriptType::of_class(dm, script).starter()
 }
 
-/// A member for a new file of a script called `name`, in [`FOLDER`], that `taken` says is free: the name with
-/// anything but letters, digits, `_` and `-` as `_`, and a number after it if the name is taken.
-pub fn new_member(name: &str, taken: impl Fn(&str) -> bool) -> String {
+/// A member for a new file of a script called `name` of type `script`, in [`FOLDER`], that `taken` says is free: the
+/// name with anything but letters, digits, `_` and `-` as `_`, a number after it if the name is taken, and the type's
+/// extension (`Door.server.luau`, #677).
+pub fn new_member(name: &str, script: ScriptType, taken: impl Fn(&str) -> bool) -> String {
+    let extension = script.extension();
     let mut stem: String = name
         .trim()
         .chars()
@@ -360,12 +359,12 @@ pub fn new_member(name: &str, taken: impl Fn(&str) -> bool) -> String {
     if stem.is_empty() {
         stem = "Script".to_owned();
     }
-    let first = format!("{FOLDER}/{stem}{EXTENSION}");
+    let first = format!("{FOLDER}/{stem}{extension}");
     if !taken(&first) {
         return first;
     }
     (2..)
-        .map(|n| format!("{FOLDER}/{stem}{n}{EXTENSION}"))
+        .map(|n| format!("{FOLDER}/{stem}{n}{extension}"))
         .find(|member| !taken(member))
         .unwrap_or(first)
 }
@@ -455,7 +454,8 @@ impl EditorState {
             }
             let name = self.dm.name(id).unwrap_or_default().to_owned();
             let project = &self.project;
-            member = new_member(&name, |member| project.contains(member));
+            let script = crate::panels::assets::ScriptType::of_class(&self.dm, id);
+            member = new_member(&name, script, |member| project.contains(member));
             if let Err(error) = self
                 .scene()
                 .set_by_name(id, "Source", Value::String(member.clone().into()))
@@ -500,13 +500,23 @@ mod tests {
 
     #[test]
     fn a_new_file_is_named_after_its_script_and_free() {
-        assert_eq!(new_member("Door", |_| false), "Scripts/Door.luau");
-        assert_eq!(new_member("Open the door!", |_| false), "Scripts/Open_the_door_.luau");
-        assert_eq!(new_member("  ", |_| false), "Scripts/Script.luau");
-        let taken = ["Scripts/Door.luau", "Scripts/Door2.luau"];
+        let server = ScriptType::Server;
+        assert_eq!(new_member("Door", server, |_| false), "Scripts/Door.server.luau");
         assert_eq!(
-            new_member("Door", |member| taken.contains(&member)),
-            "Scripts/Door3.luau"
+            new_member("Open the door!", server, |_| false),
+            "Scripts/Open_the_door_.server.luau"
+        );
+        assert_eq!(new_member("  ", server, |_| false), "Scripts/Script.server.luau");
+        // Its type is in its name (#677).
+        assert_eq!(
+            new_member("Hud", ScriptType::Local, |_| false),
+            "Scripts/Hud.client.luau"
+        );
+        assert_eq!(new_member("Util", ScriptType::Module, |_| false), "Scripts/Util.luau");
+        let taken = ["Scripts/Door.server.luau", "Scripts/Door2.server.luau"];
+        assert_eq!(
+            new_member("Door", server, |member| taken.contains(&member)),
+            "Scripts/Door3.server.luau"
         );
     }
 }
