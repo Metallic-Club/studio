@@ -231,7 +231,9 @@ impl SceneLighting {
 
         let horizon = NIGHT_HORIZON.lerp(self.horizon_color.to_linear().max(Vec3::ZERO), day);
         let twilight = smoothstep(-0.2, 0.0, e) * (1.0 - smoothstep(0.0, 0.3, e));
-        // The discs show wherever they are, below the horizon too (#672); only their light on the scene sets.
+        // The discs show wherever they are, below the horizon too (#672); their light on the scene sets, and so does the
+        // sun's halo: from far below the horizon it lit the night sky.
+        let sun_up = smoothstep(-0.03, 0.02, e);
         ResolvedLighting {
             light_direction,
             light_color,
@@ -245,7 +247,7 @@ impl SceneLighting {
             sun_direction: sun,
             sun_cos_radius: SUN_RADIUS_DEG.to_radians().cos(),
             sun_disc: sun_radiance * SUN_DISC,
-            sun_halo: sun_radiance * SUN_HALO,
+            sun_halo: sun_radiance * SUN_HALO * sun_up,
             moon_disc: MOON_TINT * brightness * MOON_DISC,
             moon_cos_radius: MOON_RADIUS_DEG.to_radians().cos(),
             color_shift_bottom: shift_bottom,
