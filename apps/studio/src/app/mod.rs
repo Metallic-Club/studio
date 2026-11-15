@@ -2418,7 +2418,7 @@ mod tests {
     fn a_focused_text_field_keeps_its_keys_from_commands() {
         let mut harness = on_the_keybinds_page(settings_file("typing", None));
         // The settings' search box is then the only text field.
-        for panel in [panels::ids::EXPLORER, panels::ids::OUTPUT] {
+        for panel in [panels::ids::EXPLORER, panels::ids::OUTPUT, panels::ids::ASSETS] {
             harness.state_mut().studio.dock_mut().close(panel);
         }
         settle(&mut harness);
@@ -3285,8 +3285,9 @@ mod tests {
         harness.get_by_role_and_label(Role::Button, "Clear");
         harness.get_by_role_and_label(Role::Tab, "Assets").click();
         settle(&mut harness);
-        harness.get_by_role_and_label(Role::ListItem, "Scenes/Main.scene");
-        harness.get_by_label("1 asset");
+        // The browser (#676): the project's folders as tiles.
+        harness.get_by_role_and_label(Role::GridCell, "Scenes");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
         assert!(harness.query_by_role_and_label(Role::Button, "Clear").is_none());
         harness.get_by_role_and_label(Role::TreeItem, "Workspace");
 
@@ -7505,7 +7506,7 @@ mod tests {
         // A click on a tab opens it, and its close button closes it.
         harness.get_by_role_and_label(Role::Tab, "Assets").click();
         settle(&mut harness);
-        harness.get_by_label("1 asset");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
         click_label(&mut harness, "Close Assets");
         assert!(!harness.state().studio.dock().is_open(panels::ids::ASSETS));
     }
@@ -7545,7 +7546,7 @@ mod tests {
             "assets is in {:?}",
             tab_bar_of(&harness.state().studio, panels::ids::ASSETS)
         );
-        harness.get_by_label("1 asset");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
     }
 
     // Dock guides (#237).
@@ -8392,7 +8393,7 @@ mod tests {
             "assets is in {:?}",
             tab_bar_of(&harness.state().studio, panels::ids::ASSETS)
         );
-        harness.get_by_label("1 asset");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
 
         // Explorer on the bottom square of its own area is nothing to split: it is that area's only tab now.
         let before = harness.state().studio.dock().tree().clone();
