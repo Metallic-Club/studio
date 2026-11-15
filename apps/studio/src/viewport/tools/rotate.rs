@@ -179,7 +179,10 @@ pub(super) fn paint_measurement(painter: &Painter, view: &View, f: &Frame, drag:
         let out = Quat::from_axis_angle(dir, degrees.to_radians()) * zero;
         let long = gizmo::tick_length(degrees);
         if let Some(line) = view.segment(f.origin + out * radius, f.origin + out * (radius * (1.0 + long))) {
-            painter.line_segment(line, Stroke::new(1.5, colour(rgb, if long > 0.1 { 255 } else { 170 })));
+            // Thicker than they were (#671); the 45° and 90° marks thicker and brighter still.
+            let major = long > 0.15;
+            let width = if major { 3.0 } else { 2.25 };
+            painter.line_segment(line, Stroke::new(width, colour(rgb, if major { 255 } else { 200 })));
         }
     }
     // The angle turned, filled in: a fan of triangles, right over a whole turn and more.
