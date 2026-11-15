@@ -169,16 +169,18 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
     if let Some(paths) = dropped_on(&response).filter(|_| is_folder) {
         acts.push(Act::Move(paths, entry.path.clone()));
     }
+    let new_items = super::NEW_ITEMS.iter().map(|(label, _)| (*label, None, true));
     let menu: Vec<super::MenuLine<'_>> = if is_root {
-        vec![("New Folder", None, true)]
+        new_items.collect()
     } else if is_folder {
-        vec![
-            ("New Folder", None, true),
-            ("", None, true),
-            ("Rename", keys.rename.clone(), true),
-            ("Duplicate", keys.duplicate.clone(), true),
-            ("Delete", keys.delete.clone(), true),
-        ]
+        new_items
+            .chain([
+                ("", None, true),
+                ("Rename", keys.rename.clone(), true),
+                ("Duplicate", keys.duplicate.clone(), true),
+                ("Delete", keys.delete.clone(), true),
+            ])
+            .collect()
     } else {
         vec![
             ("Show in Folder", None, true),
@@ -189,8 +191,13 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         ]
     };
     let path = entry.path.clone();
-    match context_menu(&response, &menu).map(|i| menu[i].0) {
-        Some("New Folder") => acts.push(Act::NewFolder(path)),
+    let chosen = context_menu(&response, &menu).map(|i| menu[i].0);
+    match chosen {
+        Some(label) if super::new_item(label).is_some() => {
+            if let Some(new) = super::new_item(label) {
+                acts.push(Act::New(path, new));
+            }
+        }
         Some("Show in Folder") => acts.push(Act::Show(path)),
         Some("Rename") => {
             // Named on its tile, in its folder.

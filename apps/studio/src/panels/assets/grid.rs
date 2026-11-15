@@ -28,14 +28,17 @@ const ICON_AREA: f32 = 44.0;
 pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Vec<Act>) {
     let entries = super::shown_entries(editor);
     let area = ui.available_rect_before_wrap();
-    // The empty space: a click there clears the selection, a right-click offers a new folder.
+    // The empty space: a click there clears the selection, a right-click offers a new folder or file.
     let ground = ui.interact(area, Id::unique("metallic.assets.ground"), Sense::click());
     ground.widget_info(|| WidgetInfo::labeled(Role::Grid, true, "Assets"));
     let folder = editor.browser.open.clone();
     let searching = !editor.browser.query.trim().is_empty();
-    let ground_menu: Vec<super::MenuLine<'_>> = vec![("New Folder", None, !searching)];
-    if context_menu(&ground, &ground_menu).is_some() {
-        acts.push(Act::NewFolder(folder.clone()));
+    let ground_menu: Vec<super::MenuLine<'_>> = super::NEW_ITEMS
+        .iter()
+        .map(|(label, _)| (*label, None, !searching))
+        .collect();
+    if let Some(new) = context_menu(&ground, &ground_menu).and_then(|i| super::new_item(ground_menu[i].0)) {
+        acts.push(Act::New(folder.clone(), new));
     }
     if ground.clicked() && !editor.browser.selected.is_empty() {
         acts.push(Act::Click {
@@ -55,7 +58,7 @@ pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Ve
         let line = if searching {
             format!("Nothing is called \u{201C}{}\u{201D}.", editor.browser.query.trim())
         } else {
-            "This folder is empty. Right-click to add a folder.".to_owned()
+            "This folder is empty. Right-click to add a folder or a script.".to_owned()
         };
         crate::panels::empty_note(ui, &line);
         ground_drop(acts);

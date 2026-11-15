@@ -325,3 +325,101 @@ fn screenshot_of_the_assets_browser() {
     }
     write_png(&out.join("676-assets-browser.png"), offscreen.read());
 }
+
+/// #677: a script file's type is in its name; the browser makes each type, and opening one opens the tab of the script
+/// that runs it, making one where its type runs when none does yet.
+#[test]
+fn script_files_of_each_type_are_made_opened_and_dragged_into_the_explorer() {
+    let mut harness = browsing("assets-scripts");
+    harness.get_by_role_and_label(Role::TreeItem, "Scripts").click();
+    settle(&mut harness);
+    for (item, file) in [
+        ("New Script", "Scripts/Script.server.luau"),
+        ("New LocalScript", "Scripts/LocalScript.client.luau"),
+        ("New ModuleScript", "Scripts/ModuleScript.luau"),
+    ] {
+        harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::MenuItem, item).click();
+        settle(&mut harness);
+        // Named in place at once; Escape keeps the name it was given.
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        assert!(editor(&mut harness).project.contains(file), "{file}");
+    }
+    let module = editor(&mut harness)
+        .project
+        .read_text("Scripts/ModuleScript.luau")
+        .unwrap();
+    assert_eq!(module, "local module = {}\n\nreturn module\n");
+
+    // Door.server.luau runs nowhere yet: opening it adds a Script for it to ServerScriptService, and opens its tab.
+    double_click_tile(&mut harness, "Door");
+    harness.get_by_role_and_label(Role::Tab, "Door");
+    let editor_state = editor(&mut harness);
+    let service = editor_state
+        .dm
+        .service(editor_state.dm.registry().class_id("ServerScriptService").unwrap())
+        .unwrap();
+    let door = editor_state
+        .dm
+        .find_first_child(service, "Door", false)
+        .unwrap()
+        .expect("a Script for it");
+    assert_eq!(editor_state.dm.class_name(door).unwrap(), "Script");
+    assert_eq!(crate::code::source(&editor_state.dm, door), "Scripts/Door.server.luau");
+    // Opened again, it is the same script.
+    double_click_tile(&mut harness, "Door");
+    let editor_state = editor(&mut harness);
+    let doors = editor_state
+        .dm
+        .children(service)
+        .unwrap()
+        .filter(|&id| editor_state.dm.name(id).unwrap() == "Door")
+        .count();
+    assert_eq!(doors, 1);
+
+    // Renaming keeps its type, and its script follows.
+    harness.get_by_role_and_label(Role::GridCell, "Door").click();
+    settle(&mut harness);
+    editor(&mut harness).browser.renaming = Some("Scripts/Door.server.luau".into());
+    settle(&mut harness);
+    harness
+        .get_by_role_and_label(Role::TextInput, "Name of Door")
+        .type_text("Gate");
+    harness.key_press(Key::Enter);
+    settle(&mut harness);
+    let editor_state = editor(&mut harness);
+    assert!(editor_state.project.contains("Scripts/Gate.server.luau"));
+    assert_eq!(crate::code::source(&editor_state.dm, door), "Scripts/Gate.server.luau");
+
+    // A LocalScript file dragged onto the Workspace's row is a LocalScript there.
+    let from = harness
+        .get_by_role_and_label(Role::GridCell, "LocalScript")
+        .rect()
+        .center();
+    let to = harness
+        .get_by_role_and_label(Role::TreeItem, "Workspace")
+        .rect()
+        .center();
+    drag(&mut harness, from, to);
+    let editor_state = editor(&mut harness);
+    let workspace = editor_state
+        .dm
+        .service(editor_state.dm.registry().class_id("Workspace").unwrap())
+        .unwrap();
+    let local = editor_state
+        .dm
+        .find_first_child(workspace, "LocalScript", false)
+        .unwrap()
+        .expect("a LocalScript in the Workspace");
+    assert_eq!(editor_state.dm.class_name(local).unwrap(), "LocalScript");
+    assert_eq!(
+        crate::code::source(&editor_state.dm, local),
+        "Scripts/LocalScript.client.luau"
+    );
+    // One undo step takes it out again.
+    harness.state_mut().studio.menu_action(MenuAction::Undo);
+    settle(&mut harness);
+    assert!(!crate::code::in_game(&editor(&mut harness).dm, local));
+}

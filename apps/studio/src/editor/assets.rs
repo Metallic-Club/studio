@@ -14,7 +14,7 @@ use metallic_engine::metallic_project::{MemberMove, PATH_PROPERTIES, Project};
 
 use super::EditorState;
 use super::open::asset_rows;
-use crate::panels::assets::AssetKind;
+use crate::panels::assets::{AssetKind, ScriptType};
 
 /// The name a new folder gets, made unique with a number.
 pub const NEW_FOLDER: &str = "New Folder";
@@ -360,6 +360,83 @@ impl EditorState {
         self.project.create_folder(&path).map_err(|error| error.to_string())?;
         self.browser.reveal(parent);
         Ok(path)
+    }
+
+    /// Makes a new script file of type `script` in `parent` (#677), named after its class and made unique, holding
+    /// the type's starter code. Returns its path.
+    pub fn new_script_file(&mut self, parent: &str, script: ScriptType) -> Result<String, String> {
+        let name = unique_name(
+            &self.project,
+            parent,
+            &format!("{}{}", script.class(), script.extension()),
+        );
+        let path = join(parent, &name);
+        self.project
+            .create_member(&path, script.starter())
+            .map_err(|error| error.to_string())?;
+        self.browser.reveal(parent);
+        self.assets = asset_rows(&self.project);
+        Ok(path)
+    }
+
+    /// Opens the script file `path` in the script editor (#677): in the tab of the editor's script that runs it. A
+    /// file no script runs yet gets one, of its type, where that type runs ([`ScriptType::home`]), as an edit of the
+    /// scene that undo takes back.
+    pub fn open_script_file(&mut self, path: &str) -> Result<(), String> {
+        let Some(script) = ScriptType::of(path) else {
+            return Err(format!("{} is not a script.", file_name(path)));
+        };
+        let running = crate::code::script_files(&self.dm)
+            .into_iter()
+            .find(|(_, member)| member == path)
+            .map(|(id, _)| id);
+        let id = match running {
+            Some(id) => id,
+            None => {
+                if self.is_playing() {
+                    return Err("Stop the game to open a script no object runs yet.".into());
+                }
+                let home = self
+                    .dm
+                    .registry()
+                    .class_id(script.home())
+                    .and_then(|class| self.dm.service(class));
+                let Some(home) = home else {
+                    return Err(format!("There is no {} to put its script in.", script.home()));
+                };
+                let id = self.script_from_file(path, home)?;
+                log::info!(
+                    "assets: {} had no script in the scene, so a {} for it was added to {}",
+                    file_name(path),
+                    script.class(),
+                    script.home()
+                );
+                id
+            }
+        };
+        self.open_script(id);
+        Ok(())
+    }
+
+    /// Adds a script of the file `path`'s type inside `parent`, named after the file, its `Source` the file, as an
+    /// edit of the scene (#677: a script file dragged into the Explorer). Returns the new script.
+    pub fn script_from_file(&mut self, path: &str, parent: Id) -> Result<Id, String> {
+        let Some(script) = ScriptType::of(path) else {
+            return Err(format!("{} is not a script.", file_name(path)));
+        };
+        let class = self
+            .dm
+            .registry()
+            .class_id(script.class())
+            .ok_or_else(|| format!("There is no {} class.", script.class()))?;
+        let name = split_name(file_name(path)).0.to_owned();
+        let mut scene = self.scene();
+        let id = scene.insert(class, parent, None).map_err(|error| error.to_string())?;
+        scene.rename(id, &name).map_err(|error| error.to_string())?;
+        scene
+            .set_by_name(id, "Source", Value::String(path.into()))
+            .map_err(|error| error.to_string())?;
+        Ok(id)
     }
 
     /// Renames the file or folder at `path` to `name`, keeping a file's extension (its type) when `name` has none
