@@ -31,6 +31,8 @@ pub struct ViewportRenderer {
     game: Option<u64>,
     /// The Rendering settings last applied.
     graphics: Option<GraphicsSettings>,
+    /// The material editor's preview (#680).
+    preview: super::material_preview::MaterialPreview,
 }
 
 impl ViewportRenderer {
@@ -49,6 +51,20 @@ impl ViewportRenderer {
     /// sizes the target to the panel, draws from the editor camera, and (re)registers the texture with `painter`.
     /// Returns whether another frame is wanted soon even without input: a resize or assets still on their way.
     pub fn frame(&mut self, context: &RenderContext, painter: &mut egui_wgpu::Renderer, studio: &mut Studio) -> bool {
+        // Materials edited in the material editor (#680): every part using one is drawn with it again, and the
+        // preview shows it, whether or not the viewport is shown.
+        if let Some(editor) = studio.editor_mut() {
+            let changed = editor.materials.take_changed();
+            if !changed.is_empty()
+                && let Some(assets) = self.scene.assets_mut()
+            {
+                assets.read_from(editor.project.asset_reader());
+                for material in &changed {
+                    assets.reload_material(&material.to_string());
+                }
+            }
+            self.preview.frame(context, painter, editor, &changed);
+        }
         let shown = studio.editor().is_some_and(|editor| editor.viewport.shown);
         if !shown {
             return false;

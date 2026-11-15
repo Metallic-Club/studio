@@ -540,6 +540,7 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
                 Ok(())
             }
             browser::EntryKind::File(AssetKind::Script(_)) => editor.open_script_file(&entry.path),
+            browser::EntryKind::File(AssetKind::Material) => editor.open_material(&entry.path),
             _ => Ok(()),
         },
         Act::Click { path, .. } if path.is_empty() => {
@@ -550,6 +551,14 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
         Act::Click { path, add, range } => {
             let shown = shown_entries(editor);
             editor.browser.click(&shown, &path, add, range);
+            // A plain click on a material gives it to the selected parts (#680); with none selected, nothing changes.
+            if !add
+                && !range
+                && AssetKind::of(&path) == AssetKind::Material
+                && let Some(id) = editor.project.assets().id(&path)
+            {
+                editor.apply_material(id);
+            }
             Ok(())
         }
         Act::Toggle(folder) => {
