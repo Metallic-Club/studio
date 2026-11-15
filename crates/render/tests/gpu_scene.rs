@@ -134,7 +134,8 @@ fn created_changed_and_destroyed_parts_reach_the_buffer() {
             ),
             color: u32::from_le_bytes([255, 128, 0, 0]),
             transparency: 1.0,
-            mesh_material: (u32::from(MeshKind::BALL.0) << 16) | 5,
+            // Neon is the first material key the scene met: row 1 (#678).
+            mesh_material: (u32::from(MeshKind::BALL.0) << 16) | 1,
             flags: GpuInstance::LIVE | GpuInstance::CAST_SHADOW | GpuInstance::HIDDEN,
         }
     );

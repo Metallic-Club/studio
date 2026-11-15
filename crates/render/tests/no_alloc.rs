@@ -2464,7 +2464,8 @@ impl HandParts {
         let sorted = buffer(instances * 64, storage);
         let pulled_vertices = buffer(32 * 4096, storage);
         let frame = buffer(FRAME_UNIFORM_SIZE, wgpu::BufferUsages::UNIFORM);
-        let materials = buffer(8192, wgpu::BufferUsages::UNIFORM);
+        // The material table (#678): 16 KiB, at least as large as the renderer's.
+        let materials = buffer(16 * 1024, wgpu::BufferUsages::UNIFORM);
         // Position, normal and texture coordinates (#189), as `MeshVertex` lays them out.
         let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 9 => Float32x2];
         let mesh_buffers = [Some(wgpu::VertexBufferLayout {
