@@ -10,7 +10,6 @@
 @group(1) @binding(2) var material_color: texture_2d_array<f32>;
 @group(1) @binding(3) var material_data: texture_2d_array<f32>;
 @group(1) @binding(4) var material_linear: sampler;
-@group(1) @binding(5) var material_nearest: sampler;
 
 @vertex
 fn vs_main(

@@ -105,23 +105,23 @@ pub fn material_textures(
     // Each of occlusion, roughness and metallic: a fitted picture and the channel it is in.
     let side = MATERIAL_TEXTURE_SIZE as usize;
     let mut sources: [Option<(MaterialImage, usize)>; 3] = [None, None, None];
-    if let Some(packed) = material.packed {
-        if let Some(image) = load(Some(packed.texture), warnings).as_ref().and_then(fit) {
-            let channel = |c: Option<Channel>| {
-                c.map(|c| match c {
-                    Channel::R => 0,
-                    Channel::G => 1,
-                    Channel::B => 2,
-                    Channel::A => 3,
-                })
-            };
-            for (slot, c) in sources
-                .iter_mut()
-                .zip([packed.occlusion, packed.roughness, packed.metallic])
-            {
-                if let Some(c) = channel(c) {
-                    *slot = Some((image.clone(), c));
-                }
+    if let Some(packed) = material.packed
+        && let Some(image) = load(Some(packed.texture), warnings).as_ref().and_then(fit)
+    {
+        let channel = |c: Option<Channel>| {
+            c.map(|c| match c {
+                Channel::R => 0,
+                Channel::G => 1,
+                Channel::B => 2,
+                Channel::A => 3,
+            })
+        };
+        for (slot, c) in sources
+            .iter_mut()
+            .zip([packed.occlusion, packed.roughness, packed.metallic])
+        {
+            if let Some(c) = channel(c) {
+                *slot = Some((image.clone(), c));
             }
         }
     }
@@ -139,7 +139,7 @@ pub fn material_textures(
             if let Some((image, channel)) = source
                 && let Some(base) = image.mips.first()
             {
-                for (texel, from) in packed.chunks_exact_mut(4).zip(base.chunks_exact(4)) {
+                for (texel, from) in packed.as_chunks_mut::<4>().0.iter_mut().zip(base.as_chunks::<4>().0) {
                     texel[out] = from[*channel];
                 }
             }

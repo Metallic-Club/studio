@@ -42,7 +42,7 @@ fn textures() -> MaterialTextureSet {
     let side = MATERIAL_TEXTURE_SIZE;
     let square = side / 8;
     let color = picture(|x, y| {
-        if (x / square + y / square) % 2 == 0 {
+        if (x / square + y / square).is_multiple_of(2) {
             [200, 40, 30, 255]
         } else {
             [240, 230, 210, 255]

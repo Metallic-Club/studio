@@ -182,16 +182,23 @@ fn wrapped(uv: vec2<f32>, flags: u32) -> vec2<f32> {
     return uv;
 }
 
+// Nearest filtering with the one (smooth) sampler: OpenGL ties a texture to one sampler, so pixel art is the largest
+// level sampled at the centre of the texel `uv` falls in.
+fn texel_centre(uv: vec2<f32>) -> vec2<f32> {
+    let side = f32(textureDimensions(material_color).x);
+    return (floor(uv * side) + 0.5) / side;
+}
+
 fn sample_color(layer: u32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, nearest: bool) -> vec4<f32> {
     if nearest {
-        return textureSampleGrad(material_color, material_nearest, uv, layer, dx, dy);
+        return textureSampleLevel(material_color, material_linear, texel_centre(uv), layer, 0.0);
     }
     return textureSampleGrad(material_color, material_linear, uv, layer, dx, dy);
 }
 
 fn sample_data(layer: u32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, nearest: bool) -> vec4<f32> {
     if nearest {
-        return textureSampleGrad(material_data, material_nearest, uv, layer, dx, dy);
+        return textureSampleLevel(material_data, material_linear, texel_centre(uv), layer, 0.0);
     }
     return textureSampleGrad(material_data, material_linear, uv, layer, dx, dy);
 }

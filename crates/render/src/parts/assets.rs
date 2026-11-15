@@ -94,11 +94,10 @@ impl AssetTextures {
                         count: None,
                     },
                     sampler_entry(1),
-                    // The materials' colour and data arrays and their samplers (#679).
+                    // The materials' colour and data arrays and their sampler (#679).
                     array(2),
                     array(3),
                     sampler_entry(4),
-                    sampler_entry(5),
                 ],
             })
         });
@@ -291,7 +290,7 @@ fn group(
     sampler: &wgpu::Sampler,
     materials: &MaterialTextures,
 ) -> wgpu::BindGroup {
-    let (color, data, linear, nearest) = materials.bindings();
+    let (color, data, linear) = materials.bindings();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic parts texture"),
         layout,
@@ -315,10 +314,6 @@ fn group(
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: wgpu::BindingResource::Sampler(linear),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: wgpu::BindingResource::Sampler(nearest),
             },
         ],
     })
