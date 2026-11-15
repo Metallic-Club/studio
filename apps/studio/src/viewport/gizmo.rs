@@ -272,12 +272,13 @@ pub fn unwrap_angle(total: f32, previous_raw: f32, raw: f32) -> f32 {
 
 /// How long a ring's mark is, as a share of its radius: longest at the quarter turns, then the eighths.
 pub fn tick_length(degrees: f32) -> f32 {
+    // Half again as long as they were (#671): the shortest were hard to see.
     if degrees % 90.0 == 0.0 {
-        0.17
+        0.26
     } else if degrees % 45.0 == 0.0 {
-        0.115
+        0.18
     } else {
-        0.07
+        0.11
     }
 }
 
@@ -504,6 +505,8 @@ mod tests {
         );
         assert!(tick_marks(1.0, 20.0).len() < 360, "a small ring is never a solid band");
         assert!(tick_length(90.0) > tick_length(45.0) && tick_length(45.0) > tick_length(15.0));
+        // Long enough to see (#671): the shortest a tenth of the ring's radius, a quarter turn's a quarter.
+        assert!(tick_length(15.0) >= 0.1 && tick_length(90.0) >= 0.25);
     }
 
     #[test]
