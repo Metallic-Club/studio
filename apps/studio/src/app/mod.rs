@@ -2418,7 +2418,7 @@ mod tests {
     fn a_focused_text_field_keeps_its_keys_from_commands() {
         let mut harness = on_the_keybinds_page(settings_file("typing", None));
         // The settings' search box is then the only text field.
-        for panel in [panels::ids::EXPLORER, panels::ids::OUTPUT] {
+        for panel in [panels::ids::EXPLORER, panels::ids::OUTPUT, panels::ids::ASSETS] {
             harness.state_mut().studio.dock_mut().close(panel);
         }
         settle(&mut harness);
@@ -3285,8 +3285,9 @@ mod tests {
         harness.get_by_role_and_label(Role::Button, "Clear");
         harness.get_by_role_and_label(Role::Tab, "Assets").click();
         settle(&mut harness);
-        harness.get_by_role_and_label(Role::ListItem, "Scenes/Main.scene");
-        harness.get_by_label("1 asset");
+        // The browser (#676): the project's folders as tiles.
+        harness.get_by_role_and_label(Role::GridCell, "Scenes");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
         assert!(harness.query_by_role_and_label(Role::Button, "Clear").is_none());
         harness.get_by_role_and_label(Role::TreeItem, "Workspace");
 
@@ -5114,9 +5115,9 @@ mod tests {
         );
         {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
-            assert_eq!(crate::code::source(&editor.dm, script), "Scripts/Door.luau");
+            assert_eq!(crate::code::source(&editor.dm, script), "Scripts/Door.server.luau");
             assert_eq!(
-                editor.project.read_text("Scripts/Door.luau").unwrap(),
+                editor.project.read_text("Scripts/Door.server.luau").unwrap(),
                 "print(\"Hello world!\")\n"
             );
         }
@@ -5131,7 +5132,7 @@ mod tests {
                 .editor_mut()
                 .unwrap()
                 .project
-                .read_text("Scripts/Door.luau")
+                .read_text("Scripts/Door.server.luau")
                 .unwrap(),
             "print(1)"
         );
@@ -5217,7 +5218,7 @@ mod tests {
         two_clicks(&mut harness, "Ends", 0.05);
         let text = |harness: &mut Harness<'static, Test>| {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
-            editor.project.read_text("Scripts/Ends.luau").unwrap()
+            editor.project.read_text("Scripts/Ends.server.luau").unwrap()
         };
         harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
         harness.event(egui::Event::Text("function open(door)".to_owned()));
@@ -5272,7 +5273,7 @@ mod tests {
             .editor_mut()
             .unwrap()
             .project
-            .read_text("Scripts/Follow.luau")
+            .read_text("Scripts/Follow.server.luau")
             .unwrap();
         assert_eq!(text.chars().take(cursor).filter(|c| *c == '\n').count(), lines - 1);
         // The field is as tall as the code; scrolled, its top is above the view.
@@ -5297,7 +5298,7 @@ mod tests {
     ) -> metallic_engine::metallic_core::Id {
         let script = add_bare_script(harness, name);
         let editor = harness.state_mut().studio.editor_mut().unwrap();
-        let member = format!("Scripts/{name}.luau");
+        let member = format!("Scripts/{name}.server.luau");
         editor
             .dm
             .set_by_name(script, "Source", Value::String(member.clone().into()))
@@ -5328,15 +5329,15 @@ mod tests {
         assert!(panel.left() < 400.0, "{panel:?}");
         harness.event(egui::Event::Text("light".to_owned()));
         settle(&mut harness);
-        harness.get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau");
-        harness.get_by_role_and_label(Role::TreeItem, "Scripts/Beta.luau");
+        harness.get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.server.luau");
+        harness.get_by_role_and_label(Role::TreeItem, "Scripts/Beta.server.luau");
         let line =
             |harness: &Harness<'static, Test>, label: &str| harness.get_by_role_and_label(Role::Button, label).rect();
-        line(&harness, "Scripts/Alpha.luau line 1 column 7: local light = 1");
-        line(&harness, "Scripts/Alpha.luau line 2 column 7: print(light)");
-        line(&harness, "Scripts/Beta.luau line 1 column 1: light = light + 1");
+        line(&harness, "Scripts/Alpha.server.luau line 1 column 7: local light = 1");
+        line(&harness, "Scripts/Alpha.server.luau line 2 column 7: print(light)");
+        line(&harness, "Scripts/Beta.server.luau line 1 column 1: light = light + 1");
         // A click opens the script with the match selected.
-        let second = line(&harness, "Scripts/Beta.luau line 1 column 9: light = light + 1");
+        let second = line(&harness, "Scripts/Beta.server.luau line 1 column 9: light = light + 1");
         left_click(&mut harness, second);
         settle(&mut harness);
         let field = crate::panels::script::field_id(beta);
@@ -5344,16 +5345,19 @@ mod tests {
         assert_eq!(crate::code::view::selection(&harness.ctx, field), Some(8..13));
         // Folded, a file's lines go.
         harness
-            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau")
+            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.server.luau")
             .click();
         settle(&mut harness);
         assert!(
             harness
-                .query_by_role_and_label(Role::Button, "Scripts/Alpha.luau line 1 column 7: local light = 1")
+                .query_by_role_and_label(
+                    Role::Button,
+                    "Scripts/Alpha.server.luau line 1 column 7: local light = 1"
+                )
                 .is_none()
         );
         harness
-            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau")
+            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.server.luau")
             .click();
         settle(&mut harness);
         // Replace all, from Ctrl+Shift+H's field.
@@ -5369,15 +5373,18 @@ mod tests {
             .get_by_role_and_label(Role::Button, "Replace all in scripts")
             .click();
         settle(&mut harness);
-        assert_eq!(text(&mut harness, "Scripts/Alpha.luau"), "local lamp = 1\nprint(lamp)");
-        assert_eq!(text(&mut harness, "Scripts/Beta.luau"), "lamp = lamp + 1");
+        assert_eq!(
+            text(&mut harness, "Scripts/Alpha.server.luau"),
+            "local lamp = 1\nprint(lamp)"
+        );
+        assert_eq!(text(&mut harness, "Scripts/Beta.server.luau"), "lamp = lamp + 1");
         let saved = harness
             .state_mut()
             .studio
             .editor_mut()
             .unwrap()
             .project
-            .read_text("Scripts/Beta.luau")
+            .read_text("Scripts/Beta.server.luau")
             .unwrap();
         assert_eq!(saved, "lamp = lamp + 1");
         // One match, from the button over its line.
@@ -5390,25 +5397,25 @@ mod tests {
         harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
         harness.event(egui::Event::Text("x".to_owned()));
         settle(&mut harness);
-        let row = line(&harness, "Scripts/Beta.luau line 1 column 1: lamp = lamp + 1");
+        let row = line(&harness, "Scripts/Beta.server.luau line 1 column 1: lamp = lamp + 1");
         harness.hover_at(row.center());
         settle(&mut harness);
         harness
-            .get_by_role_and_label(Role::Button, "Replace line 1 column 1 of Scripts/Beta.luau")
+            .get_by_role_and_label(Role::Button, "Replace line 1 column 1 of Scripts/Beta.server.luau")
             .click();
         settle(&mut harness);
-        assert_eq!(text(&mut harness, "Scripts/Beta.luau"), "x = lamp + 1");
+        assert_eq!(text(&mut harness, "Scripts/Beta.server.luau"), "x = lamp + 1");
         // A file's, from the button over its row.
         let row = harness
-            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.luau")
+            .get_by_role_and_label(Role::TreeItem, "Scripts/Alpha.server.luau")
             .rect();
         harness.hover_at(row.center());
         settle(&mut harness);
         harness
-            .get_by_role_and_label(Role::Button, "Replace in Scripts/Alpha.luau")
+            .get_by_role_and_label(Role::Button, "Replace in Scripts/Alpha.server.luau")
             .click();
         settle(&mut harness);
-        assert_eq!(text(&mut harness, "Scripts/Alpha.luau"), "local x = 1\nprint(x)");
+        assert_eq!(text(&mut harness, "Scripts/Alpha.server.luau"), "local x = 1\nprint(x)");
     }
 
     /// Opens a new script called `name` holding `code`, its field having the keyboard; returns it and its field's id.
@@ -5488,7 +5495,7 @@ mod tests {
         let (_, field) = open_with_code(&mut harness, "Cursors", code);
         let text = |harness: &mut Harness<'static, Test>| {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
-            editor.project.read_text("Scripts/Cursors.luau").unwrap()
+            editor.project.read_text("Scripts/Cursors.server.luau").unwrap()
         };
         let at = char_pos(&harness, field, code, 0);
         click_with(&mut harness, at, Modifiers::NONE);
@@ -5549,7 +5556,7 @@ mod tests {
         let (_, field) = open_with_code(&mut harness, "Column", code);
         let text = |harness: &mut Harness<'static, Test>| {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
-            editor.project.read_text("Scripts/Column.luau").unwrap()
+            editor.project.read_text("Scripts/Column.server.luau").unwrap()
         };
         let at = char_pos(&harness, field, code, 1);
         click_with(&mut harness, at, Modifiers::NONE);
@@ -5647,7 +5654,7 @@ mod tests {
         let (_, field) = open_with_code(&mut harness, "Drag", code);
         let text = |harness: &mut Harness<'static, Test>| {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
-            editor.project.read_text("Scripts/Drag.luau").unwrap()
+            editor.project.read_text("Scripts/Drag.server.luau").unwrap()
         };
         // `local ` dragged to the start of the second line.
         crate::code::view::select(&harness.ctx, field, 0..6);
@@ -5684,9 +5691,10 @@ mod tests {
         let code: Vec<String> = (0..400).map(|n| format!("local value{n} = {n}")).collect();
         let (script, _) = open_with_code(&mut harness, "Warned", &code.join("\n"));
         let editor = harness.state_mut().studio.editor_mut().unwrap();
-        let (_, diagnostics) = editor
-            .scripts
-            .check(&mut editor.project, &editor.dm, script, "Scripts/Warned.luau");
+        let (_, diagnostics) =
+            editor
+                .scripts
+                .check(&mut editor.project, &editor.dm, script, "Scripts/Warned.server.luau");
         assert!(diagnostics.len() >= 400, "{} problems", diagnostics.len());
         let start = std::time::Instant::now();
         for _ in 0..10 {
@@ -5762,7 +5770,7 @@ mod tests {
         let field = crate::panels::script::field_id(script);
         let text = |harness: &mut Harness<'static, Test>| {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
-            editor.project.read_text("Scripts/Finder.luau").unwrap()
+            editor.project.read_text("Scripts/Finder.server.luau").unwrap()
         };
         // The selection is what is looked for.
         crate::code::view::select(&harness.ctx, field, 6..10);
@@ -5858,7 +5866,7 @@ mod tests {
                 .editor_mut()
                 .unwrap()
                 .project
-                .read_text("Scripts/Keys.luau")
+                .read_text("Scripts/Keys.server.luau")
                 .unwrap()
         };
         harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -5944,7 +5952,7 @@ mod tests {
             let crate::editor::EditorState {
                 scripts, project, dm, ..
             } = editor;
-            scripts.check(project, dm, script, "Scripts/Marks.luau").1
+            scripts.check(project, dm, script, "Scripts/Marks.server.luau").1
         };
         let found: Vec<(crate::code::analysis::Severity, &str)> = diagnostics
             .iter()
@@ -5988,7 +5996,7 @@ mod tests {
                 .editor_mut()
                 .unwrap()
                 .project
-                .read_text("Scripts/Pairs.luau")
+                .read_text("Scripts/Pairs.server.luau")
                 .unwrap()
         };
         let type_each = |harness: &mut Harness<'static, Test>, typed: &str| {
@@ -6033,7 +6041,7 @@ mod tests {
                 .editor_mut()
                 .unwrap()
                 .project
-                .read_text("Scripts/Steps.luau")
+                .read_text("Scripts/Steps.server.luau")
                 .unwrap()
         };
         // A key a frame, fast, as typing is: egui's own undo would make one step of it all.
@@ -6077,7 +6085,7 @@ mod tests {
                 .editor_mut()
                 .unwrap()
                 .project
-                .read_text("Scripts/Complete.luau")
+                .read_text("Scripts/Complete.server.luau")
                 .unwrap()
         };
         harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -6159,7 +6167,7 @@ mod tests {
             .editor_mut()
             .unwrap()
             .project
-            .read_text("Scripts/Eat.luau")
+            .read_text("Scripts/Eat.server.luau")
             .unwrap();
         assert_eq!(
             text,
@@ -6174,7 +6182,7 @@ mod tests {
             .editor_mut()
             .unwrap()
             .project
-            .read_text("Scripts/Eat.luau")
+            .read_text("Scripts/Eat.server.luau")
             .unwrap();
         assert!(text.ends_with("\n\ncheese.x"), "{text}");
     }
@@ -6195,7 +6203,7 @@ mod tests {
         settle(&mut harness);
         let text = |harness: &mut Harness<'static, Test>| {
             let editor = harness.state_mut().studio.editor_mut().unwrap();
-            editor.project.read_text("Scripts/Paint.luau").unwrap()
+            editor.project.read_text("Scripts/Paint.server.luau").unwrap()
         };
         // Before `Color3`, in the room the code leaves for it.
         let settings = harness.state().studio.settings().code.clone();
@@ -6892,13 +6900,13 @@ mod tests {
             let registry = dm.registry().clone();
             let service = dm.service(registry.class_id("ServerScriptService").unwrap()).unwrap();
             let script = dm.create(registry.class_id("Script").unwrap()).unwrap();
-            dm.set_by_name(script, "Source", Value::String("Scripts/Keys.luau".into()))
+            dm.set_by_name(script, "Source", Value::String("Scripts/Keys.server.luau".into()))
                 .unwrap();
             dm.set_parent(script, Some(service)).unwrap();
             editor
                 .project
                 .write(
-                    "Scripts/Keys.luau",
+                    "Scripts/Keys.server.luau",
                     "game:GetService('UserInputService').InputBegan:Connect(function(input)\n\
                          print('began ' .. input.KeyCode.Name)\n\
                      end)\n",
@@ -7505,7 +7513,7 @@ mod tests {
         // A click on a tab opens it, and its close button closes it.
         harness.get_by_role_and_label(Role::Tab, "Assets").click();
         settle(&mut harness);
-        harness.get_by_label("1 asset");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
         click_label(&mut harness, "Close Assets");
         assert!(!harness.state().studio.dock().is_open(panels::ids::ASSETS));
     }
@@ -7545,7 +7553,7 @@ mod tests {
             "assets is in {:?}",
             tab_bar_of(&harness.state().studio, panels::ids::ASSETS)
         );
-        harness.get_by_label("1 asset");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
     }
 
     // Dock guides (#237).
@@ -8392,7 +8400,7 @@ mod tests {
             "assets is in {:?}",
             tab_bar_of(&harness.state().studio, panels::ids::ASSETS)
         );
-        harness.get_by_label("1 asset");
+        harness.get_by_role_and_label(Role::Grid, "Assets");
 
         // Explorer on the bottom square of its own area is nothing to split: it is that area's only tab now.
         let before = harness.state().studio.dock().tree().clone();

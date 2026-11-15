@@ -42,22 +42,101 @@ pub enum AssetKind {
     Audio,
     /// A scene file.
     Scene,
-    /// A Luau script.
-    Script,
+    /// A script file (#677), of the type its name gives.
+    Script(ScriptType),
     /// Anything else.
     Other,
+}
+
+/// A script file's type, from its name (#677, ADR 0012): `Door.server.luau` is a Script, `Door.client.luau` a
+/// LocalScript and `Door.luau` a ModuleScript, as Rojo names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptType {
+    /// A Script, which runs on the server.
+    Server,
+    /// A LocalScript, which runs on a player's machine.
+    Local,
+    /// A ModuleScript, which other scripts `require`.
+    Module,
+}
+
+impl ScriptType {
+    /// Every type, in the order the menus offer them.
+    pub const ALL: [ScriptType; 3] = [ScriptType::Server, ScriptType::Local, ScriptType::Module];
+
+    /// The type of the script file `path`, or `None` for a file that is not Luau.
+    pub fn of(path: &str) -> Option<Self> {
+        let lower = path.to_ascii_lowercase();
+        let stem = lower.strip_suffix(".luau").or_else(|| lower.strip_suffix(".lua"))?;
+        Some(if stem.ends_with(".server") {
+            ScriptType::Server
+        } else if stem.ends_with(".client") {
+            ScriptType::Local
+        } else {
+            ScriptType::Module
+        })
+    }
+
+    /// The type of a script instance's class: `Script`, `LocalScript` or `ModuleScript` (or a class of theirs).
+    pub fn of_class(dm: &metallic_engine::metallic_core::DataModel, id: metallic_engine::metallic_core::Id) -> Self {
+        if crate::viewport::pick::is_a(dm, id, "LocalScript") {
+            ScriptType::Local
+        } else if crate::viewport::pick::is_a(dm, id, "ModuleScript") {
+            ScriptType::Module
+        } else {
+            ScriptType::Server
+        }
+    }
+
+    /// The class of the instances that run a file of this type.
+    pub fn class(self) -> &'static str {
+        match self {
+            ScriptType::Server => "Script",
+            ScriptType::Local => "LocalScript",
+            ScriptType::Module => "ModuleScript",
+        }
+    }
+
+    /// The end of a file name of this type.
+    pub fn extension(self) -> &'static str {
+        match self {
+            ScriptType::Server => ".server.luau",
+            ScriptType::Local => ".client.luau",
+            ScriptType::Module => ".luau",
+        }
+    }
+
+    /// Where a script of this type is put when a file of it is opened with none in the scene: where it runs (or, for
+    /// a module, where every side can `require` it).
+    pub fn home(self) -> &'static str {
+        match self {
+            ScriptType::Server => "ServerScriptService",
+            ScriptType::Local => "Workspace",
+            ScriptType::Module => "ReplicatedStorage",
+        }
+    }
+
+    /// What a new file of this type holds, as Roblox Studio starts them.
+    pub fn starter(self) -> &'static str {
+        match self {
+            ScriptType::Module => "local module = {}\n\nreturn module\n",
+            _ => "print(\"Hello world!\")\n",
+        }
+    }
 }
 
 impl AssetKind {
     /// The kind of the asset at `path`.
     pub fn of(path: &str) -> Self {
+        if let Some(script) = ScriptType::of(path) {
+            return AssetKind::Script(script);
+        }
         let extension = path.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
         match extension.as_deref() {
             Some("glb" | "gltf") => AssetKind::Mesh,
             Some("png" | "jpg" | "jpeg" | "webp" | "ktx2") => AssetKind::Image,
             Some("ogg" | "mp3" | "wav" | "opus" | "flac" | "m4a") => AssetKind::Audio,
             Some("scene") => AssetKind::Scene,
-            Some("luau" | "lua") => AssetKind::Script,
             _ => AssetKind::Other,
         }
     }
@@ -69,7 +148,7 @@ impl AssetKind {
             AssetKind::Image => "Image",
             AssetKind::Audio => "Audio",
             AssetKind::Scene => "Scene",
-            AssetKind::Script => "Script",
+            AssetKind::Script(script) => script.class(),
             AssetKind::Other => "File",
         }
     }
@@ -81,7 +160,9 @@ impl AssetKind {
             AssetKind::Image => Icon::AssetImage,
             AssetKind::Audio => Icon::AssetAudio,
             AssetKind::Scene => Icon::AssetScene,
-            AssetKind::Script => Icon::AssetScript,
+            AssetKind::Script(ScriptType::Server) => Icon::AssetScript,
+            AssetKind::Script(ScriptType::Local) => Icon::AssetLocalScript,
+            AssetKind::Script(ScriptType::Module) => Icon::AssetModuleScript,
             AssetKind::Other => Icon::AssetFile,
         }
     }
@@ -126,6 +207,28 @@ const SEARCH_WIDTH: f32 = 180.0;
 /// The label of the root, in the tree and the breadcrumbs.
 pub const ROOT: &str = "Project";
 
+/// What a New menu item makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum New {
+    /// A folder.
+    Folder,
+    /// A script file of this type.
+    Script(ScriptType),
+}
+
+/// The New items of a folder's menus, in order.
+pub(crate) const NEW_ITEMS: [(&str, New); 4] = [
+    ("New Folder", New::Folder),
+    ("New Script", New::Script(ScriptType::Server)),
+    ("New LocalScript", New::Script(ScriptType::Local)),
+    ("New ModuleScript", New::Script(ScriptType::Module)),
+];
+
+/// The New item called `label`, if it is one.
+pub(crate) fn new_item(label: &str) -> Option<New> {
+    NEW_ITEMS.iter().find(|(item, _)| *item == label).map(|(_, new)| *new)
+}
+
 /// What the tree and the tiles asked for this frame, done after they are drawn.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Act {
@@ -145,8 +248,8 @@ pub(crate) enum Act {
     Rename(String, String),
     /// Renaming ended without a new name.
     KeepName,
-    /// A new folder in this one.
-    NewFolder(String),
+    /// A new folder or file in this folder.
+    New(String, New),
     /// Copies of these beside them.
     Duplicate(Vec<String>),
     /// Ask to delete these.
@@ -423,12 +526,14 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
             editor.browser.anchor = Some(path);
             Ok(())
         }
-        Act::Activate(entry) => {
-            if entry.is_folder() {
+        Act::Activate(entry) => match entry.kind {
+            browser::EntryKind::Folder => {
                 editor.browser.open_folder(&entry.path);
+                Ok(())
             }
-            Ok(())
-        }
+            browser::EntryKind::File(AssetKind::Script(_)) => editor.open_script_file(&entry.path),
+            _ => Ok(()),
+        },
         Act::Click { path, .. } if path.is_empty() => {
             editor.browser.selected.clear();
             editor.browser.anchor = None;
@@ -457,7 +562,11 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
             editor.browser.renaming = None;
             Ok(())
         }
-        Act::NewFolder(parent) => editor.new_folder(&parent).map(|path| {
+        Act::New(parent, new) => match new {
+            New::Folder => editor.new_folder(&parent),
+            New::Script(script) => editor.new_script_file(&parent, script),
+        }
+        .map(|path| {
             if parent != editor.browser.open {
                 editor.browser.open_folder(&parent);
             }
@@ -643,8 +752,25 @@ mod tests {
         assert_eq!(AssetKind::of("Textures/a.b/rock.jpeg"), AssetKind::Image);
         assert_eq!(AssetKind::of("Sounds/hit.ogg"), AssetKind::Audio);
         assert_eq!(AssetKind::of("Scenes/Main.scene"), AssetKind::Scene);
-        assert_eq!(AssetKind::of("Scripts/Door.luau"), AssetKind::Script);
         assert_eq!(AssetKind::of("notes"), AssetKind::Other);
+    }
+
+    #[test]
+    fn a_script_file_s_type_is_in_its_name() {
+        let script = |path| AssetKind::of(path);
+        assert_eq!(
+            script("Scripts/Door.server.luau"),
+            AssetKind::Script(ScriptType::Server)
+        );
+        assert_eq!(script("Scripts/Hud.CLIENT.luau"), AssetKind::Script(ScriptType::Local));
+        assert_eq!(script("Scripts/Util.luau"), AssetKind::Script(ScriptType::Module));
+        assert_eq!(script("old/Thing.server.lua"), AssetKind::Script(ScriptType::Server));
+        assert_eq!(AssetKind::Script(ScriptType::Local).label(), "LocalScript");
+        for script in ScriptType::ALL {
+            let file = format!("Door{}", script.extension());
+            assert_eq!(ScriptType::of(&file), Some(script), "{file}");
+        }
+        assert_eq!(ScriptType::of("Door.txt"), None);
     }
 
     #[test]

@@ -291,8 +291,12 @@ icons! {
     AssetAudio = "asset.audio", Content, "music";
     /// A scene in the Assets panel.
     AssetScene = "asset.scene", Object, "list-tree";
-    /// A script in the Assets panel.
+    /// A Script file in the Assets panel (`.server.luau`, #677).
     AssetScript = "asset.script", ServerScript, "scroll";
+    /// A LocalScript file in the Assets panel (`.client.luau`, #677).
+    AssetLocalScript = "asset.local_script", LocalScript, "scroll";
+    /// A ModuleScript file in the Assets panel (`.luau`, #677).
+    AssetModuleScript = "asset.module_script", ModuleScript, "scroll-text";
     /// A folder in the Assets panel (#676).
     AssetFolder = "asset.folder", Object, "folder";
     /// Any other file in the Assets panel.
