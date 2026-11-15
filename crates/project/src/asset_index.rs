@@ -124,6 +124,21 @@ impl FromStr for AssetId {
     }
 }
 
+/// Written as its 32 hex digits, as `assets.json` and scenes write it.
+impl serde::Serialize for AssetId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// Read from its 32 lowercase hex digits.
+impl<'de> Deserialize<'de> for AssetId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 /// Text that is not an [`AssetId`] (32 lowercase hex digits).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("an asset id is 32 lowercase hex digits")]

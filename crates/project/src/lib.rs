@@ -10,6 +10,7 @@ pub mod asset_index;
 pub mod assets;
 mod game_files;
 pub mod manifest;
+pub mod material;
 pub mod pak;
 pub mod project;
 pub mod scene;
