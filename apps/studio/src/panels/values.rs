@@ -181,9 +181,11 @@ const MIXED: &str = "\u{2013}";
 
 /// Draws the editor of `value` (the active instance's value of property `meta`, shown as `label`, with what the
 /// selection disagrees on `mixed`) filling `ui`, the value's cell. Returns what the user changed.
+#[allow(clippy::too_many_arguments)]
 pub fn edit(
     ui: &mut Ui,
     dm: &DataModel,
+    files: &Files,
     meta: &PropMeta,
     label: &str,
     part: Part,
@@ -213,6 +215,11 @@ pub fn edit(
                 whole: false,
             };
             number(ui, n, field, label, width, mixed.whole).map(|n| Edit::Whole(Value::Number(n)))
+        }
+        // A project file's path or asset id (#55): picked from the project's files.
+        Value::String(s) if meta.widget.file_extensions().is_some() => {
+            file_picker(ui, files, meta.widget, label, &s, width, mixed.whole)
+                .map(|s| Edit::Whole(Value::String(s.into())))
         }
         Value::String(s) => text_field(ui, label, &s, width, mixed.whole).map(|s| Edit::Whole(Value::String(s.into()))),
         Value::Vector2(v) => components_field(ui, &[v.x, v.y], &mixed.parts, meta.range, label, width),
@@ -277,6 +284,143 @@ pub fn edit(
         // References are read-only (the Parent changes by dragging in the Explorer); the panel draws them.
         Value::Ref(_) => None,
     }
+}
+
+/// The project's files, as a file picker offers them (#55): every member's path with its asset id, taken before the
+/// panel borrows the scene.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Files {
+    /// Each member's path and asset id (as text), sorted by path.
+    members: Vec<(String, Option<String>)>,
+}
+
+impl Files {
+    /// The files of `project`, but its metadata and the editor's own data.
+    pub fn of(project: &metallic_engine::metallic_project::Project) -> Self {
+        use metallic_engine::metallic_project::asset_index::{is_asset, is_editor_data};
+        let members = project
+            .members()
+            .into_iter()
+            .filter(|member| is_asset(member) && !is_editor_data(member))
+            .map(|member| {
+                let id = project.assets().id(member).map(|id| id.to_string());
+                (member.to_owned(), id)
+            })
+            .collect();
+        Self { members }
+    }
+
+    /// The path of the file whose asset id is `id`.
+    fn path_of(&self, id: &str) -> Option<&str> {
+        self.members
+            .iter()
+            .find(|(_, own)| own.as_deref() == Some(id))
+            .map(|(path, _)| path.as_str())
+    }
+}
+
+/// What a file picker shows for nothing chosen.
+pub const NO_FILE: &str = "None";
+
+/// The picker of a [`Widget::FilePath`] or [`Widget::AssetId`] property (#55): a drop-down of the project's files it
+/// takes, by path, and None. It shows the chosen file's name, or that the file is missing. Returns the value chosen:
+/// a path, or for an asset id property the file's id; empty for None.
+fn file_picker(
+    ui: &mut Ui,
+    files: &Files,
+    widget: metallic_engine::metallic_core::Widget,
+    label: &str,
+    current: &str,
+    width: f32,
+    mixed: bool,
+) -> Option<String> {
+    let by_id = matches!(widget, metallic_engine::metallic_core::Widget::AssetId { .. });
+    let current_path = if by_id {
+        files.path_of(current).map(str::to_owned)
+    } else {
+        files
+            .members
+            .iter()
+            .any(|(path, _)| path == current)
+            .then(|| current.to_owned())
+    };
+    let shown = if mixed {
+        "Mixed".to_owned()
+    } else if current.is_empty() {
+        NO_FILE.to_owned()
+    } else {
+        match &current_path {
+            Some(path) => path.rsplit_once('/').map_or(path.as_str(), |(_, name)| name).to_owned(),
+            None => format!("Missing: {current}"),
+        }
+    };
+    let choices: Vec<(&str, &str)> = files
+        .members
+        .iter()
+        .filter(|(path, _)| widget.takes_file(path))
+        .filter_map(|(path, id)| {
+            let value = if by_id { id.as_deref()? } else { path.as_str() };
+            Some((path.as_str(), value))
+        })
+        .collect();
+    let mut chosen = None;
+    let combo = ui.scope(|ui| {
+        plain(ui);
+        ComboBox::from_id_salt(label)
+            .selected_text(shown.clone())
+            .width(width)
+            .height(size::ROW * 12.0)
+            .show_ui(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let none = !mixed && current.is_empty();
+                if choice_row(ui, NO_FILE, none, 0).clicked() && !none {
+                    chosen = Some(String::new());
+                }
+                for (index, (path, value)) in choices.iter().enumerate() {
+                    let on = !mixed && *value == current;
+                    if choice_row(ui, path, on, index + 1).clicked() && !on {
+                        chosen = Some((*value).to_owned());
+                    }
+                }
+            })
+    });
+    // The file shown is its value, for screen readers.
+    let enabled = combo.inner.response.enabled();
+    combo.inner.response.widget_info(|| {
+        let mut info = WidgetInfo::labeled(Role::ComboBox, enabled, label);
+        info.current_text_value = Some(shown.clone());
+        info
+    });
+    if let Some(path) = &current_path {
+        combo.inner.response.clone().on_hover_text(path.as_str());
+    }
+    // A file dragged from the Assets panel (#676) and let go on the picker, if it is one the picker takes.
+    let response = &combo.inner.response;
+    let fits = |drag: &crate::panels::assets::AssetDrag| match drag.paths.as_slice() {
+        [path] => choices
+            .iter()
+            .find(|(choice, _)| choice == path)
+            .map(|(_, value)| (*value).to_owned()),
+        _ => None,
+    };
+    if response
+        .dnd_hover_payload::<crate::panels::assets::AssetDrag>()
+        .is_some_and(|drag| fits(&drag).is_some())
+    {
+        let accent = current_colors(ui.ctx()).accent;
+        ui.painter().rect_stroke(
+            response.rect,
+            CornerRadius::ZERO,
+            Stroke::new(2.0, accent),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if let Some(drag) = response.dnd_release_payload::<crate::panels::assets::AssetDrag>()
+        && let Some(value) = fits(&drag)
+    {
+        chosen = Some(value);
+    }
+    chosen
 }
 
 /// One item of an enum's drop-down (#418), in the Properties panel's style: a row its height, striped as its rows are
@@ -679,7 +823,9 @@ mod tests {
             .with_context_setup(crate::theme::fonts::install)
             .build_ui_state(
                 move |ui, edit: &mut Option<Edit>| {
-                    if let Some(made) = super::edit(ui, &dm, meta, "Value", Part::Whole, &value, mixed) {
+                    if let Some(made) =
+                        super::edit(ui, &dm, &Files::default(), meta, "Value", Part::Whole, &value, mixed)
+                    {
                         *edit = Some(made);
                     }
                 },

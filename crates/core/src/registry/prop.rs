@@ -158,6 +158,41 @@ pub enum Widget {
     },
     /// A text box with several lines.
     Multiline,
+    /// A string that holds a project file's path (#55), such as a script's `Source`: Studio picks it from the
+    /// project's files with one of `extensions` (lowercase, without the dot; empty means any file).
+    FilePath {
+        /// The extensions of the files it can name.
+        extensions: &'static [&'static str],
+    },
+    /// A string that holds a project asset's id (#55), such as a mesh part's `MeshId`: Studio picks it from the
+    /// project's files with one of `extensions` and stores the file's asset id, so moving the file keeps it.
+    AssetId {
+        /// The extensions of the files it can name.
+        extensions: &'static [&'static str],
+    },
+}
+
+impl Widget {
+    /// The extensions a [`Widget::FilePath`] or [`Widget::AssetId`] property takes; `None` for other widgets.
+    pub fn file_extensions(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::FilePath { extensions } | Self::AssetId { extensions } => Some(extensions),
+            _ => None,
+        }
+    }
+
+    /// Whether a file at `path` fits a [`Widget::FilePath`] or [`Widget::AssetId`] property: its extension (the
+    /// part after its last dot, in any letter case) is one of the widget's, or the widget takes any file.
+    pub fn takes_file(self, path: &str) -> bool {
+        let Some(extensions) = self.file_extensions() else {
+            return false;
+        };
+        let name = path.rsplit_once('/').map_or(path, |(_, name)| name);
+        extensions.is_empty()
+            || name
+                .rsplit_once('.')
+                .is_some_and(|(_, extension)| extensions.iter().any(|e| e.eq_ignore_ascii_case(extension)))
+    }
 }
 
 /// Reads a computed property: one whose value is derived from other state instead of being stored.
@@ -512,5 +547,23 @@ mod tests {
         assert_eq!(DefaultValue::Number(1.0).kind_name(), PropType::Number.to_string());
         assert_eq!(DefaultValue::Str("").kind_name(), PropType::String.to_string());
         assert_eq!(DefaultValue::NilRef.kind_name(), "nil reference");
+    }
+
+    #[test]
+    fn a_file_widget_takes_the_files_of_its_extensions() {
+        let source = Widget::FilePath {
+            extensions: &["luau", "lua"],
+        };
+        assert!(source.takes_file("Scripts/Door.server.luau"));
+        assert!(source.takes_file("Old/Door.LUA"));
+        assert!(!source.takes_file("Assets/rock.glb"));
+        assert!(
+            !source.takes_file("Assets.luau/rock"),
+            "the extension is the file name's"
+        );
+        let any = Widget::AssetId { extensions: &[] };
+        assert!(any.takes_file("notes"));
+        assert!(!Widget::Default.takes_file("Door.luau"));
+        assert_eq!(Widget::Slider.file_extensions(), None);
     }
 }

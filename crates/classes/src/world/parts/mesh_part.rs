@@ -5,7 +5,13 @@
 //! `AssetMesh` component, which the renderer implements by drawing the mesh stretched so its bounds fill `Size`.
 //! Loading the assets is the engine's job: until they are loaded, or when they are missing, the part draws nothing.
 
-use metallic_core::{ClassDesc, ComponentDesc, PropMeta};
+use metallic_core::{ClassDesc, ComponentDesc, PropMeta, Widget};
+
+/// The files a `MeshId` names: glTF models.
+pub const MESH_EXTENSIONS: &[&str] = &["glb", "gltf"];
+
+/// The files a `TextureId` names: pictures.
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg"];
 
 /// The component that draws a part as a mesh asset. Declared here; the renderer implements it.
 pub static COMPONENT: ComponentDesc = ComponentDesc::new("AssetMesh")
@@ -18,6 +24,9 @@ pub static COMPONENT: ComponentDesc = ComponentDesc::new("AssetMesh")
 static PROPS: &[PropMeta] = &[
     PropMeta::string("MeshId", "")
         .visual()
+        .widget(Widget::AssetId {
+            extensions: MESH_EXTENSIONS,
+        })
         .group("MeshPart")
         .order(0)
         .desc(
@@ -26,6 +35,9 @@ static PROPS: &[PropMeta] = &[
         ),
     PropMeta::string("TextureId", "")
         .visual()
+        .widget(Widget::AssetId {
+            extensions: IMAGE_EXTENSIONS,
+        })
         .group("MeshPart")
         .order(1)
         .desc(

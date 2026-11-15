@@ -9734,6 +9734,7 @@ skip_sign_in = true
     }
 
     mod assets_browser;
+    mod file_pickers;
     mod team_create;
     mod team_play;
     mod team_play_port;
