@@ -1013,7 +1013,7 @@ mod tests {
     #[test]
     fn the_filter_menu_offers_the_classes_in_the_game_without_its_services() {
         let dm = game();
-        assert_eq!(classes_in(&dm), ["Camera", "Part"]);
+        assert_eq!(classes_in(&dm), ["Camera", "Part", "SpawnLocation"]);
     }
 
     /// The rows' names as one string, the selected ones in brackets, the active one starred.

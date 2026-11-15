@@ -27,8 +27,7 @@
   }, {
     "id": 4,
     "parent": 1,
-    "class": "Part",
-    "name": "SpawnLocation",
+    "class": "SpawnLocation",
     "properties": {
       "CFrame": [0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0],
       "Color": [0.6392157, 0.63529414, 0.64705884],

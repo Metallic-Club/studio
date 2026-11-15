@@ -20,11 +20,18 @@ fn workspace(dm: &DataModel) -> Id {
         .expect("the service")
 }
 
-/// Adds an anchored `Part` called `name` to `Workspace`.
-fn part(dm: &mut DataModel, name: &str, size: Vector3, position: Vector3, rgb: [u8; 3], material: &str) {
+/// Adds an anchored part of `class` called `name` to `Workspace`.
+fn part(
+    dm: &mut DataModel,
+    (class, name): (&str, &str),
+    size: Vector3,
+    position: Vector3,
+    rgb: [u8; 3],
+    material: &str,
+) {
     let material = dm.registry().enum_item("Material", material).expect("the material");
     let part = dm
-        .create(dm.registry().class_id("Part").expect("the class"))
+        .create(dm.registry().class_id(class).expect("the class"))
         .expect("a part");
     dm.set_name(part, name.into()).expect("named");
     for (prop, value) in [
@@ -46,16 +53,16 @@ fn baseplate_scene() -> String {
     let mut dm = metallic_classes::new_game().expect("a game");
     part(
         &mut dm,
-        "Baseplate",
+        ("Part", "Baseplate"),
         Vector3::new(512.0, 16.0, 512.0),
         Vector3::new(0.0, -8.0, 0.0),
         [99, 95, 98],
         "Concrete",
     );
-    // A plain part until there is a SpawnLocation class (#198): it marks where players will appear.
+    // Where players will appear (#198).
     part(
         &mut dm,
-        "SpawnLocation",
+        ("SpawnLocation", "SpawnLocation"),
         Vector3::new(12.0, 1.0, 12.0),
         Vector3::new(0.0, 0.5, 0.0),
         [163, 162, 165],
@@ -116,4 +123,7 @@ fn the_template_scene_loads_without_warnings() {
     for name in ["Baseplate", "SpawnLocation", "Camera"] {
         assert!(dm.find_first_child(workspace, name, false).unwrap().is_some(), "{name}");
     }
+    let spawn = dm.find_first_child(workspace, "SpawnLocation", false).unwrap().unwrap();
+    let class = dm.class_of(spawn).unwrap();
+    assert_eq!(dm.registry().class(class).unwrap().name(), "SpawnLocation");
 }

@@ -600,11 +600,16 @@ fn editable(meta: &PropMeta) -> bool {
         && !matches!(meta.ty, PropType::Ref(_))
 }
 
-/// What the header calls several selected instances: "3 Parts" when they share a class, else "4 objects".
+/// What the header calls several selected instances: "3 Parts" when they are all of one of their classes (a Part
+/// and a SpawnLocation, which is a Part, are 2 Parts), else "4 objects".
 pub fn count_title(dm: &DataModel, ids: &[Id]) -> String {
-    let classes: Vec<&str> = ids.iter().filter_map(|&id| dm.class_name(id).ok()).collect();
-    match classes.split_first() {
-        Some((first, rest)) if rest.iter().all(|class| class == first) => format!("{} {first}s", ids.len()),
+    let classes: Vec<_> = ids.iter().filter_map(|&id| dm.class_of(id).ok()).collect();
+    let registry = dm.registry();
+    let shared = classes
+        .iter()
+        .find(|&&candidate| classes.iter().all(|&class| registry.is_a(class, candidate)));
+    match shared.and_then(|&class| registry.class(class)) {
+        Some(info) if classes.len() == ids.len() => format!("{} {}s", ids.len(), info.name()),
         _ => format!("{} objects", ids.len()),
     }
 }
