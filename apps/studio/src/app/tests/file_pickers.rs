@@ -68,7 +68,10 @@ fn a_mesh_part_s_ids_and_a_script_s_source_are_picked_from_the_project_s_files()
         editor.dm.get_by_name(part, "TextureId"),
         Ok(Value::String(bark.as_str().into()))
     );
-    harness.get_by_label("bark.png");
+    let shown = harness.get_by_role_and_label(Role::ComboBox, "TextureId").value();
+    assert_eq!(shown.as_deref(), Some("bark.png"));
+    // A separate step: edits of one property less than 600 ms apart are one.
+    std::thread::sleep(std::time::Duration::from_millis(700));
     // None empties it, as one undo step.
     harness.get_by_role_and_label(Role::ComboBox, "TextureId").click();
     settle(&mut harness);
@@ -124,6 +127,7 @@ fn a_file_dragged_from_the_assets_panel_onto_a_picker_is_chosen() {
         editor.browser.open_folder("Assets");
         (part, rock)
     };
+    settle(&mut harness);
     harness.get_by_role_and_label(Role::Tab, "Assets").click();
     settle(&mut harness);
     let from = harness.get_by_role_and_label(Role::GridCell, "rock").rect().center();

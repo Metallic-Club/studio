@@ -367,7 +367,7 @@ fn file_picker(
     let combo = ui.scope(|ui| {
         plain(ui);
         ComboBox::from_id_salt(label)
-            .selected_text(shown)
+            .selected_text(shown.clone())
             .width(width)
             .height(size::ROW * 12.0)
             .show_ui(ui, |ui| {
@@ -384,7 +384,13 @@ fn file_picker(
                 }
             })
     });
-    labelled(&combo.inner.response, Role::ComboBox, label);
+    // The file shown is its value, for screen readers.
+    let enabled = combo.inner.response.enabled();
+    combo.inner.response.widget_info(|| {
+        let mut info = WidgetInfo::labeled(Role::ComboBox, enabled, label);
+        info.current_text_value = Some(shown.clone());
+        info
+    });
     if let Some(path) = &current_path {
         combo.inner.response.clone().on_hover_text(path.as_str());
     }
