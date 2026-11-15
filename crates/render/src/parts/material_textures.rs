@@ -227,33 +227,28 @@ fn array_view(texture: &wgpu::Texture) -> wgpu::TextureView {
     })
 }
 
-/// The materials' texture arrays, their samplers, and which layers each material has.
+/// The materials' texture arrays, their sampler, and which layers each material has. One sampler, smooth and
+/// repeating: OpenGL ties a texture to one sampler, so nearest filtering is done in the shader.
 #[derive(Debug)]
 pub(crate) struct MaterialTextures {
     color: LayerArray,
     data: LayerArray,
     linear: wgpu::Sampler,
-    nearest: wgpu::Sampler,
     by_key: HashMap<Arc<str>, MaterialLayers>,
     most: u32,
 }
 
 impl MaterialTextures {
     pub(crate) fn new(device: &wgpu::Device) -> Self {
-        let sampler = |label, filter| {
-            device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some(label),
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                mag_filter: filter,
-                min_filter: filter,
-                mipmap_filter: match filter {
-                    wgpu::FilterMode::Linear => wgpu::MipmapFilterMode::Linear,
-                    wgpu::FilterMode::Nearest => wgpu::MipmapFilterMode::Nearest,
-                },
-                ..wgpu::SamplerDescriptor::default()
-            })
-        };
+        let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("metallic material textures"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
         Self {
             color: LayerArray::new(
                 device,
@@ -267,16 +262,15 @@ impl MaterialTextures {
                 wgpu::TextureFormat::Rgba8Unorm,
                 FIRST_LAYERS,
             ),
-            linear: sampler("metallic material textures", wgpu::FilterMode::Linear),
-            nearest: sampler("metallic material textures (nearest)", wgpu::FilterMode::Nearest),
+            linear,
             by_key: HashMap::new(),
             most: device.limits().max_texture_array_layers.min(MOST_LAYERS),
         }
     }
 
-    /// The colour array's view, the data array's, and the linear and nearest samplers, for a texture group.
-    pub(crate) fn bindings(&self) -> (&wgpu::TextureView, &wgpu::TextureView, &wgpu::Sampler, &wgpu::Sampler) {
-        (&self.color.view, &self.data.view, &self.linear, &self.nearest)
+    /// The colour array's view, the data array's, and the sampler, for a texture group.
+    pub(crate) fn bindings(&self) -> (&wgpu::TextureView, &wgpu::TextureView, &wgpu::Sampler) {
+        (&self.color.view, &self.data.view, &self.linear)
     }
 
     /// Puts `set` in layers for the material `key` (its old layers freed first) and returns them, with whether an

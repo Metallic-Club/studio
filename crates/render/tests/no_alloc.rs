@@ -2662,10 +2662,6 @@ impl HandParts {
                         binding: 4,
                         resource: wgpu::BindingResource::Sampler(&nearest),
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: wgpu::BindingResource::Sampler(&nearest),
-                    },
                 ],
             })
         };
