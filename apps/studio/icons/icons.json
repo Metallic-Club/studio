@@ -342,6 +342,9 @@
     "ui.expand": {
       "file": "interface/chevron-right.svg"
     },
+    "ui.grip": {
+      "file": "interface/grip-vertical.svg"
+    },
     "ui.info": {
       "file": "interface/info.svg"
     },
