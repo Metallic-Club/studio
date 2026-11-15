@@ -528,6 +528,8 @@ pub struct Collab {
     pub cursor: Option<(String, usize, usize)>,
     /// When the user last typed in each file.
     pub typed: HashMap<String, std::time::Instant>,
+    /// The files whose field started a new undo step (#654), for the session's undo to start one too.
+    pub steps: std::collections::HashSet<String>,
     /// A selection (tail, head) the session moved a field's cursor to (others' edits, an undo), for the field to take.
     pub moves: HashMap<String, (usize, usize)>,
     /// The others' cursors, by file.

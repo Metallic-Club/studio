@@ -214,6 +214,10 @@ impl Panel for ScriptEditor {
             popup.open || find_open,
         );
         let mut changed = output.changed || taken;
+        // A new undo step started in the field (#654): the shared undo starts one there too.
+        if code::view::take_undo_step(ui.ctx(), id) && shared {
+            editor.scripts.collab.steps.insert(member.clone());
+        }
         if shared {
             // Where this user's cursor is, for the others (and for keeping it on its code through their edits).
             let collab = &mut editor.scripts.collab;
