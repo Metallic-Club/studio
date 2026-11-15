@@ -246,7 +246,12 @@ pub fn edit(
                     })
             });
             labelled(&combo.inner.response, Role::ComboBox, label);
-            // The wheel over it steps through its items (#469), down to the next.
+            combo
+                .inner
+                .response
+                .clone()
+                .on_hover_text("Hold Ctrl and turn the wheel to step through the choices.");
+            // The wheel over it, with Ctrl held (#666), steps through its items (#469), down to the next.
             if let Some(steps) = wheel_steps(ui, &combo.inner.response) {
                 let last = desc.items.len().saturating_sub(1) as i64;
                 let at = desc.items.iter().position(|&name| name == item.name()).unwrap_or(0) as i64;
@@ -346,11 +351,12 @@ const FAST: f64 = 10.0;
 /// How many points of a smooth (trackpad) scroll make one wheel notch.
 const NOTCH: f32 = 40.0;
 
-/// The whole wheel notches turned this frame with the pointer over `response` (down positive), the part of a notch
-/// short of one kept for the next frames; none while a pop-up is open or Ctrl (Cmd) zooms. The panel under it does not
-/// scroll meanwhile (#469).
+/// The whole wheel notches turned this frame with the pointer over `response` while Ctrl (Cmd) is held (down
+/// positive), the part of a notch short of one kept for the next frames; none while a pop-up is open. The panel under
+/// it does not scroll meanwhile (#469). Without Ctrl the wheel scrolls the panel (#666): scrolling down it past a
+/// drop-down changed the drop-down.
 fn wheel_steps(ui: &Ui, response: &Response) -> Option<i64> {
-    if !response.hovered() || ui.ctx().any_popup_open() || ui.input(|input| input.modifiers.command) {
+    if !response.hovered() || ui.ctx().any_popup_open() || !ui.input(|input| input.modifiers.command) {
         return None;
     }
     let turned: f32 = ui.input(|input| {
@@ -812,7 +818,7 @@ mod tests {
         };
         let items = registry.enum_desc(material).unwrap().items;
         let at = items.iter().position(|&name| name == "Concrete").unwrap();
-        let wheel = |down: bool| {
+        let wheel = |down: bool, modifiers: egui::Modifiers| {
             let mut harness = editor(
                 dm_meta("Material"),
                 Value::Enum(EnumItem::new("Material", "Concrete")),
@@ -820,21 +826,25 @@ mod tests {
             );
             let combo = harness.get_by_role_and_label(Role::ComboBox, "Value").rect();
             harness.hover_at(combo.center());
-            harness.run();
+            harness.run_steps(8);
+            harness.event(egui::Event::ModifiersChanged(modifiers));
             harness.event(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Line,
                 delta: vec2(0.0, if down { -1.0 } else { 1.0 }),
                 phase: egui::TouchPhase::Move,
                 source: egui::MouseWheelSource::Wheel,
-                modifiers: egui::Modifiers::NONE,
+                modifiers,
             });
-            harness.run();
+            harness.run_steps(8);
             harness.state().clone()
         };
-        // One notch down, the next item (#469); up, the one before.
+        // With Ctrl held (#666), one notch down, the next item (#469); up, the one before.
         let item = |index: usize| Some(Edit::Whole(Value::Enum(EnumItem::new("Material", items[index]))));
-        assert_eq!(wheel(true), item(at + 1));
-        assert_eq!(wheel(false), item(at - 1));
+        assert_eq!(wheel(true, egui::Modifiers::COMMAND), item(at + 1));
+        assert_eq!(wheel(false, egui::Modifiers::COMMAND), item(at - 1));
+        // Without, the wheel is the panel's to scroll: the value stays.
+        assert_eq!(wheel(true, egui::Modifiers::NONE), None);
+        assert_eq!(wheel(false, egui::Modifiers::NONE), None);
     }
 
     /// The registry's declaration of `BasePart`'s property `name`, for the editor.
