@@ -90,12 +90,12 @@ fn bindable_events_carry_engine_values_between_scripts() {
         local part = Instance.new("Part")
         part.Name = "Crate"
         workspace.Ping:Fire(part, Vector3.new(1, 2, 3), CFrame.new(4, 5, 6), Color3.new(0.5, 0, 0),
-            Enum.Material.Wood, {1, 2, 3})
+            Enum.PartShape.Wedge, {1, 2, 3})
         "##,
     );
     game.frame(1.0 / 60.0);
     game.assert_no_errors();
-    assert_eq!(game.prints(), ["Crate 1, 2, 3 4, 5, 6 0.5 Enum.Material.Wood 3 2"]);
+    assert_eq!(game.prints(), ["Crate 1, 2, 3 4, 5, 6 0.5 Enum.PartShape.Wedge 3 2"]);
 }
 
 #[test]
