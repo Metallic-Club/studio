@@ -955,6 +955,12 @@ declare extern type SpotLight extends Light with
     Angle: number
 end
 
+--- A part that marks where players appear when they join or respawn.
+declare extern type SpawnLocation extends Part with
+    --- Whether players can appear on this spawn location. A disabled one is an ordinary part.
+    Enabled: boolean
+end
+
 --- Creates instances: `Instance.new("Part", workspace)`.
 declare Instance: {
     new: ((className: "BindableEvent", parent: Instance?) -> BindableEvent)
@@ -973,5 +979,6 @@ declare Instance: {
         & ((className: "Part", parent: Instance?) -> Part)
         & ((className: "PointLight", parent: Instance?) -> PointLight)
         & ((className: "Script", parent: Instance?) -> Script)
-        & ((className: "SpotLight", parent: Instance?) -> SpotLight),
+        & ((className: "SpotLight", parent: Instance?) -> SpotLight)
+        & ((className: "SpawnLocation", parent: Instance?) -> SpawnLocation),
 }
