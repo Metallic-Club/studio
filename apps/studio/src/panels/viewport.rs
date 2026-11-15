@@ -425,7 +425,8 @@ impl Panel for Viewport {
         // Frame pacing: continuous while the viewport shows and the window has focus, at the frame cap if there is
         // one. Otherwise Studio waits for input or a change.
         if ui.input(|input| input.focused) {
-            match cx.settings.rendering.frame_cap.filter(|cap| *cap > 0) {
+            let refresh = crate::settings::display_refresh(ui.ctx());
+            match crate::settings::frame_cap(&cx.settings.rendering, refresh) {
                 Some(fps) => ui
                     .ctx()
                     .request_repaint_after(Duration::from_secs_f64(1.0 / f64::from(fps))),

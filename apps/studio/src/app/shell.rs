@@ -322,6 +322,13 @@ impl StudioWindow {
         let info = input.viewports.entry(ViewportId::ROOT).or_default();
         egui_winit::update_viewport_info(info, &ctx, &self.window, false);
         let studio = &mut self.studio;
+        // The refresh rate of the monitor the window is on now (#669), which an unset frame cap follows.
+        let refresh = self
+            .window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+            .map(crate::settings::refresh_hz);
+        studio.set_display_refresh(refresh);
         let now = Instant::now();
         let mut output = ctx.run_ui(input, |ui| studio.ui(ui, now));
         self.egui

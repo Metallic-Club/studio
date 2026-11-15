@@ -57,9 +57,10 @@ impl ViewportRenderer {
         let graphics = &studio.settings().rendering;
         if self.graphics.as_ref() != Some(graphics) {
             self.scene.set_graphics(graphics.clone());
-            self.scene.set_frame_cap(graphics.frame_cap.filter(|cap| *cap > 0));
             self.graphics = Some(graphics.clone());
         }
+        // Each frame: unset, the cap follows the display, which changes with the monitor the window is on (#669).
+        self.scene.set_frame_cap(studio.frame_cap());
         let shading = studio.settings().viewport.shading;
         if self.scene.shading_view() != shading {
             self.scene.set_shading_view(shading);

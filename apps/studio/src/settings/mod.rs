@@ -369,6 +369,38 @@ pub const RENDERING_KEYS: [&str; 15] = [
 
 /// The most frames per second a frame cap may ask for.
 pub const MAX_FRAME_CAP: u32 = 1000;
+
+/// Where the display's refresh rate is kept for the frame (#669).
+fn refresh_id() -> egui::Id {
+    egui::Id::unique("metallic.display_refresh")
+}
+
+/// The refresh rate of the display Studio's window is on, in whole hertz, as the shell last read it (#669).
+pub fn display_refresh(ctx: &egui::Context) -> Option<u32> {
+    ctx.data(|data| data.get_temp::<u32>(refresh_id()))
+}
+
+/// Keeps `hz` as the display's refresh rate for [`display_refresh`].
+pub fn set_display_refresh(ctx: &egui::Context, hz: Option<u32>) {
+    ctx.data_mut(|data| {
+        if let Some(hz) = hz {
+            data.insert_temp(refresh_id(), hz);
+        } else {
+            data.remove::<u32>(refresh_id());
+        }
+    });
+}
+
+/// The frame cap the viewport draws at (#669): the one set, or unset the display's refresh rate (`refresh`); `None`
+/// for no limit (0 set, or no rate known and none set).
+pub fn frame_cap(rendering: &GraphicsSettings, refresh: Option<u32>) -> Option<u32> {
+    rendering.frame_cap.or(refresh).filter(|cap| *cap > 0)
+}
+
+/// A refresh rate in millihertz, as the system gives it, in whole hertz.
+pub fn refresh_hz(millihertz: u32) -> u32 {
+    (millihertz + 500) / 1000
+}
 /// The farthest view distance, in metres.
 pub const MAX_VIEW_DISTANCE: f32 = 100_000.0;
 /// The nearest and farthest shadow distances, in metres.
@@ -726,6 +758,28 @@ mod tests {
     use metallic_engine::metallic_render::settings::{Preset, Tier};
 
     use super::*;
+
+    /// #669: unset, the frame cap is the display's refresh rate; one set wins, and 0 is no limit.
+    #[test]
+    fn an_unset_frame_cap_follows_the_display() {
+        let unset = GraphicsSettings::default();
+        assert_eq!(unset.frame_cap, None);
+        assert_eq!(frame_cap(&unset, Some(144)), Some(144));
+        assert_eq!(frame_cap(&unset, None), None, "no rate known: no limit, as before");
+        let set = GraphicsSettings {
+            frame_cap: Some(90),
+            ..GraphicsSettings::default()
+        };
+        assert_eq!(frame_cap(&set, Some(144)), Some(90));
+        let none = GraphicsSettings {
+            frame_cap: Some(0),
+            ..GraphicsSettings::default()
+        };
+        assert_eq!(frame_cap(&none, Some(144)), None);
+        // Millihertz from the system, to whole hertz.
+        assert_eq!(refresh_hz(143_998), 144);
+        assert_eq!(refresh_hz(59_940), 60);
+    }
 
     fn parse(text: &str) -> StudioSettings {
         StudioSettings::from_document(&text.parse().unwrap())

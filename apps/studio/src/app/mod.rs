@@ -136,6 +136,8 @@ pub struct Studio {
     about_open: bool,
     /// Every shortcut's command and bindings: the settings' overrides over the defaults.
     keymap: Keymap,
+    /// The refresh rate of the display the window is on, in hertz, as the shell last read it (#669).
+    display_refresh: Option<u32>,
     /// What to tell the user (about the settings file, or a new default shortcut left out), first shown first.
     notices: Vec<Notice>,
     /// Whether the system asks for reduced motion (the Appearance setting can follow it).
@@ -211,6 +213,7 @@ impl Studio {
             settings_window: SettingsWindow::default(),
             about_open: false,
             keymap: Keymap::studio(&Overrides::new()),
+            display_refresh: None,
             notices: Vec::new(),
             system_reduces_motion: reduce_motion,
             applied_scale: None,
@@ -677,6 +680,17 @@ impl Studio {
         &mut self.toolbar
     }
 
+    /// Keeps `hz` as the refresh rate of the display the window is on (#669): an unset frame cap draws at it.
+    pub fn set_display_refresh(&mut self, hz: Option<u32>) {
+        self.display_refresh = hz;
+    }
+
+    /// The frame cap the viewport draws at (#669): the one set, or unset the display's refresh rate; `None` for no
+    /// limit.
+    pub fn frame_cap(&self) -> Option<u32> {
+        crate::settings::frame_cap(&self.settings().rendering, self.display_refresh)
+    }
+
     /// The keymap.
     pub fn keymap(&self) -> &Keymap {
         &self.keymap
@@ -690,6 +704,8 @@ impl Studio {
 
     /// Draws one frame into `ui`, the whole window, at `now`.
     pub fn ui(&mut self, ui: &mut egui::Ui, now: Instant) {
+        // The display's refresh rate, for the panels' frame pacing and Settings (#669).
+        crate::settings::set_display_refresh(ui.ctx(), self.display_refresh);
         // Edits to icons.json show without a restart (#403).
         if crate::theme::icons::builtin::refresh() {
             ui.ctx().request_repaint();
