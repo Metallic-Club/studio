@@ -123,3 +123,81 @@ fn parts_share_a_material_asset_and_follow_its_file() {
     assert_eq!(renderer.parts().materials().resolve(&id), material_params(&rough));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A `size` × `size` PNG of one colour.
+fn png(size: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, size, size);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("test setup");
+    let texels: Vec<u8> = (0..size * size).flat_map(|_| rgba).collect();
+    writer.write_image_data(&texels).expect("test setup");
+    writer.finish().expect("test setup");
+    bytes
+}
+
+/// #679: a material's pictures reach the layers: the base colour as it is, and occlusion, roughness and metallic
+/// packed into one picture from a packed map (by its channels) or from maps of their own; a picture that is missing
+/// is a warning and its channel goes without.
+#[test]
+fn a_material_s_pictures_are_fitted_and_packed() {
+    use metallic_engine::material_textures;
+    use metallic_engine::metallic_project::material::{Channel, Packed, Textures};
+
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("material_textures");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("test setup");
+    let template = Template::from_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates/baseplate-3d"))
+        .expect("test setup");
+    let mut project = Project::create(dir.join("Game.mtproj"), &template, "Game").expect("test setup");
+    let color = project
+        .create_member("Assets/red.png", png(4, [255, 0, 0, 255]))
+        .expect("test setup");
+    let packed = project
+        .create_member("Assets/packed.png", png(8, [10, 20, 30, 40]))
+        .expect("test setup");
+    let rough = project
+        .create_member("Assets/rough.png", png(2, [99, 0, 0, 255]))
+        .expect("test setup");
+    let mut reader = project.asset_reader();
+
+    // A packed map with metallic in its alpha, and no occlusion.
+    let material = Material {
+        textures: Textures {
+            color: Some(color),
+            normal: Some(GONE.parse().expect("an id")),
+            ..Textures::default()
+        },
+        packed: Some(Packed {
+            occlusion: None,
+            metallic: Some(Channel::A),
+            ..Packed::new(packed)
+        }),
+        ..Material::default()
+    };
+    let mut warnings = Vec::new();
+    let set = material_textures(&mut reader, &material, &mut warnings);
+    let texel = |image: &metallic_engine::metallic_render::MaterialImage| image.mips[0][..4].to_vec();
+    assert_eq!(texel(set.color.as_ref().expect("a colour")), [255, 0, 0, 255]);
+    assert!(set.normal.is_none() && set.emission.is_none());
+    assert_eq!(
+        texel(set.orm.as_ref().expect("packed")),
+        [255, 20, 40, 255],
+        "no occlusion is white"
+    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+    // Separate maps: roughness from its own picture's red.
+    let material = Material {
+        textures: Textures {
+            roughness: Some(rough),
+            ..Textures::default()
+        },
+        ..Material::default()
+    };
+    let set = material_textures(&mut reader, &material, &mut warnings);
+    assert_eq!(texel(set.orm.as_ref().expect("packed")), [255, 99, 255, 255]);
+    assert!(set.color.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}

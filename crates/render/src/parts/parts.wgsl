@@ -13,20 +13,34 @@ const PI: f32 = 3.14159265;
 
 // `MaterialRow` in parts/material.rs.
 struct MaterialRow {
-    // x: roughness, y: metalness, z: 1 for glass, w: normal strength.
+    // x: roughness, y: metalness, z: the flags below (bits), w: normal strength.
     surface: vec4<f32>,
-    // The base colour's tint (linear).
+    // The base colour's tint (linear); w: the colour and normal layers (bits, #679).
     tint: vec4<f32>,
-    // The emitted light (linear, times its strength), multiplied by the albedo.
+    // The emitted light (linear, times its strength), multiplied by the albedo; w: the occlusion-roughness-metallic
+    // and emission layers (bits, #679).
     emission: vec4<f32>,
-    // Texture tiling (#679).
+    // A primitive's texture mapping (#679): repeats per metre along U and V, then the offset.
     uv: vec4<f32>,
+    // A mesh asset's: repeats along its own U and V, then the offset.
+    mesh_uv: vec4<f32>,
 }
 
 // MAX_MATERIAL_ROWS in parts/material.rs.
-const MATERIAL_ROWS: u32 = 256u;
+const MATERIAL_ROWS: u32 = 192u;
 
-@group(0) @binding(1) var<uniform> materials: array<MaterialRow, 256>;
+// `MaterialRow::surface.z`'s flags (parts/material.rs).
+const MATERIAL_GLASS: u32 = 1u;
+const MATERIAL_TEXTURED: u32 = 2u;
+const MATERIAL_NEAREST: u32 = 4u;
+const MATERIAL_MIRROR: u32 = 8u;
+const MATERIAL_CLAMP: u32 = 16u;
+// A layer number that names no layer.
+const NO_LAYER: u32 = 0xffffu;
+// `MeshKind::BUILTIN_COUNT`: kinds from here on are mesh assets, which have texture coordinates of their own.
+const BUILTIN_KINDS: u32 = 4u;
+
+@group(0) @binding(1) var<uniform> materials: array<MaterialRow, 192>;
 
 // The sun's shadow cascades, one layer each, and a comparison sampler that filters four depth tests bilinearly.
 @group(0) @binding(2) var shadow_maps: texture_depth_2d_array;
@@ -50,6 +64,12 @@ struct VertexOut {
     // Where the base-colour texture is sampled (`base_texture`, bound by the instance file: a mesh asset's texture,
     // or white for every other draw).
     @location(4) uv: vec2<f32>,
+    // The position in the part's own frame, in metres, and the mesh's normal there: where a material's textures are
+    // projected on a primitive (#679).
+    @location(5) local: vec3<f32>,
+    @location(6) local_normal: vec3<f32>,
+    // The mesh kind: a mesh asset's textures use its own coordinates.
+    @location(7) @interpolate(flat) kind: u32,
 }
 
 // The packed sRGB colour of an instance (red in the lowest byte), as linear light.
@@ -114,12 +134,136 @@ fn place(
     out.color = vec4<f32>(lod_tint(level, mesh_material, unpack_color(color)), 1.0 - transparency);
     out.material = mesh_material & 0xffffu;
     out.uv = uv;
+    out.local = position * vec3<f32>(length(c0), length(c1), length(c2));
+    out.local_normal = normal;
+    out.kind = mesh_material >> 16u;
     return out;
 }
 
-// The base colour at a fragment: the instance's colour times its texture's (linear, since the texture is sRGB).
+// What the light meets at a fragment: the material's constants, times its textures where it has them (#679).
+struct Surface {
+    // The base colour (linear).
+    albedo: vec3<f32>,
+    // The unit world normal, bent by the normal map.
+    n: vec3<f32>,
+    roughness: f32,
+    metalness: f32,
+    // Ambient occlusion: how much of the sky's and the ambient light reaches it.
+    occlusion: f32,
+    // Light emitted.
+    emission: vec3<f32>,
+}
+
+// Where a material's textures are sampled, before wrapping: a mesh asset's own coordinates, or the primitive's
+// position projected along its face's axis, in metres.
+fn material_uv(in: VertexOut, row: MaterialRow) -> vec2<f32> {
+    if in.kind >= BUILTIN_KINDS {
+        return in.uv * row.mesh_uv.xy + row.mesh_uv.zw;
+    }
+    let a = abs(in.local_normal);
+    var planar = in.local.xz;
+    if a.x >= a.y && a.x >= a.z {
+        planar = vec2<f32>(-sign(in.local_normal.x) * in.local.z, -in.local.y);
+    } else if a.z >= a.y {
+        planar = vec2<f32>(sign(in.local_normal.z) * in.local.x, -in.local.y);
+    }
+    return planar * row.uv.xy + row.uv.zw;
+}
+
+// `uv` wrapped as the material says: repeating (the sampler's), mirrored, or held at the edges.
+fn wrapped(uv: vec2<f32>, flags: u32) -> vec2<f32> {
+    if (flags & MATERIAL_MIRROR) != 0u {
+        let t = fract(uv * 0.5) * 2.0;
+        return select(t, 2.0 - t, t > vec2<f32>(1.0));
+    }
+    if (flags & MATERIAL_CLAMP) != 0u {
+        return clamp(uv, vec2<f32>(0.001), vec2<f32>(0.999));
+    }
+    return uv;
+}
+
+// Nearest filtering with the one (smooth) sampler: OpenGL ties a texture to one sampler, so pixel art is the largest
+// level sampled at the centre of the texel `uv` falls in.
+fn texel_centre(uv: vec2<f32>) -> vec2<f32> {
+    let side = f32(textureDimensions(material_color).x);
+    return (floor(uv * side) + 0.5) / side;
+}
+
+fn sample_color(layer: u32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, nearest: bool) -> vec4<f32> {
+    if nearest {
+        return textureSampleLevel(material_color, material_linear, texel_centre(uv), layer, 0.0);
+    }
+    return textureSampleGrad(material_color, material_linear, uv, layer, dx, dy);
+}
+
+fn sample_data(layer: u32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, nearest: bool) -> vec4<f32> {
+    if nearest {
+        return textureSampleLevel(material_data, material_linear, texel_centre(uv), layer, 0.0);
+    }
+    return textureSampleGrad(material_data, material_linear, uv, layer, dx, dy);
+}
+
+// The surface at a fragment. Call it in uniform control flow: it takes derivatives. A material without textures
+// samples none of its own.
+fn surface_of(in: VertexOut) -> Surface {
+    let row = material_row(in.material);
+    let flags = bitcast<u32>(row.surface.z);
+    let base = textureSample(base_texture, base_sampler, in.uv).rgb;
+    let uv = material_uv(in, row);
+    // Gradients of the coordinates before wrapping, so a mirrored or held edge does not pick the smallest mip.
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    let dpx = dpdx(in.position);
+    let dpy = dpdy(in.position);
+    var s: Surface;
+    s.albedo = in.color.rgb * base * row.tint.rgb;
+    s.n = normalize(in.normal);
+    s.roughness = row.surface.x;
+    s.metalness = row.surface.y;
+    s.occlusion = 1.0;
+    s.emission = s.albedo * row.emission.rgb;
+    if (flags & MATERIAL_TEXTURED) != 0u {
+        let at = wrapped(uv, flags);
+        let nearest = (flags & MATERIAL_NEAREST) != 0u;
+        let layers_a = bitcast<u32>(row.tint.w);
+        let layers_b = bitcast<u32>(row.emission.w);
+        let color = layers_a & 0xffffu;
+        let normal = layers_a >> 16u;
+        let orm = layers_b & 0xffffu;
+        let glow = layers_b >> 16u;
+        if color != NO_LAYER {
+            s.albedo *= sample_color(color, at, dx, dy, nearest).rgb;
+            s.emission = s.albedo * row.emission.rgb;
+        }
+        if orm != NO_LAYER {
+            let o = sample_data(orm, at, dx, dy, nearest).rgb;
+            s.occlusion = o.r;
+            s.roughness *= o.g;
+            s.metalness *= o.b;
+        }
+        if glow != NO_LAYER {
+            s.emission *= sample_color(glow, at, dx, dy, nearest).rgb;
+        }
+        if normal != NO_LAYER {
+            // A tangent-space normal map on a frame found from the screen-space derivatives of the position and
+            // the coordinates (Schüler's cotangent frame), so meshes need no stored tangents.
+            let m = sample_data(normal, at, dx, dy, nearest).xyz * 2.0 - 1.0;
+            let bent = vec3<f32>(m.xy * row.surface.w, max(m.z, 1e-3));
+            let p1 = cross(s.n, dpx);
+            let p2 = cross(dpy, s.n);
+            let t = p2 * dx.x + p1 * dy.x;
+            let b = p2 * dx.y + p1 * dy.y;
+            let scale = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-30));
+            s.n = normalize(t * scale * bent.x + b * scale * bent.y + s.n * bent.z);
+        }
+    }
+    return s;
+}
+
+// The base colour at a fragment: the instance's colour times its texture's (linear, since the texture is sRGB), times
+// the material's.
 fn albedo_of(in: VertexOut) -> vec3<f32> {
-    return in.color.rgb * textureSample(base_texture, base_sampler, in.uv).rgb * material_row(in.material).tint.rgb;
+    return surface_of(in).albedo;
 }
 
 fn material_row(row: u32) -> MaterialRow {
@@ -270,11 +414,11 @@ struct Shaded {
     specular: vec3<f32>,
 }
 
-fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
-    let row = material_row(in.material);
-    let roughness = clamp(row.surface.x, 0.045, 1.0);
-    let metalness = row.surface.y;
-    let n = normalize(in.normal);
+fn shade(in: VertexOut, s: Surface) -> Shaded {
+    let albedo = s.albedo;
+    let roughness = clamp(s.roughness, 0.045, 1.0);
+    let metalness = s.metalness;
+    let n = s.n;
     let v = normalize(-in.position);
     let l = frame.light_direction.xyz;
 
@@ -311,11 +455,13 @@ fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     let away = max(-dot(n, l), 0.0);
     // The sky's light only where the sky reaches; Ambient everywhere (#615).
     let open = sky_open(in.position, n);
+    // Ambient occlusion (#679) dims the sky's and the ambient light, not the sun's or the lights'.
     out.body = diffuse / PI * (light + frame.color_shift_bottom.rgb * away)
-        + diffuse * (sky_light(n.y, open) * frame.environment.x + frame.ambient.rgb)
-        + albedo * row.emission.rgb;
+        + diffuse * (sky_light(n.y, open) * frame.environment.x + frame.ambient.rgb) * s.occlusion
+        + s.emission;
     out.specular = distribution * visibility * fresnel * light
-        + env_brdf(f0, roughness, n_dot_v) * (sky_light(reflect(-v, n).y, open) + frame.ambient.rgb) * frame.environment.y;
+        + env_brdf(f0, roughness, n_dot_v) * (sky_light(reflect(-v, n).y, open) + frame.ambient.rgb)
+            * frame.environment.y * s.occlusion;
     // Frames that draw no local light use pipelines made with lights_off.wgsl, whose `local_lighting` adds nothing
     // and binds nothing (parts/mod.rs).
     let local = local_lighting(in.clip.xy, in.position, n, v, n_dot_v, diffuse, f0, a2);
@@ -343,44 +489,46 @@ fn density_heat(count: u32) -> vec3<f32> {
 
 // What a shading view other than Shaded draws at a fragment (parts/shading.rs, #478), before transparency: the
 // part's own colour (unlit), the light alone on a grey surface, or the light-density heat map over the surface's
-// sunlit shape. `albedo` is sampled by the caller, in uniform control flow.
-fn view_color(in: VertexOut, albedo: vec3<f32>, view: u32) -> vec3<f32> {
+// sunlit shape. `surface` is sampled by the caller, in uniform control flow.
+fn view_color(in: VertexOut, surface: Surface, view: u32) -> vec3<f32> {
     if view == 1u {
-        return albedo;
+        return surface.albedo;
     }
     if view == 2u {
-        let s = shade(in, vec3<f32>(0.5));
+        var grey = surface;
+        grey.albedo = vec3<f32>(0.5);
+        grey.emission = grey.albedo * material_row(in.material).emission.rgb;
+        let s = shade(in, grey);
         return s.body + s.specular;
     }
-    let n = normalize(in.normal);
     let count = local_light_count(in.clip.xy, in.position);
-    let sunlit = 0.45 + 0.55 * max(dot(n, frame.light_direction.xyz), 0.0);
+    let sunlit = 0.45 + 0.55 * max(dot(surface.n, frame.light_direction.xyz), 0.0);
     return density_heat(count) * sunlit;
 }
 
 @fragment
 fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
     // Sampled first, in uniform control flow.
-    let albedo = albedo_of(in);
+    let surface = surface_of(in);
     let view = u32(frame.view.x);
     if view != 0u {
-        return vec4<f32>(encode(view_color(in, albedo, view)), 1.0);
+        return vec4<f32>(encode(view_color(in, surface, view)), 1.0);
     }
-    let s = shade(in, albedo);
+    let s = shade(in, surface);
     return vec4<f32>(encode(finish(s.body + s.specular, length(in.position))), 1.0);
 }
 
 // Premultiplied alpha. Glass keeps its reflections at full strength while its body fades.
 @fragment
 fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
-    let albedo = albedo_of(in);
+    let surface = surface_of(in);
     let alpha = in.color.a;
     let view = u32(frame.view.x);
     if view != 0u {
-        return vec4<f32>(encode(view_color(in, albedo, view) * alpha), alpha);
+        return vec4<f32>(encode(view_color(in, surface, view) * alpha), alpha);
     }
-    let s = shade(in, albedo);
-    let glass = material_row(in.material).surface.z > 0.5;
+    let s = shade(in, surface);
+    let glass = (bitcast<u32>(material_row(in.material).surface.z) & MATERIAL_GLASS) != 0u;
     let specular = select(s.specular * alpha, s.specular, glass);
     // Through the fog (#600) the surface gives way to the fog's colour, as much as it covers.
     let lit = s.body * alpha + specular;

@@ -164,7 +164,7 @@ pub use hooks::{RenderFrame, RenderHook, RenderHookError};
 #[cfg(feature = "render")]
 pub use input::InputEvent;
 #[cfg(feature = "render")]
-pub use mesh_assets::{MeshAssets, material_params};
+pub use mesh_assets::{MeshAssets, material_params, material_textures};
 pub use output::StdOutput;
 pub use project::project_sources;
 #[cfg(feature = "render")]

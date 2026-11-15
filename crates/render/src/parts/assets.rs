@@ -16,6 +16,8 @@ use crate::context::in_heap_turn;
 use crate::scene::InstanceBinding;
 use crate::textures::{Slot, TextureMaker, TextureSpec};
 
+use super::material_textures::{MaterialLayers, MaterialTextureSet, MaterialTextures};
+
 /// The bind group index of the base-colour texture on the instance path `binding`.
 pub(crate) const fn texture_group(binding: InstanceBinding) -> u32 {
     match binding {
@@ -45,16 +47,38 @@ struct Pending {
 pub(crate) struct AssetTextures {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// The white texture's sampler (nearest).
+    nearest: wgpu::Sampler,
     /// The white texture's group first ([`WHITE`]), then one per texture.
     groups: Vec<wgpu::BindGroup>,
+    /// Each group's base-colour texture, to make the group again when the materials' arrays grow.
+    views: Vec<wgpu::TextureView>,
     by_key: HashMap<Arc<str>, u32>,
     pending: Vec<Pending>,
+    /// The materials' textures (#679), in every group.
+    materials: MaterialTextures,
     /// Changes whenever a texture's group appears.
     revision: u64,
 }
 
 impl AssetTextures {
     pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let array = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let sampler_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
         let layout = in_heap_turn(|| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("metallic parts texture"),
@@ -69,12 +93,11 @@ impl AssetTextures {
                         },
                         count: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
+                    sampler_entry(1),
+                    // The materials' colour and data arrays and their sampler (#679).
+                    array(2),
+                    array(3),
+                    sampler_entry(4),
                 ],
             })
         });
@@ -98,15 +121,54 @@ impl AssetTextures {
         )
         .make_now(device);
         write(queue, &white, 1, 1, &[255; 4]);
-        let white = group(device, &layout, &white, &nearest);
+        let materials = MaterialTextures::new(device);
+        let white = white.create_view(&wgpu::TextureViewDescriptor::default());
+        let white_group = group(device, &layout, &white, &nearest, &materials);
         Self {
             layout,
             sampler,
-            groups: vec![white],
+            nearest,
+            groups: vec![white_group],
+            views: vec![white],
             by_key: HashMap::new(),
             pending: Vec::new(),
+            materials,
             revision: 0,
         }
+    }
+
+    /// Puts the material `key`'s textures in layers (#679) and returns them. When an array grew, every group is made
+    /// again.
+    pub(crate) fn add_material(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        key: &str,
+        set: &MaterialTextureSet,
+    ) -> MaterialLayers {
+        let (layers, grew) = self.materials.add(device, queue, key, set);
+        if grew {
+            self.groups = self
+                .views
+                .iter()
+                .enumerate()
+                .map(|(index, view)| {
+                    let sampler = if index == WHITE as usize {
+                        &self.nearest
+                    } else {
+                        &self.sampler
+                    };
+                    group(device, &self.layout, view, sampler, &self.materials)
+                })
+                .collect();
+            self.revision = self.revision.wrapping_add(1);
+        }
+        layers
+    }
+
+    /// Frees the material `key`'s layers.
+    pub(crate) fn remove_material(&mut self, key: &str) {
+        self.materials.remove(key);
     }
 
     /// The layout of a texture's group.
@@ -185,12 +247,17 @@ impl AssetTextures {
                 continue;
             };
             write(queue, &texture, pending.width, pending.height, &pending.rgba);
-            let group = group(device, &self.layout, &texture, &self.sampler);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let group = group(device, &self.layout, &view, &self.sampler, &self.materials);
             match self.by_key.get(&pending.key) {
-                Some(&index) => self.groups[index as usize] = group,
+                Some(&index) => {
+                    self.groups[index as usize] = group;
+                    self.views[index as usize] = view;
+                }
                 None => {
                     self.by_key.insert(pending.key, self.groups.len() as u32);
                     self.groups.push(group);
+                    self.views.push(view);
                 }
             }
             self.revision = self.revision.wrapping_add(1);
@@ -219,21 +286,34 @@ fn write(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32, 
 fn group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    texture: &wgpu::Texture,
+    view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    materials: &MaterialTextures,
 ) -> wgpu::BindGroup {
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let (color, data, linear) = materials.bindings();
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("metallic parts texture"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
+                resource: wgpu::BindingResource::TextureView(view),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(color),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(data),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(linear),
             },
         ],
     })

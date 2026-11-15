@@ -2613,6 +2613,30 @@ impl HandParts {
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
         let nearest = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        // The materials' texture arrays (#679): one layer each, unsampled by these primitives' plain materials.
+        let array = |label, format| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    ..wgpu::TextureViewDescriptor::default()
+                })
+        };
+        let material_color = array("hand material colour", wgpu::TextureFormat::Rgba8UnormSrgb);
+        let material_data = array("hand material data", wgpu::TextureFormat::Rgba8Unorm);
         let texture_group = |pipeline: &wgpu::RenderPipeline| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("hand white"),
@@ -2624,6 +2648,18 @@ impl HandParts {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&nearest),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&material_color),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&material_data),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
                         resource: wgpu::BindingResource::Sampler(&nearest),
                     },
                 ],
