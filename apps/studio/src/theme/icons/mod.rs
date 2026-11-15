@@ -363,6 +363,8 @@ icons! {
     UiMoveDown = "ui.move_down", Interface, "chevron-down";
     /// Delete.
     UiDelete = "ui.delete", Interface, "trash-2";
+    /// A grip to drag something by (#667).
+    UiGrip = "ui.grip", Interface, "grip-vertical";
 }
 
 /// The file types a custom icon may be, in the order one is preferred when both are there.

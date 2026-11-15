@@ -107,3 +107,4 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `ui.move_up` | Move up in a list. | Interface | [`interface/chevron-up.svg`](https://lucide.dev/icons/chevron-up) | `ui.move_up.svg`, `ui.move_up.png` |
 | `ui.move_down` | Move down in a list. | Interface | [`interface/chevron-down.svg`](https://lucide.dev/icons/chevron-down) | `ui.move_down.svg`, `ui.move_down.png` |
 | `ui.delete` | Delete. | Interface | [`interface/trash-2.svg`](https://lucide.dev/icons/trash-2) | `ui.delete.svg`, `ui.delete.png` |
+| `ui.grip` | A grip to drag something by (#667). | Interface | [`interface/grip-vertical.svg`](https://lucide.dev/icons/grip-vertical) | `ui.grip.svg`, `ui.grip.png` |

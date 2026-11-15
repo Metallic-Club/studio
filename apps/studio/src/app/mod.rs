@@ -7758,10 +7758,42 @@ mod tests {
             .click();
         settle(&mut harness);
         assert!(config(&harness).tabs[3].own_layout);
-        harness.get_by_role_and_label(Role::Button, "Move Plugins up").click();
+        // Plugins' grip, focused, and the up arrow (#667).
+        harness.get_by_role_and_label(Role::Button, "Move Plugins").focus();
         settle(&mut harness);
-        let names: Vec<String> = config(&harness).tabs.iter().map(|tab| tab.name.clone()).collect();
-        assert_eq!(names, ["Home", "Model", "UI", "Plugins", "Scripts"]);
+        harness.key_press(Key::ArrowUp);
+        settle(&mut harness);
+        let names = |harness: &Harness<'_, Test>| -> Vec<String> {
+            config(harness).tabs.iter().map(|tab| tab.name.clone()).collect()
+        };
+        assert_eq!(names(&harness), ["Home", "Model", "UI", "Plugins", "Scripts"]);
+        // Scripts' grip dragged above Model's row (#667), and let go there.
+        let from = harness
+            .get_by_role_and_label(Role::Button, "Move Scripts")
+            .rect()
+            .center();
+        let model_row = harness.get_by_role_and_label(Role::Button, "Move Model").rect();
+        let to = egui::pos2(from.x, model_row.top() + 2.0);
+        harness.event(egui::Event::PointerMoved(from));
+        harness.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        harness.step();
+        for step in 1..=6 {
+            harness.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 6.0)));
+            harness.step();
+        }
+        harness.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        settle(&mut harness);
+        assert_eq!(names(&harness), ["Home", "Scripts", "Model", "UI", "Plugins"]);
         // The tabs move to the right of the row.
         let home = toolbar_tab(&harness, "Home");
         harness.get_by_role(Role::ComboBox).click();
