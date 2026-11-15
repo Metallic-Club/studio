@@ -68,6 +68,11 @@ pub struct Project {
     archive: Archive,
     /// Every file member of the archive on disk, by path, with its index in the archive.
     stored: BTreeMap<String, usize>,
+    /// The folders that exist of their own, empty or not (#676): the archive's directory entries, as edited. Every
+    /// other folder is only the path of a member in it ([`Project::folders`]).
+    folders: BTreeSet<String>,
+    /// The explicit folders as the archive on disk has them, to tell whether they changed.
+    stored_folders: BTreeSet<String>,
     /// Changes since the project was opened or last saved: a member's new contents, or `None` once removed.
     edits: BTreeMap<String, Option<Vec<u8>>>,
     manifest: Manifest,
@@ -100,11 +105,13 @@ impl Project {
             path: path.clone(),
             reason: error.to_string(),
         })?;
-        let stored = index(&archive, &path)?;
+        let (stored, folders) = index(&archive, &path)?;
         let mut project = Self {
             path,
             archive,
             stored,
+            stored_folders: folders.clone(),
+            folders,
             edits: BTreeMap::new(),
             manifest: Manifest::new(""),
             warnings: Vec::new(),
@@ -260,7 +267,37 @@ impl Project {
 
     /// Whether there are edits [`Project::save`] has not written yet.
     pub fn is_modified(&self) -> bool {
-        !self.edits.is_empty()
+        !self.edits.is_empty() || self.folders != self.stored_folders
+    }
+
+    /// Every folder of the project, sorted: those made of their own ([`Project::create_folder`]), empty or not, and
+    /// every folder that holds a member, with their parents. A folder is written as its path (`Assets/Trees`).
+    pub fn folders(&self) -> Vec<String> {
+        let mut folders: BTreeSet<String> = BTreeSet::new();
+        let add_parents = |path: &str, folders: &mut BTreeSet<String>| {
+            let mut at = path;
+            while let Some((parent, _)) = at.rsplit_once('/') {
+                if !folders.insert(parent.to_owned()) {
+                    break;
+                }
+                at = parent;
+            }
+        };
+        for folder in &self.folders {
+            folders.insert(folder.clone());
+            add_parents(folder, &mut folders);
+        }
+        for member in self.members() {
+            add_parents(member, &mut folders);
+        }
+        folders.into_iter().collect()
+    }
+
+    /// Whether `folder` is one of [`Project::folders`].
+    pub fn has_folder(&self, folder: &str) -> bool {
+        let prefix = format!("{folder}/");
+        self.folders.iter().any(|f| f == folder || f.starts_with(&prefix))
+            || self.members().iter().any(|member| member.starts_with(&prefix))
     }
 
     /// The contents of `member`: its unsaved edit, or else what the archive holds (read and inflated now).
@@ -313,10 +350,15 @@ impl Project {
     }
 
     /// Removes `member` (in memory until [`Project::save`]). Returns whether it was there. `metallic.toml` and
-    /// `assets.json` cannot be removed.
+    /// `assets.json` cannot be removed. The folder it was in stays, even if it is empty now.
     pub fn remove(&mut self, member: &str) -> bool {
         if member == MANIFEST_FILE || member == INDEX_FILE || !self.contains(member) {
             return false;
+        }
+        if let Some((folder, _)) = member.rsplit_once('/')
+            && !crate::asset_index::is_editor_data(member)
+        {
+            self.folders.insert(folder.to_owned());
         }
         if self.stored.contains_key(member) {
             self.edits.insert(member.to_owned(), None);
@@ -415,21 +457,30 @@ impl Project {
     pub fn save(&mut self) -> Result<(), ProjectError> {
         let members: Vec<String> = self.members().into_iter().map(str::to_owned).collect();
         let Self {
-            archive, stored, edits, ..
+            archive,
+            stored,
+            edits,
+            folders,
+            ..
         } = self;
-        // The manifest first, so a tool listing the archive sees it at once.
-        let ordered = members
-            .iter()
-            .filter(|member| *member == MANIFEST_FILE)
-            .chain(members.iter().filter(|member| *member != MANIFEST_FILE));
         write_archive(&self.path, |writer| {
-            for member in ordered {
+            let mut copy = |writer: &mut ZipWriter<BufWriter<Sink>>, member: &str| -> Result<(), ZipError> {
                 match (edits.get(member), stored.get(member)) {
-                    (Some(Some(bytes)), _) => write_member(writer, member, bytes)?,
-                    (_, Some(&index)) => writer.raw_copy_file(archive.by_index(index)?)?,
+                    (Some(Some(bytes)), _) => write_member(writer, member, bytes),
+                    (_, Some(&index)) => writer.raw_copy_file(archive.by_index(index)?),
                     // `members` only lists members that are edited or stored.
-                    _ => {}
+                    _ => Ok(()),
                 }
+            };
+            // The manifest first, so a tool listing the archive sees it at once, then the folders of their own.
+            if members.iter().any(|member| member == MANIFEST_FILE) {
+                copy(writer, MANIFEST_FILE)?;
+            }
+            for folder in folders.iter() {
+                write_folder(writer, folder)?;
+            }
+            for member in members.iter().filter(|member| *member != MANIFEST_FILE) {
+                copy(writer, member)?;
             }
             Ok(())
         })?;
@@ -701,8 +752,9 @@ pub fn compression_for(member: &str) -> CompressionMethod {
 
 /// The file members of `archive` by path, each checked. Folder entries (paths ending in `/`, which zip tools add)
 /// are checked too, then left out.
-fn index(archive: &Archive, path: &Path) -> Result<BTreeMap<String, usize>, ProjectError> {
+fn index(archive: &Archive, path: &Path) -> Result<(BTreeMap<String, usize>, BTreeSet<String>), ProjectError> {
     let mut stored = BTreeMap::new();
+    let mut folders = BTreeSet::new();
     for (i, name) in archive.file_names().enumerate() {
         let name = name.map_err(|error| ProjectError::NotAZip {
             path: path.to_path_buf(),
@@ -717,11 +769,21 @@ fn index(archive: &Archive, path: &Path) -> Result<BTreeMap<String, usize>, Proj
             member: name.to_string(),
             reason,
         })?;
-        if !is_folder {
+        if is_folder {
+            folders.insert(member.to_owned());
+        } else {
             stored.insert(member.to_owned(), i);
         }
     }
-    Ok(stored)
+    Ok((stored, folders))
+}
+
+/// Writes a folder's directory entry (`Name/`), dated like every member.
+fn write_folder(writer: &mut ZipWriter<BufWriter<Sink>>, folder: &str) -> Result<(), ZipError> {
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(DateTime::default());
+    writer.add_directory(format!("{folder}/"), options)
 }
 
 /// Writes one member, compressed as [`compression_for`] says, dated 1980-01-01 so archives are deterministic.

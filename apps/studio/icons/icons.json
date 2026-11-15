@@ -92,6 +92,10 @@
       "file": "assets/file.svg",
       "color": "other"
     },
+    "asset.folder": {
+      "file": "assets/folder.svg",
+      "color": "object"
+    },
     "asset.image": {
       "file": "assets/image.svg",
       "color": "content"
@@ -320,6 +324,9 @@
     },
     "ui.add": {
       "file": "interface/plus.svg"
+    },
+    "ui.back": {
+      "file": "interface/arrow-left.svg"
     },
     "ui.check": {
       "file": "interface/check.svg"

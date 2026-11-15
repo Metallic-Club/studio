@@ -125,6 +125,15 @@ impl Scripts {
         self.edited();
     }
 
+    /// Follows a file that moved from `from` to `to` in the Assets browser (#676): its text as edited goes with it.
+    pub fn moved(&mut self, from: &str, to: &str) {
+        if let Some(text) = self.texts.remove(from) {
+            self.texts.insert(to.to_owned(), text);
+        }
+        self.checked.remove(from);
+        self.edited();
+    }
+
     /// Notes that a file was edited: every file is checked again (#530).
     pub fn edited(&mut self) {
         self.edits += 1;

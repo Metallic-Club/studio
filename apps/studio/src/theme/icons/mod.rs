@@ -293,6 +293,8 @@ icons! {
     AssetScene = "asset.scene", Object, "list-tree";
     /// A script in the Assets panel.
     AssetScript = "asset.script", ServerScript, "scroll";
+    /// A folder in the Assets panel (#676).
+    AssetFolder = "asset.folder", Object, "folder";
     /// Any other file in the Assets panel.
     AssetFile = "asset.file", Other, "file";
     /// Play, and Resume while paused.
@@ -365,6 +367,8 @@ icons! {
     UiDelete = "ui.delete", Interface, "trash-2";
     /// A grip to drag something by (#667).
     UiGrip = "ui.grip", Interface, "grip-vertical";
+    /// Back to the folder opened before (#676).
+    UiBack = "ui.back", Interface, "arrow-left";
 }
 
 /// The file types a custom icon may be, in the order one is preferred when both are there.
