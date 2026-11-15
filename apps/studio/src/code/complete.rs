@@ -8,6 +8,8 @@
 
 use std::ops::Range;
 
+use metallic_engine::metallic_core::{DataModel, Id};
+
 use super::analysis::{Analysis, DeclKind, Env, Ref, Ty};
 use super::api::Member;
 use super::lexer::{KEYWORDS, TokenKind};
@@ -31,6 +33,8 @@ pub enum ItemKind {
     Keyword,
     /// A class's or a service's name, in a string.
     Class,
+    /// A ModuleScript of the game, required when taken (#652).
+    Module,
 }
 
 impl ItemKind {
@@ -45,6 +49,7 @@ impl ItemKind {
             ItemKind::Global => "G",
             ItemKind::Keyword => "K",
             ItemKind::Class => "T",
+            ItemKind::Module => "R",
         }
     }
 }
@@ -60,6 +65,8 @@ pub struct Item {
     pub detail: String,
     /// What it does.
     pub doc: String,
+    /// For a ModuleScript (#652): the `local name = require(path)` line taking it adds near the top.
+    pub require: Option<String>,
 }
 
 /// The suggestions at a place, and what taking one replaces.
@@ -170,6 +177,7 @@ fn everything(analysis: &Analysis, at: usize, env: &Env<'_>) -> Vec<Item> {
             kind: ItemKind::Keyword,
             detail: String::new(),
             doc: String::new(),
+            require: None,
         })
         .collect();
     for decl in analysis.visible(at) {
@@ -189,6 +197,7 @@ fn everything(analysis: &Analysis, at: usize, env: &Env<'_>) -> Vec<Item> {
             },
             detail: type_name(&ty, env),
             doc: String::new(),
+            require: None,
         });
     }
     for global in env.api().globals.values() {
@@ -201,9 +210,113 @@ fn everything(analysis: &Analysis, at: usize, env: &Env<'_>) -> Vec<Item> {
             },
             detail: global.ty.clone(),
             doc: global.doc.clone(),
+            require: None,
         });
     }
+    // The game's ModuleScripts (#652), but for the script itself and a name already standing for something here.
+    let named: Vec<String> = items
+        .iter()
+        .filter(|item| item.kind != ItemKind::Keyword)
+        .map(|item| item.label.clone())
+        .collect();
+    items.extend(module_items(env, &named));
     items
+}
+
+/// Whether `name` can be written as a name in Luau: not empty, not a keyword, no character a name cannot have.
+fn is_identifier(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| !c.is_ascii_digit())
+        && name.chars().all(is_name_char)
+        && !KEYWORDS.contains(&name)
+}
+
+/// The game's ModuleScripts as suggestions that require them when taken (#652): each but the script itself and those
+/// whose name is not a Luau name or is in `named` already.
+fn module_items(env: &Env<'_>, named: &[String]) -> Vec<Item> {
+    let dm = env.dm;
+    let Some(root) = dm.root() else {
+        return Vec::new();
+    };
+    let Ok(all) = dm.descendants(root) else {
+        return Vec::new();
+    };
+    all.filter(|&id| Some(id) != env.script && dm.class_name(id).ok() == Some("ModuleScript"))
+        .filter_map(|id| {
+            let name = dm.name(id).ok()?;
+            if !is_identifier(name) || named.iter().any(|taken| taken == name) {
+                return None;
+            }
+            let (path, shown) = require_path(dm, root, id)?;
+            let line = format!("local {name} = require({path})");
+            Some(Item {
+                label: name.to_owned(),
+                kind: ItemKind::Module,
+                detail: shown,
+                doc: format!("Adds `{line}` near the top."),
+                require: Some(line),
+            })
+        })
+        .collect()
+}
+
+/// How code reaches the instance `id` from `game` (`root`): `game:GetService("ReplicatedStorage").Folder.cheese`, with
+/// `:WaitForChild("…")` for a name that is not a Luau name; and the same path shown short,
+/// `ReplicatedStorage.Folder.cheese`.
+fn require_path(dm: &DataModel, root: Id, id: Id) -> Option<(String, String)> {
+    let mut chain = vec![id];
+    let mut at = id;
+    loop {
+        let parent = dm.parent(at).ok()??;
+        if parent == root {
+            break;
+        }
+        chain.push(parent);
+        at = parent;
+    }
+    chain.reverse();
+    let (service, rest) = chain.split_first()?;
+    let mut path = format!("game:GetService(\"{}\")", dm.class_name(*service).ok()?);
+    let mut shown = dm.name(*service).ok()?.to_owned();
+    for &step in rest {
+        let name = dm.name(step).ok()?;
+        if is_identifier(name) {
+            path.push('.');
+            path.push_str(name);
+        } else {
+            let quoted = name.replace('\\', "\\\\").replace('"', "\\\"");
+            path.push_str(&format!(":WaitForChild(\"{quoted}\")"));
+        }
+        shown.push('.');
+        shown.push_str(name);
+    }
+    Some((path, shown))
+}
+
+/// Where a `require` line goes in `text` (#652), as a byte offset and the text to put there for `line`: after the
+/// comments, `require`s and `GetService`s the file starts with, else at the top with a blank line after it.
+pub fn require_insertion(text: &str, line: &str) -> (usize, String) {
+    let mut end = None;
+    let mut offset = 0;
+    for row in text.split_inclusive('\n') {
+        let trimmed = row.trim();
+        if trimmed.is_empty() {
+            offset += row.len();
+            continue;
+        }
+        let header = trimmed.starts_with("--")
+            || (trimmed.starts_with("local ") && (trimmed.contains("require(") || trimmed.contains(":GetService(")));
+        if !header {
+            break;
+        }
+        offset += row.len();
+        end = Some((offset, row.ends_with('\n')));
+    }
+    match end {
+        Some((at, true)) => (at, format!("{line}\n")),
+        Some((at, false)) => (at, format!("\n{line}")),
+        None if text.is_empty() => (0, format!("{line}\n")),
+        None => (0, format!("{line}\n\n")),
+    }
 }
 
 /// The members of a value of type `ty`, after `.` or with `methods` after `:`.
@@ -229,6 +342,7 @@ pub fn members(analysis: &Analysis, ty: &Ty, methods: bool, env: &Env<'_>) -> Ve
                             kind: ItemKind::Child,
                             detail: env.class(child).unwrap_or_default(),
                             doc: format!("A child of {}.", env.dm.name(*id).unwrap_or_default()),
+                            require: None,
                         });
                     }
                 }
@@ -286,6 +400,7 @@ fn table_items(analysis: &Analysis, owner: usize, env: &Env<'_>) -> Vec<Item> {
                 },
                 detail: type_name(&analysis.decl_type(field, env), env),
                 doc: String::new(),
+                require: None,
             }
         })
         .collect()
@@ -304,6 +419,7 @@ fn member_item(member: &Member) -> Item {
         },
         detail: member.ty.clone(),
         doc: member.doc.clone(),
+        require: None,
     }
 }
 
@@ -331,6 +447,7 @@ fn in_string(analysis: &Analysis, quote: usize, at: usize, env: &Env<'_>) -> Opt
                     .get(info.name())
                     .map(|def| def.doc.clone())
                     .unwrap_or_default(),
+                require: None,
             })
             .collect()
     };
@@ -356,6 +473,7 @@ fn in_string(analysis: &Analysis, quote: usize, at: usize, env: &Env<'_>) -> Opt
                         kind: ItemKind::Child,
                         detail: env.class(child).unwrap_or_default(),
                         doc: String::new(),
+                        require: None,
                     })
                     .collect(),
                 _ => Vec::new(),
@@ -607,5 +725,83 @@ mod tests {
         assert!(hover("print").doc.contains("output"));
         assert!(hover("pi").title.starts_with("math.pi"));
         assert_eq!(hover("workspace").title, "workspace: Workspace");
+    }
+
+    /// A ModuleScript named `name` in a folder `folder` made in ReplicatedStorage.
+    fn add_module(dm: &mut DataModel, folder: &str, name: &str) -> Id {
+        let class = |dm: &DataModel, name: &str| dm.registry().class_id(name).unwrap();
+        let storage = dm.service(class(dm, "ReplicatedStorage")).unwrap();
+        let parent = dm.create(class(dm, "Folder")).unwrap();
+        dm.set_name(parent, folder.into()).unwrap();
+        dm.set_parent(parent, Some(storage)).unwrap();
+        let module = dm.create(class(dm, "ModuleScript")).unwrap();
+        dm.set_name(module, name.into()).unwrap();
+        dm.set_parent(module, Some(parent)).unwrap();
+        module
+    }
+
+    /// The suggestions where `|` is in `code`, in the script `script`.
+    fn items(dm: &DataModel, code: &str, script: Option<Id>) -> Vec<Item> {
+        let at = code.find('|').unwrap();
+        let source = code.replace('|', "");
+        let analysis = Analysis::new(&source);
+        let env = Env {
+            dm,
+            script,
+            module: &no_modules,
+        };
+        complete(&analysis, at, &env).map(|c| c.items).unwrap_or_default()
+    }
+
+    /// #652: a ModuleScript is suggested by its name, with the `require` taking it adds; not where a local has the
+    /// name already, nor in the module itself; a folder whose name is not a Luau name is reached by `WaitForChild`.
+    #[test]
+    fn modules_are_suggested_with_their_require() {
+        let mut dm = game();
+        let cheese = add_module(&mut dm, "Food", "cheese");
+        let found = items(&dm, "chee|", None);
+        let item = found
+            .iter()
+            .find(|item| item.label == "cheese")
+            .expect("cheese is suggested");
+        assert_eq!(item.kind, ItemKind::Module);
+        assert_eq!(item.detail, "ReplicatedStorage.Food.cheese");
+        assert_eq!(
+            item.require.as_deref(),
+            Some(r#"local cheese = require(game:GetService("ReplicatedStorage").Food.cheese)"#)
+        );
+        let shadowed = items(&dm, "local cheese = 1\nchee|", None);
+        assert!(
+            shadowed.iter().all(|item| item.kind != ItemKind::Module),
+            "{shadowed:?}"
+        );
+        assert!(
+            items(&dm, "chee|", Some(cheese))
+                .iter()
+                .all(|item| item.label != "cheese")
+        );
+        add_module(&mut dm, "my folder", "Util");
+        let found = items(&dm, "Uti|", None);
+        let util = found.iter().find(|item| item.label == "Util").unwrap();
+        assert_eq!(
+            util.require.as_deref(),
+            Some(r#"local Util = require(game:GetService("ReplicatedStorage"):WaitForChild("my folder").Util)"#)
+        );
+    }
+
+    /// #652: the `require` goes after the comments, requires and services the file starts with, else on top.
+    #[test]
+    fn a_require_goes_after_the_file_s_header() {
+        let line = "local cheese = require(x)";
+        assert_eq!(require_insertion("", line), (0, format!("{line}\n")));
+        assert_eq!(require_insertion("print(1)\n", line), (0, format!("{line}\n\n")));
+        let header = "--!strict\nlocal Players = game:GetService(\"Players\")\n\nprint(1)\n";
+        let (at, with) = require_insertion(header, line);
+        assert_eq!(
+            &header[..at],
+            "--!strict\nlocal Players = game:GetService(\"Players\")\n"
+        );
+        assert_eq!(with, format!("{line}\n"));
+        assert_eq!(require_insertion("-- hi", line), (5, format!("\n{line}")));
     }
 }
