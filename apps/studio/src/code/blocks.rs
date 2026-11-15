@@ -3,8 +3,9 @@
 //!
 //! A line opens a block when it ends in `then` (of an `if`, not an `elseif`), `do` (of `for`, `while` or a bare
 //! `do`), `repeat`, or the `)` that closes a `function`'s parameters, named or not, with its return type after it if
-//! it has one (#656). An anonymous function inside a call's brackets, `x.Touched:Connect(function(hit)`, is closed with
-//! `end)`. Whether the block is closed is a count over the whole script: more `function`, `if` and `do` than `end` (or more `repeat` than `until`) means one is open.
+//! it has one (#656). An anonymous function inside a call's brackets, `x.Touched:Connect(function(hit)`, is closed
+//! with `end)`. Whether the block is closed is a count over the whole script: more `function`, `if` and `do` than
+//! `end` (or more `repeat` than `until`) means one is open.
 //!
 //! A block comment is closed the same way (#575): Enter after a line that opens `--[[` (or `--[==[`) not closed
 //! anywhere after it steps in and puts the `]]` (or `]==]`) under it.
