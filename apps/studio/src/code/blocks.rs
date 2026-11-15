@@ -2,7 +2,8 @@
 //! closed yet, its `end` (or `until`) under it, as Roblox Studio's script editor does.
 //!
 //! A line opens a block when it ends in `then` (of an `if`, not an `elseif`), `do` (of `for`, `while` or a bare
-//! `do`), `repeat`, or the `)` that closes a `function`'s parameters, named or not. An anonymous function inside a
+//! `do`), `repeat`, or the `)` that closes a `function`'s parameters, named or not, with its return type after it if
+//! it has one (#656). An anonymous function inside a
 //! call's brackets, `x.Touched:Connect(function(hit)`, is closed with `end)`. Whether the block is closed is a count
 //! over the whole script: more `function`, `if` and `do` than `end` (or more `repeat` than `until`) means one is open.
 //!
@@ -116,29 +117,38 @@ fn opens(line: &str, tokens: &[Token]) -> Option<(Closer, usize)> {
     if last.is(line, "repeat") {
         return Some((Closer::Until, 0));
     }
-    if last.is(line, ")") {
+    {
         let function = tokens.iter().rposition(|token| token.is(line, "function"))?;
-        // `function name(...)`, `function a.b:c(...)` or `function(...)`: the `)` closes the first `(` after it.
+        // `function name(...)`, `function a.b:c(...)`, `function f<T>(...)` or `function(...)`: the `)` closes the
+        // first `(` after it.
         let open = function + tokens[function..].iter().position(|token| token.is(line, "("))?;
-        if !tokens[function + 1..open]
-            .iter()
-            .all(|token| token.kind == TokenKind::Name || token.is(line, ".") || token.is(line, ":"))
-        {
+        let header = |token: &Token| {
+            token.kind == TokenKind::Name || [".", ":", "<", ">", ","].iter().any(|symbol| token.is(line, symbol))
+        };
+        if !tokens[function + 1..open].iter().all(header) {
             return None;
         }
         let mut depth = 0usize;
+        let mut close = None;
         for (index, token) in tokens.iter().enumerate().skip(open) {
             if token.is(line, "(") {
                 depth += 1;
             } else if token.is(line, ")") {
                 depth = depth.checked_sub(1)?;
                 if depth == 0 {
-                    if index != tokens.len() - 1 {
-                        return None;
-                    }
+                    close = Some(index);
                     break;
                 }
             }
+        }
+        // After the parameters, nothing or a return type (#656): `: string`, `: Instance?`, `: (Instance)`,
+        // `: (number) -> ()`; not the function's body closed on the line.
+        let rest = &tokens[close? + 1..];
+        let typed = rest.first().is_some_and(|token| token.is(line, ":"))
+            && rest.len() > 1
+            && !rest.iter().any(|token| token.is(line, "end"));
+        if !rest.is_empty() && !typed {
+            return None;
         }
         // The brackets the function is inside, on this line.
         let brackets = tokens[..function].iter().fold(0usize, |open, token| {
@@ -150,9 +160,8 @@ fn opens(line: &str, tokens: &[Token]) -> Option<(Closer, usize)> {
                 open
             }
         });
-        return Some((Closer::End, brackets));
+        Some((Closer::End, brackets))
     }
-    None
 }
 
 /// Whether `text` has a block closed by `closer` that is not closed.
@@ -211,6 +220,45 @@ mod tests {
         );
         // The `)` after the cursor goes under, after the `end`.
         assert_eq!(typed("task.spawn(function()|)"), "task.spawn(function()\n\t|\nend)");
+    }
+
+    /// #656: a function with a return type or generics opens its block as one without does.
+    #[test]
+    fn a_function_with_a_return_type_or_generics_is_closed() {
+        assert_eq!(
+            typed("function module.FunctionName(Name: string) : (Instance)"),
+            "function module.FunctionName(Name: string) : (Instance)\n\t|\nend"
+        );
+        assert_eq!(
+            typed("local function f(x: number): string"),
+            "local function f(x: number): string\n\t|\nend"
+        );
+        assert_eq!(
+            typed("function Door:Find(): Instance?"),
+            "function Door:Find(): Instance?\n\t|\nend"
+        );
+        assert_eq!(
+            typed("function map<T, U>(xs: {T}): {U}"),
+            "function map<T, U>(xs: {T}): {U}\n\t|\nend"
+        );
+        assert_eq!(
+            typed("function f(cb: (number) -> ()): (number) -> ()"),
+            "function f(cb: (number) -> ()): (number) -> ()\n\t|\nend"
+        );
+        assert_eq!(
+            typed("local f = function(x): number"),
+            "local f = function(x): number\n\t|\nend"
+        );
+        assert_eq!(
+            typed("task.spawn(function(): ()|)"),
+            "task.spawn(function(): ()\n\t|\nend)"
+        );
+        // Closed on its line, or no type after the colon: a plain Enter.
+        assert_eq!(
+            typed("local f = function(): number return 1 end"),
+            "local f = function(): number return 1 end\n|"
+        );
+        assert_eq!(typed("function f() :"), "function f() :\n|");
     }
 
     #[test]
