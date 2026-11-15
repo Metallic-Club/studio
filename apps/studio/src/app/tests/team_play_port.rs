@@ -4,7 +4,7 @@
 use egui::Role;
 use egui_kittest::kittest::Queryable;
 
-use super::team_create::host;
+use super::team_create::{free_pairs, host, hosted_port, open_menu};
 use super::*;
 use crate::team::PlayMode;
 
@@ -54,4 +54,23 @@ fn team_create_play_serves_on_the_port_after_the_sessions() {
         "{notice}"
     );
     a.state_mut().studio.team_action(crate::team::menu::TeamAction::End);
+}
+
+/// #651: a session asked for on a port something else holds moves up to the next free pair, and the menu says so.
+#[test]
+fn hosting_on_a_taken_port_moves_to_the_next_free_pair() {
+    let mut a = editing(settings_file("busy-port-host", None), "Busy Port");
+    // Two pairs, so the one the session moves to is no other test's.
+    let asked = free_pairs(2);
+    let _held = std::net::TcpListener::bind(("0.0.0.0", asked)).unwrap();
+    open_menu(&mut a);
+    a.state_mut().studio.team_mut().form.port = asked.to_string();
+    a.get_by_role_and_label(Role::Button, "Start hosting").click();
+    settle(&mut a);
+    let port = hosted_port(&a);
+    assert_eq!(port, asked + 2);
+    a.get_by_label_contains(&format!(
+        "Port {asked} or the one after it was in use, so the session is on {port}."
+    ));
+    assert_eq!(a.state().studio.team().form.port, port.to_string());
 }

@@ -34,6 +34,7 @@ use metallic_engine::metallic_net::collab::client::{Client, ClientEvent};
 use metallic_engine::metallic_net::collab::host::{Host, HostConfig, HostEvent, ProjectSnapshot};
 use metallic_engine::metallic_net::collab::protocol::{DEFAULT_PORT, ProjectId, SessionInfo};
 use metallic_engine::metallic_net::collab::{ClientLink, HostServer};
+use metallic_engine::metallic_net::forward::PortForward;
 use metallic_engine::metallic_net::identity::{Identity, User, UserId};
 use metallic_engine::metallic_net::registry_fingerprint;
 use metallic_engine::metallic_net::transport::{self, Waker};
@@ -62,6 +63,40 @@ pub struct Hosting {
     pub started: Instant,
     /// The scene and presence sync, while the hosted project is open.
     pub live: Option<live::HostLive>,
+    /// The session's ports forwarded on the router, while hosting (#651); none in tests, which must not touch a real
+    /// router.
+    pub forward: Option<PortForward>,
+}
+
+/// How many pairs of ports up from the one asked for hosting tries before giving up (#651).
+const PORT_TRIES: u16 = 10;
+
+/// Whether TCP `port` can be listened on here now.
+fn port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
+/// The ports to try for a session, from `asked` up: pairs, as Team Create Play serves on the port after the
+/// session's (#639).
+fn port_candidates(asked: u16) -> impl Iterator<Item = u16> {
+    (0..PORT_TRIES)
+        .filter_map(move |i| asked.checked_add(i * 2))
+        .filter(|port| *port < u16::MAX)
+}
+
+/// Asks the router to forward the session's port and Team Create Play's (#651).
+#[cfg(not(test))]
+fn forward_ports(port: u16, waker: &Waker) -> Option<PortForward> {
+    let ports = std::iter::once(port).chain(play_port_after(port)).collect();
+    PortForward::start(ports, "Metallic Team Create".to_owned(), Arc::clone(waker))
+        .map_err(|error| log::warn!("team create: {error}"))
+        .ok()
+}
+
+/// Tests never touch a real router.
+#[cfg(test)]
+fn forward_ports(_port: u16, _waker: &Waker) -> Option<PortForward> {
+    None
 }
 
 /// A join under way.
@@ -403,7 +438,7 @@ impl TeamCreate {
         if self.is_in_cache(editor.path()) {
             return Err("This is a copy of someone else's project: only its owner can host it.".to_owned());
         }
-        let port = parse_port(&self.form.port)?;
+        let asked = parse_port(&self.form.port)?;
         let path = editor.path().to_path_buf();
         let project = self.store.id_for_owned(&path);
         let config = HostConfig {
@@ -417,8 +452,31 @@ impl TeamCreate {
             engine: ENGINE.to_owned(),
             fingerprint: registry_fingerprint(editor.dm.registry()),
         };
-        let server = HostServer::start(port, Host::new(config), Arc::clone(&self.waker)).map_err(capitalise)?;
+        // The port asked for when it and the one after it are free, or the next free pair up (#651).
+        let mut server = None;
+        let mut last_error = None;
+        for candidate in port_candidates(asked) {
+            if !(port_free(candidate) && play_port_after(candidate).is_some_and(port_free)) {
+                continue;
+            }
+            match HostServer::start(candidate, Host::new(config.clone()), Arc::clone(&self.waker)) {
+                Ok(started) => {
+                    server = Some(started);
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        let server = server.ok_or_else(|| {
+            capitalise(last_error.unwrap_or_else(|| {
+                format!(
+                    "ports {asked} to {} are in use: try another port",
+                    asked.saturating_add(PORT_TRIES * 2)
+                )
+            }))
+        })?;
         let port = server.port();
+        let forward = forward_ports(port, &self.waker);
         let addresses = transport::local_addresses();
         log::info!("team create: hosting {} on port {port}", editor.name());
         self.store.port = port;
@@ -432,7 +490,13 @@ impl TeamCreate {
             port,
             last_used: 0,
         });
-        self.note = None;
+        self.note = (port != asked).then(|| Note {
+            error: false,
+            text: format!("Port {asked} or the one after it was in use, so the session is on {port}."),
+        });
+        if port != asked {
+            self.form.port = port.to_string();
+        }
         let live = live::HostLive::new(editor)?;
         self.session = Session::Hosting(Box::new(Hosting {
             server,
@@ -440,6 +504,7 @@ impl TeamCreate {
             addresses,
             started: Instant::now(),
             live: Some(live),
+            forward,
         }));
         Ok(())
     }

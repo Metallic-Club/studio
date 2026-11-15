@@ -9,6 +9,7 @@
 
 pub mod codec;
 pub mod collab;
+pub mod forward;
 pub mod identity;
 pub mod play;
 pub mod transport;
