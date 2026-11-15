@@ -314,7 +314,8 @@ impl AssetBrowser {
                 if path == from {
                     Some(to.clone())
                 } else {
-                    path.strip_prefix(&format!("{from}/")).map(|rest| format!("{to}/{rest}"))
+                    path.strip_prefix(&format!("{from}/"))
+                        .map(|rest| format!("{to}/{rest}"))
                 }
             })
         };
@@ -326,7 +327,10 @@ impl AssetBrowser {
         map(&mut self.open);
         self.back.iter_mut().for_each(map);
         for set in [&mut self.expanded, &mut self.selected] {
-            *set = set.iter().map(|path| remap(path).unwrap_or_else(|| path.clone())).collect();
+            *set = set
+                .iter()
+                .map(|path| remap(path).unwrap_or_else(|| path.clone()))
+                .collect();
         }
         if let Some(anchor) = &mut self.anchor {
             map(anchor);
@@ -335,11 +339,7 @@ impl AssetBrowser {
 
     /// Forgets every path under `removed`.
     fn forget(&mut self, removed: &[String]) {
-        let gone = |path: &str| {
-            removed
-                .iter()
-                .any(|r| path == r || path.starts_with(&format!("{r}/")))
-        };
+        let gone = |path: &str| removed.iter().any(|r| path == r || path.starts_with(&format!("{r}/")));
         while gone(&self.open) {
             self.open = parent_of(&self.open).to_owned();
         }

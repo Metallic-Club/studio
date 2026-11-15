@@ -19,8 +19,14 @@ fn browsing(test: &str) -> Harness<'static, Test> {
     harness.set_size(egui::vec2(1280.0, 1000.0));
     let editor = editor(&mut harness);
     if !editor.project.contains("Assets/Trees/oak.png") {
-        editor.project.create_member("Assets/Trees/oak.png", vec![7; 300]).unwrap();
-        editor.project.create_member("Scripts/Door.server.luau", b"print('door')".to_vec()).unwrap();
+        editor
+            .project
+            .create_member("Assets/Trees/oak.png", vec![7; 300])
+            .unwrap();
+        editor
+            .project
+            .create_member("Scripts/Door.server.luau", b"print('door')".to_vec())
+            .unwrap();
     }
     settle(&mut harness);
     harness.get_by_role_and_label(Role::Tab, "Assets").click();
@@ -61,7 +67,10 @@ fn folders_open_from_the_tree_the_tiles_the_breadcrumbs_and_back() {
     harness.get_by_role_and_label(Role::Link, "Open Assets");
 
     double_click_tile(&mut harness, "Trees");
-    assert!(tile_exists(&harness, "oak"), "a file's tile is its name without the extension");
+    assert!(
+        tile_exists(&harness, "oak"),
+        "a file's tile is its name without the extension"
+    );
     harness.get_by_role_and_label(Role::Link, "Open Trees");
     // The tree opened down to it.
     harness.get_by_role_and_label(Role::TreeItem, "oak.png");
@@ -85,7 +94,9 @@ fn folders_open_from_the_tree_the_tiles_the_breadcrumbs_and_back() {
 #[test]
 fn the_search_finds_files_anywhere_by_name() {
     let mut harness = browsing("assets-search");
-    harness.get_by_role_and_label(Role::TextInput, "Search the assets").click();
+    harness
+        .get_by_role_and_label(Role::TextInput, "Search the assets")
+        .click();
     settle(&mut harness);
     harness
         .get_by_role_and_label(Role::TextInput, "Search the assets")
@@ -119,17 +130,27 @@ fn a_new_folder_is_named_in_place_and_files_are_renamed_duplicated_and_moved() {
 
     // F2 renames the selected file; its extension stays.
     double_click_tile(&mut harness, "Trees");
-    let id = editor(&mut harness).project.assets().id("Assets/Trees/oak.png").unwrap();
+    let id = editor(&mut harness)
+        .project
+        .assets()
+        .id("Assets/Trees/oak.png")
+        .unwrap();
     harness.get_by_role_and_label(Role::GridCell, "oak").click();
     settle(&mut harness);
     harness.key_press(Key::F2);
     settle(&mut harness);
-    harness.get_by_role_and_label(Role::TextInput, "Name of oak").type_text("birch");
+    harness
+        .get_by_role_and_label(Role::TextInput, "Name of oak")
+        .type_text("birch");
     harness.key_press(Key::Enter);
     settle(&mut harness);
     let project = &editor(&mut harness).project;
     assert!(project.contains("Assets/Trees/birch.png") && !project.contains("Assets/Trees/oak.png"));
-    assert_eq!(project.assets().id("Assets/Trees/birch.png"), Some(id), "the id is kept");
+    assert_eq!(
+        project.assets().id("Assets/Trees/birch.png"),
+        Some(id),
+        "the id is kept"
+    );
 
     // Ctrl+D copies it beside itself, as a new asset.
     harness.get_by_role_and_label(Role::GridCell, "birch").click();
@@ -262,4 +283,45 @@ fn delete_asks_first_and_says_what_uses_the_file() {
     settle(&mut harness);
     assert!(harness.query_by_label("Delete Main.scene?").is_none());
     harness.get_by_label("Scenes/Main.scene is the scene being edited, so it cannot be deleted.");
+}
+
+#[test]
+#[ignore = "writes docs/screenshots; needs a GPU or a software adapter"]
+fn screenshot_of_the_assets_browser() {
+    use super::offscreen::Offscreen;
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/screenshots");
+    let path = config("shot-assets", Some("[general]\nskip_sign_in = true\n"), None);
+    let project = make_project_once(path.parent().unwrap(), "Forest");
+    let mut studio = studio_after_startup(steps_reading(path));
+    let mut offscreen = Offscreen::new(egui::vec2(1280.0, 800.0), 1.0).expect("a GPU");
+    studio.open(project);
+    for _ in 0..10_000 {
+        offscreen.frame(&mut studio);
+        if !studio.is_opening() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let editor = studio.editor_mut().unwrap();
+    for (member, bytes) in [
+        ("Assets/Trees/oak.png", vec![1; 900]),
+        ("Assets/Trees/pine.png", vec![2; 900]),
+        ("Assets/Trees/Pine bark.jpg", vec![3; 900]),
+        ("Assets/Rock.glb", vec![4; 900]),
+        ("Assets/Birdsong.ogg", vec![5; 900]),
+        ("Scripts/Door.server.luau", b"print('door')".to_vec()),
+    ] {
+        if !editor.project.contains(member) {
+            editor.project.create_member(member, bytes).unwrap();
+        }
+    }
+    let _ = editor.project.create_folder("Assets/Trees/Saplings");
+    editor.browser.open_folder("Assets");
+    editor.browser.open_folder("Assets/Trees");
+    editor.browser.selected.insert("Assets/Trees/oak.png".into());
+    studio.dock_mut().open(crate::panels::ids::ASSETS);
+    for _ in 0..30 {
+        offscreen.frame(&mut studio);
+    }
+    write_png(&out.join("676-assets-browser.png"), offscreen.read());
 }

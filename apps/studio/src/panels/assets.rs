@@ -13,7 +13,9 @@
 mod grid;
 mod tree;
 
-use egui::{Align2, CornerRadius, Frame, Id, Label, Layout, Modal, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo};
+use egui::{
+    Align2, CornerRadius, Frame, Id, Label, Layout, Modal, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo,
+};
 use egui::{pos2, vec2};
 
 use super::ids;
@@ -298,8 +300,9 @@ fn toolbar(ui: &mut Ui, editor: &mut EditorState, acts: &mut Vec<Act>) {
             ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
             breadcrumbs(ui, editor, acts);
         });
-        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.set_width(search_width);
+        // At the right end, the magnifier before the field as everywhere else.
+        ui.add_space((ui.available_width() - search_width).max(0.0));
+        ui.allocate_ui_with_layout(vec2(search_width, size::ROW), layout, |ui| {
             super::search_box(ui, &mut editor.browser.query, "Search the assets");
         });
     });
@@ -394,7 +397,9 @@ pub(crate) fn drop_target(response: &egui::Response, folder: &str) -> bool {
 
 /// The paths dropped on `response` this frame.
 pub(crate) fn dropped_on(response: &egui::Response) -> Option<Vec<String>> {
-    response.dnd_release_payload::<AssetDrag>().map(|drag| drag.paths.clone())
+    response
+        .dnd_release_payload::<AssetDrag>()
+        .map(|drag| drag.paths.clone())
 }
 
 /// Whether `paths` can move into `folder`: not into one of themselves, and not where they all are already.

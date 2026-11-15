@@ -420,11 +420,17 @@ mod tests {
         for taken in ["Assets/Trees", "Scenes/Main.scene", ".studio"] {
             assert!(project.create_folder(taken).is_err(), "{taken}");
         }
-        assert!(project.create_member("Assets/Trees", vec![1]).is_err(), "a file where a folder is");
+        assert!(
+            project.create_member("Assets/Trees", vec![1]).is_err(),
+            "a file where a folder is"
+        );
         project.save().unwrap();
         let mut project = Project::open(&path).unwrap();
         assert!(!project.is_modified());
-        assert_eq!(project.folders(), ["Assets", "Assets/Trees", "Assets/Trees/Pines", "Scenes"]);
+        assert_eq!(
+            project.folders(),
+            ["Assets", "Assets/Trees", "Assets/Trees/Pines", "Scenes"]
+        );
 
         // A folder stays when its last file leaves it.
         let id = project.create_member("Assets/Trees/oak.png", vec![3; 64]).unwrap();
@@ -432,12 +438,17 @@ mod tests {
         assert!(project.has_folder("Assets/Trees"));
 
         // Moving a folder moves what is in it, empty folders included; ids are kept.
-        project.create_member("Assets/Trees/Pines/pine.png", vec![4; 64]).unwrap();
+        project
+            .create_member("Assets/Trees/Pines/pine.png", vec![4; 64])
+            .unwrap();
         project.rename_folder("Assets/Trees", "Assets/Forest").unwrap();
         assert!(!project.has_folder("Assets/Trees"));
         assert!(project.contains("Assets/Forest/Pines/pine.png"));
         assert!(project.rename_folder("Assets/Forest", "Assets/Forest/Inside").is_err());
-        assert!(project.rename_folder("Assets/Forest", "Scenes").is_err(), "onto a folder that is there");
+        assert!(
+            project.rename_folder("Assets/Forest", "Scenes").is_err(),
+            "onto a folder that is there"
+        );
         project.create_folder("Empty").unwrap();
         project.rename_folder("Empty", "Still Empty").unwrap();
         assert!(project.has_folder("Still Empty") && !project.has_folder("Empty"));

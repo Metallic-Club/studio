@@ -2,8 +2,8 @@
 //! caret opens it here, a click opens it on the right. The open folder is highlighted, and a folder takes tiles
 //! dropped on it.
 
-use egui::{Align2, Color32, CornerRadius, FontId, Rect, ScrollArea, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 use egui::Role;
+use egui::{Align2, Color32, CornerRadius, FontId, Rect, ScrollArea, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 
 use super::{Act, Keys, ROOT, context_menu, drop_target, dropped_on};
 use crate::editor::EditorState;
@@ -81,8 +81,15 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
     let p = colors.palette;
     let entry = &row.entry;
     let is_root = entry.path.is_empty();
-    let name = if is_root { ROOT } else { entry.name() };
     let is_folder = entry.is_folder();
+    // A file's row shows its whole file name, a folder's its name.
+    let name = if is_root {
+        ROOT
+    } else if is_folder {
+        entry.name()
+    } else {
+        entry.file_name()
+    };
     let open = is_folder && entry.path == editor.browser.open && editor.browser.query.trim().is_empty();
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::click());
     response.widget_info(|| WidgetInfo::selected(Role::TreeItem, true, open, name));
@@ -117,7 +124,14 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         if let Some(caret_response) = &caret_response {
             let tint = if caret_response.hovered() { p.text } else { p.subtle };
             let icon = if row.expanded { Icon::UiCollapse } else { Icon::UiExpand };
-            icons::paint_at(ui.painter(), caret.center(), Align2::CENTER_CENTER, icon, text::SMALL, tint);
+            icons::paint_at(
+                ui.painter(),
+                caret.center(),
+                Align2::CENTER_CENTER,
+                icon,
+                text::SMALL,
+                tint,
+            );
         }
         let icon = match entry.kind {
             EntryKind::Folder if is_root => Icon::PanelAssets,
@@ -130,18 +144,24 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
             _ => icon.color(&colors),
         };
         let x = caret.right() + space::S1;
-        icons::paint_at(ui.painter(), pos2(x, rect.center().y), Align2::LEFT_CENTER, icon, text::BODY, ink);
+        icons::paint_at(
+            ui.painter(),
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            icon,
+            text::BODY,
+            ink,
+        );
         let font = if open {
             fonts::named(fonts::STRONG, text::BODY)
         } else {
             FontId::proportional(text::BODY)
         };
-        let label = if is_folder || is_root { name } else { entry.file_name() };
         let clip = Rect::from_min_max(pos2(x, rect.top()), pos2(rect.right() - space::S2, rect.bottom()));
         ui.painter().with_clip_rect(clip).text(
             pos2(x + text::BODY + space::S3, rect.center().y),
             Align2::LEFT_CENTER,
-            label,
+            name,
             font,
             if open { p.text } else { p.muted },
         );

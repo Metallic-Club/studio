@@ -3,15 +3,17 @@
 //! and dragged onto a folder to move it there.
 
 use egui::text::{LayoutJob, TextWrapping};
-use egui::{Align2, CornerRadius, FontId, Id, Order, Rect, Role, ScrollArea, Sense, Stroke, TextFormat, Ui, WidgetInfo};
+use egui::{
+    Align2, CornerRadius, FontId, Id, Order, Rect, Role, ScrollArea, Sense, Stroke, TextFormat, Ui, WidgetInfo,
+};
 use egui::{pos2, vec2};
 
 use super::{Act, AssetDrag, Keys, MISSING, context_menu, drop_target, dropped_on, file_size, rename_field};
 use crate::editor::EditorState;
 use crate::editor::assets::{Entry, EntryKind};
+use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, space, text};
-use crate::theme::current_colors;
 
 /// A tile's size.
 pub(super) const TILE: egui::Vec2 = egui::vec2(84.0, 82.0);
@@ -42,9 +44,13 @@ pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Ve
             range: false,
         });
     }
-    if let Some(paths) = dropped_on(&ground).filter(|_| !searching) {
-        acts.push(Act::Move(paths, folder.clone()));
-    }
+    // Tiles dropped on the empty space go into the open folder (not while a search shows files from anywhere). Taken
+    // after the tiles, so a folder's tile under the pointer takes a drop first.
+    let ground_drop = |acts: &mut Vec<Act>| {
+        if let Some(paths) = dropped_on(&ground).filter(|_| !searching) {
+            acts.push(Act::Move(paths, folder.clone()));
+        }
+    };
     if entries.is_empty() {
         let line = if searching {
             format!("Nothing is called \u{201C}{}\u{201D}.", editor.browser.query.trim())
@@ -52,6 +58,7 @@ pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Ve
             "This folder is empty. Right-click to add a folder.".to_owned()
         };
         crate::panels::empty_note(ui, &line);
+        ground_drop(acts);
         return;
     }
     let columns = (((area.width() + GAP) / (TILE.x + GAP)).floor() as usize).max(1);
@@ -71,6 +78,7 @@ pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Ve
                 ui.add_space(GAP);
             }
         });
+    ground_drop(acts);
     drag_chip(ui);
 }
 
@@ -127,10 +135,8 @@ fn tile(ui: &mut Ui, editor: &EditorState, entry: &Entry, keys: &Keys, acts: &mu
                 _ if selected => p.text,
                 _ => p.muted,
             };
-            let mut job = LayoutJob::single_section(
-                name.clone(),
-                TextFormat::simple(FontId::proportional(text::SMALL), ink),
-            );
+            let mut job =
+                LayoutJob::single_section(name.clone(), TextFormat::simple(FontId::proportional(text::SMALL), ink));
             job.wrap = TextWrapping {
                 max_width: label.width(),
                 max_rows: 2,
@@ -218,7 +224,9 @@ fn drag_chip(ui: &Ui) {
         [one] => crate::editor::assets::file_name(one).to_owned(),
         many => format!("{} items", many.len()),
     };
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(Order::Tooltip, Id::unique("metallic.assets.drag")));
+    let painter = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(Order::Tooltip, Id::unique("metallic.assets.drag")));
     let galley = painter.layout_no_wrap(label, FontId::proportional(text::SMALL), p.text);
     let rect = Rect::from_min_size(
         pointer + vec2(space::S6, space::S4),

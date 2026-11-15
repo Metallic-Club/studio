@@ -72,6 +72,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `asset.audio` | A sound in the Assets panel. | Panels and Assets: content | [`assets/music.svg`](https://lucide.dev/icons/music) | `asset.audio.svg`, `asset.audio.png` |
 | `asset.scene` | A scene in the Assets panel. | Explorer and Assets: parts, models, folders, cameras | [`assets/list-tree.svg`](https://lucide.dev/icons/list-tree) | `asset.scene.svg`, `asset.scene.png` |
 | `asset.script` | A script in the Assets panel. | Explorer and Assets: server scripts and server storage | [`assets/scroll.svg`](https://lucide.dev/icons/scroll) | `asset.script.svg`, `asset.script.png` |
+| `asset.folder` | A folder in the Assets panel (#676). | Explorer and Assets: parts, models, folders, cameras | [`assets/folder.svg`](https://lucide.dev/icons/folder) | `asset.folder.svg`, `asset.folder.png` |
 | `asset.file` | Any other file in the Assets panel. | Explorer and Assets: other | [`assets/file.svg`](https://lucide.dev/icons/file) | `asset.file.svg`, `asset.file.png` |
 | `toolbar.play` | Play, and Resume while paused. | Running the game | [`toolbar/play.svg`](https://lucide.dev/icons/play) | `toolbar.play.svg`, `toolbar.play.png` |
 | `toolbar.pause` | Pause. | Running the game | [`toolbar/pause.svg`](https://lucide.dev/icons/pause) | `toolbar.pause.svg`, `toolbar.pause.png` |
@@ -108,3 +109,4 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `ui.move_down` | Move down in a list. | Interface | [`interface/chevron-down.svg`](https://lucide.dev/icons/chevron-down) | `ui.move_down.svg`, `ui.move_down.png` |
 | `ui.delete` | Delete. | Interface | [`interface/trash-2.svg`](https://lucide.dev/icons/trash-2) | `ui.delete.svg`, `ui.delete.png` |
 | `ui.grip` | A grip to drag something by (#667). | Interface | [`interface/grip-vertical.svg`](https://lucide.dev/icons/grip-vertical) | `ui.grip.svg`, `ui.grip.png` |
+| `ui.back` | Back to the folder opened before (#676). | Interface | [`interface/arrow-left.svg`](https://lucide.dev/icons/arrow-left) | `ui.back.svg`, `ui.back.png` |
