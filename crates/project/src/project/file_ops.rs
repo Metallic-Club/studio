@@ -113,9 +113,47 @@ impl Project {
         self.move_members(vec![(from.to_owned(), to.to_owned())])
     }
 
+    /// Makes the folder `folder` (and its parents), empty, in memory until [`Project::save`] (#676). Refuses an unsafe
+    /// path, the editor's data folder, a member at that path and a folder that is already there.
+    pub fn create_folder(&mut self, folder: &str) -> Result<(), ProjectError> {
+        self.check(folder)?;
+        if crate::asset_index::is_editor_data(&format!("{folder}/")) || self.contains(folder) || self.has_folder(folder)
+        {
+            return Err(self.exists(folder));
+        }
+        self.folders.insert(folder.to_owned());
+        Ok(())
+    }
+
+    /// Deletes the folder `folder` and everything in it (in memory until [`Project::save`]), each member as
+    /// [`Project::delete_member`] does, and returns what referred to the members, those nothing referred to left out.
+    /// Refuses a folder that is not there.
+    pub fn delete_folder(&mut self, folder: &str) -> Result<Vec<References>, ProjectError> {
+        self.check(folder)?;
+        if !self.has_folder(folder) {
+            return Err(self.missing(folder));
+        }
+        let prefix = format!("{folder}/");
+        let members: Vec<String> = self
+            .members()
+            .into_iter()
+            .filter(|member| member.starts_with(&prefix))
+            .map(str::to_owned)
+            .collect();
+        let mut referred = Vec::new();
+        for member in members {
+            let references = self.delete_member(&member)?;
+            if !references.is_empty() {
+                referred.push(references);
+            }
+        }
+        self.folders.retain(|f| f != folder && !f.starts_with(&prefix));
+        Ok(referred)
+    }
+
     /// Renames or moves the folder `from` to `to`: every member whose path starts with `from/` moves under `to/`,
-    /// keeping its asset id, and every path that named one is rewritten. A folder is only a path prefix, so one with
-    /// no members is not there. Refuses unsafe paths, a folder moved into itself, and any member, or `to` itself,
+    /// keeping its asset id, and every path that named one is rewritten; so do the folders in it. Refuses unsafe
+    /// paths, a folder that is not there, a folder moved into itself, and any member or folder, or `to` itself,
     /// already being there. On an error nothing changed.
     pub fn rename_folder(&mut self, from: &str, to: &str) -> Result<MoveReport, ProjectError> {
         self.check(from)?;
@@ -133,16 +171,30 @@ impl Project {
             .into_iter()
             .filter_map(|member| Some((member.to_owned(), format!("{to}/{}", member.strip_prefix(&prefix)?))))
             .collect();
-        if moves.is_empty() {
+        if !self.has_folder(from) {
             return Err(self.missing(from));
         }
-        if self.contains(to) {
+        if self.contains(to) || self.has_folder(to) {
             return Err(self.exists(to));
         }
         for (_, destination) in &moves {
             self.check_new(destination)?;
         }
-        self.move_members(moves)
+        let report = if moves.is_empty() {
+            MoveReport::default()
+        } else {
+            self.move_members(moves)?
+        };
+        let folders = std::mem::take(&mut self.folders);
+        self.folders = folders
+            .into_iter()
+            .map(|folder| match folder.strip_prefix(&prefix) {
+                Some(rest) => format!("{to}/{rest}"),
+                None if folder == from => to.to_owned(),
+                None => folder,
+            })
+            .collect();
+        Ok(report)
     }
 
     /// Deletes `member` (in memory until [`Project::save`]) and returns what referred to it. Deleting is not refused
@@ -265,7 +317,7 @@ impl Project {
     fn check_new(&self, member: &str) -> Result<(), ProjectError> {
         self.check(member)?;
         self.check_metadata(member)?;
-        if self.contains(member) {
+        if self.contains(member) || self.has_folder(member) {
             return Err(self.exists(member));
         }
         Ok(())
@@ -354,6 +406,50 @@ mod tests {
         let reopened = Project::open(&path).unwrap();
         assert_eq!(reopened.manifest().start_scene, "Scenes/Level 1.scene");
         assert!(reopened.contains("Models/rock.glb") && !reopened.contains("Assets/rock.glb"));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn folders_exist_empty_survive_a_save_and_move_and_delete_with_their_contents() {
+        let mut project = new_project("folders");
+        let path: PathBuf = project.path().to_path_buf();
+        assert!(!project.is_modified());
+        project.create_folder("Assets/Trees/Pines").unwrap();
+        assert!(project.is_modified(), "a new folder is an edit");
+        assert!(project.has_folder("Assets/Trees") && project.has_folder("Assets"));
+        for taken in ["Assets/Trees", "Scenes/Main.scene", ".studio"] {
+            assert!(project.create_folder(taken).is_err(), "{taken}");
+        }
+        assert!(project.create_member("Assets/Trees", vec![1]).is_err(), "a file where a folder is");
+        project.save().unwrap();
+        let mut project = Project::open(&path).unwrap();
+        assert!(!project.is_modified());
+        assert_eq!(project.folders(), ["Assets", "Assets/Trees", "Assets/Trees/Pines", "Scenes"]);
+
+        // A folder stays when its last file leaves it.
+        let id = project.create_member("Assets/Trees/oak.png", vec![3; 64]).unwrap();
+        project.rename_member("Assets/Trees/oak.png", "Assets/oak.png").unwrap();
+        assert!(project.has_folder("Assets/Trees"));
+
+        // Moving a folder moves what is in it, empty folders included; ids are kept.
+        project.create_member("Assets/Trees/Pines/pine.png", vec![4; 64]).unwrap();
+        project.rename_folder("Assets/Trees", "Assets/Forest").unwrap();
+        assert!(!project.has_folder("Assets/Trees"));
+        assert!(project.contains("Assets/Forest/Pines/pine.png"));
+        assert!(project.rename_folder("Assets/Forest", "Assets/Forest/Inside").is_err());
+        assert!(project.rename_folder("Assets/Forest", "Scenes").is_err(), "onto a folder that is there");
+        project.create_folder("Empty").unwrap();
+        project.rename_folder("Empty", "Still Empty").unwrap();
+        assert!(project.has_folder("Still Empty") && !project.has_folder("Empty"));
+
+        // Deleting a folder deletes its members and its folders.
+        project.delete_folder("Assets/Forest").unwrap();
+        assert!(!project.has_folder("Assets/Forest") && !project.contains("Assets/Forest/Pines/pine.png"));
+        assert_eq!(project.assets().id("Assets/oak.png"), Some(id));
+        assert!(project.delete_folder("Nowhere").is_err());
+        project.save().unwrap();
+        let project = Project::open(&path).unwrap();
+        assert_eq!(project.folders(), ["Assets", "Scenes", "Still Empty"]);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 }

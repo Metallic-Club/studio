@@ -1,0 +1,611 @@
+//! The Assets browser's state and its file operations (#676, ADR 0012): which folder is open, what is selected, and
+//! creating, renaming, moving, duplicating and deleting the project's files and folders.
+//!
+//! The browser reads the project's members and folders every frame, so it shows every change, whoever made it. An
+//! operation goes through `metallic_project`'s file operations, which keep asset ids and rewrite the paths that name
+//! a moved file in the saved scenes; [`EditorState`] then does the same for what it holds in memory: the scene being
+//! edited (its scripts' `Source`), the script editor's open files, and the browser's own paths.
+
+use std::collections::BTreeSet;
+
+use metallic_engine::metallic_core::{Id, Value};
+use metallic_engine::metallic_project::asset_index::{is_asset, is_editor_data};
+use metallic_engine::metallic_project::{MemberMove, PATH_PROPERTIES, Project};
+
+use super::EditorState;
+use super::open::asset_rows;
+use crate::panels::assets::AssetKind;
+
+/// The name a new folder gets, made unique with a number.
+pub const NEW_FOLDER: &str = "New Folder";
+
+/// What the browser keeps between frames.
+#[derive(Clone, Debug, Default)]
+pub struct AssetBrowser {
+    /// The folder shown on the right: its path, `""` for the project's root.
+    pub open: String,
+    /// The folders opened before, for Back.
+    pub back: Vec<String>,
+    /// The tree's open folders.
+    pub expanded: BTreeSet<String>,
+    /// The selected files and folders, by path.
+    pub selected: BTreeSet<String>,
+    /// Where a Shift-click's range starts.
+    pub anchor: Option<String>,
+    /// The search, across the whole project.
+    pub query: String,
+    /// The file or folder whose name is being edited.
+    pub renaming: Option<String>,
+    /// Files and folders waiting for Delete's confirmation, with what the dialog says.
+    pub deleting: Option<Deleting>,
+    /// A command from the keyboard for the panel to run on its next frame (the keymap runs before the panels).
+    pub command: Option<crate::editor::TreeEdit>,
+    /// The last operation's error, shown under the toolbar until the next one.
+    pub error: Option<String>,
+}
+
+/// Delete's confirmation: what is deleted and what refers to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Deleting {
+    /// The files and folders.
+    pub paths: Vec<String>,
+    /// How many files that is, counting those in the folders.
+    pub files: usize,
+    /// The scene properties that refer to them, as "scene: property" lines.
+    pub references: Vec<String>,
+}
+
+/// One thing in a folder: a folder or a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// Its path in the project.
+    pub path: String,
+    /// What it is.
+    pub kind: EntryKind,
+    /// The asset index's id of a file, as text.
+    pub id: Option<String>,
+}
+
+/// What an [`Entry`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    /// A folder.
+    Folder,
+    /// A file of this kind.
+    File(AssetKind),
+    /// A file the asset index names but the project no longer has.
+    Missing(AssetKind),
+}
+
+impl Entry {
+    /// Whether it is a folder.
+    pub fn is_folder(&self) -> bool {
+        self.kind == EntryKind::Folder
+    }
+
+    /// Its file or folder name, the last part of its path.
+    pub fn file_name(&self) -> &str {
+        file_name(&self.path)
+    }
+
+    /// The name people see: a file's name without its type's extension (`Door` for `Door.server.luau`).
+    pub fn name(&self) -> &str {
+        if self.is_folder() {
+            self.file_name()
+        } else {
+            split_name(self.file_name()).0
+        }
+    }
+}
+
+/// The last part of `path`.
+pub fn file_name(path: &str) -> &str {
+    path.rsplit_once('/').map_or(path, |(_, name)| name)
+}
+
+/// The folder `path` is in, `""` for the root.
+pub fn parent_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
+/// `name` in `folder`.
+pub fn join(folder: &str, name: &str) -> String {
+    if folder.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
+/// The extensions that are two parts long: a script's type is in its name (#677).
+const DOUBLE_EXTENSIONS: [&str; 4] = [".server.luau", ".client.luau", ".server.lua", ".client.lua"];
+
+/// A file name's stem and extension, the extension with its dot (`("Door", ".server.luau")`). A name that starts
+/// with its only dot has no extension.
+pub fn split_name(name: &str) -> (&str, &str) {
+    let lower = name.to_ascii_lowercase();
+    for double in DOUBLE_EXTENSIONS {
+        if lower.ends_with(double) && name.len() > double.len() {
+            return name.split_at(name.len() - double.len());
+        }
+    }
+    match name.rfind('.') {
+        Some(0) | None => (name, ""),
+        Some(dot) => name.split_at(dot),
+    }
+}
+
+/// Whether the browser shows `member`: every asset but the editor's own data.
+fn shown(member: &str) -> bool {
+    is_asset(member) && !is_editor_data(member)
+}
+
+/// The folders the browser shows: the project's, without the editor's data folder.
+pub fn folders(project: &Project) -> Vec<String> {
+    project
+        .folders()
+        .into_iter()
+        .filter(|folder| !is_editor_data(&format!("{folder}/")))
+        .collect()
+}
+
+/// Sorts entries as the browser lists them: folders first, then by name, ignoring case.
+fn sort(entries: &mut [Entry]) {
+    entries.sort_by(|a, b| {
+        b.is_folder()
+            .cmp(&a.is_folder())
+            .then_with(|| a.file_name().to_lowercase().cmp(&b.file_name().to_lowercase()))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+}
+
+/// The entry for every file and folder of the project, with the missing assets the index still names.
+fn all_entries(project: &Project) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = folders(project)
+        .into_iter()
+        .map(|path| Entry {
+            path,
+            kind: EntryKind::Folder,
+            id: None,
+        })
+        .collect();
+    for row in asset_rows(project) {
+        if !shown(&row.path) {
+            continue;
+        }
+        let kind = AssetKind::of(&row.path);
+        entries.push(Entry {
+            kind: if row.missing {
+                EntryKind::Missing(kind)
+            } else {
+                EntryKind::File(kind)
+            },
+            path: row.path,
+            id: Some(row.id),
+        });
+    }
+    // Members not indexed yet (none, as Studio keeps the index up to date; but never hide a file).
+    for member in project.members() {
+        if shown(member) && !entries.iter().any(|entry| entry.path == member) {
+            entries.push(Entry {
+                path: member.to_owned(),
+                kind: EntryKind::File(AssetKind::of(member)),
+                id: None,
+            });
+        }
+    }
+    entries
+}
+
+/// What is in `folder` (`""` for the root): its folders, then its files, by name.
+pub fn children(project: &Project, folder: &str) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = all_entries(project)
+        .into_iter()
+        .filter(|entry| parent_of(&entry.path) == folder)
+        .collect();
+    sort(&mut entries);
+    entries
+}
+
+/// Every file and folder whose name holds `query` (ignoring case), by name.
+pub fn search(project: &Project, query: &str) -> Vec<Entry> {
+    let query = query.trim().to_lowercase();
+    let mut entries: Vec<Entry> = all_entries(project)
+        .into_iter()
+        .filter(|entry| entry.file_name().to_lowercase().contains(&query))
+        .collect();
+    sort(&mut entries);
+    entries
+}
+
+/// `name` made unique in `folder` with a number before its extension (`New Folder 2`, `Rock 2.png`).
+pub fn unique_name(project: &Project, folder: &str, name: &str) -> String {
+    let taken = |name: &str| {
+        let path = join(folder, name);
+        project.contains(&path) || project.has_folder(&path)
+    };
+    if !taken(name) {
+        return name.to_owned();
+    }
+    let (stem, extension) = split_name(name);
+    (2..)
+        .map(|n| format!("{stem} {n}{extension}"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or_else(|| name.to_owned())
+}
+
+/// Whether `name` can be a file or folder name: not empty, no `/` or `\`, not `.` or `..`.
+fn valid_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("A name cannot be empty.".into());
+    }
+    if name.contains(['/', '\\']) {
+        return Err("A name cannot hold / or \\.".into());
+    }
+    if name == "." || name == ".." {
+        return Err("A name cannot be . or ...".into());
+    }
+    Ok(())
+}
+
+impl AssetBrowser {
+    /// Opens `folder` on the right, remembering the one before for Back, and shows it in the tree.
+    pub fn open_folder(&mut self, folder: &str) {
+        if folder == self.open && self.query.is_empty() {
+            return;
+        }
+        self.back.push(std::mem::replace(&mut self.open, folder.to_owned()));
+        self.query.clear();
+        self.selected.clear();
+        self.anchor = None;
+        self.reveal(folder);
+    }
+
+    /// Goes back to the folder opened before this one. Returns whether there was one.
+    pub fn go_back(&mut self) -> bool {
+        match self.back.pop() {
+            Some(folder) => {
+                self.open = folder;
+                self.selected.clear();
+                self.anchor = None;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Expands the tree down to `path`'s folder.
+    pub fn reveal(&mut self, path: &str) {
+        let mut at = path;
+        while !at.is_empty() {
+            self.expanded.insert(at.to_owned());
+            at = parent_of(at);
+        }
+    }
+
+    /// A click on `path` among `shown` (in their order): selects it alone, or adds or removes it (`add`), or selects
+    /// the run from the anchor to it (`range`).
+    pub fn click(&mut self, shown: &[Entry], path: &str, add: bool, range: bool) {
+        let position = |p: &str| shown.iter().position(|entry| entry.path == p);
+        if range && let (Some(from), Some(to)) = (self.anchor.as_deref().and_then(position), position(path)) {
+            let (low, high) = (from.min(to), from.max(to));
+            if !add {
+                self.selected.clear();
+            }
+            self.selected
+                .extend(shown[low..=high].iter().map(|entry| entry.path.clone()));
+            return;
+        }
+        if add {
+            if !self.selected.remove(path) {
+                self.selected.insert(path.to_owned());
+            }
+        } else {
+            self.selected.clear();
+            self.selected.insert(path.to_owned());
+        }
+        self.anchor = Some(path.to_owned());
+    }
+
+    /// Moves every path the browser keeps that `moved` changed.
+    fn follow(&mut self, moved: &[(String, String)]) {
+        let remap = |path: &str| -> Option<String> {
+            moved.iter().find_map(|(from, to)| {
+                if path == from {
+                    Some(to.clone())
+                } else {
+                    path.strip_prefix(&format!("{from}/")).map(|rest| format!("{to}/{rest}"))
+                }
+            })
+        };
+        let map = |path: &mut String| {
+            if let Some(new) = remap(path) {
+                *path = new;
+            }
+        };
+        map(&mut self.open);
+        self.back.iter_mut().for_each(map);
+        for set in [&mut self.expanded, &mut self.selected] {
+            *set = set.iter().map(|path| remap(path).unwrap_or_else(|| path.clone())).collect();
+        }
+        if let Some(anchor) = &mut self.anchor {
+            map(anchor);
+        }
+    }
+
+    /// Forgets every path under `removed`.
+    fn forget(&mut self, removed: &[String]) {
+        let gone = |path: &str| {
+            removed
+                .iter()
+                .any(|r| path == r || path.starts_with(&format!("{r}/")))
+        };
+        while gone(&self.open) {
+            self.open = parent_of(&self.open).to_owned();
+        }
+        self.back.retain(|path| !gone(path));
+        self.expanded.retain(|path| !gone(path));
+        self.selected.retain(|path| !gone(path));
+        if self.anchor.as_deref().is_some_and(gone) {
+            self.anchor = None;
+        }
+    }
+}
+
+impl EditorState {
+    /// Makes a new, empty folder in `parent` with a unique name, and returns its path.
+    pub fn new_folder(&mut self, parent: &str) -> Result<String, String> {
+        let name = unique_name(&self.project, parent, NEW_FOLDER);
+        let path = join(parent, &name);
+        self.project.create_folder(&path).map_err(|error| error.to_string())?;
+        self.browser.reveal(parent);
+        Ok(path)
+    }
+
+    /// Renames the file or folder at `path` to `name`, keeping a file's extension (its type) when `name` has none
+    /// of its own. Returns the new path.
+    pub fn rename_asset(&mut self, path: &str, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        valid_name(name)?;
+        let is_folder = !self.project.contains(path);
+        let name = if is_folder {
+            name.to_owned()
+        } else {
+            let (_, extension) = split_name(file_name(path));
+            let (_, typed) = split_name(name);
+            if typed.eq_ignore_ascii_case(extension) {
+                name.to_owned()
+            } else {
+                format!("{name}{extension}")
+            }
+        };
+        let to = join(parent_of(path), &name);
+        if to == path {
+            return Ok(to);
+        }
+        self.move_one(path, &to)?;
+        Ok(to)
+    }
+
+    /// Moves the files and folders at `paths` into `folder`. Refuses a folder moved into itself; nothing is moved
+    /// once one fails, but those before it.
+    pub fn move_assets(&mut self, paths: &[String], folder: &str) -> Result<(), String> {
+        for path in paths {
+            if parent_of(path) == folder {
+                continue;
+            }
+            if folder == path || folder.starts_with(&format!("{path}/")) {
+                return Err(format!("{} cannot go into itself.", file_name(path)));
+            }
+            let to = join(folder, file_name(path));
+            self.move_one(path, &to)?;
+        }
+        Ok(())
+    }
+
+    /// Moves one file or folder from `from` to `to`, and makes what the editor holds follow it.
+    fn move_one(&mut self, from: &str, to: &str) -> Result<(), String> {
+        let report = if self.project.contains(from) {
+            self.project.rename_member(from, to)
+        } else {
+            self.project.rename_folder(from, to)
+        }
+        .map_err(|error| error.to_string())?;
+        self.follow_moves(&report.moved);
+        self.browser.follow(&[(from.to_owned(), to.to_owned())]);
+        self.assets = asset_rows(&self.project);
+        Ok(())
+    }
+
+    /// Makes the scene being edited and the script editor follow files that moved: a script's `Source` that named
+    /// one names its new path.
+    fn follow_moves(&mut self, moved: &[MemberMove]) {
+        if moved.is_empty() {
+            return;
+        }
+        let ids: Vec<Id> = match self.dm.root().and_then(|root| self.dm.descendants(root).ok()) {
+            Some(all) => all.collect(),
+            None => Vec::new(),
+        };
+        for id in ids {
+            for property in PATH_PROPERTIES {
+                let Ok(Value::String(path)) = self.dm.get_by_name(id, property) else {
+                    continue;
+                };
+                if let Some(to) = moved.iter().find(|m| *m.from == *path).map(|m| m.to.clone()) {
+                    let _ = self.dm.set_by_name(id, property, Value::String(to.into()));
+                }
+            }
+        }
+        for m in moved {
+            self.scripts.moved(&m.from, &m.to);
+        }
+    }
+
+    /// Duplicates the files and folders at `paths` beside themselves (`Rock 2.png`), each copy a new asset, and
+    /// returns the copies' paths.
+    pub fn duplicate_assets(&mut self, paths: &[String]) -> Result<Vec<String>, String> {
+        let mut copies = Vec::new();
+        for path in paths {
+            let folder = parent_of(path);
+            let copy = join(folder, &unique_name(&self.project, folder, file_name(path)));
+            if self.project.contains(path) {
+                let bytes = self.project.read(path).map_err(|error| error.to_string())?;
+                self.project
+                    .create_member(&copy, bytes)
+                    .map_err(|error| error.to_string())?;
+            } else {
+                self.project.create_folder(&copy).map_err(|error| error.to_string())?;
+                let prefix = format!("{path}/");
+                let inside: Vec<String> = self
+                    .project
+                    .members()
+                    .into_iter()
+                    .filter(|member| member.starts_with(&prefix))
+                    .map(str::to_owned)
+                    .collect();
+                for member in inside {
+                    let bytes = self.project.read(&member).map_err(|error| error.to_string())?;
+                    let to = format!("{copy}/{}", &member[prefix.len()..]);
+                    self.project
+                        .create_member(&to, bytes)
+                        .map_err(|error| error.to_string())?;
+                }
+                for folder in self.project.folders() {
+                    if let Some(rest) = folder.strip_prefix(&prefix) {
+                        let to = format!("{copy}/{rest}");
+                        if !self.project.has_folder(&to) {
+                            self.project.create_folder(&to).map_err(|error| error.to_string())?;
+                        }
+                    }
+                }
+            }
+            copies.push(copy);
+        }
+        self.assets = asset_rows(&self.project);
+        Ok(copies)
+    }
+
+    /// What deleting `paths` would delete and what refers to it, for Delete's confirmation. Refuses the scene being
+    /// edited, and a folder holding it.
+    pub fn plan_delete(&mut self, paths: &[String]) -> Result<Deleting, String> {
+        let editing = self.project.manifest().start_scene.clone();
+        let mut members = Vec::new();
+        for path in paths {
+            if self.project.contains(path) {
+                members.push(path.clone());
+            } else {
+                let prefix = format!("{path}/");
+                members.extend(
+                    self.project
+                        .members()
+                        .into_iter()
+                        .filter(|member| member.starts_with(&prefix))
+                        .map(str::to_owned),
+                );
+            }
+        }
+        if members.contains(&editing) {
+            return Err(format!("{editing} is the scene being edited, so it cannot be deleted."));
+        }
+        let mut references = Vec::new();
+        for member in &members {
+            let found = self.project.references(member).map_err(|error| error.to_string())?;
+            for reference in found.scenes {
+                references.push(format!("{}: {}", reference.scene, reference.property));
+            }
+        }
+        references.sort();
+        references.dedup();
+        Ok(Deleting {
+            paths: paths.to_vec(),
+            files: members.len(),
+            references,
+        })
+    }
+
+    /// Deletes the files and folders at `paths` (until the project is saved, they are only gone from memory).
+    pub fn delete_assets(&mut self, paths: &[String]) -> Result<(), String> {
+        for path in paths {
+            if self.project.contains(path) {
+                self.project.delete_member(path).map_err(|error| error.to_string())?;
+            } else if self.project.has_folder(path) {
+                self.project.delete_folder(path).map_err(|error| error.to_string())?;
+            }
+        }
+        self.browser.forget(paths);
+        self.assets = asset_rows(&self.project);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_split_before_their_type_s_extension() {
+        assert_eq!(split_name("Door.server.luau"), ("Door", ".server.luau"));
+        assert_eq!(split_name("Door.Client.luau"), ("Door", ".Client.luau"));
+        assert_eq!(split_name("Util.luau"), ("Util", ".luau"));
+        assert_eq!(split_name("bark.tex.png"), ("bark.tex", ".png"));
+        assert_eq!(split_name("README"), ("README", ""));
+        assert_eq!(split_name(".hidden"), (".hidden", ""));
+        assert_eq!(split_name(".server.luau"), (".server", ".luau"));
+    }
+
+    #[test]
+    fn paths_join_and_split() {
+        assert_eq!(join("", "Assets"), "Assets");
+        assert_eq!(join("Assets", "Trees"), "Assets/Trees");
+        assert_eq!(parent_of("Assets/Trees/oak.png"), "Assets/Trees");
+        assert_eq!(parent_of("Assets"), "");
+        assert_eq!(file_name("Assets/Trees/oak.png"), "oak.png");
+    }
+
+    #[test]
+    fn back_returns_to_the_folders_opened_before() {
+        let mut browser = AssetBrowser::default();
+        browser.open_folder("Assets");
+        browser.open_folder("Assets/Trees");
+        assert!(browser.expanded.contains("Assets") && browser.expanded.contains("Assets/Trees"));
+        assert!(browser.go_back());
+        assert_eq!(browser.open, "Assets");
+        assert!(browser.go_back());
+        assert_eq!(browser.open, "");
+        assert!(!browser.go_back());
+    }
+
+    #[test]
+    fn clicks_select_one_add_and_range() {
+        let entry = |path: &str| Entry {
+            path: path.into(),
+            kind: EntryKind::Folder,
+            id: None,
+        };
+        let shown = [entry("a"), entry("b"), entry("c"), entry("d")];
+        let mut browser = AssetBrowser::default();
+        browser.click(&shown, "b", false, false);
+        browser.click(&shown, "d", false, true);
+        assert_eq!(browser.selected.iter().collect::<Vec<_>>(), ["b", "c", "d"]);
+        browser.click(&shown, "c", true, false);
+        assert_eq!(browser.selected.iter().collect::<Vec<_>>(), ["b", "d"]);
+        browser.click(&shown, "a", false, false);
+        assert_eq!(browser.selected.iter().collect::<Vec<_>>(), ["a"]);
+    }
+
+    #[test]
+    fn paths_follow_a_move_and_a_delete() {
+        let mut browser = AssetBrowser {
+            open: "Assets/Trees/Pines".into(),
+            ..Default::default()
+        };
+        browser.selected.insert("Assets/Trees/oak.png".into());
+        browser.follow(&[("Assets/Trees".into(), "Forest".into())]);
+        assert_eq!(browser.open, "Forest/Pines");
+        assert!(browser.selected.contains("Forest/oak.png"));
+        browser.forget(&["Forest".into()]);
+        assert_eq!(browser.open, "");
+        assert!(browser.selected.is_empty());
+    }
+}

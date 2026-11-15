@@ -1627,6 +1627,14 @@ impl Studio {
                         ids::EDIT_RENAME => TreeEdit::Rename,
                         _ => TreeEdit::Delete,
                     };
+                    // The Assets panel's own: on its tiles, not the scene (#676).
+                    if context == Context::Assets
+                        && let Some(editor) = self.editor_mut()
+                    {
+                        editor.browser.command = Some(edit);
+                        ctx.request_repaint();
+                        continue;
+                    }
                     self.menu_action(MenuAction::Tree(edit));
                 }
                 id @ (ids::PROJECTS_OPEN | ids::PROJECTS_NEW | ids::PROJECTS_ADD) if context == Context::Projects => {
@@ -9711,6 +9719,7 @@ skip_sign_in = true
         write_png(&out.join("217-viewport.png"), offscreen.read());
     }
 
+    mod assets_browser;
     mod team_create;
     mod team_play;
     mod team_play_port;
