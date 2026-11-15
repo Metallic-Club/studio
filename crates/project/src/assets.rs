@@ -525,6 +525,20 @@ pub enum AssetError {
         /// Why.
         source: DecodeError,
     },
+    /// The member is not a material file this engine reads (#678).
+    #[error("`{member}` is not a material this engine reads: {reason}")]
+    Material {
+        /// The member.
+        member: String,
+        /// Why.
+        reason: String,
+    },
+    /// A part names a material by a name that neither the game nor the built-in set has (#678).
+    #[error("there is no material called `{name}`")]
+    NoMaterial {
+        /// The name.
+        name: String,
+    },
 }
 
 /// Reads a game's assets by id on any thread: a project's, from its file and the edits not saved when the reader was
@@ -584,6 +598,38 @@ impl AssetReader {
         let parsed: AssetId = id.parse().map_err(|_| AssetError::BadId { id: id.to_owned() })?;
         let member = self.index.path(parsed).ok_or(AssetError::UnknownId { id: parsed })?;
         Ok((parsed, member))
+    }
+
+    /// The id of the material called `name` (#678): the first material file, by path, whose name without
+    /// `.material` is `name`. `None` when the game has none.
+    pub fn material_named(&self, name: &str) -> Option<AssetId> {
+        self.index
+            .iter()
+            .find(|(path, _)| crate::material::is_material(path) && crate::material::material_name(path) == name)
+            .map(|(_, id)| id)
+    }
+
+    /// Reads the material asset `id` names, or the material called `id` when it is a name rather than an id (the
+    /// game's material of that name, else the built-in one; #678, ADR 0012). Returns the material and what was
+    /// skipped in its file.
+    pub fn load_material(&mut self, id: &str) -> Result<crate::material::LoadedMaterial, AssetError> {
+        let key = if id.parse::<AssetId>().is_ok() {
+            id.to_owned()
+        } else if let Some(found) = self.material_named(id) {
+            found.to_string()
+        } else {
+            return crate::material::builtin(id)
+                .map(|material| crate::material::LoadedMaterial {
+                    material,
+                    warnings: Vec::new(),
+                })
+                .ok_or_else(|| AssetError::NoMaterial { name: id.to_owned() });
+        };
+        let (member, bytes) = self.read(&key)?;
+        crate::material::Material::from_bytes(&bytes).map_err(|error| AssetError::Material {
+            member,
+            reason: error.to_string(),
+        })
     }
 
     /// The bytes of the asset `id` names, with its member path.

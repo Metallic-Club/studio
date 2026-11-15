@@ -44,6 +44,8 @@ pub enum AssetKind {
     Scene,
     /// A script file (#677), of the type its name gives.
     Script(ScriptType),
+    /// A material (#678).
+    Material,
     /// Anything else.
     Other,
 }
@@ -137,6 +139,7 @@ impl AssetKind {
             Some("png" | "jpg" | "jpeg" | "webp" | "ktx2") => AssetKind::Image,
             Some("ogg" | "mp3" | "wav" | "opus" | "flac" | "m4a") => AssetKind::Audio,
             Some("scene") => AssetKind::Scene,
+            Some("material") => AssetKind::Material,
             _ => AssetKind::Other,
         }
     }
@@ -148,6 +151,7 @@ impl AssetKind {
             AssetKind::Image => "Image",
             AssetKind::Audio => "Audio",
             AssetKind::Scene => "Scene",
+            AssetKind::Material => "Material",
             AssetKind::Script(script) => script.class(),
             AssetKind::Other => "File",
         }
@@ -160,6 +164,7 @@ impl AssetKind {
             AssetKind::Image => Icon::AssetImage,
             AssetKind::Audio => Icon::AssetAudio,
             AssetKind::Scene => Icon::AssetScene,
+            AssetKind::Material => Icon::AssetMaterial,
             AssetKind::Script(ScriptType::Server) => Icon::AssetScript,
             AssetKind::Script(ScriptType::Local) => Icon::AssetLocalScript,
             AssetKind::Script(ScriptType::Module) => Icon::AssetModuleScript,
@@ -214,14 +219,17 @@ pub(crate) enum New {
     Folder,
     /// A script file of this type.
     Script(ScriptType),
+    /// A material (#678).
+    Material,
 }
 
 /// The New items of a folder's menus, in order.
-pub(crate) const NEW_ITEMS: [(&str, New); 4] = [
+pub(crate) const NEW_ITEMS: [(&str, New); 5] = [
     ("New Folder", New::Folder),
     ("New Script", New::Script(ScriptType::Server)),
     ("New LocalScript", New::Script(ScriptType::Local)),
     ("New ModuleScript", New::Script(ScriptType::Module)),
+    ("New Material", New::Material),
 ];
 
 /// The New item called `label`, if it is one.
@@ -565,6 +573,7 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
         Act::New(parent, new) => match new {
             New::Folder => editor.new_folder(&parent),
             New::Script(script) => editor.new_script_file(&parent, script),
+            New::Material => editor.new_material_file(&parent),
         }
         .map(|path| {
             if parent != editor.browser.open {

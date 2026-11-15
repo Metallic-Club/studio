@@ -314,9 +314,9 @@ mod tests {
         );
         assert_eq!(
             input().enums.concat().len(),
-            8,
-            "Material, PartShape, KeyCode, UserInputType, UserInputState, MouseBehavior, GraphicsPreset and \
-             AntiAliasingMode"
+            7,
+            "PartShape, KeyCode, UserInputType, UserInputState, MouseBehavior, GraphicsPreset and AntiAliasingMode \
+             (materials are assets, #678)"
         );
     }
 }

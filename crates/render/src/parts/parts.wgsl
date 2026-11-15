@@ -13,9 +13,14 @@ const PI: f32 = 3.14159265;
 
 // `MaterialRow` in parts/material.rs.
 struct MaterialRow {
-    // x: roughness, y: metalness, z: emissive, w: 1 for glass.
+    // x: roughness, y: metalness, z: 1 for glass, w: normal strength.
     surface: vec4<f32>,
-    reserved: vec4<f32>,
+    // The base colour's tint (linear).
+    tint: vec4<f32>,
+    // The emitted light (linear, times its strength), multiplied by the albedo.
+    emission: vec4<f32>,
+    // Texture tiling (#679).
+    uv: vec4<f32>,
 }
 
 // MAX_MATERIAL_ROWS in parts/material.rs.
@@ -114,7 +119,7 @@ fn place(
 
 // The base colour at a fragment: the instance's colour times its texture's (linear, since the texture is sRGB).
 fn albedo_of(in: VertexOut) -> vec3<f32> {
-    return in.color.rgb * textureSample(base_texture, base_sampler, in.uv).rgb;
+    return in.color.rgb * textureSample(base_texture, base_sampler, in.uv).rgb * material_row(in.material).tint.rgb;
 }
 
 fn material_row(row: u32) -> MaterialRow {
@@ -308,7 +313,7 @@ fn shade(in: VertexOut, albedo: vec3<f32>) -> Shaded {
     let open = sky_open(in.position, n);
     out.body = diffuse / PI * (light + frame.color_shift_bottom.rgb * away)
         + diffuse * (sky_light(n.y, open) * frame.environment.x + frame.ambient.rgb)
-        + albedo * row.surface.z;
+        + albedo * row.emission.rgb;
     out.specular = distribution * visibility * fresnel * light
         + env_brdf(f0, roughness, n_dot_v) * (sky_light(reflect(-v, n).y, open) + frame.ambient.rgb) * frame.environment.y;
     // Frames that draw no local light use pipelines made with lights_off.wgsl, whose `local_lighting` adds nothing
@@ -375,7 +380,7 @@ fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(encode(view_color(in, albedo, view) * alpha), alpha);
     }
     let s = shade(in, albedo);
-    let glass = material_row(in.material).surface.w > 0.5;
+    let glass = material_row(in.material).surface.z > 0.5;
     let specular = select(s.specular * alpha, s.specular, glass);
     // Through the fog (#600) the surface gives way to the fog's colour, as much as it covers.
     let lit = s.body * alpha + specular;

@@ -104,6 +104,10 @@
       "file": "assets/scroll.svg",
       "color": "local_script"
     },
+    "asset.material": {
+      "file": "assets/palette.svg",
+      "color": "content"
+    },
     "asset.mesh": {
       "file": "assets/cuboid.svg",
       "color": "object"

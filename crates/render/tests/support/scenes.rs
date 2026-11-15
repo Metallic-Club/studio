@@ -62,7 +62,7 @@ impl Game {
         let id = dm.create(self.part).expect("a part");
         dm.set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", look.shape)))
             .expect("Shape");
-        dm.set_by_name(id, "Material", Value::Enum(EnumItem::new("Material", look.material)))
+        dm.set_by_name(id, "Material", Value::String(look.material.into()))
             .expect("Material");
         dm.set_by_name(id, "Size", Value::Vector3(size)).expect("Size");
         dm.set_by_name(id, "CFrame", Value::CFrame(cframe)).expect("CFrame");

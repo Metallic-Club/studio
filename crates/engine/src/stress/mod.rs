@@ -342,7 +342,8 @@ struct Builder<'a> {
     props: Props,
     /// Enum items made once and cloned (an `Arc`) per part.
     shapes: [(&'static str, EnumItem); 4],
-    materials: Vec<(&'static str, EnumItem)>,
+    /// Each material's name and its value, made once so a part's costs no allocation.
+    materials: Vec<(&'static str, Value)>,
     parts: usize,
     see_through: usize,
     lights: usize,
@@ -384,7 +385,7 @@ impl<'a> Builder<'a> {
             "Grass",
         ]
         .into_iter()
-        .map(|name| (name, EnumItem::new("Material", name)))
+        .map(|name| (name, Value::String(name.into())))
         .collect();
         Ok(Self {
             dm,
@@ -412,10 +413,15 @@ impl<'a> Builder<'a> {
     fn part(&mut self, look: Look, size: Vec3, cframe: CFrame, parent: Option<Id>) -> Result<Id, StressError> {
         let p = &self.props;
         let shape = Self::enum_item(&self.shapes, look.shape).ok_or(StressError::Missing("a part shape"))?;
-        let material = Self::enum_item(&self.materials, look.material).ok_or(StressError::Missing("a material"))?;
+        let material = self
+            .materials
+            .iter()
+            .find(|(name, _)| *name == look.material)
+            .map(|(_, value)| value.clone())
+            .ok_or(StressError::Missing("a material"))?;
         let id = self.dm.create(self.part)?;
         self.dm.set(id, p.shape, Value::Enum(shape.clone()))?;
-        self.dm.set(id, p.material, Value::Enum(material.clone()))?;
+        self.dm.set(id, p.material, material)?;
         self.dm.set(id, p.size, Value::Vector3(size))?;
         self.dm.set(id, p.cframe, Value::CFrame(cframe))?;
         let [r, g, b] = look.color;

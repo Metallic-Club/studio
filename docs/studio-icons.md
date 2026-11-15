@@ -75,6 +75,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `asset.local_script` | A LocalScript file in the Assets panel (`.client.luau`, #677). | Explorer: local scripts | [`assets/scroll.svg`](https://lucide.dev/icons/scroll) | `asset.local_script.svg`, `asset.local_script.png` |
 | `asset.module_script` | A ModuleScript file in the Assets panel (`.luau`, #677). | Explorer: module scripts | [`assets/scroll-text.svg`](https://lucide.dev/icons/scroll-text) | `asset.module_script.svg`, `asset.module_script.png` |
 | `asset.folder` | A folder in the Assets panel (#676). | Explorer and Assets: parts, models, folders, cameras | [`assets/folder.svg`](https://lucide.dev/icons/folder) | `asset.folder.svg`, `asset.folder.png` |
+| `asset.material` | A material in the Assets panel (#678). | Panels and Assets: content | [`assets/palette.svg`](https://lucide.dev/icons/palette) | `asset.material.svg`, `asset.material.png` |
 | `asset.file` | Any other file in the Assets panel. | Explorer and Assets: other | [`assets/file.svg`](https://lucide.dev/icons/file) | `asset.file.svg`, `asset.file.png` |
 | `toolbar.play` | Play, and Resume while paused. | Running the game | [`toolbar/play.svg`](https://lucide.dev/icons/play) | `toolbar.play.svg`, `toolbar.play.png` |
 | `toolbar.pause` | Pause. | Running the game | [`toolbar/pause.svg`](https://lucide.dev/icons/pause) | `toolbar.pause.svg`, `toolbar.pause.png` |

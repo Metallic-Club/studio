@@ -2693,7 +2693,7 @@ mod tests {
             metallic_engine::metallic_project::Template::from_dir(templates_dir().unwrap().join("baseplate-3d"))
                 .unwrap();
         let path = dir.join(format!("{name}.mtproj"));
-        metallic_engine::metallic_project::Project::create(&path, &template, name).unwrap();
+        crate::projects::create_project(&path, &template, name).unwrap();
         path
     }
 
@@ -3764,15 +3764,15 @@ mod tests {
         undo(&mut harness);
 
         // An enum, from its drop-down.
-        harness.get_by_role_and_label(Role::ComboBox, "Material").click();
+        harness.get_by_role_and_label(Role::ComboBox, "Shape").click();
         settle(&mut harness);
-        harness.get_by_label("Wood").click();
+        harness.get_by_label("Ball").click();
         settle(&mut harness);
-        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Wood"));
+        assert!(matches!(value(&harness, "Shape"), Value::Enum(item) if item.name() == "Ball"));
         undo(&mut harness);
-        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Concrete"));
+        assert!(matches!(value(&harness, "Shape"), Value::Enum(item) if item.name() == "Block"));
         // Or by the wheel over it with Ctrl held (#469, #666): a notch down, another item, in place; undone as any edit.
-        let combo = harness.get_by_role_and_label(Role::ComboBox, "Material").rect();
+        let combo = harness.get_by_role_and_label(Role::ComboBox, "Shape").rect();
         harness.hover_at(combo.center());
         settle(&mut harness);
         harness.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
@@ -3785,10 +3785,10 @@ mod tests {
         });
         settle(&mut harness);
         harness.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() != "Concrete"));
-        assert_eq!(harness.get_by_role_and_label(Role::ComboBox, "Material").rect(), combo);
+        assert!(matches!(value(&harness, "Shape"), Value::Enum(item) if item.name() != "Block"));
+        assert_eq!(harness.get_by_role_and_label(Role::ComboBox, "Shape").rect(), combo);
         undo(&mut harness);
-        assert!(matches!(value(&harness, "Material"), Value::Enum(item) if item.name() == "Concrete"));
+        assert!(matches!(value(&harness, "Shape"), Value::Enum(item) if item.name() == "Block"));
 
         // A number past its range is kept in it; a reference is not a field.
         type_into(&mut harness, "Transparency", "4");

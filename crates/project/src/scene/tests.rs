@@ -53,8 +53,7 @@ fn rich_game() -> (DataModel, Id, Id) {
         .unwrap();
     dm.set_by_name(part, "Color", Value::Color3(Color3::new(0.1, 0.2, 0.3)))
         .unwrap();
-    dm.set_by_name(part, "Material", enum_item(&dm, "Material", "Wood"))
-        .unwrap();
+    dm.set_by_name(part, "Material", Value::String("Wood".into())).unwrap();
     dm.set_by_name(part, "Shape", enum_item(&dm, "PartShape", "Wedge"))
         .unwrap();
     dm.set_by_name(part, "Transparency", Value::Number(0.1)).unwrap();
@@ -67,7 +66,7 @@ fn rich_game() -> (DataModel, Id, Id) {
         .unwrap();
     dm.set_attribute(part, "Offset", Some(Value::Vector3(Vector3::ONE)))
         .unwrap();
-    dm.set_attribute(part, "Kind", Some(enum_item(&dm, "Material", "Metal")))
+    dm.set_attribute(part, "Kind", Some(enum_item(&dm, "PartShape", "Ball")))
         .unwrap();
 
     let storage = service(&dm, "ReplicatedStorage");
@@ -270,7 +269,7 @@ fn values_are_written_by_their_declared_type() {
     assert_eq!(part["attributes"]["Speed"], json!({"Number": 3.5}));
     assert_eq!(
         part["attributes"]["Kind"],
-        json!({"Enum": {"enum_type": "Material", "name": "Metal"}})
+        json!({"Enum": {"enum_type": "PartShape", "name": "Ball"}})
     );
     let model = named(&doc, "House");
     assert_eq!(model["properties"]["PrimaryPart"], part["id"]);
@@ -378,7 +377,7 @@ fn unknown_and_unfit_content_is_skipped_with_warnings() {
             {"id": 2, "parent": 1, "class": "Hologram", "name": "FromTheFuture"},
             {"id": 3, "parent": 2, "class": "Part", "name": "UnderTheHologram"},
             {"id": 4, "parent": 1, "class": "Part", "name": "Kept",
-             "properties": {"Material": "Cheese", "Size": "big", "Position": [1.0, 2.0, 3.0], "Anchored": true},
+             "properties": {"Shape": "Cheese", "Size": "big", "Position": [1.0, 2.0, 3.0], "Anchored": true},
              "attributes": {"Bad": {"Instance": 1}, "Good": {"Bool": true}}},
             {"id": 5, "parent": 77, "class": "Part"},
             {"id": 6, "parent": 1, "class": "BasePart"},
@@ -400,16 +399,16 @@ fn unknown_and_unfit_content_is_skipped_with_warnings() {
             id: 2,
             class: "Hologram".to_owned(),
         },
-        SceneWarning::BadValue {
-            id: 4,
-            class: "Part",
-            property: "Material",
-            expected: "Enum.Material".to_owned(),
-        },
         SceneWarning::UnknownProperty {
             id: 4,
             class: "Part",
             property: "Position".to_owned(),
+        },
+        SceneWarning::BadValue {
+            id: 4,
+            class: "Part",
+            property: "Shape",
+            expected: "Enum.PartShape".to_owned(),
         },
         SceneWarning::BadValue {
             id: 4,

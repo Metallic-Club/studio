@@ -71,6 +71,7 @@ mod grid;
 mod instance;
 mod lights;
 mod lists;
+mod materials;
 mod slots;
 mod sync;
 #[cfg(test)]

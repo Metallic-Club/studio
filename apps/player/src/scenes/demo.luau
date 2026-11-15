@@ -26,7 +26,7 @@ local UserInputService = game:GetService("UserInputService")
 local function part(
     name: string,
     shape: EnumPartShape,
-    material: EnumMaterial,
+    material: string,
     size: Vector3,
     cframe: CFrame,
     color: Color3,
@@ -47,7 +47,17 @@ end
 
 local Block, Ball, Cylinder, Wedge =
     Enum.PartShape.Block, Enum.PartShape.Ball, Enum.PartShape.Cylinder, Enum.PartShape.Wedge
-local M = Enum.Material
+-- Materials are named (#678): the game's material of that name, else the built-in one.
+local M = {
+    Plastic = "Plastic",
+    SmoothPlastic = "SmoothPlastic",
+    Metal = "Metal",
+    Wood = "Wood",
+    Concrete = "Concrete",
+    Grass = "Grass",
+    Glass = "Glass",
+    Neon = "Neon",
+}
 
 -- The baseplate, and a darker path across it.
 part("Baseplate", Block, M.Concrete, Vector3.new(160, 2, 160), CFrame.new(0, -1, 0), Color3.fromRGB(99, 95, 98))
@@ -73,7 +83,7 @@ for row, material in materials do
         local x = 10 + (column - 1) * 5
         local size = if shape == Cylinder then Vector3.new(3, 2.5, 2.5) else Vector3.new(3, 3, 3)
         part(
-            `{material.Name}{shape.Name}`,
+            `{material}{shape.Name}`,
             shape,
             material,
             size,

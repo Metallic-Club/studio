@@ -354,7 +354,7 @@ impl Projects {
             let path = std::path::absolute(&path).unwrap_or(path);
             let template =
                 Template::from_dir(&template.dir).map_err(|error| format!("Could not read the template: {error}."))?;
-            Project::create(&path, &template, &name).map_err(|error| format!("{error}."))?;
+            create_project(&path, &template, &name).map_err(|error| format!("{error}."))?;
             Ok(path)
         })();
         match made {
@@ -922,6 +922,22 @@ pub fn file_name_for(name: &str) -> Option<String> {
         .collect();
     let file = file.trim().trim_end_matches('.').trim_end();
     (!file.is_empty()).then(|| file.to_owned())
+}
+
+/// Makes a project at `path` from `template`, called `name`, ready to edit: its members indexed and its scenes naming
+/// the template's materials by id (#678), saved, so it opens with nothing unsaved.
+pub fn create_project(
+    path: &Path,
+    template: &Template,
+    name: &str,
+) -> Result<(), metallic_engine::metallic_project::ProjectError> {
+    let mut project = Project::create(path, template, name)?;
+    project.refresh_assets()?;
+    project.link_material_names()?;
+    if project.is_modified() {
+        project.save()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

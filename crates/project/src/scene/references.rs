@@ -101,6 +101,16 @@ enum Frame {
 /// Rewrites the member paths in the scene `text`'s [`PATH_PROPERTIES`] that `remap` gives a new path for. Returns
 /// the new text, or `None` when nothing changed. Only the rewritten strings change; every other byte is kept.
 pub(crate) fn rewrite_paths(text: &str, remap: impl Fn(&str) -> Option<String>) -> Result<Option<String>, SceneError> {
+    rewrite_values(text, PATH_PROPERTIES, remap)
+}
+
+/// Rewrites the string values of the scene `text`'s properties named in `properties` that `remap` gives a new value
+/// for, as [`rewrite_paths`] does for paths (#678: material names into asset ids).
+pub(crate) fn rewrite_values(
+    text: &str,
+    properties: &[&str],
+    remap: impl Fn(&str) -> Option<String>,
+) -> Result<Option<String>, SceneError> {
     // Checked first, so the scan below only ever sees valid JSON.
     parse(text)?;
     let bytes = text.as_bytes();
@@ -132,7 +142,7 @@ pub(crate) fn rewrite_paths(text: &str, remap: impl Fn(&str) -> Option<String>) 
                     serde_json::from_str(literal).map_err(|error| SceneError::Syntax(error.to_string()))?;
                 if let Some(Frame::Object { key, want_key: true }) = stack.last_mut() {
                     *key = Some(value);
-                } else if is_path_property(&stack)
+                } else if is_property(&stack, properties)
                     && let Some(path) = remap(&value)
                 {
                     out.push_str(&text[copied..i]);
@@ -166,8 +176,8 @@ fn string_end(bytes: &[u8], start: usize) -> usize {
     bytes.len()
 }
 
-/// Whether the scan is at the value of `instances[n].properties.<a path property>`.
-fn is_path_property(stack: &[Frame]) -> bool {
+/// Whether the scan is at the value of `instances[n].properties.<one of properties>`.
+fn is_property(stack: &[Frame], properties: &[&str]) -> bool {
     fn key(frame: &Frame) -> Option<&str> {
         match frame {
             Frame::Object { key, .. } => key.as_deref(),
@@ -175,10 +185,10 @@ fn is_path_property(stack: &[Frame]) -> bool {
         }
     }
     match stack {
-        [instances, Frame::Array, properties, property] => {
+        [instances, Frame::Array, props, property] => {
             key(instances) == Some("instances")
-                && key(properties) == Some("properties")
-                && key(property).is_some_and(|name| PATH_PROPERTIES.contains(&name))
+                && key(props) == Some("properties")
+                && key(property).is_some_and(|name| properties.contains(&name))
         }
         _ => false,
     }
@@ -236,8 +246,9 @@ mod tests {
     /// it. This lists every saved string property of the built-in classes, so adding one means deciding.
     #[test]
     fn every_saved_string_property_is_known_to_be_a_path_or_not() {
-        // `Lighting.TimeOfDay`, `MeshPart.MeshId` and `TextureId` (asset ids), `StringValue.Value`.
-        const NOT_PATHS: &[&str] = &["TimeOfDay", "MeshId", "TextureId", "Value"];
+        // `Lighting.TimeOfDay`, `MeshPart.MeshId` and `TextureId` (asset ids), `BasePart.Material` (an asset id or a
+        // material name, #678), `StringValue.Value`.
+        const NOT_PATHS: &[&str] = &["TimeOfDay", "MeshId", "TextureId", "Material", "Value"];
         let registry = metallic_classes::shared_registry().unwrap();
         let mut unknown = Vec::new();
         for class in registry.classes() {

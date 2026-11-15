@@ -10,6 +10,7 @@ pub mod asset_index;
 pub mod assets;
 mod game_files;
 pub mod manifest;
+pub mod material;
 pub mod pak;
 pub mod project;
 pub mod scene;
@@ -23,7 +24,8 @@ pub use game_files::GameFiles;
 pub use manifest::{LoadedManifest, Manifest, ManifestError, ManifestWarning, ProjectKind, ProjectMode};
 pub use pak::{PAK_FILE, PAK_FORMAT, PAK_MAGIC, Pak, PakError};
 pub use project::{
-    MemberMove, MoveReport, PROJECT_EXTENSION, Project, ProjectError, References, Template, check_member_path,
+    MATERIAL_PROPERTY, MaterialLinks, MemberMove, MoveReport, PROJECT_EXTENSION, Project, ProjectError, References,
+    Template, check_member_path,
 };
 pub use scene::{
     LoadedScene, PATH_PROPERTIES, SCENE_FORMAT, SavedScene, SceneError, SceneIds, SceneReference, SceneWarning,

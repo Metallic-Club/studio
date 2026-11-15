@@ -7,7 +7,7 @@ part.Name = "Door"
 part.Position = Vector3.new(0, 5, 0)
 part.Size = Vector3.one * 4
 part.Color = Color3.fromRGB(200, 120, 40)
-part.Material = Enum.Material.Plastic
+part.Material = "Plastic"
 part.Shape = Enum.PartShape.Ball
 part.Anchored = true
 part.Parent = workspace
@@ -15,8 +15,8 @@ part.Parent = workspace
 local height: number = part.Position.Y + part.Size.Magnitude
 local pivot: CFrame = part:GetPivot() * CFrame.Angles(0, math.pi / 2, 0)
 part:PivotTo(pivot + Vector3.yAxis)
-local material: EnumMaterial = part.Material
-local materialName: string = material.Name
+-- A material is an asset of the game, named here (#678).
+local materialName: string = part.Material
 
 local found = workspace:FindFirstChild("Door")
 if found and found:IsA("BasePart") then
@@ -54,6 +54,6 @@ task.spawn(function()
     connection:Disconnect()
 end)
 
-for _, item in Enum.Material:GetEnumItems() do
+for _, item in Enum.PartShape:GetEnumItems() do
     print(item.Name, item.Value)
 end

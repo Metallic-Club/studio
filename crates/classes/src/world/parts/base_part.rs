@@ -7,14 +7,15 @@
 //! `Size` is clamped on write, per component, into [`MIN_SIZE`]..=[`MAX_SIZE`] metres, so a negative or zero size
 //! becomes the smallest one rather than an error. NaN and infinity are refused, like for every property.
 //!
-//! The `Material` enum lives here because `BasePart` owns it.
+//! `Material` names a material asset (#678, ADR 0012): a project's `.material` file by its asset id, or by its name
+//! (`"Wood"`: the project's material of that name, else the built-in one). There is no fixed `Material` enum.
 
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use metallic_core::{
-    CFrame, ClassDesc, DataModel, DmError, EnumDesc, Id, PropFlags, PropId, PropMeta, ScriptError, ScriptValue, Value,
-    Vector3, Widget,
+    CFrame, ClassDesc, DataModel, DmError, Id, PropFlags, PropId, PropMeta, ScriptError, ScriptValue, Value, Vector3,
+    Widget,
 };
 
 /// The smallest a part can be along each axis, in metres.
@@ -23,21 +24,8 @@ pub const MIN_SIZE: f64 = 0.001;
 /// The largest a part can be along each axis, in metres.
 pub const MAX_SIZE: f64 = 2048.0;
 
-/// The enums `BasePart` declares.
-pub static ENUMS: &[EnumDesc] = &[EnumDesc::new(
-    "Material",
-    &[
-        "Plastic",
-        "SmoothPlastic",
-        "Metal",
-        "Wood",
-        "Glass",
-        "Neon",
-        "Concrete",
-        "Grass",
-    ],
-)
-.describe("What a part's surface is made of, which sets how it looks: its texture, shine and glow.")];
+/// The files a `Material` names: material assets.
+pub const MATERIAL_EXTENSIONS: &[&str] = &["material"];
 
 /// The name of the stored property `Position` and `Orientation` are views of.
 const CFRAME: &str = "CFrame";
@@ -169,11 +157,18 @@ static PROPS: &[PropMeta] = &[
         .group("Appearance")
         .order(2)
         .desc("The part's colour."),
-    PropMeta::enumeration("Material", "Material", "Plastic")
+    PropMeta::string("Material", "")
         .visual()
+        .widget(Widget::AssetId {
+            extensions: MATERIAL_EXTENSIONS,
+        })
         .group("Appearance")
         .order(1)
-        .desc("What the part looks like it is made of, such as Wood, Metal or Neon."),
+        .desc(
+            "The material the part looks like it is made of: a material asset of the project, by its id or by its \
+             name such as \"Wood\" or \"Neon\" (the project's material of that name, else the built-in one). Empty is \
+             plain plastic.",
+        ),
     PropMeta::number("Transparency", 0.0)
         .range(0.0, 1.0)
         .widget(Widget::Slider)
@@ -212,7 +207,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("BasePart", Some("WorldObject"))
 
 #[cfg(test)]
 mod tests {
-    use metallic_core::{CFrame, Color3, EnumItem, Value, Vector3};
+    use metallic_core::{CFrame, Color3, Value, Vector3};
 
     use crate::shared_registry;
     use crate::testing::{game, new_in, workspace};
@@ -347,26 +342,19 @@ mod tests {
         assert_eq!(dm.get_by_name(part, "CastShadow"), Ok(Value::Bool(true)));
         assert_eq!(dm.get_by_name(part, "Anchored"), Ok(Value::Bool(true)), "on by default (#589)");
         assert_eq!(dm.get_by_name(part, "CanCollide"), Ok(Value::Bool(true)));
-        assert_eq!(
-            dm.get_by_name(part, "Material"),
-            Ok(Value::Enum(EnumItem::new("Material", "Plastic")))
-        );
+        assert_eq!(dm.get_by_name(part, "Material"), Ok(Value::String("".into())));
         assert_eq!(cframe(&dm, part), CFrame::IDENTITY);
     }
 
     #[test]
-    fn material_has_its_items() {
+    fn a_material_is_an_asset_by_id_or_name_not_an_enum() {
         let registry = shared_registry().unwrap();
-        let material = registry.enum_desc("Material").unwrap();
-        assert_eq!(
-            material.items,
-            ["Plastic", "SmoothPlastic", "Metal", "Wood", "Glass", "Neon", "Concrete", "Grass"]
-        );
+        assert!(registry.enum_desc("Material").is_none(), "no fixed list (#678)");
         let (mut dm, part) = part();
-        dm.set_by_name(part, "Material", Value::Enum(EnumItem::new("Material", "Neon")))
-            .unwrap();
-        let unknown = Value::Enum(EnumItem::new("Material", "Cheese"));
-        assert!(dm.set_by_name(part, "Material", unknown).is_err());
+        for material in ["Neon", "0123456789abcdef0123456789abcdef", ""] {
+            dm.set_by_name(part, "Material", Value::String(material.into())).unwrap();
+            assert_eq!(dm.get_by_name(part, "Material"), Ok(Value::String(material.into())));
+        }
     }
 
     #[test]
@@ -412,7 +400,7 @@ mod tests {
 
         /// A registry of the part classes and the test classes, with `classes` listed in the given order.
         fn registry_of(classes: &[&'static ClassDesc]) -> Arc<Registry> {
-            let enums = [base_part::ENUMS, part::ENUMS];
+            let enums = [part::ENUMS];
             Arc::new(
                 Registry::build(RegistryInput {
                     classes,

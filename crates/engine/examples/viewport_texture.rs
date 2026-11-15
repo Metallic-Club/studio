@@ -215,7 +215,7 @@ fn game() -> (DataModel, Id) {
         let id = dm.create(part_class).expect("a part");
         dm.set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", shape)))
             .expect("Shape");
-        dm.set_by_name(id, "Material", Value::Enum(EnumItem::new("Material", material)))
+        dm.set_by_name(id, "Material", Value::String(material.into()))
             .expect("Material");
         dm.set_by_name(id, "Size", Value::Vector3(size)).expect("Size");
         dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at)))

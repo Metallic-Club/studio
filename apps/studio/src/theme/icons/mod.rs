@@ -299,6 +299,8 @@ icons! {
     AssetModuleScript = "asset.module_script", ModuleScript, "scroll-text";
     /// A folder in the Assets panel (#676).
     AssetFolder = "asset.folder", Object, "folder";
+    /// A material in the Assets panel (#678).
+    AssetMaterial = "asset.material", Content, "palette";
     /// Any other file in the Assets panel.
     AssetFile = "asset.file", Other, "file";
     /// Play, and Resume while paused.

@@ -80,8 +80,7 @@ fn a_part_is_packed_from_its_properties() {
     dm.set_by_name(id, "Color", Value::Color3(Color3::from_rgb_u8(10, 20, 30)))
         .unwrap();
     dm.set_by_name(id, "Transparency", Value::Number(0.25)).unwrap();
-    dm.set_by_name(id, "Material", Value::Enum(EnumItem::new("Material", "Metal")))
-        .unwrap();
+    dm.set_by_name(id, "Material", Value::String("Metal".into())).unwrap();
     dm.set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", "Cylinder")))
         .unwrap();
     dm.set_by_name(id, "CastShadow", Value::Bool(false)).unwrap();
@@ -95,8 +94,8 @@ fn a_part_is_packed_from_its_properties() {
         rows: affine_rows(turned, Vec3::new(2.0, 4.0, 6.0), Vec3::ZERO),
         color: u32::from_le_bytes([10, 20, 30, 0]),
         transparency: 0.25,
-        // Metal is the third `Material` item.
-        mesh_material: (u32::from(MeshKind::CYLINDER.0) << 16) | 2,
+        // Metal is the first material key the scene met: row 1 (#678).
+        mesh_material: (u32::from(MeshKind::CYLINDER.0) << 16) | 1,
         flags: GpuInstance::LIVE | GpuInstance::TRANSLUCENT,
     };
     assert_eq!(got, expected);
