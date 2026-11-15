@@ -9717,6 +9717,7 @@ skip_sign_in = true
         write_png(&out.join("217-viewport.png"), offscreen.read());
     }
 
+    mod file_pickers;
     mod team_create;
     mod team_play;
     mod team_play_port;

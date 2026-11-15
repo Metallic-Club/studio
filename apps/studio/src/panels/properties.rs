@@ -690,6 +690,8 @@ impl Panel for Properties {
         // What changed in the editor's scene since the rows were last worked out (#597).
         let revision = cx.editor.parts.revision();
         // The running game's values while one runs, live (ADR 0010 §5).
+        // The project's files, for the file pickers (#55), before the scene borrows the editor.
+        let files = values::Files::of(&cx.editor.project);
         let mut scene = cx.editor.scene();
         let playing = scene.playing;
         if playing {
@@ -761,14 +763,14 @@ impl Panel for Properties {
                 let mut open = open_rows(ui.ctx());
                 for group in cached_groups(ui.ctx(), dm, &ids, (!playing).then_some(revision)).iter() {
                     section_label(ui, group.name);
-                    let drawn = rows_ui(ui, dm, &group.rows, &mut open, share, &taken, picking.as_ref());
+                    let drawn = rows_ui(ui, dm, &files, &group.rows, &mut open, share, &taken, picking.as_ref());
                     edits.extend(drawn.edits);
                     pick |= drawn.pick;
                     ui.add_space(space::S5);
                 }
                 if let Some(rows) = &icon_rows {
                     section_label(ui, "Appearance");
-                    let drawn = rows_ui(ui, dm, rows, &mut open, share, &taken, None);
+                    let drawn = rows_ui(ui, dm, &files, rows, &mut open, share, &taken, None);
                     edits.extend(drawn.edits);
                     reset_icon |= drawn.reset;
                     ui.add_space(space::S5);
@@ -777,7 +779,7 @@ impl Panel for Properties {
                 if let Some(rows) = &attributes {
                     // Like every group, with a + at the right of its label (#617).
                     let added = attributes_header(ui, &taken);
-                    let drawn = rows_ui(ui, dm, rows, &mut open, share, &taken, None);
+                    let drawn = rows_ui(ui, dm, &files, rows, &mut open, share, &taken, None);
                     edits.extend(drawn.edits);
                     attribute_action = drawn.action.or(added);
                     bottom = ui.cursor().top();
@@ -873,9 +875,11 @@ struct Drawn {
 
 /// Draws `rows` (a group's) touching and striped, a part's row only while every row it opens from is `open` (#417),
 /// and opens or closes what was clicked. `taken` are the active instance's attribute names, which a rename checks.
+#[allow(clippy::too_many_arguments)]
 fn rows_ui(
     ui: &mut Ui,
     dm: &DataModel,
+    files: &values::Files,
     rows: &[PropertyRow],
     open: &mut HashSet<String>,
     share: f32,
@@ -906,7 +910,18 @@ fn rows_ui(
             let is_open = row.opens.then(|| open.contains(&row.key));
             let out = ui
                 .push_id(&row.key, |ui| {
-                    row_ui(ui, dm, row, shades.fill(index), last, share, is_open, taken, picking)
+                    row_ui(
+                        ui,
+                        dm,
+                        files,
+                        row,
+                        shades.fill(index),
+                        last,
+                        share,
+                        is_open,
+                        taken,
+                        picking,
+                    )
                 })
                 .inner;
             if let Some(edit) = out.edit {
@@ -951,6 +966,7 @@ const INDENT: f32 = 14.0;
 fn row_ui(
     ui: &mut Ui,
     dm: &DataModel,
+    files: &values::Files,
     row: &PropertyRow,
     fill: Color32,
     last: bool,
@@ -1080,7 +1096,9 @@ fn row_ui(
                     pick_clicked = parent_value(ui, dm, row, picking);
                     None
                 }
-                None if row.editable => values::edit(ui, dm, row.meta, &row.label, row.part, &row.value, row.mixed),
+                None if row.editable => {
+                    values::edit(ui, dm, files, row.meta, &row.label, row.part, &row.value, row.mixed)
+                }
                 None if row.mixed.whole => {
                     ui.label(RichText::new("Mixed").size(text::BODY).color(p.subtle));
                     None

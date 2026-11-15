@@ -10,7 +10,7 @@
 //! the language. Running scripts and `require` belong to the script host (`metallic_script`); these classes are
 //! only data.
 
-use metallic_core::{ClassDesc, PropMeta};
+use metallic_core::{ClassDesc, PropMeta, Widget};
 
 /// The category script classes are listed under in Studio's Insert menu.
 pub const CATEGORY: &str = "Scripts";
@@ -18,11 +18,20 @@ pub const CATEGORY: &str = "Scripts";
 /// The Properties panel group of the script members.
 pub const GROUP: &str = "Script";
 
-// Studio should edit `Source` with a project file picker; core has no such widget yet, so the description says it.
-static PROPS: &[PropMeta] = &[PropMeta::string("Source", "").group(GROUP).order(0).desc(
-    "The project-relative path of the script's source file, such as \"Scripts/Door.luau\", chosen with a file \
-     picker. The file's extension selects the language. Empty means the script has no source and does nothing.",
-)];
+/// The extensions of the source files a script can name: the languages the engine ships (Luau). A static list, as
+/// the classes do not know the script host (#55).
+pub const SOURCE_EXTENSIONS: &[&str] = &["luau", "lua"];
+
+static PROPS: &[PropMeta] = &[PropMeta::string("Source", "")
+    .widget(Widget::FilePath {
+        extensions: SOURCE_EXTENSIONS,
+    })
+    .group(GROUP)
+    .order(0)
+    .desc(
+        "The project-relative path of the script's source file, such as \"Scripts/Door.luau\", chosen with a file \
+         picker. The file's extension selects the language. Empty means the script has no source and does nothing.",
+    )];
 
 /// The base of every script class.
 pub static CLASS: ClassDesc = ClassDesc::new("SourceContainer", Some("Instance"))
