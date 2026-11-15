@@ -23,14 +23,19 @@ pub(super) fn free_port() -> u16 {
 /// (Windows from 49152, Linux from 32768): there, the joiner's own outgoing socket can be handed the port after the
 /// host's, as Windows hands them out in order.
 pub(super) fn free_pair() -> u16 {
+    free_pairs(1)
+}
+
+/// The first of `pairs` pairs of ports in a row, all free and handed to no other test (see [`free_pair`]).
+pub(super) fn free_pairs(pairs: u16) -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
     let bindable = |port: u16| std::net::TcpListener::bind(("0.0.0.0", port)).is_ok();
     // Spread over the range by process, so test runs side by side rarely try the same ports.
     let start = 20_000 + (std::process::id() % 400) as u16 * 20;
     loop {
-        let port = start + NEXT.fetch_add(2, Ordering::Relaxed) % 4_000;
-        if bindable(port) && bindable(port + 1) {
+        let port = start + NEXT.fetch_add(2 * pairs, Ordering::Relaxed) % 4_000;
+        if (port..port + 2 * pairs).all(bindable) {
             return port;
         }
     }
@@ -76,19 +81,22 @@ pub(super) fn open_menu(harness: &mut Harness<'_, Test>) {
     settle(harness);
 }
 
-/// Hosts from `a`'s menu on a free port; returns it.
+/// Hosts from `a`'s menu on a free port; returns the port the session is on.
 pub(super) fn host(a: &mut Harness<'_, Test>) -> u16 {
     open_menu(a);
     let port = free_pair();
     a.state_mut().studio.team_mut().form.port = port.to_string();
     a.get_by_role_and_label(Role::Button, "Start hosting").click();
     settle(a);
-    assert!(
-        a.state().studio.team().is_hosting(),
-        "{:?}",
-        a.state().studio.team().note
-    );
-    port
+    hosted_port(a)
+}
+
+/// The port `a`'s hosted session is on.
+pub(super) fn hosted_port(a: &Harness<'_, Test>) -> u16 {
+    match a.state().studio.team().session() {
+        Session::Hosting(hosting) => hosting.server.port(),
+        _ => panic!("not hosting: {:?}", a.state().studio.team().note),
+    }
 }
 
 /// Joins `port` on localhost from `b`'s menu as `name`.

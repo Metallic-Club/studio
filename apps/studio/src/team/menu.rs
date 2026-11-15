@@ -5,12 +5,15 @@
 //! labels, the segmented control for Host and Join, bordered buttons and fields. egui's menu style, which strips the
 //! buttons' fill and border, is not applied.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Popup, PopupCloseBehavior, Rect, Response,
     RichText, Sense, Stroke, TextEdit, Ui, WidgetInfo, pos2, vec2,
 };
+
+use metallic_engine::metallic_net::forward::{Forwarding, PortForward};
 
 use super::{Session, TeamCreate};
 use crate::projects::section_label;
@@ -330,29 +333,77 @@ fn active(ui: &mut Ui, team: &mut TeamCreate) -> Option<TeamAction> {
         ui.add(egui::ProgressBar::new(received as f32 / total as f32).desired_height(4.0));
     }
     if let Session::Hosting(hosting) = team.session() {
-        field_label(ui, "Others join at");
         let port = hosting.server.port();
-        for address in &hosting.addresses {
-            let text = match address {
-                std::net::IpAddr::V6(v6) => format!("[{v6}]:{port}"),
-                std::net::IpAddr::V4(v4) => format!("{v4}:{port}"),
-            };
-            address_row(ui, &text);
-        }
-        // These are this machine's addresses on its own network (#639): someone outside it needs the router's public
-        // address, with the session's port and Team Create Play's forwarded to this computer.
+        let with_port = |address: &IpAddr| match address {
+            IpAddr::V6(v6) => format!("[{v6}]:{port}"),
+            IpAddr::V4(v4) => format!("{v4}:{port}"),
+        };
         let ports = match crate::team::play_port_after(port) {
             Some(play) => format!("TCP ports {port} and {play}"),
             None => format!("TCP port {port}"),
         };
-        ui.label(
-            RichText::new(format!(
-                "On your network. From outside it, people join at your public address, with {ports} forwarded \
-                 to this computer."
-            ))
-            .size(text::SMALL)
-            .color(p.subtle),
-        );
+        // From the internet (#651): the router's address once it forwards the ports, or why it does not.
+        let note = |ui: &mut Ui, words: String, color: Color32| {
+            ui.label(RichText::new(words).size(text::SMALL).color(color));
+        };
+        match hosting.forward.as_ref().map(PortForward::state) {
+            Some(Forwarding::Forwarded { public }) => {
+                field_label(ui, "From the internet");
+                address_row(ui, &with_port(&public));
+                note(
+                    ui,
+                    format!(
+                        "Your router forwards {ports} to this computer. If Windows asks, let Metallic Studio through \
+                         its firewall."
+                    ),
+                    p.subtle,
+                );
+            }
+            Some(Forwarding::Asking) => {
+                field_label(ui, "From the internet");
+                note(ui, format!("Asking your router to forward {ports}\u{2026}"), p.subtle);
+            }
+            Some(Forwarding::Shared { router }) => {
+                field_label(ui, "From the internet");
+                note(
+                    ui,
+                    format!(
+                        "Your router forwards {ports}, but its own outside address ({router}) is shared by your \
+                         internet provider or a second router, so people outside can't reach you directly. Use a \
+                         virtual network such as Tailscale or ZeroTier and share its address."
+                    ),
+                    crate::panels::output::WARNING,
+                );
+            }
+            Some(Forwarding::Failed(why)) => {
+                field_label(ui, "From the internet");
+                note(
+                    ui,
+                    format!(
+                        "Your router didn't forward the ports: {why}. Turn on UPnP in its settings, or forward \
+                         {ports} to this computer there."
+                    ),
+                    crate::panels::output::WARNING,
+                );
+            }
+            None => {}
+        }
+        field_label(ui, "On your network");
+        for address in &hosting.addresses {
+            address_row(ui, &with_port(address));
+        }
+        if hosting.forward.is_none() {
+            // Without forwarding (#639): someone outside needs the router's public address, with the session's port
+            // and Team Create Play's forwarded to this computer.
+            note(
+                ui,
+                format!(
+                    "On your network. From outside it, people join at your public address, with {ports} forwarded \
+                     to this computer."
+                ),
+                p.subtle,
+            );
+        }
     }
     let users = team.users();
     if !users.is_empty() {
