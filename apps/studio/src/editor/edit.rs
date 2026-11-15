@@ -424,6 +424,20 @@ impl TreeEdit {
     pub fn pastes(self) -> bool {
         matches!(self, TreeEdit::Paste | TreeEdit::PasteInto)
     }
+
+    /// The keymap's command for it, whose shortcut menus show (#660).
+    pub fn command(self) -> &'static str {
+        use crate::keymap::ids;
+        match self {
+            TreeEdit::Cut => ids::EDIT_CUT,
+            TreeEdit::Copy => ids::EDIT_COPY,
+            TreeEdit::Paste => ids::EDIT_PASTE,
+            TreeEdit::PasteInto => ids::EDIT_PASTE_INTO,
+            TreeEdit::Duplicate => ids::EDIT_DUPLICATE,
+            TreeEdit::Rename => ids::EDIT_RENAME,
+            TreeEdit::Delete => ids::EDIT_DELETE,
+        }
+    }
 }
 
 /// Whether `id` can be moved, copied or deleted: anything but the root and the services.

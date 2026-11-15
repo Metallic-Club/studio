@@ -57,6 +57,8 @@ pub struct PanelContext<'a> {
     pub editor: &'a mut EditorState,
     /// Studio's settings (the viewport reads its Rendering settings).
     pub settings: &'a mut StudioSettings,
+    /// The keymap, for the shortcuts a panel's menus show (#660).
+    pub keymap: &'a crate::keymap::Keymap,
 }
 
 /// A dockable panel. Implementations are unit types; their state lives in [`EditorState`].

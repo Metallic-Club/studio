@@ -8,7 +8,7 @@
 
 use egui::{
     Align, Align2, Color32, CornerRadius, Frame, Id, Layout, Rect, Response, RichText, Role, Sense, Stroke, Ui,
-    UiBuilder, WidgetInfo, pos2, vec2,
+    UiBuilder, WidgetInfo, vec2,
 };
 
 use crate::dock::Dock;
@@ -16,18 +16,13 @@ use crate::editor::edit::is_movable;
 use crate::editor::{EditorState, STEPS, TreeEdit};
 use crate::keymap::{Keymap, ids};
 use crate::theme::icons::{self, Icon};
+use crate::theme::menu::{ITEM_GAP, menu_item, menu_width as width_of};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
 use crate::viewport::tools::Tool;
 
 /// The top bar's height.
 pub(crate) const BAR_HEIGHT: f32 = 40.0;
-/// The narrowest a menu is (#276: otherwise as wide as its longest item and shortcut need).
-const MENU_MIN_WIDTH: f32 = 150.0;
-/// The space between an item's label and its shortcut.
-const SHORTCUT_GAP: f32 = space::S8;
-/// A menu item's height.
-const ITEM_HEIGHT: f32 = 28.0;
 /// A menu title's height in the bar.
 const TITLE_HEIGHT: f32 = 28.0;
 /// The progress card's width.
@@ -517,7 +512,7 @@ fn menu_entries(
     width: f32,
 ) -> Option<MenuAction> {
     let mut chosen = None;
-    ui.spacing_mut().item_spacing.y = 2.0;
+    ui.spacing_mut().item_spacing.y = ITEM_GAP;
     for entry in menu.entries {
         match *entry {
             Entry::Item { label, action, command } => {
@@ -553,103 +548,32 @@ fn menu_entries(
 /// How wide `menu` is (#276): its longest line, the check column (for the panels' list), the label, the gap and the
 /// shortcut, with the item's padding on both sides; never less than [`MENU_MIN_WIDTH`].
 fn menu_width(ui: &Ui, menu: &Menu, dock: &Dock, keymap: &Keymap) -> f32 {
-    let painter = ui.painter();
-    let measure = |text: &str, size: f32| {
-        painter
-            .layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), Color32::WHITE)
-            .size()
-            .x
-    };
-    let mut widest: f32 = 0.0;
-    let mut line = |label: &str, shortcut: Option<String>, check: bool| {
-        let check = if check { text::BODY + space::S3 } else { 0.0 };
-        let keys = shortcut.map_or(0.0, |keys| SHORTCUT_GAP + measure(&keys, text::SMALL));
-        widest = widest.max(check + measure(label, text::BODY) + keys);
-    };
+    let mut lines: Vec<(&str, Option<String>, bool)> = Vec::new();
     for entry in menu.entries {
         match *entry {
             Entry::Item { label, action, command } => {
                 let keys = command.and_then(|id| keymap.shortcut_text(id));
-                line(label, keys.clone(), false);
+                lines.push((label, keys.clone(), false));
                 if action == MenuAction::Pause {
                     // Pause reads Resume while paused: the menu keeps one width.
-                    line("Resume", keys, false);
+                    lines.push(("Resume", keys, false));
                 }
             }
-            Entry::Planned(label) => line(label, None, false),
+            Entry::Planned(label) => lines.push((label, None, false)),
             Entry::Panels => {
                 for panel in dock.panels().iter().filter(|panel| !panel.transient()) {
-                    line(panel.title(), None, true);
+                    lines.push((panel.title(), None, true));
                 }
             }
             Entry::Separator => {}
         }
     }
-    (widest + 2.0 * space::S4).ceil().max(MENU_MIN_WIDTH)
-}
-
-/// A menu item `width` wide: a check mark when `checked` is `Some(true)`, the label, and the shortcut on the right. A click closes
-/// the menu. Not `enabled`, it is drawn at the theme's disabled strength and does nothing.
-fn menu_item(
-    ui: &mut Ui,
-    width: f32,
-    label: &str,
-    shortcut: Option<String>,
-    checked: Option<bool>,
-    enabled: bool,
-) -> Response {
-    let colors = current_colors(ui.ctx());
-    let p = colors.palette;
-    // The menu's width, measured from its items: a popup's available width is not its own, and items sized from it
-    // widen the menu every frame.
-    let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(vec2(width, ITEM_HEIGHT), sense);
-    response.widget_info(|| match checked {
-        Some(on) => WidgetInfo::selected(Role::MenuItemCheckBox, enabled, on, label),
-        None => WidgetInfo::labeled(Role::MenuItem, enabled, label),
-    });
-    // The website's disabled strength: 48 %.
-    let ink = if enabled { p.text } else { p.text.gamma_multiply(0.48) };
-    if ui.is_rect_visible(rect) {
-        if enabled && response.hovered() {
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface_hover);
-        }
-        let mut x = rect.left() + space::S4;
-        if checked.is_some() {
-            if checked == Some(true) {
-                icons::paint_at(
-                    ui.painter(),
-                    pos2(x, rect.center().y),
-                    Align2::LEFT_CENTER,
-                    Icon::UiCheck,
-                    text::BODY,
-                    colors.accent,
-                );
-            }
-            x += text::BODY + space::S3;
-        }
-        ui.painter().text(
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(text::BODY),
-            ink,
-        );
-        if let Some(keys) = shortcut {
-            ui.painter().text(
-                pos2(rect.right() - space::S4, rect.center().y),
-                Align2::RIGHT_CENTER,
-                keys,
-                egui::FontId::proportional(text::SMALL),
-                p.subtle,
-            );
-        }
-    }
-    if response.clicked() {
-        ui.close();
-    }
-    response
+    width_of(
+        ui,
+        lines
+            .iter()
+            .map(|(label, keys, check)| (*label, keys.as_deref(), *check)),
+    )
 }
 
 /// The About window while `open`: the mark, Studio's name and version, and a Close button.
