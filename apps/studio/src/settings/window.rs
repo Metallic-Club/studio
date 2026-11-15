@@ -277,13 +277,15 @@ pub static ENTRIES: &[Entry] = &[
     Entry {
         category: Category::Rendering,
         name: "Frame cap",
-        description: "The most frames per second the viewport draws; 0 for no limit.",
+        description: "The most frames per second the viewport draws; 0 for no limit. Unset, your display's refresh rate.",
         control: |ui, s| {
+            // Unset, the cap is the display's refresh rate (#669).
+            let preset = super::display_refresh(ui.ctx()).unwrap_or(PRESET_FRAME_CAP);
             override_number(
                 ui,
                 "Frame cap",
                 &mut s.rendering.frame_cap,
-                PRESET_FRAME_CAP,
+                preset,
                 0..=MAX_FRAME_CAP,
                 1.0,
                 " fps",
