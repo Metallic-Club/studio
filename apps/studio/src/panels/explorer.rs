@@ -31,7 +31,8 @@ use crate::editor::edit::is_movable;
 use crate::editor::{Selection, TreeEdit};
 use crate::keymap::Context;
 use crate::theme::icons::{self, Icon};
-use crate::theme::tokens::{size, space, text};
+use crate::theme::menu;
+use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{current_colors, fonts};
 
 /// How far each level is indented.
@@ -52,6 +53,8 @@ pub struct ExplorerState {
     query: String,
     /// An instance to scroll into view next frame.
     scroll_to: Option<Id>,
+    /// The list's scroll offset and the height in view, as last drawn (#660).
+    shown: Option<(f32, f32)>,
     /// Where a Shift-click's range starts: the last row clicked without Shift (#347).
     anchor: Option<Id>,
     /// The row being renamed in place (#351).
@@ -350,6 +353,11 @@ impl Panel for Explorer {
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         // Team Create's others (ADR 0011), for the editor's own tree: a running game's instances are not theirs.
         let presence = (!cx.editor.is_playing() && !cx.editor.presence.is_empty()).then(|| cx.editor.presence.clone());
+        // The shortcuts the rows' menu shows (#660).
+        let keys = MenuKeys {
+            insert: cx.keymap.shortcut_text(crate::keymap::ids::EDIT_INSERT),
+            edits: ROW_MENU.map(|(_, edit)| cx.keymap.shortcut_text(edit.command())),
+        };
         // The running game's tree while one runs (live editing, ADR 0010 §5), with no banner (#309).
         let mut editor = cx.editor.scene();
         let mut added = None;
@@ -386,7 +394,15 @@ impl Panel for Explorer {
             // The rows touch (#274): no spacing between them.
             let top = index as f32 * row_height;
             let view = ui.available_height();
-            scroll = scroll.vertical_scroll_offset((top - view / 2.0).max(0.0));
+            // A row in view already stays where it is (#660): a double-click's rename revealed it, and the list
+            // jumped to put it in the middle.
+            let in_view = editor
+                .explorer
+                .shown
+                .is_some_and(|(offset, height)| top >= offset && top + row_height <= offset + height);
+            if !in_view {
+                scroll = scroll.vertical_scroll_offset((top - view / 2.0).max(0.0));
+            }
         }
         let mut clicked = None;
         let mut toggled = None;
@@ -404,7 +420,7 @@ impl Panel for Explorer {
         let holders = editor.selection.holders(editor.dm);
         // The rows touch (#274), so the stripes are continuous, as the Properties panel's are.
         ui.spacing_mut().item_spacing.y = 0.0;
-        scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
+        let shown = scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
             for (index, row) in range.clone().zip(&rows[range]) {
                 let selected = editor.selection.contains(row.id);
                 let marked = !row.expanded && holders.contains(&row.id);
@@ -421,7 +437,7 @@ impl Panel for Explorer {
                         .map(|[r, g, b]| Color32::from_rgb(r, g, b)),
                 };
                 let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_height));
-                let action = row_ui(ui, editor.dm, *row, look);
+                let action = row_ui(ui, editor.dm, *row, look, &keys);
                 // A dot per other user at the row's right edge, growing leftwards: who has it selected, or, for a
                 // script, who has it open.
                 if let Some(presence) = &presence {
@@ -461,6 +477,7 @@ impl Panel for Explorer {
                 }
             }
         });
+        editor.explorer.shown = Some((shown.state.clamped_offset().y, shown.inner_rect.height()));
         if let Some(row) = toggled {
             editor.explorer.set_expanded(row.id, !row.expanded);
         }
@@ -604,6 +621,15 @@ struct Look {
     icon_color: Option<Color32>,
 }
 
+/// The shortcuts a row's menu shows (#660): Insert Object's, and each of [`ROW_MENU`]'s in order.
+struct MenuKeys {
+    insert: Option<String>,
+    edits: [Option<String>; 7],
+}
+
+/// The label of a row menu's first item.
+const INSERT_LABEL: &str = "Insert Object\u{2026}";
+
 /// The items of a row's menu, in order, with whether each needs something to move (not a service) or the clipboard.
 const ROW_MENU: [(&str, TreeEdit); 7] = [
     ("Cut", TreeEdit::Cut),
@@ -637,7 +663,7 @@ enum RowAction {
 /// One row on its stripe (#274): the caret, the class icon and the name (a text field while it is renamed, #351); a
 /// selected row on a square raised fill (#300), and a closed row that holds something selected with a dot at its end
 /// (#347). A right-click opens its menu of tree edits (#351).
-fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
+fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look, keys: &MenuKeys) -> RowAction {
     let Look {
         selected,
         marked,
@@ -746,21 +772,42 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look) -> RowAction {
     }
     let mut insert = false;
     let mut chosen = None;
-    response.context_menu(|ui| {
-        if ui.button("Insert Object\u{2026}").clicked() {
-            insert = true;
-            ui.close();
-        }
-        ui.separator();
-        let movable = is_movable(dm, row.id);
-        for (label, edit) in ROW_MENU {
-            let enabled = edit.pastes() || movable;
-            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-                chosen = Some(edit);
-                ui.close();
+    // Drawn as the menu bar's menus are (#660): as wide as its longest item and shortcut, rows with no gap, the
+    // items' rounding and the menu bar's frame.
+    let p = current_colors(ui.ctx()).palette;
+    egui::Popup::context_menu(&response)
+        .style(egui::style::StyleModifier::default())
+        .frame(
+            egui::Frame::new()
+                .fill(p.surface)
+                .stroke(egui::Stroke::new(size::BORDER, p.border))
+                .corner_radius(CornerRadius::same(radius::ITEM))
+                .shadow(shadow::MENU)
+                .inner_margin(space::S2),
+        )
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = menu::ITEM_GAP;
+            let lines = std::iter::once((INSERT_LABEL, keys.insert.as_deref(), false)).chain(
+                ROW_MENU
+                    .iter()
+                    .zip(&keys.edits)
+                    .map(|((label, _), keys)| (*label, keys.as_deref(), false)),
+            );
+            let width = menu::menu_width(ui, lines);
+            ui.set_min_width(width);
+            ui.set_max_width(width);
+            if menu::menu_item(ui, width, INSERT_LABEL, keys.insert.clone(), None, true).clicked() {
+                insert = true;
             }
-        }
-    });
+            ui.separator();
+            let movable = is_movable(dm, row.id);
+            for ((label, edit), shortcut) in ROW_MENU.iter().zip(&keys.edits) {
+                let enabled = edit.pastes() || movable;
+                if menu::menu_item(ui, width, label, shortcut.clone(), None, enabled).clicked() {
+                    chosen = Some(*edit);
+                }
+            }
+        });
     if response.drag_started() && !renaming {
         RowAction::Drag
     } else if insert {

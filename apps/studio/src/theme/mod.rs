@@ -11,6 +11,7 @@
 
 pub mod fonts;
 pub mod icons;
+pub mod menu;
 pub mod tokens;
 
 use egui::class::HasClasses as _;

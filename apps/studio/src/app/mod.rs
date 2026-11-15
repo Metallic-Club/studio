@@ -823,6 +823,7 @@ impl Studio {
         let mut cx = PanelContext {
             editor,
             settings: self.settings.settings_mut(),
+            keymap: &self.keymap,
         };
         ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
             self.dock.ui(ui, &mut cx);
@@ -3855,6 +3856,75 @@ mod tests {
         assert!(harness.query_by_role_and_label(Role::TreeItem, "Camera").is_some());
     }
 
+    /// #660: starting a rename, typing and keeping the name leave the Explorer's list where it was: the row being
+    /// renamed does not move, in a list long enough to scroll.
+    #[test]
+    fn renaming_leaves_the_explorer_list_where_it_was() {
+        let mut harness = editing(settings_file("editor-rename-still", None), "Rename Still Game");
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let dm = &mut editor.dm;
+            let ws = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+            for i in 0..80 {
+                let part = dm.create(dm.registry().class_id("Part").unwrap()).unwrap();
+                dm.set_name(part, format!("Part{i:02}").into()).unwrap();
+                dm.set_parent(part, Some(ws)).unwrap();
+            }
+        }
+        settle(&mut harness);
+        // Scrolled down, so the list has somewhere to jump to.
+        let list = harness.get_by_role_and_label(Role::TreeItem, "Workspace").rect();
+        harness.event(egui::Event::PointerMoved(list.center()));
+        for _ in 0..4 {
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -3.0),
+                modifiers: Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+            });
+            harness.step();
+        }
+        settle(&mut harness);
+        let row = |harness: &Harness<'_, Test>, name: &str| {
+            harness
+                .query_by_role_and_label(Role::TreeItem, name)
+                .map(|node| node.rect().top())
+        };
+        let name = (0..80)
+            .map(|i| format!("Part{i:02}"))
+            .find(|name| row(&harness, name).is_some_and(|top| top > 260.0 && top < 340.0))
+            .expect("a part in the middle of the list");
+        // The wheel's scroll eases out over a few frames.
+        for _ in 0..30 {
+            harness.step();
+        }
+        let before = row(&harness, &name).unwrap();
+        two_clicks(&mut harness, &name, 0.05);
+        let mut tops = Vec::new();
+        for _ in 0..8 {
+            harness.step();
+            tops.push(row(&harness, &name).unwrap_or(f32::NAN));
+        }
+        harness.get_by_role_and_label(Role::TextInput, &format!("Name of {name}"));
+        assert!(
+            tops.iter().all(|top| (top - before).abs() < 0.5),
+            "the row moved while renaming: {before} then {tops:?}"
+        );
+        harness.event(egui::Event::Text("x".to_owned()));
+        harness.key_press(Key::Enter);
+        let mut after = Vec::new();
+        for _ in 0..8 {
+            harness.step();
+            after.push(row(&harness, "x").unwrap_or(f32::NAN));
+        }
+        assert!(
+            after.iter().all(|top| (top - before).abs() < 0.5),
+            "the row moved after renaming: {before} then {after:?}"
+        );
+    }
+
     #[test]
     fn tree_edits_duplicate_delete_cut_copy_paste_and_rename_and_each_undoes() {
         let mut harness = editing(settings_file("editor-tree-edits", None), "Tree Edits Game");
@@ -3946,7 +4016,24 @@ mod tests {
         // A row's right-click menu: Duplicate.
         let row = harness.get_by_role_and_label(Role::TreeItem, "Baseplate").rect();
         right_click(&mut harness, row);
-        harness.get_by_role_and_label(Role::Button, "Duplicate").click();
+        // The menu bar's items (#660): as wide as the menu, 28 points tall, a couple of points apart, and the
+        // shortcut drawn beside its label.
+        let duplicate = harness.get_by_role_and_label(Role::MenuItem, "Duplicate").rect();
+        let delete = harness.get_by_role_and_label(Role::MenuItem, "Delete").rect();
+        assert_eq!(duplicate.height(), 28.0);
+        assert!(duplicate.width() >= 150.0, "{duplicate:?}");
+        assert_eq!(duplicate.width(), delete.width());
+        let copy = harness.get_by_role_and_label(Role::MenuItem, "Copy").rect();
+        let paste = harness.get_by_role_and_label(Role::MenuItem, "Paste").rect();
+        assert!(paste.top() - copy.bottom() <= 2.0, "{copy:?} {paste:?}");
+        assert!(
+            harness.output().shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Text(text) if text.galley.text() == "Ctrl+D" && duplicate.contains(text.pos)
+            )),
+            "Duplicate's shortcut is drawn on its row"
+        );
+        harness.get_by_role_and_label(Role::MenuItem, "Duplicate").click();
         settle(&mut harness);
         assert_eq!(children_of(&harness, "Workspace"), ["Camera", "Baseplate", "Baseplate"]);
     }
@@ -4011,7 +4098,7 @@ mod tests {
         let row = harness.get_by_role_and_label(Role::TreeItem, "Workspace").rect();
         right_click(&mut harness, row);
         harness
-            .get_by_role_and_label(Role::Button, "Insert Object\u{2026}")
+            .get_by_role_and_label(Role::MenuItem, "Insert Object\u{2026}")
             .click();
         settle(&mut harness);
         let aim = {
