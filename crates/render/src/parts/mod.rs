@@ -88,12 +88,16 @@
 mod assets;
 mod camera;
 mod material;
+mod material_textures;
 mod mesh;
 mod shading;
 mod transparent;
 
 pub use camera::{Camera, CameraReader};
-pub use material::{MAX_MATERIAL_ROWS, MaterialParams, MaterialTable};
+pub use material::{MAX_MATERIAL_ROWS, MaterialParams, MaterialTable, MaterialWrap};
+pub use material_textures::{
+    MATERIAL_TEXTURE_SIZE, MaterialImage, MaterialLayers, MaterialTextureSet, NO_LAYER, material_image,
+};
 pub use mesh::{MeshData, MeshPool, MeshRange, MeshVertex};
 pub use shading::ShadingView;
 
@@ -1084,6 +1088,18 @@ impl PartRenderer {
     /// Adds the texture asset `key` (see [`crate::Renderer::add_texture_asset`]).
     pub(crate) fn add_texture_asset(&mut self, maker: &TextureMaker, key: &str, size: (u32, u32), rgba: Vec<u8>) {
         self.textures.add((&self.device, &self.queue, maker), key, size, rgba);
+    }
+
+    /// Gives the material `key` its textures (#679): puts them in layers and its rows sample them from the next
+    /// frame. An empty set takes its textures away.
+    pub fn add_material_textures(&mut self, key: &str, set: &MaterialTextureSet) {
+        let layers = if set.is_empty() {
+            self.textures.remove_material(key);
+            MaterialLayers::NONE
+        } else {
+            self.textures.add_material(&self.device, &self.queue, key, set)
+        };
+        self.materials.set_layers(key, layers);
     }
 
     /// Whether the mesh asset `key` was added.

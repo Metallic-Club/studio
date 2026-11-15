@@ -3,17 +3,33 @@
 //! Rows are data, not code (#678, ADR 0012). The scene numbers every material key its parts name, an asset id or a
 //! name, from row 1 ([`crate::InstanceScene::material_keys`]); row 0 is the default look. Each row is filled from
 //! the parameters given for its key ([`MaterialTable::set_material`]: the engine gives a material asset's), else from
-//! the built-in material of that name ([`MaterialParams::builtin`]), else plastic. A key's parameters can change at
-//! any time, and every part using it changes with them. The table is a uniform buffer (readable on every backend,
-//! GLES included) of [`MAX_MATERIAL_ROWS`] rows, 64 bytes each, uploaded only when a row changes.
+//! the built-in material of that name ([`MaterialParams::builtin`]), else plastic, and from the texture layers given
+//! for it ([`MaterialTable::set_layers`], #679). A key's parameters can change at any time, and every part using it
+//! changes with them. The table is a uniform buffer (readable on every backend, GLES included) of
+//! [`MAX_MATERIAL_ROWS`] rows, 80 bytes each, uploaded only when a row changes.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 
-/// How many rows the table holds. Rows beyond it shade as row 0. The instance format has room for 65,536.
-pub const MAX_MATERIAL_ROWS: usize = 256;
+use super::material_textures::MaterialLayers;
+
+/// How many rows the table holds: 80 bytes each, within the 16 KiB of uniform binding WebGPU guarantees. Rows
+/// beyond it shade as row 0.
+pub const MAX_MATERIAL_ROWS: usize = 192;
+
+/// What a material's textures do past their edges (#679).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaterialWrap {
+    /// They repeat.
+    #[default]
+    Repeat,
+    /// They repeat mirrored.
+    Mirror,
+    /// Their edges stretch on.
+    Clamp,
+}
 
 /// The shading parameters of one material.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -30,7 +46,26 @@ pub struct MaterialParams {
     pub tint: [f32; 3],
     /// The emitted light's tint, linear, multiplied by the part's colour and `emissive`.
     pub emission: [f32; 3],
+    /// How strongly the normal map bends the light: 0 flat, 1 as painted (#679).
+    pub normal_strength: f32,
+    /// How many metres one repeat of the textures covers on a primitive part (#679).
+    pub tile_size: f32,
+    /// Repeats per tile along U and V (#679).
+    pub uv_scale: [f32; 2],
+    /// Where the textures start, in tiles (#679).
+    pub uv_offset: [f32; 2],
+    /// Whether textures are sampled nearest rather than smoothly (#679).
+    pub nearest: bool,
+    /// What textures do past their edges (#679).
+    pub wrap: MaterialWrap,
 }
+
+/// `MaterialRow::surface.z`'s flags (`MATERIAL_*` in `parts.wgsl`).
+const GLASS: u32 = 1;
+const TEXTURED: u32 = 2;
+const NEAREST: u32 = 4;
+const MIRROR: u32 = 8;
+const CLAMP: u32 = 16;
 
 impl MaterialParams {
     /// Plain plastic: the default, and what unknown materials shade as.
@@ -41,6 +76,12 @@ impl MaterialParams {
         glass: false,
         tint: [1.0; 3],
         emission: [1.0; 3],
+        normal_strength: 1.0,
+        tile_size: 4.0,
+        uv_scale: [1.0; 2],
+        uv_offset: [0.0; 2],
+        nearest: false,
+        wrap: MaterialWrap::Repeat,
     };
 
     /// The parameters of the built-in material called `name`; `None` for names it does not know. The same set and
@@ -80,30 +121,60 @@ impl MaterialParams {
         })
     }
 
-    fn row(self) -> MaterialRow {
+    fn row(self, layers: MaterialLayers) -> MaterialRow {
         let unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        let finite = |v: f32, or: f32| if v.is_finite() { v } else { or };
         let emissive = if self.emissive.is_finite() {
             self.emissive.max(0.0)
         } else {
             0.0
         };
+        let mut flags = 0;
+        if self.glass {
+            flags |= GLASS;
+        }
+        if layers.any() {
+            flags |= TEXTURED;
+        }
+        if self.nearest {
+            flags |= NEAREST;
+        }
+        flags |= match self.wrap {
+            MaterialWrap::Repeat => 0,
+            MaterialWrap::Mirror => MIRROR,
+            MaterialWrap::Clamp => CLAMP,
+        };
+        let pair = |low: u16, high: u16| f32::from_bits(u32::from(low) | (u32::from(high) << 16));
+        let tile = if self.tile_size.is_finite() && self.tile_size > 0.0 {
+            self.tile_size
+        } else {
+            4.0
+        };
+        let scale = [finite(self.uv_scale[0], 1.0), finite(self.uv_scale[1], 1.0)];
+        let offset = [finite(self.uv_offset[0], 0.0), finite(self.uv_offset[1], 0.0)];
         MaterialRow {
             // NaN stays NaN in roughness and metalness: a broken material should show, not be hidden (the post
             // tests poison a row on purpose).
             surface: [
                 self.roughness.clamp(0.0, 1.0),
                 self.metalness.clamp(0.0, 1.0),
-                if self.glass { 1.0 } else { 0.0 },
-                1.0,
+                f32::from_bits(flags),
+                finite(self.normal_strength, 1.0).clamp(0.0, 4.0),
             ],
-            tint: [unit(self.tint[0]), unit(self.tint[1]), unit(self.tint[2]), 0.0],
+            tint: [
+                unit(self.tint[0]),
+                unit(self.tint[1]),
+                unit(self.tint[2]),
+                pair(layers.color, layers.normal),
+            ],
             emission: [
                 unit(self.emission[0]) * emissive,
                 unit(self.emission[1]) * emissive,
                 unit(self.emission[2]) * emissive,
-                0.0,
+                pair(layers.orm, layers.emission),
             ],
-            uv: [1.0, 1.0, 0.0, 0.0],
+            uv: [scale[0] / tile, scale[1] / tile, offset[0], offset[1]],
+            mesh_uv: [scale[0], scale[1], offset[0], offset[1]],
         }
     }
 }
@@ -118,14 +189,16 @@ impl Default for MaterialParams {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 struct MaterialRow {
-    /// Roughness, metalness, glass flag, normal strength.
+    /// Roughness, metalness, flags (bits), normal strength.
     surface: [f32; 4],
-    /// The base colour's tint (linear); w is for the texture layers (#679).
+    /// The base colour's tint (linear); w: the colour and normal layers (bits).
     tint: [f32; 4],
-    /// The emitted light (linear, times its strength); w is for the texture layers (#679).
+    /// The emitted light (linear, times its strength); w: the occlusion-roughness-metallic and emission layers.
     emission: [f32; 4],
-    /// Texture tiling: scale per metre along U and V, then the offset (#679).
+    /// A primitive's texture mapping: repeats per metre along U and V, then the offset.
     uv: [f32; 4],
+    /// A mesh asset's: repeats along its own U and V, then the offset.
+    mesh_uv: [f32; 4],
 }
 
 /// Size of the table in bytes.
@@ -138,6 +211,8 @@ pub struct MaterialTable {
     buffer: wgpu::Buffer,
     /// Parameters given for keys ([`MaterialTable::set_material`]).
     given: HashMap<Arc<str>, MaterialParams>,
+    /// Texture layers given for keys ([`MaterialTable::set_layers`]).
+    layers: HashMap<Arc<str>, MaterialLayers>,
     /// The scene revision the rows were last filled for, and how many keys it had.
     filled: Option<(u64, usize)>,
     /// Whether a key's parameters changed since the rows were filled.
@@ -155,9 +230,10 @@ impl MaterialTable {
             mapped_at_creation: false,
         });
         Self {
-            rows: vec![MaterialParams::PLASTIC.row(); MAX_MATERIAL_ROWS],
+            rows: vec![MaterialParams::PLASTIC.row(MaterialLayers::NONE); MAX_MATERIAL_ROWS],
             buffer,
             given: HashMap::new(),
+            layers: HashMap::new(),
             filled: None,
             stale: false,
             dirty: true,
@@ -173,9 +249,19 @@ impl MaterialTable {
         }
     }
 
-    /// Forgets the parameters given for `key`: its rows go back to the built-in material of that name, or plastic.
+    /// Gives the material named by `key` its texture layers (#679, made by
+    /// [`crate::Renderer::add_material_textures`]).
+    pub fn set_layers(&mut self, key: &str, layers: MaterialLayers) {
+        if self.layers.get(key) != Some(&layers) {
+            self.layers.insert(Arc::from(key), layers);
+            self.stale = true;
+        }
+    }
+
+    /// Forgets the parameters and layers given for `key`: its rows go back to the built-in material of that name, or
+    /// plastic.
     pub fn forget_material(&mut self, key: &str) {
-        if self.given.remove(key).is_some() {
+        if self.given.remove(key).is_some() | self.layers.remove(key).is_some() {
             self.stale = true;
         }
     }
@@ -189,6 +275,11 @@ impl MaterialTable {
             .unwrap_or_default()
     }
 
+    /// The texture layers of `key`'s rows.
+    pub fn layers(&self, key: &str) -> MaterialLayers {
+        self.layers.get(key).copied().unwrap_or_default()
+    }
+
     /// Fills the rows from the scene's material keys (row `i + 1` from `keys[i]`) when the scene has new keys
     /// (`revision`) or a key's parameters changed. Rows changed with [`MaterialTable::set`] since are overwritten
     /// only then.
@@ -198,14 +289,13 @@ impl MaterialTable {
         }
         self.filled = Some((revision, keys.len()));
         self.stale = false;
-        for (row, key) in self.rows.iter_mut().skip(1).zip(keys) {
-            let params = self
-                .given
-                .get(key)
-                .copied()
-                .or_else(|| MaterialParams::builtin(key))
-                .unwrap_or_default();
-            *row = params.row();
+        let rows: Vec<MaterialRow> = keys
+            .iter()
+            .take(MAX_MATERIAL_ROWS - 1)
+            .map(|key| self.resolve(key).row(self.layers(key)))
+            .collect();
+        for (row, made) in self.rows.iter_mut().skip(1).zip(rows) {
+            *row = made;
         }
         self.dirty = true;
     }
@@ -215,12 +305,12 @@ impl MaterialTable {
         let Some(target) = self.rows.get_mut(row) else {
             return false;
         };
-        *target = params.row();
+        *target = params.row(MaterialLayers::NONE);
         self.dirty = true;
         true
     }
 
-    /// Row `row`'s parameters, as the shader reads them.
+    /// Row `row`'s parameters, as the shader reads them (without its texture mapping).
     pub fn get(&self, row: usize) -> Option<MaterialParams> {
         self.rows.get(row).map(|r| {
             let emissive = r.emission[0].max(r.emission[1]).max(r.emission[2]);
@@ -237,9 +327,11 @@ impl MaterialTable {
                 roughness: r.surface[0],
                 metalness: r.surface[1],
                 emissive,
-                glass: r.surface[2] > 0.5,
+                glass: r.surface[2].to_bits() & GLASS != 0,
                 tint: [r.tint[0], r.tint[1], r.tint[2]],
                 emission,
+                normal_strength: r.surface[3],
+                ..MaterialParams::PLASTIC
             }
         })
     }
@@ -287,13 +379,39 @@ mod tests {
     }
 
     #[test]
-    fn a_row_is_64_bytes_and_the_table_fits_a_uniform_binding() {
-        assert_eq!(size_of::<MaterialRow>(), 64);
+    fn a_row_is_80_bytes_and_the_table_fits_a_uniform_binding() {
+        assert_eq!(size_of::<MaterialRow>(), 80);
         // WebGPU guarantees 16 KiB of uniform binding, GLES included.
         const { assert!(MATERIAL_TABLE_SIZE <= 16 * 1024) };
-        let row = MaterialParams::builtin("Glass").unwrap().row();
-        assert_eq!(row.surface, [0.05, 0.0, 1.0, 1.0]);
-        let neon = MaterialParams::builtin("Neon").unwrap().row();
-        assert_eq!(neon.emission, [1.0, 1.0, 1.0, 0.0]);
+        let glass = MaterialParams::builtin("Glass").unwrap().row(MaterialLayers::NONE);
+        assert_eq!(glass.surface[2].to_bits(), GLASS);
+        let neon = MaterialParams::builtin("Neon").unwrap().row(MaterialLayers::NONE);
+        assert_eq!(&neon.emission[..3], &[1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn layers_and_tiling_reach_the_row() {
+        let params = MaterialParams {
+            tile_size: 2.0,
+            uv_scale: [2.0, 1.0],
+            uv_offset: [0.5, 0.0],
+            nearest: true,
+            wrap: MaterialWrap::Mirror,
+            ..MaterialParams::PLASTIC
+        };
+        let layers = MaterialLayers {
+            color: 3,
+            normal: MaterialLayers::NONE.normal,
+            orm: 1,
+            emission: 7,
+        };
+        let row = params.row(layers);
+        assert_eq!(row.surface[2].to_bits(), TEXTURED | NEAREST | MIRROR);
+        assert_eq!(row.tint[3].to_bits(), 3 | (0xffff << 16));
+        assert_eq!(row.emission[3].to_bits(), 1 | (7 << 16));
+        assert_eq!(row.uv, [1.0, 0.5, 0.5, 0.0], "per metre");
+        assert_eq!(row.mesh_uv, [2.0, 1.0, 0.5, 0.0]);
+        let plain = MaterialParams::PLASTIC.row(MaterialLayers::NONE);
+        assert_eq!(plain.surface[2].to_bits(), 0, "nothing to sample");
     }
 }

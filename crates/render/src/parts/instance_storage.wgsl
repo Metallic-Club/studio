@@ -20,6 +20,12 @@ struct Instance {
 // The draw's base-colour texture (parts/assets.rs): a mesh asset's, or white.
 @group(2) @binding(0) var base_texture: texture_2d<f32>;
 @group(2) @binding(1) var base_sampler: sampler;
+// The materials' textures (#679, parts/material_textures.rs): sRGB colour and emission layers, linear normal and
+// occlusion-roughness-metallic layers, and their samplers.
+@group(2) @binding(2) var material_color: texture_2d_array<f32>;
+@group(2) @binding(3) var material_data: texture_2d_array<f32>;
+@group(2) @binding(4) var material_linear: sampler;
+@group(2) @binding(5) var material_nearest: sampler;
 
 fn instance_of(entry: u32) -> Instance {
     let slot = entry & 0x7fffffffu;

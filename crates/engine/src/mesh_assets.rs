@@ -20,10 +20,13 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use metallic_project::material::Material;
-use metallic_project::{AssetError, AssetReader, ImageAsset, MeshAsset};
+use metallic_project::material::{Channel, Filter, Material, Wrap};
+use metallic_project::{AssetError, AssetId, AssetReader, ImageAsset, MeshAsset};
 use metallic_render::parts::{MeshData, MeshVertex};
-use metallic_render::{InstanceScene, MaterialParams, Renderer};
+use metallic_render::{
+    InstanceScene, MATERIAL_TEXTURE_SIZE, MaterialImage, MaterialParams, MaterialTextureSet, MaterialWrap, Renderer,
+    material_image,
+};
 
 /// What the worker is asked to load: a mesh, a texture fitted to the device's largest size, or a material; or a
 /// newer reader to load from from now on.
@@ -38,11 +41,15 @@ enum Job {
 enum Loaded {
     Mesh(Arc<str>, Result<MeshData, AssetError>),
     Texture(Arc<str>, Result<ImageAsset, AssetError>),
-    /// A material's parameters, with what was skipped in its file.
-    Material(Arc<str>, Result<(MaterialParams, Vec<String>), AssetError>),
+    /// A material's parameters and textures, with what was skipped or could not be read.
+    Material(
+        Arc<str>,
+        Result<(MaterialParams, MaterialTextureSet, Vec<String>), AssetError>,
+    ),
 }
 
-/// The renderer's parameters for `material`: its colours in linear light, emission times its strength.
+/// The renderer's parameters for `material`: its colours in linear light, emission times its strength, and how its
+/// textures are mapped.
 pub fn material_params(material: &Material) -> MaterialParams {
     let linear = |c: [f32; 3]| {
         let v = metallic_core::Color3::new(c[0], c[1], c[2]).to_linear();
@@ -55,7 +62,91 @@ pub fn material_params(material: &Material) -> MaterialParams {
         glass: material.glass,
         tint: linear(material.color),
         emission: linear(material.emission),
+        normal_strength: material.normal_strength,
+        tile_size: material.tile_size,
+        uv_scale: material.uv_scale,
+        uv_offset: material.uv_offset,
+        nearest: material.filter == Filter::Nearest,
+        wrap: match material.wrap {
+            Wrap::Repeat => MaterialWrap::Repeat,
+            Wrap::Mirror => MaterialWrap::Mirror,
+            Wrap::Clamp => MaterialWrap::Clamp,
+        },
     }
+}
+
+/// Reads `material`'s pictures with `reader` and fits each to a layer (#679): the base colour, the normal map and the
+/// emission as they are; ambient occlusion, roughness and metallic packed into one picture's red, green and blue, from
+/// the packed map or from their own maps (a channel without one is white, which leaves its constant as it is). A
+/// picture that cannot be read is left out, with a warning.
+pub fn material_textures(
+    reader: &mut AssetReader,
+    material: &Material,
+    warnings: &mut Vec<String>,
+) -> MaterialTextureSet {
+    let mut load = |id: Option<AssetId>, warnings: &mut Vec<String>| -> Option<ImageAsset> {
+        let id = id?.to_string();
+        match reader.load_image(&id) {
+            Ok(image) => Some(image),
+            Err(error) => {
+                warnings.push(format!("texture {id}: {error}"));
+                None
+            }
+        }
+    };
+    let fit = |image: &ImageAsset| material_image(image.width, image.height, &image.rgba);
+    let textures = material.textures;
+    let mut set = MaterialTextureSet {
+        color: load(textures.color, warnings).as_ref().and_then(fit),
+        normal: load(textures.normal, warnings).as_ref().and_then(fit),
+        emission: load(textures.emission, warnings).as_ref().and_then(fit),
+        orm: None,
+    };
+    // Each of occlusion, roughness and metallic: a fitted picture and the channel it is in.
+    let side = MATERIAL_TEXTURE_SIZE as usize;
+    let mut sources: [Option<(MaterialImage, usize)>; 3] = [None, None, None];
+    if let Some(packed) = material.packed {
+        if let Some(image) = load(Some(packed.texture), warnings).as_ref().and_then(fit) {
+            let channel = |c: Option<Channel>| {
+                c.map(|c| match c {
+                    Channel::R => 0,
+                    Channel::G => 1,
+                    Channel::B => 2,
+                    Channel::A => 3,
+                })
+            };
+            for (slot, c) in sources
+                .iter_mut()
+                .zip([packed.occlusion, packed.roughness, packed.metallic])
+            {
+                if let Some(c) = channel(c) {
+                    *slot = Some((image.clone(), c));
+                }
+            }
+        }
+    }
+    for (slot, id) in sources
+        .iter_mut()
+        .zip([textures.occlusion, textures.roughness, textures.metallic])
+    {
+        if slot.is_none() {
+            *slot = load(id, warnings).as_ref().and_then(fit).map(|image| (image, 0));
+        }
+    }
+    if sources.iter().any(Option::is_some) {
+        let mut packed = vec![255u8; side * side * 4];
+        for (out, source) in sources.iter().enumerate() {
+            if let Some((image, channel)) = source
+                && let Some(base) = image.mips.first()
+            {
+                for (texel, from) in packed.chunks_exact_mut(4).zip(base.chunks_exact(4)) {
+                    texel[out] = from[*channel];
+                }
+            }
+        }
+        set.orm = material_image(MATERIAL_TEXTURE_SIZE, MATERIAL_TEXTURE_SIZE, &packed);
+    }
+    set
 }
 
 /// A project's mesh and texture assets, loaded on a worker thread for the parts that name them. See the
@@ -250,8 +341,10 @@ impl MeshAssets {
                 (key, added.map_err(|error| format!("texture: {error}")))
             }
             Loaded::Texture(key, Err(error)) => (Arc::clone(&key), Err(format!("texture {key}: {error}"))),
-            Loaded::Material(key, Ok((params, skipped))) => {
-                renderer.parts_mut().materials_mut().set_material(&key, params);
+            Loaded::Material(key, Ok((params, textures, skipped))) => {
+                let parts = renderer.parts_mut();
+                parts.materials_mut().set_material(&key, params);
+                parts.add_material_textures(&key, &textures);
                 for skip in skipped {
                     self.warn(format!("material {key}: {skip}"));
                 }
@@ -316,9 +409,11 @@ fn load(reader: &mut AssetReader, job: Job) -> Option<Loaded> {
             Loaded::Texture(key, image)
         }
         Job::Material(key) => {
-            let material = reader
-                .load_material(&key)
-                .map(|loaded| (material_params(&loaded.material), loaded.warnings));
+            let material = reader.load_material(&key).map(|loaded| {
+                let mut warnings = loaded.warnings;
+                let textures = material_textures(reader, &loaded.material, &mut warnings);
+                (material_params(&loaded.material), textures, warnings)
+            });
             Loaded::Material(key, material)
         }
     })
