@@ -94,8 +94,8 @@ fn a_part_is_packed_from_its_properties() {
         rows: affine_rows(turned, Vec3::new(2.0, 4.0, 6.0), Vec3::ZERO),
         color: u32::from_le_bytes([10, 20, 30, 0]),
         transparency: 0.25,
-        // Metal is the third `Material` item.
-        mesh_material: (u32::from(MeshKind::CYLINDER.0) << 16) | 2,
+        // Metal is the first material key the scene met: row 1 (#678).
+        mesh_material: (u32::from(MeshKind::CYLINDER.0) << 16) | 1,
         flags: GpuInstance::LIVE | GpuInstance::TRANSLUCENT,
     };
     assert_eq!(got, expected);

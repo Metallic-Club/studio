@@ -470,7 +470,7 @@ mod tests {
         assert!(text.contains("((className: \"Part\", parent: Instance?) -> Part)"));
         assert!(text.contains("function GetService(self, className: \"Lighting\"): Lighting\n"));
         assert!(text.contains("function GetService(self, className: string): Instance\n"));
-        assert!(text.contains("    read Plastic: EnumMaterial\n"));
+        assert!(text.contains("    read Ball: EnumPartShape\n"));
         // `IntValue.Changed` passes the new number, not a property name.
         let int_value = text
             .split("declare extern type IntValue extends ValueBase with\n")

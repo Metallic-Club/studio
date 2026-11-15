@@ -367,7 +367,7 @@ fn file_picker(
     let combo = ui.scope(|ui| {
         plain(ui);
         ComboBox::from_id_salt(label)
-            .selected_text(shown)
+            .selected_text(shown.clone())
             .width(width)
             .height(size::ROW * 12.0)
             .show_ui(ui, |ui| {
@@ -384,9 +384,41 @@ fn file_picker(
                 }
             })
     });
-    labelled(&combo.inner.response, Role::ComboBox, label);
+    // The file shown is its value, for screen readers.
+    let enabled = combo.inner.response.enabled();
+    combo.inner.response.widget_info(|| {
+        let mut info = WidgetInfo::labeled(Role::ComboBox, enabled, label);
+        info.current_text_value = Some(shown.clone());
+        info
+    });
     if let Some(path) = &current_path {
         combo.inner.response.clone().on_hover_text(path.as_str());
+    }
+    // A file dragged from the Assets panel (#676) and let go on the picker, if it is one the picker takes.
+    let response = &combo.inner.response;
+    let fits = |drag: &crate::panels::assets::AssetDrag| match drag.paths.as_slice() {
+        [path] => choices
+            .iter()
+            .find(|(choice, _)| choice == path)
+            .map(|(_, value)| (*value).to_owned()),
+        _ => None,
+    };
+    if response
+        .dnd_hover_payload::<crate::panels::assets::AssetDrag>()
+        .is_some_and(|drag| fits(&drag).is_some())
+    {
+        let accent = current_colors(ui.ctx()).accent;
+        ui.painter().rect_stroke(
+            response.rect,
+            CornerRadius::ZERO,
+            Stroke::new(2.0, accent),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if let Some(drag) = response.dnd_release_payload::<crate::panels::assets::AssetDrag>()
+        && let Some(value) = fits(&drag)
+    {
+        chosen = Some(value);
     }
     chosen
 }
