@@ -900,25 +900,25 @@ mod tests {
     #[test]
     fn a_drop_down_lists_its_items_as_the_panel_s_rows() {
         let mut harness = editor(
-            dm_meta("Material"),
-            Value::Enum(EnumItem::new("Material", "Concrete")),
+            dm_meta("Shape"),
+            Value::Enum(EnumItem::new("PartShape", "Cylinder")),
             Mixed::default(),
         );
         harness.set_size(egui::vec2(300.0, 600.0));
         harness.get_by_role_and_label(Role::ComboBox, "Value").click();
         harness.run();
         // Rows the panel's height (#418), the current one marked.
-        let wood = harness.get_by_role_and_label(Role::Button, "Wood");
-        assert_eq!(wood.rect().height(), size::ROW);
-        let concrete = harness.get_by_role_and_label(Role::Button, "Concrete");
+        let ball = harness.get_by_role_and_label(Role::Button, "Ball");
+        assert_eq!(ball.rect().height(), size::ROW);
+        let cylinder = harness.get_by_role_and_label(Role::Button, "Cylinder");
         assert_eq!(
-            egui_kittest::kittest::NodeT::accesskit_node(&concrete).toggled(),
+            egui_kittest::kittest::NodeT::accesskit_node(&cylinder).toggled(),
             Some(egui::accesskit::Toggled::True)
         );
-        harness.get_by_role_and_label(Role::Button, "Wood").click();
+        harness.get_by_role_and_label(Role::Button, "Ball").click();
         harness.run();
         assert!(
-            matches!(harness.state(), Some(Edit::Whole(Value::Enum(item))) if item.name() == "Wood"),
+            matches!(harness.state(), Some(Edit::Whole(Value::Enum(item))) if item.name() == "Ball"),
             "{:?}",
             harness.state()
         );
@@ -927,15 +927,15 @@ mod tests {
     #[test]
     fn the_wheel_over_a_drop_down_steps_through_its_items() {
         let registry = metallic_engine::metallic_classes::shared_registry().unwrap();
-        let PropType::Enum(material) = dm_meta("Material").ty else {
+        let PropType::Enum(shape) = dm_meta("Shape").ty else {
             panic!("an enum");
         };
-        let items = registry.enum_desc(material).unwrap().items;
-        let at = items.iter().position(|&name| name == "Concrete").unwrap();
+        let items = registry.enum_desc(shape).unwrap().items;
+        let at = items.iter().position(|&name| name == "Cylinder").unwrap();
         let wheel = |down: bool, modifiers: egui::Modifiers| {
             let mut harness = editor(
-                dm_meta("Material"),
-                Value::Enum(EnumItem::new("Material", "Concrete")),
+                dm_meta("Shape"),
+                Value::Enum(EnumItem::new("PartShape", "Cylinder")),
                 Mixed::default(),
             );
             let combo = harness.get_by_role_and_label(Role::ComboBox, "Value").rect();
@@ -953,7 +953,7 @@ mod tests {
             harness.state().clone()
         };
         // With Ctrl held (#666), one notch down, the next item (#469); up, the one before.
-        let item = |index: usize| Some(Edit::Whole(Value::Enum(EnumItem::new("Material", items[index]))));
+        let item = |index: usize| Some(Edit::Whole(Value::Enum(EnumItem::new("PartShape", items[index]))));
         assert_eq!(wheel(true, egui::Modifiers::COMMAND), item(at + 1));
         assert_eq!(wheel(false, egui::Modifiers::COMMAND), item(at - 1));
         // Without, the wheel is the panel's to scroll: the value stays.

@@ -70,6 +70,7 @@ mod gpu;
 mod grid;
 mod instance;
 mod lights;
+mod materials;
 mod lists;
 mod slots;
 mod sync;

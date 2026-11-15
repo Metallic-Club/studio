@@ -1409,7 +1409,8 @@ impl PartRenderer {
         let instances = scene.scene();
         let offset = camera.position - instances.origin();
 
-        self.materials.fill_from_names(instances.material_names());
+        self.materials
+            .fill_from_keys(instances.material_keys(), instances.material_revision());
         self.materials.upload(&self.queue);
         let aspect = width as f32 / height.max(1) as f32;
         // The wireframe draws with pipelines of its own; the other views are the shader's (#478). A wireframe still

@@ -156,6 +156,24 @@ fn open(path: &Path, mut step: impl FnMut(usize)) -> Result<Opened, String> {
     for warning in project.warnings() {
         log::warn!("projects: {}: {warning}", path.display());
     }
+    // Before the scene loads: its materials must be named by id (#678), and an older project names them by name.
+    let refreshed = project.refresh_assets();
+    if refreshed.is_ok() {
+        match project.link_material_names() {
+            Ok(links) => {
+                for scene in &links.scenes {
+                    log::info!("projects: {scene} now names its materials by asset id (#678)");
+                }
+                for made in &links.created {
+                    log::info!("projects: {made} was made from the built-in materials");
+                }
+                for name in &links.unknown {
+                    log::warn!("projects: no material called `{name}`; parts that name it draw as plastic");
+                }
+            }
+            Err(error) => log::warn!("projects: could not name the materials by id: {error}"),
+        }
+    }
 
     step(1);
     let mut dm = metallic_engine::metallic_classes::new_game()
@@ -166,7 +184,7 @@ fn open(path: &Path, mut step: impl FnMut(usize)) -> Result<Opened, String> {
     }
 
     step(2);
-    match project.refresh_assets() {
+    match refreshed {
         Ok(report) => {
             for asset in &report.missing {
                 log::warn!("assets: `{}` is in the index but not in the project", asset.path);

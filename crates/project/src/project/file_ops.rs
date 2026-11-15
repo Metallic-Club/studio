@@ -429,7 +429,7 @@ mod tests {
         assert!(!project.is_modified());
         assert_eq!(
             project.folders(),
-            ["Assets", "Assets/Trees", "Assets/Trees/Pines", "Scenes"]
+            ["Assets", "Assets/Materials", "Assets/Trees", "Assets/Trees/Pines", "Scenes"]
         );
 
         // A folder stays when its last file leaves it.
@@ -460,7 +460,7 @@ mod tests {
         assert!(project.delete_folder("Nowhere").is_err());
         project.save().unwrap();
         let project = Project::open(&path).unwrap();
-        assert_eq!(project.folders(), ["Assets", "Scenes", "Still Empty"]);
+        assert_eq!(project.folders(), ["Assets", "Assets/Materials", "Scenes", "Still Empty"]);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 }

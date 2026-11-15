@@ -50,7 +50,13 @@ fn ids_are_given_and_the_index_round_trips_through_a_saved_project() {
     project.write(GRASS, b"\x89PNG grass".to_vec()).unwrap();
     project.write(HELLO, "print('hello')").unwrap();
     let report = project.refresh_assets().unwrap();
-    let added: Vec<&str> = report.added.iter().map(|asset| asset.path.as_str()).collect();
+    // Without the template's materials (#678), which every new project has.
+    let added: Vec<&str> = report
+        .added
+        .iter()
+        .map(|asset| asset.path.as_str())
+        .filter(|path| !path.starts_with("Assets/Materials/"))
+        .collect();
     assert_eq!(added, [GRASS, START, HELLO]);
     assert!(report.moved.is_empty() && report.missing.is_empty());
     assert!(project.contains(INDEX_FILE));

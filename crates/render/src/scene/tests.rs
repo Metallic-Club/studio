@@ -80,7 +80,7 @@ fn a_part_is_packed_from_its_properties() {
     dm.set_by_name(id, "Color", Value::Color3(Color3::from_rgb_u8(10, 20, 30)))
         .unwrap();
     dm.set_by_name(id, "Transparency", Value::Number(0.25)).unwrap();
-    dm.set_by_name(id, "Material", Value::Enum(EnumItem::new("Material", "Metal")))
+    dm.set_by_name(id, "Material", Value::String("Metal".into()))
         .unwrap();
     dm.set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", "Cylinder")))
         .unwrap();

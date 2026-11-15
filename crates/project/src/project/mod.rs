@@ -26,6 +26,7 @@
 //! with such a member fails, so nothing read from a project can point outside it.
 
 mod file_ops;
+mod materials;
 mod template;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,6 +47,7 @@ use crate::pak::PakError;
 use crate::scene::{LoadedScene, SceneError};
 
 pub use file_ops::{MemberMove, MoveReport, References};
+pub use materials::{MATERIAL_PROPERTY, MaterialLinks};
 pub use template::Template;
 
 /// The file name extension of a project (`MyGame.mtproj`).
@@ -140,8 +142,10 @@ impl Project {
 
     /// Makes a new project at `path` from `template`, called `name`, and opens it.
     ///
-    /// The template's `metallic.toml` is kept but for its name and engine version (this engine's). Refuses to
-    /// replace a file that is already there. The archive is written crash-safely, like [`Project::save`].
+    /// The template's `metallic.toml` is kept but for its name and engine version (this engine's). The archive holds
+    /// the template's members as they are, so making the same project twice gives the same bytes; ids come with
+    /// [`Project::refresh_assets`], and [`Project::link_material_names`] then names the template's materials by them.
+    /// Refuses to replace a file that is already there. The archive is written crash-safely, like [`Project::save`].
     pub fn create(path: impl AsRef<Path>, template: &Template, name: &str) -> Result<Self, ProjectError> {
         let path = path.as_ref();
         if fs::symlink_metadata(path).is_ok() {

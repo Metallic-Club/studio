@@ -662,11 +662,11 @@ mod tests {
                 .contains(&"Magnitude".to_owned())
         );
         assert!(labels(&dm, "math.cl|").unwrap().contains(&"clamp".to_owned()));
-        assert!(labels(&dm, "Enum.Mat|").unwrap().contains(&"Material".to_owned()));
+        assert!(labels(&dm, "Enum.Par|").unwrap().contains(&"PartShape".to_owned()));
         assert!(
-            labels(&dm, "local m = Enum.Material.Pl|")
+            labels(&dm, "local m = Enum.PartShape.Ba|")
                 .unwrap()
-                .contains(&"Plastic".to_owned())
+                .contains(&"Ball".to_owned())
         );
         // A local table's fields.
         let mut fields = labels(&dm, "local M = { speed = 1 }\nfunction M.open() end\nM.|").unwrap();

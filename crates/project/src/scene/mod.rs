@@ -75,7 +75,7 @@ use metallic_core::{DmError, Id, PropFlags, ResolvedProp};
 
 pub use load::{load_scene, load_scene_bytes};
 pub use references::{PATH_PROPERTIES, SceneReference};
-pub(crate) use references::{find as find_references, rewrite_paths};
+pub(crate) use references::{find as find_references, rewrite_paths, rewrite_values};
 pub use save::save_scene;
 
 /// The scene format version this engine writes. Older versions load through migrations; newer ones are refused.

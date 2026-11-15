@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use metallic_core::{CFrame, Color3, DataModel, Id, Value, Vector3};
 use metallic_project::manifest::MANIFEST_FILE;
-use metallic_project::{Manifest, SceneIds, Template, load_scene, save_scene};
+use metallic_project::{Manifest, SceneIds, Template, load_scene, material, save_scene};
 
 /// The template's folder.
 fn template_dir() -> PathBuf {
@@ -29,7 +29,8 @@ fn part(
     rgb: [u8; 3],
     material: &str,
 ) {
-    let material = dm.registry().enum_item("Material", material).expect("the material");
+    // By name: a project made from the template names it by its material file's id (#678).
+    let material = Value::String(material.into());
     let part = dm
         .create(dm.registry().class_id(class).expect("the class"))
         .expect("a part");
@@ -38,7 +39,7 @@ fn part(
         ("Size", Value::Vector3(size)),
         ("CFrame", Value::CFrame(CFrame::new(position))),
         ("Color", Value::Color3(Color3::from_rgb_u8(rgb[0], rgb[1], rgb[2]))),
-        ("Material", Value::Enum(material)),
+        ("Material", material),
         ("Anchored", Value::Bool(true)),
     ] {
         dm.set_by_name(part, prop, value).expect("a part property");
@@ -104,11 +105,20 @@ fn the_checked_in_template_is_what_the_code_produces() {
     check(MANIFEST_FILE, &manifest);
     let start = Manifest::from_toml(&manifest).unwrap().manifest.start_scene;
     check(&start, &baseplate_scene());
+    // The familiar materials, as plain files a project can change or delete (#678).
+    let mut expected = vec![start.clone(), MANIFEST_FILE.to_owned()];
+    for name in material::BUILTIN_NAMES {
+        let path = material::builtin_path(name);
+        check(&path, &material::builtin(name).expect("built in").to_json());
+        expected.push(path);
+    }
 
     // Nothing else is in the folder, so a stray file is not packed into every new project.
     let template = Template::from_dir(template_dir()).unwrap();
-    let members: Vec<&str> = template.members().map(|(member, _)| member).collect();
-    assert_eq!(members, [start.as_str(), MANIFEST_FILE]);
+    let mut members: Vec<&str> = template.members().map(|(member, _)| member).collect();
+    members.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(members, expected);
 }
 
 #[test]

@@ -107,7 +107,7 @@ pub(super) enum Attribute {
     CFrame(CFrame),
     /// A `Color3`.
     Color3(Color3),
-    /// An enum item: `{"enum_type": "Material", "name": "Plastic"}`.
+    /// An enum item: `{"enum_type": "PartShape", "name": "Ball"}`.
     Enum(EnumItem),
 }
 
@@ -193,8 +193,8 @@ mod tests {
             PropType::CFrame,
         );
         round_trip(Value::Color3(Color3::new(0.2, 0.4, 0.6)), PropType::Color3);
-        let plastic = registry().enum_item("Material", "Plastic").unwrap();
-        round_trip(Value::Enum(plastic), PropType::Enum("Material"));
+        let ball = registry().enum_item("PartShape", "Ball").unwrap();
+        round_trip(Value::Enum(ball), PropType::Enum("PartShape"));
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
             None,
             "overflows f32"
         );
-        assert_eq!(read(&registry, PropType::Enum("Material"), &json!("Cheese")), None);
+        assert_eq!(read(&registry, PropType::Enum("PartShape"), &json!("Cheese")), None);
         assert_eq!(
             read(&registry, PropType::Number, &json!(2)),
             Some(Read::Value(Value::Number(2.0)))

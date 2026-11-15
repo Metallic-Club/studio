@@ -118,7 +118,7 @@ fn created_changed_and_destroyed_parts_reach_the_buffer() {
         .unwrap();
     dm.set_by_name(id, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
         .unwrap();
-    dm.set_by_name(id, "Material", Value::Enum(EnumItem::new("Material", "Neon")))
+    dm.set_by_name(id, "Material", Value::String("Neon".into()))
         .unwrap();
     dm.set_by_name(id, "Transparency", Value::Number(1.0)).unwrap();
     let stats = frame(&context, &mut scene, &mut game.dm);

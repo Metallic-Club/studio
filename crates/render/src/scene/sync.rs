@@ -11,6 +11,7 @@ use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
 use super::lights::{LightChange, LightSet, SceneLight};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
+use super::materials::MaterialKeys;
 use super::slots::RegionSlots;
 use super::{
     DEMOTE_REST, MAX_SHADOW_CHANGES, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED,
@@ -86,6 +87,8 @@ pub struct InstanceScene {
     has_lights: bool,
     /// The mesh-asset kinds (see [`super::assets`]).
     asset_kinds: AssetKinds,
+    /// The material keys and their rows (see [`super::materials`]).
+    material_keys: MaterialKeys,
 }
 
 /// The static region's shadow-caster changes since they were last taken: bounding spheres, origin-relative.
@@ -146,6 +149,7 @@ impl InstanceScene {
             lights: LightSet::default(),
             has_lights: false,
             asset_kinds: AssetKinds::default(),
+            material_keys: MaterialKeys::default(),
         })
     }
 
@@ -477,9 +481,15 @@ impl InstanceScene {
         self.regions[region.index()].instances.get(slot as usize)
     }
 
-    /// The `Material` enum's items: the material table's rows, in order. Empty when the game has no such enum.
-    pub fn material_names(&self) -> &'static [&'static str] {
-        self.classes.materials()
+    /// The material key of every material table row from 1: row `i + 1` draws the `i`th (#678). A key is a material
+    /// asset's id or a material's name, as parts name it in `Material`.
+    pub fn material_keys(&self) -> &[std::sync::Arc<str>] {
+        self.material_keys.keys()
+    }
+
+    /// Changes whenever [`InstanceScene::material_keys`] grows; no two scenes share one.
+    pub fn material_revision(&self) -> u64 {
+        self.material_keys.revision()
     }
 
     /// Makes the draw lists also record changed instances (not only changed entries), for lists that hold copies
@@ -777,7 +787,7 @@ impl InstanceScene {
     /// the change record names a transform property (`CFrame`, `Position`, `Orientation`, `Size`: the `TRANSFORM`
     /// dirty bit), which moves the bounding sphere for the culling grid.
     fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding, transform: bool) {
-        let mut instance = pack(dm, id, binding, &self.classes, self.origin);
+        let mut instance = pack(dm, id, binding, &mut self.material_keys, self.origin);
         if let Some(asset) = binding.asset {
             self.asset_kind(dm, id, asset, &mut instance);
         }
@@ -838,7 +848,7 @@ impl InstanceScene {
 }
 
 /// The packed instance of `id`, read from the data model. Properties that cannot be read draw with defaults.
-fn pack(dm: &DataModel, id: Id, binding: &ClassBinding, classes: &ClassTable, origin: Vec3) -> GpuInstance {
+fn pack(dm: &DataModel, id: Id, binding: &ClassBinding, materials: &mut MaterialKeys, origin: Vec3) -> GpuInstance {
     let props = &binding.props;
     let cframe = dm.cframe(id, props.cframe).unwrap_or(CFrame::IDENTITY);
     let size = props.size.and_then(|p| dm.vector3(id, p).ok()).unwrap_or(Vec3::ONE);
@@ -850,8 +860,8 @@ fn pack(dm: &DataModel, id: Id, binding: &ClassBinding, classes: &ClassTable, or
         .map_or(0.0, |t| t.clamp(0.0, 1.0) as f32);
     let material = props
         .material
-        .and_then(|p| dm.enum_item(id, p).ok())
-        .map_or(0, |item| classes.material_row(item.name()));
+        .and_then(|p| dm.string(id, p).ok())
+        .map_or(0, |key| materials.row(key));
     let cast_shadow = props.cast_shadow.is_none_or(|p| dm.bool(id, p).unwrap_or(true));
     let mut flags = GpuInstance::LIVE | transparency_flags(transparency);
     if cast_shadow {

@@ -84,7 +84,7 @@ fn referencing_project(test: &str) -> (Project, AssetId) {
     project.write(START, saved.text).expect("set up");
     // Indexes the template's scene, which came without an id.
     let report = project.refresh_assets().expect("set up");
-    assert_eq!(report.added.len(), 1);
+    assert_eq!(report.added.len(), 1 + metallic_project::material::BUILTIN_NAMES.len());
     (save_and_reopen(project), rock)
 }
 
@@ -276,12 +276,18 @@ fn create_gives_ids_and_every_new_path_is_checked() {
 
     // A folder move keeps every id.
     let report = project.rename_folder("Assets", "Art").unwrap();
-    assert_eq!(report.moved.len(), 2);
+    // With the template's materials (#678).
+    assert_eq!(report.moved.len(), 2 + metallic_project::material::BUILTIN_NAMES.len());
     let project = save_and_reopen(project);
     assert_eq!(project.assets().id("Art/grass.png"), Some(id));
     assert_eq!(project.assets().id("Art/sand.png"), Some(other));
+    let members: Vec<&str> = project
+        .members()
+        .into_iter()
+        .filter(|member| !member.starts_with("Art/Materials/"))
+        .collect();
     assert_eq!(
-        project.members(),
+        members,
         [
             "Art/grass.png",
             "Art/sand.png",

@@ -132,35 +132,39 @@ fn enums_come_from_the_registry() {
         r##"
         local part = Instance.new("Part", workspace)
         part.Name = "P"
-        print(part.Material, part.Material == Enum.Material.Plastic, typeof(Enum.Material.Wood))
-        part.Material = Enum.Material.Neon
-        print(part.Material.Name, part.Material.Value, part.Material.EnumType, part.Material == Enum.Material.Neon)
-        part.Material = "Wood"
-        print(part.Material, #Enum.Material:GetEnumItems(), Enum.PartShape.Ball)
-        print(pcall(function() part.Material = Enum.PartShape.Ball end))
-        print(pcall(function() return Enum.Material.Lava end))
+        print(part.Shape, part.Shape == Enum.PartShape.Block, typeof(Enum.PartShape.Wedge))
+        part.Shape = Enum.PartShape.Cylinder
+        print(part.Shape.Name, part.Shape.Value, part.Shape.EnumType, part.Shape == Enum.PartShape.Cylinder)
+        part.Shape = "Wedge"
+        print(part.Shape, #Enum.PartShape:GetEnumItems(), Enum.MouseBehavior.Default)
+        print(pcall(function() part.Shape = Enum.MouseBehavior.Default end))
+        print(pcall(function() return Enum.PartShape.Cone end))
+        part.Material = "Neon"
+        print(part.Material)
         "##,
     );
     let prints = game.prints();
     game.assert_no_errors();
-    assert_eq!(prints[0], "Enum.Material.Plastic true EnumItem");
-    assert_eq!(prints[1], "Neon 5 Material true");
-    assert_eq!(prints[2], "Enum.Material.Wood 8 Enum.PartShape.Ball");
+    assert_eq!(prints[0], "Enum.PartShape.Block true EnumItem");
+    assert_eq!(prints[1], "Cylinder 2 PartShape true");
+    assert_eq!(prints[2], "Enum.PartShape.Wedge 4 Enum.MouseBehavior.Default");
     assert!(
-        prints[3].starts_with("false") && prints[3].contains("Enum.Material"),
+        prints[3].starts_with("false") && prints[3].contains("Enum.PartShape"),
         "{}",
         prints[3]
     );
     assert!(
-        prints[4].contains("Lava is not a valid member of \"Enum.Material\""),
+        prints[4].contains("Cone is not a valid member of \"Enum.PartShape\""),
         "{}",
         prints[4]
     );
+    // A material is named, not an enum item (#678).
+    assert_eq!(prints[5], "Neon");
     let workspace = game.service("Workspace");
     let part = game.dm.find_first_child(workspace, "P", false).unwrap().unwrap();
     assert_eq!(
-        game.dm.get_by_name(part, "Material"),
-        Ok(Value::Enum(game.dm.registry().enum_item("Material", "Wood").unwrap()))
+        game.dm.get_by_name(part, "Shape"),
+        Ok(Value::Enum(game.dm.registry().enum_item("PartShape", "Wedge").unwrap()))
     );
 }
 

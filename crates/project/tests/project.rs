@@ -15,6 +15,14 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 const START: &str = "Scenes/Main.scene";
 
 /// An empty folder for one test.
+/// The folder of the template's materials (#678), which tests about other members leave out.
+const MATERIALS: &str = "Assets/Materials/";
+
+/// `members` without the template's materials.
+fn without_materials(members: Vec<&str>) -> Vec<&str> {
+    members.into_iter().filter(|member| !member.starts_with(MATERIALS)).collect()
+}
+
 fn scratch(test: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("project").join(test);
     let _ = fs::remove_dir_all(&dir);
@@ -73,7 +81,7 @@ fn a_project_made_from_the_template_opens_and_shows_the_baseplate() {
     let project = Project::create(&path, &template(), "My Game").unwrap();
     assert_eq!(project.manifest().name, "My Game");
     assert_eq!(project.manifest().start_scene, START);
-    assert_eq!(project.members(), [START, MANIFEST_FILE]);
+    assert_eq!(without_materials(project.members()), [START, MANIFEST_FILE]);
     assert!(!project.is_modified());
     assert!(
         !dir.join(format!("My Game.mtproj{TEMP_SUFFIX}")).exists(),
@@ -100,7 +108,11 @@ fn the_archive_has_the_manifest_first_and_text_deflated() {
     project.save().unwrap();
 
     let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
-    let names: Vec<String> = archive.file_names().map(|name| name.unwrap().into_owned()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|name| name.unwrap().into_owned())
+        .filter(|name| !name.starts_with(MATERIALS))
+        .collect();
     assert_eq!(
         names,
         [MANIFEST_FILE, "Assets/Logo.png", START, "Scripts/Main.luau"],
@@ -185,7 +197,7 @@ fn edits_stay_in_memory_until_saved() {
     project.save().unwrap();
     drop(reopened);
     let reopened = Project::open(&path).unwrap();
-    assert_eq!(reopened.members(), [START, MANIFEST_FILE]);
+    assert_eq!(without_materials(reopened.members()), [START, MANIFEST_FILE]);
 }
 
 #[test]
@@ -364,7 +376,7 @@ fn folder_entries_are_allowed_and_skipped() {
     }
     writer.finish().unwrap();
     let project = Project::open(&path).unwrap();
-    assert_eq!(project.members(), [START, MANIFEST_FILE]);
+    assert_eq!(without_materials(project.members()), [START, MANIFEST_FILE]);
 }
 
 #[test]

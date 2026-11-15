@@ -657,8 +657,8 @@ mod tests {
         assert!(api.globals["math"].fields.iter().any(|field| field.name == "clamp"));
         assert!(api.globals["task"].fields.iter().any(|field| field.name == "wait"));
         // Enums.
-        assert!(api.globals["Enum"].fields.iter().any(|field| field.name == "Material"));
-        assert!(api.member("EnumMaterial_INTERNAL", "Plastic").is_some());
+        assert!(api.globals["Enum"].fields.iter().any(|field| field.name == "PartShape"));
+        assert!(api.member("EnumPartShape_INTERNAL", "Ball").is_some());
     }
 
     #[test]

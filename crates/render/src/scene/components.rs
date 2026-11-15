@@ -173,7 +173,7 @@ impl PartProps {
             size: typed("Size", |t| matches!(t, PropType::Vector3)),
             color: typed("Color", |t| matches!(t, PropType::Color3)),
             transparency: typed("Transparency", |t| matches!(t, PropType::Number)),
-            material: typed("Material", |t| matches!(t, PropType::Enum(_))),
+            material: typed("Material", |t| matches!(t, PropType::String)),
             shape: typed("Shape", |t| matches!(t, PropType::Enum(_))),
             cast_shadow: typed("CastShadow", |t| matches!(t, PropType::Bool)),
             anchored: typed("Anchored", |t| matches!(t, PropType::Bool)),
@@ -261,8 +261,6 @@ pub(crate) struct LightBinding {
 pub(crate) struct ClassTable {
     classes: Vec<Option<ClassBinding>>,
     lights: Vec<Option<LightBinding>>,
-    /// The `Material` enum's items, whose positions are the material table's rows.
-    materials: &'static [&'static str],
 }
 
 impl ClassTable {
@@ -293,11 +291,7 @@ impl ClassTable {
                 })
             })
             .collect();
-        Self {
-            classes,
-            lights,
-            materials: registry.enum_desc("Material").map_or(&[], |e| e.items),
-        }
+        Self { classes, lights }
     }
 
     #[inline]
@@ -309,21 +303,6 @@ impl ClassTable {
     #[inline]
     pub(crate) fn light(&self, class: metallic_core::ClassId) -> Option<&LightBinding> {
         self.lights.get(class.index()).and_then(Option::as_ref)
-    }
-
-    /// The `Material` enum's items, in row order.
-    pub(crate) fn materials(&self) -> &'static [&'static str] {
-        self.materials
-    }
-
-    /// The material table row of the `Material` item named `name` (its position in the enum); 0 when unknown.
-    #[inline]
-    pub(crate) fn material_row(&self, name: &str) -> u16 {
-        self.materials
-            .iter()
-            .position(|&item| item == name)
-            .and_then(|row| u16::try_from(row).ok())
-            .unwrap_or(0)
     }
 }
 

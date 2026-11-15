@@ -1333,7 +1333,7 @@ mod tests {
         dm.set_attribute(part, "Speed", Some(Value::Number(3.0))).unwrap();
         dm.set_attribute(part, "Aim", Some(Value::Vector3(Vector3::new(0.0, 1.0, 0.0))))
             .unwrap();
-        let wood = metallic_engine::metallic_core::EnumItem::new("Material", "Wood");
+        let wood = metallic_engine::metallic_core::EnumItem::new("PartShape", "Ball");
         dm.set_attribute(part, "Kind", Some(Value::Enum(wood))).unwrap();
 
         let rows = attribute_rows(&dm, part);

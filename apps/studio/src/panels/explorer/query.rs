@@ -9,7 +9,7 @@
 //! - `IsA=BasePart`: its class is that one or inherits from it;
 //! - `Name=door`: its name contains `door`, in any letter case (a search, as Roblox's, not an exact name);
 //! - any other key is a property, in any letter case: `Anchored=true`, `Transparency>0.5`, `Material=Plastic`.
-//!   Numbers compare as numbers, booleans as `true` or `false`, enum items by name (`Enum.Material.Plastic` too), text
+//!   Numbers compare as numbers, booleans as `true` or `false`, enum items by name (`Enum.PartShape.Ball` too), text
 //!   by containing the value in any letter case, and anything else (vectors, colours, references) by the text the
 //!   Properties panel shows, spaces aside (`Size=12,1,12`, `Parent=Workspace`). An instance without the property never
 //!   matches.
@@ -201,7 +201,7 @@ fn compare(dm: &DataModel, have: &Value, op: Op, want: &str) -> Option<bool> {
             };
             op.equality(*on == wanted)
         }
-        // `Enum.Material.Plastic` as well as `Plastic`: the item's name is the last part.
+        // `Enum.PartShape.Ball` as well as `Ball`: the item's name is the last part.
         Value::Enum(item) => op.equality(
             item.name()
                 .eq_ignore_ascii_case(want.rsplit('.').next().unwrap_or(want)),
@@ -449,8 +449,8 @@ mod tests {
         let panel = add(&mut dm, "Part", door, "Panel");
         dm.set_by_name(panel, "Anchored", Value::Bool(false)).unwrap();
         dm.set_by_name(panel, "Transparency", Value::Number(0.5)).unwrap();
-        let plastic = dm.registry().enum_item("Material", "Plastic").unwrap();
-        dm.set_by_name(panel, "Material", Value::Enum(plastic)).unwrap();
+        let ball = dm.registry().enum_item("PartShape", "Ball").unwrap();
+        dm.set_by_name(panel, "Shape", Value::Enum(ball)).unwrap();
         add(&mut dm, "PointLight", panel, "Lamp");
         let scripts = service(&dm, "ServerScriptService");
         add(&mut dm, "Script", scripts, "Opener");
@@ -540,10 +540,10 @@ mod tests {
     #[test]
     fn enums_compare_by_item_name() {
         let dm = game();
-        assert_eq!(found(&dm, "Material=Plastic"), ["Panel"]);
-        assert_eq!(found(&dm, "material=smoothplastic"), ["SpawnLocation"]);
-        assert_eq!(found(&dm, "Material=Enum.Material.Concrete"), ["Baseplate"]);
-        assert_eq!(found(&dm, "Material!=Plastic"), ["Baseplate", "SpawnLocation"]);
+        assert_eq!(found(&dm, "Shape=Ball"), ["Panel"]);
+        assert_eq!(found(&dm, "shape=block"), ["Baseplate", "SpawnLocation"]);
+        assert_eq!(found(&dm, "Shape=Enum.PartShape.Ball"), ["Panel"]);
+        assert_eq!(found(&dm, "Shape!=Block"), ["Panel"]);
     }
 
     #[test]
