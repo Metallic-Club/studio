@@ -532,6 +532,14 @@ pub static ENTRIES: &[Entry] = &[
             toggle(ui, &mut s.code.minimap, "Show the minimap");
         },
     },
+    Entry {
+        category: Category::CodeEditor,
+        name: "Close brackets and quotes",
+        description: "Typing ( [ { or a quote puts in its closer, and wraps selected code in the pair.",
+        control: |ui, s| {
+            toggle(ui, &mut s.code.close_pairs, "Close brackets and quotes");
+        },
+    },
     code_colour_entry!(Text, "The colour of names and anything else."),
     code_colour_entry!(Keyword, "local, function, if, end and Luau's other reserved words."),
     code_colour_entry!(Constant, "The values true, false and nil."),

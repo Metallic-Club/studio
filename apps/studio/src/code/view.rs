@@ -797,7 +797,131 @@ fn keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
     if ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter)) {
         changed |= enter(ui.ctx(), id, text, settings);
     }
+    if settings.close_pairs {
+        changed |= pairs(ui, id, text);
+    }
     changed
+}
+
+/// The brackets and quotes typed in pairs (#659), opener and closer.
+const PAIRS: [(char, char); 5] = [('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('\'', '\'')];
+
+/// What typing `typed` does in `text` with the selection `start..end` (characters), when it is a bracket or a quote
+/// (#659); `None` when the field types it as always.
+fn pair_edit(text: &str, start: usize, end: usize, typed: char) -> Option<PairEdit> {
+    let opener = PAIRS.iter().find(|(open, _)| *open == typed);
+    let quote = typed == '"' || typed == '\'';
+    let char_at = |index: usize| text.chars().nth(index);
+    // In a comment or a string (a quote's own string aside), a bracket is just a character.
+    let byte = byte_of(text, start);
+    // A line comment, or a string not closed yet, goes on to its end: the cursor there is still in it.
+    let inside = super::lexer::lex(text).into_iter().find(|token| {
+        let open_ended = token.unterminated
+            || (token.kind == super::lexer::TokenKind::Comment && !text[token.start..token.end].ends_with(']'));
+        token.start < byte && (byte < token.end || (byte == token.end && open_ended))
+    });
+    let in_comment = inside.as_ref().is_some_and(|token| token.kind == super::lexer::TokenKind::Comment);
+    let in_string = inside.as_ref().is_some_and(|token| token.kind == super::lexer::TokenKind::String);
+    if start != end {
+        // A selection: wrapped in the pair, and still selected.
+        let (open, close) = opener?;
+        let inner: String = text.chars().skip(start).take(end - start).collect();
+        return Some(PairEdit {
+            range: start..end,
+            with: format!("{open}{inner}{close}"),
+            select: (start + 1, end + 1),
+        });
+    }
+    let next = char_at(start);
+    // The closer right before the same one: step over it.
+    let closer = PAIRS.iter().any(|(_, close)| *close == typed);
+    if closer && next == Some(typed) && !in_comment && (quote || !in_string) {
+        return Some(PairEdit {
+            range: start..start + 1,
+            with: typed.to_string(),
+            select: (start + 1, start + 1),
+        });
+    }
+    let (open, close) = opener?;
+    if in_comment || in_string {
+        return None;
+    }
+    // Only where what follows is space, the line's end or a closer: not before a word.
+    let free = next.is_none_or(|c| c.is_whitespace() || matches!(c, ')' | ']' | '}' | ',' | ';'));
+    let after_word = start
+        .checked_sub(1)
+        .and_then(char_at)
+        .is_some_and(|c| c == '_' || c.is_alphanumeric());
+    if !free || (quote && after_word) {
+        return None;
+    }
+    Some(PairEdit {
+        range: start..start,
+        with: format!("{open}{close}"),
+        select: (start + 1, start + 1),
+    })
+}
+
+/// An edit [`pair_edit`] makes: the characters it replaces, with what, and the selection after (anchor, head).
+#[derive(Debug, PartialEq, Eq)]
+struct PairEdit {
+    range: Range<usize>,
+    with: String,
+    select: (usize, usize),
+}
+
+/// Brackets and quotes typed in the field `id` (#659): an opener puts in its closer, a closer steps over the one put
+/// in, a selection is wrapped, and Backspace between an empty pair takes both. Returns whether `text` changed.
+fn pairs(ui: &Ui, id: Id, text: &mut String) -> bool {
+    let Some(mut state) = TextEditState::load(ui.ctx(), id) else {
+        return false;
+    };
+    let Some(range) = state.cursor.char_range() else {
+        return false;
+    };
+    let (start, end) = {
+        let (a, b) = (range.primary.index.0, range.secondary.index.0);
+        (a.min(b), a.max(b))
+    };
+    // Backspace between an empty pair.
+    if start == end && start > 0 {
+        let around = (text.chars().nth(start - 1), text.chars().nth(start));
+        let empty = PAIRS
+            .iter()
+            .any(|(open, close)| around == (Some(*open), Some(*close)));
+        if empty && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Backspace)) {
+            replace_chars(ui.ctx(), id, &mut state, text, start - 1..start + 1, "");
+            return true;
+        }
+    }
+    let typed = ui.input(|input| {
+        input.events.iter().enumerate().find_map(|(index, event)| match event {
+            egui::Event::Text(typed) => {
+                let mut chars = typed.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => Some((index, c)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    });
+    let Some((index, typed)) = typed else {
+        return false;
+    };
+    let Some(edit) = pair_edit(text, start, end, typed) else {
+        return false;
+    };
+    ui.input_mut(|input| {
+        input.events.remove(index);
+    });
+    replace_chars(ui.ctx(), id, &mut state, text, edit.range, &edit.with);
+    state.cursor.set_char_range(Some(CCursorRange::two(
+        CCursor::new(edit.select.0),
+        CCursor::new(edit.select.1),
+    )));
+    state.store(ui.ctx(), id);
+    true
 }
 
 /// The field `id`'s cursors besides its own (#558).
@@ -1350,5 +1474,66 @@ mod tests {
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 1), ["one"]);
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 2), ["two"]);
         assert!(messages_on_line(text, &Lines::new(text), &diagnostics, 0).is_empty());
+    }
+
+    /// Typing `typed` in `code`, where `|` is the cursor or `[` and `]` mark the selection; the code after, with `|`
+    /// for the cursor or `[` and `]` for the selection. A character the field types as always goes in at the cursor.
+    fn type_pair(code: &str, typed: char) -> String {
+        let (start, end, text) = match code.find('|') {
+            Some(at) => (at, at, code.replacen('|', "", 1)),
+            None => {
+                let (open, close) = (code.find('[').unwrap(), code.rfind(']').unwrap());
+                let text = format!("{}{}{}", &code[..open], &code[open + 1..close], &code[close + 1..]);
+                (open, close - 1, text)
+            }
+        };
+        let (start, end) = (text[..start].chars().count(), text[..end].chars().count());
+        let mut out: Vec<char> = text.chars().collect();
+        let (select, at) = match pair_edit(&text, start, end, typed) {
+            Some(edit) => {
+                out.splice(edit.range.clone(), edit.with.chars());
+                (edit.select, None)
+            }
+            None => {
+                out.splice(start..end, [typed]);
+                ((start + 1, start + 1), Some(()))
+            }
+        };
+        let _ = at;
+        let mut shown: String = out.iter().collect();
+        if select.0 == select.1 {
+            shown.insert(byte_of(&shown, select.0), '|');
+        } else {
+            shown.insert(byte_of(&shown, select.1), ']');
+            shown.insert(byte_of(&shown, select.0), '[');
+        }
+        shown
+    }
+
+    /// #659: an opener puts in its closer where nothing but space or a closer follows; a closer steps over the one put
+    /// in; a quote is not paired after a word, nor anything in a comment or a string.
+    #[test]
+    fn brackets_and_quotes_are_typed_in_pairs() {
+        assert_eq!(type_pair("print|", '('), "print(|)");
+        assert_eq!(type_pair("local t = |", '{'), "local t = {|}");
+        assert_eq!(type_pair("x[|", '['), "x[[|]");
+        assert_eq!(type_pair("f(|)", '"'), "f(\"|\")");
+        assert_eq!(type_pair("f(\"hi|\")", '"'), "f(\"hi\"|)", "steps over the closing quote");
+        assert_eq!(type_pair("print(|)", ')'), "print()|", "steps over the closer");
+        assert_eq!(type_pair("|word", '('), "(|word", "not before a word");
+        assert_eq!(type_pair("don|", '\''), "don'|", "not after a word");
+        assert_eq!(type_pair("-- note |", '('), "-- note (|");
+        assert_eq!(type_pair("print(\"a |\")", '('), "print(\"a (|\")");
+    }
+
+    /// #659: a selection typed over with an opener or a quote is wrapped in the pair and stays selected.
+    #[test]
+    fn a_selection_is_wrapped_in_the_pair_typed() {
+        assert_eq!(type_pair("print([a + b])", '('), "print(([a + b]))");
+        assert_eq!(type_pair("local s = [hello]", '"'), "local s = \"[hello]\"");
+        assert_eq!(type_pair("[x, y]", '{'), "{[x, y]}");
+        assert_eq!(type_pair("[x]", '['), "[[x]]");
+        // Not an opener: typed over as always.
+        assert_eq!(type_pair("[x]", 'y'), "y|");
     }
 }

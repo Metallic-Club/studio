@@ -11,6 +11,7 @@
 //! show_whitespace = false
 //! highlight_line = true
 //! minimap = true
+//! close_pairs = true      # brackets and quotes closed as they are typed
 //!
 //! [colors.dark]
 //! keyword = "#F86D7C"
@@ -206,6 +207,8 @@ pub struct CodeEditor {
     pub highlight_line: bool,
     /// Whether the code's minimap shows down its right (#556).
     pub minimap: bool,
+    /// Whether typing a bracket or a quote puts in its closer, and wraps a selection in the pair (#659).
+    pub close_pairs: bool,
     /// The dark theme's colours.
     pub dark: Palette,
     /// The light theme's colours.
@@ -224,6 +227,7 @@ impl Default for CodeEditor {
             show_whitespace: false,
             highlight_line: true,
             minimap: true,
+            close_pairs: true,
             dark: Palette::DARK,
             light: Palette::LIGHT,
         }
@@ -300,6 +304,7 @@ impl CodeEditor {
             settings.show_whitespace = flag("show_whitespace").unwrap_or(settings.show_whitespace);
             settings.highlight_line = flag("highlight_line").unwrap_or(settings.highlight_line);
             settings.minimap = flag("minimap").unwrap_or(settings.minimap);
+            settings.close_pairs = flag("close_pairs").unwrap_or(settings.close_pairs);
         }
         if let Some(colors) = document.get("colors").and_then(Value::as_table) {
             for (theme, palette) in [("dark", &mut settings.dark), ("light", &mut settings.light)] {
@@ -344,6 +349,7 @@ impl CodeEditor {
             editor.insert("show_whitespace".into(), Value::Boolean(self.show_whitespace));
             editor.insert("highlight_line".into(), Value::Boolean(self.highlight_line));
             editor.insert("minimap".into(), Value::Boolean(self.minimap));
+            editor.insert("close_pairs".into(), Value::Boolean(self.close_pairs));
         });
         with_section(&mut document, "colors", |colors| {
             for (theme, palette) in [("dark", &self.dark), ("light", &self.light)] {
@@ -399,6 +405,7 @@ mod tests {
             show_whitespace: true,
             highlight_line: false,
             minimap: false,
+            close_pairs: false,
             ..CodeEditor::default()
         };
         settings.dark.set(Kind::Keyword, [1, 2, 3]);
