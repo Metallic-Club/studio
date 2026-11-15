@@ -102,12 +102,12 @@ fn materials_and_scenes_ask_for_thumbnails_and_again_once_they_change() {
         .assets()
         .id("Assets/Materials/Neon.material")
         .unwrap();
-    let asked = editor_state.pictures.next().expect("asked for");
+    let asked = editor_state.pictures.take_next().expect("asked for");
     assert_eq!((asked.id, asked.picture), (neon, Picture::Material));
     // Drawn (as the renderer would), then the file changes: asked for again, the old one shown meanwhile.
     let texture = egui::TextureId::User(1);
     editor_state.pictures.done(neon, asked.fingerprint, texture);
-    while editor_state.pictures.next().is_some() {}
+    while editor_state.pictures.take_next().is_some() {}
     let mut material = editor_state.read_material(neon).unwrap();
     material.roughness = 0.2;
     editor_state
@@ -116,7 +116,7 @@ fn materials_and_scenes_ask_for_thumbnails_and_again_once_they_change() {
         .unwrap();
     settle(&mut harness);
     let editor_state = editor(&mut harness);
-    let again = editor_state.pictures.next().expect("asked for again");
+    let again = editor_state.pictures.take_next().expect("asked for again");
     assert_eq!(again.id, neon);
     assert_ne!(again.fingerprint, asked.fingerprint);
 
@@ -126,7 +126,7 @@ fn materials_and_scenes_ask_for_thumbnails_and_again_once_they_change() {
     let editor_state = editor(&mut harness);
     let scene = editor_state.project.assets().id("Scenes/Main.scene").unwrap();
     let mut asked = Vec::new();
-    while let Some(wanted) = editor_state.pictures.next() {
+    while let Some(wanted) = editor_state.pictures.take_next() {
         asked.push((wanted.id, wanted.picture));
     }
     assert!(asked.contains(&(scene, Picture::Scene)), "{asked:?}");

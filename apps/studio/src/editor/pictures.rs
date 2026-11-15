@@ -56,7 +56,7 @@ impl Pictures {
     }
 
     /// The next thumbnail to draw, taken from those asked for.
-    pub fn next(&mut self) -> Option<Wanted> {
+    pub fn take_next(&mut self) -> Option<Wanted> {
         (!self.wanted.is_empty()).then(|| self.wanted.remove(0))
     }
 
@@ -90,14 +90,14 @@ mod tests {
         pictures.want(wanted(1, 10));
         pictures.want(wanted(1, 11));
         pictures.want(wanted(2, 10));
-        let first = pictures.next().unwrap();
+        let first = pictures.take_next().unwrap();
         assert_eq!(
             (first.id, first.fingerprint.size),
             (AssetId::from_u128(1), 11),
             "the newest ask"
         );
-        assert_eq!(pictures.next().unwrap().id, AssetId::from_u128(2));
-        assert_eq!(pictures.next(), None);
+        assert_eq!(pictures.take_next().unwrap().id, AssetId::from_u128(2));
+        assert_eq!(pictures.take_next(), None);
 
         let texture = egui::TextureId::User(7);
         pictures.done(first.id, first.fingerprint, texture);

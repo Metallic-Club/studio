@@ -76,7 +76,7 @@ impl Thumbnails {
                 assets.reload_material(&material.to_string());
             }
         }
-        let Some(wanted) = self.again.take().or_else(|| editor.pictures.next()) else {
+        let Some(wanted) = self.again.take().or_else(|| editor.pictures.take_next()) else {
             return;
         };
         if !self.attached {
