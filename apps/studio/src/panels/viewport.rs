@@ -299,6 +299,19 @@ impl Panel for Viewport {
             } else {
                 Vec::new()
             };
+            // A material dragged from the Assets panel and let go on a part gives it the material (#680).
+            if let Some(drag) = response.dnd_release_payload::<crate::panels::assets::AssetDrag>()
+                && let [path] = drag.paths.as_slice()
+                && metallic_engine::metallic_project::material::is_material(path)
+                && let Some(id) = editor.project.assets().id(path)
+                && let Some(at) = ui.input(|input| input.pointer.latest_pos())
+                && let Some((part, _)) = view
+                    .ray(at)
+                    .and_then(|ray| pick::nearest_part(&editor.dm, &editor.parts, ray))
+                && let Err(error) = editor.apply_material_to(id, part)
+            {
+                log::warn!("materials: {error}");
+            }
             let under = |at: egui::Pos2| {
                 light_icons::icon_at(&lights, at)
                     .or_else(|| view.ray(at).and_then(|ray| pick::pick(&editor.dm, &editor.parts, ray)))

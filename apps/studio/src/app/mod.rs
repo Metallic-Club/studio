@@ -8,6 +8,7 @@
 mod editor;
 pub mod game;
 mod game_input;
+pub mod material_preview;
 mod native;
 #[cfg(test)]
 mod offscreen;
@@ -849,7 +850,18 @@ impl Studio {
         for script in cx.editor.scripts.take_opening() {
             self.dock.open_instance(&crate::code::pane(script));
         }
+        // The material tabs asked for this frame (#680).
+        for material in cx.editor.materials.take_opening() {
+            self.dock.open_instance(&crate::editor::materials::pane(material));
+        }
         for pane in self.dock.instance_panes() {
+            if let Some(material) = crate::editor::materials::material_of(&pane) {
+                if cx.editor.project.assets().path(material).is_none() {
+                    cx.editor.materials.close(material);
+                    self.dock.close(&pane);
+                }
+                continue;
+            }
             if crate::code::script_of(&pane).is_none_or(|script| !crate::code::in_game(&cx.editor.dm, script)) {
                 self.dock.close(&pane);
             }
@@ -9735,6 +9747,7 @@ skip_sign_in = true
 
     mod assets_browser;
     mod file_pickers;
+    mod material_editor;
     mod team_create;
     mod team_play;
     mod team_play_port;

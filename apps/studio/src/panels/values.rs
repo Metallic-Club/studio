@@ -325,7 +325,7 @@ pub const NO_FILE: &str = "None";
 /// The picker of a [`Widget::FilePath`] or [`Widget::AssetId`] property (#55): a drop-down of the project's files it
 /// takes, by path, and None. It shows the chosen file's name, or that the file is missing. Returns the value chosen:
 /// a path, or for an asset id property the file's id; empty for None.
-fn file_picker(
+pub(crate) fn file_picker(
     ui: &mut Ui,
     files: &Files,
     widget: metallic_engine::metallic_core::Widget,

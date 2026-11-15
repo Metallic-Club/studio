@@ -222,6 +222,11 @@ impl SceneRenderer {
         self.assets.as_ref()
     }
 
+    /// The assets loaded for the game's parts, to read some again (#680: a material edited in Studio).
+    pub fn assets_mut(&mut self) -> Option<&mut MeshAssets> {
+        self.assets.as_mut()
+    }
+
     /// Milliseconds from the first attach to a window (the device and the renderer made, the first frame's pipelines
     /// compiled) until the first frame was presented: what a player waits for the first image. `None` before it.
     pub fn first_frame_ms(&self) -> Option<f32> {

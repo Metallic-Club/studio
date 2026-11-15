@@ -7,6 +7,7 @@
 pub mod assets;
 pub mod edit;
 pub mod history;
+pub mod materials;
 pub mod multi;
 pub mod open;
 pub mod play;
@@ -41,6 +42,11 @@ pub struct EditorState {
     pub assets: Vec<AssetRow>,
     /// The Assets browser: its open folder, selection and search (#676).
     pub browser: assets::AssetBrowser,
+    /// The materials open in the material editor (#680).
+    pub materials: materials::MaterialEditor,
+    /// Small pictures of the project's images, by asset id, for the material editor's slots (#680); `None` for one that
+    /// could not be read.
+    pub thumbnails: std::collections::HashMap<metallic_engine::metallic_project::AssetId, Option<egui::TextureHandle>>,
     /// The mesh and texture loader the viewport's renderer is fed from, until the renderer takes it.
     pub mesh_assets: Option<MeshAssets>,
     /// What is selected (#347).
@@ -99,6 +105,8 @@ impl EditorState {
             scene_ids,
             assets,
             browser: assets::AssetBrowser::default(),
+            materials: materials::MaterialEditor::default(),
+            thumbnails: std::collections::HashMap::new(),
             mesh_assets: Some(mesh_assets),
             selection: Selection::new(),
             history: History::new(Selection::new()),
