@@ -100,9 +100,17 @@
       "file": "assets/image.svg",
       "color": "content"
     },
+    "asset.local_script": {
+      "file": "assets/scroll.svg",
+      "color": "local_script"
+    },
     "asset.mesh": {
       "file": "assets/cuboid.svg",
       "color": "object"
+    },
+    "asset.module_script": {
+      "file": "assets/scroll-text.svg",
+      "color": "module_script"
     },
     "asset.scene": {
       "file": "assets/list-tree.svg",
