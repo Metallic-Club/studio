@@ -68,7 +68,10 @@ fn a_mesh_part_s_ids_and_a_script_s_source_are_picked_from_the_project_s_files()
         editor.dm.get_by_name(part, "TextureId"),
         Ok(Value::String(bark.as_str().into()))
     );
-    harness.get_by_label("bark.png");
+    let shown = harness.get_by_role_and_label(Role::ComboBox, "TextureId").value();
+    assert_eq!(shown.as_deref(), Some("bark.png"));
+    // A separate step: edits of one property less than 600 ms apart are one.
+    std::thread::sleep(std::time::Duration::from_millis(700));
     // None empties it, as one undo step.
     harness.get_by_role_and_label(Role::ComboBox, "TextureId").click();
     settle(&mut harness);
@@ -103,4 +106,38 @@ fn a_mesh_part_s_ids_and_a_script_s_source_are_picked_from_the_project_s_files()
         editor.dm.get_by_name(script, "Source"),
         Ok(Value::String("Scripts/Door.server.luau".into()))
     );
+}
+
+/// #55 with #676: a file dragged from the Assets panel onto a picker that takes it is chosen.
+#[test]
+fn a_file_dragged_from_the_assets_panel_onto_a_picker_is_chosen() {
+    let mut harness = editing(settings_file("editor-file-picker-drop", None), "Picker Drop Game");
+    harness.set_size(egui::vec2(1280.0, 1400.0));
+    let (part, rock) = {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        if !editor.project.contains("Assets/rock.glb") {
+            editor.project.create_member("Assets/rock.glb", vec![1; 64]).unwrap();
+        }
+        let rock = editor.project.assets().id("Assets/rock.glb").unwrap().to_string();
+        let dm = &mut editor.dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.create(dm.registry().class_id("MeshPart").unwrap()).unwrap();
+        dm.set_parent(part, Some(workspace)).unwrap();
+        editor.select(Some(part));
+        editor.browser.open_folder("Assets");
+        (part, rock)
+    };
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Tab, "Assets").click();
+    settle(&mut harness);
+    let from = harness.get_by_role_and_label(Role::GridCell, "rock").rect().center();
+    let to = harness.get_by_role_and_label(Role::ComboBox, "MeshId").rect().center();
+    drag(&mut harness, from, to);
+    let editor = harness.state_mut().studio.editor_mut().unwrap();
+    assert_eq!(
+        editor.dm.get_by_name(part, "MeshId"),
+        Ok(Value::String(rock.as_str().into()))
+    );
+    // Only the picker it was let go on changed.
+    assert_eq!(editor.dm.get_by_name(part, "TextureId"), Ok(Value::String("".into())));
 }

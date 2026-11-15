@@ -207,7 +207,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("BasePart", Some("WorldObject"))
 
 #[cfg(test)]
 mod tests {
-    use metallic_core::{CFrame, Color3, EnumItem, Value, Vector3};
+    use metallic_core::{CFrame, Color3, Value, Vector3};
 
     use crate::shared_registry;
     use crate::testing::{game, new_in, workspace};
@@ -400,7 +400,7 @@ mod tests {
 
         /// A registry of the part classes and the test classes, with `classes` listed in the given order.
         fn registry_of(classes: &[&'static ClassDesc]) -> Arc<Registry> {
-            let enums = [base_part::ENUMS, part::ENUMS];
+            let enums = [part::ENUMS];
             Arc::new(
                 Registry::build(RegistryInput {
                     classes,
