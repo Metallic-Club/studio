@@ -8,7 +8,7 @@ use egui::{
 };
 use egui::{pos2, vec2};
 
-use super::{Act, AssetDrag, Keys, MISSING, context_menu, drop_target, dropped_on, file_size, rename_field};
+use super::{Act, AssetDrag, AssetKind, Keys, MISSING, context_menu, drop_target, dropped_on, file_size, rename_field};
 use crate::editor::EditorState;
 use crate::editor::assets::{Entry, EntryKind};
 use crate::theme::current_colors;
@@ -25,7 +25,9 @@ const ICON: f32 = 30.0;
 const ICON_AREA: f32 = 44.0;
 
 /// Draws the tiles.
-pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Vec<Act>) {
+pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mut Vec<Act>) {
+    // Pictures decoded this frame: a few a frame, so a folder of large pictures does not stall one (#681).
+    let mut decodes = 0;
     let entries = super::shown_entries(editor);
     let area = ui.available_rect_before_wrap();
     // The empty space: a click there clears the selection, a right-click offers a new folder or file.
@@ -75,7 +77,7 @@ pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Ve
                     ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
                     let start = line * columns;
                     for entry in &entries[start..(start + columns).min(entries.len())] {
-                        tile(ui, editor, entry, keys, acts);
+                        tile(ui, editor, entry, keys, acts, &mut decodes);
                     }
                 });
                 ui.add_space(GAP);
@@ -86,7 +88,7 @@ pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Ve
 }
 
 /// One tile: its icon on a fill when selected or under the pointer, its name under it (two lines at most).
-fn tile(ui: &mut Ui, editor: &EditorState, entry: &Entry, keys: &Keys, acts: &mut Vec<Act>) {
+fn tile(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, keys: &Keys, acts: &mut Vec<Act>, decodes: &mut usize) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let selected = editor.browser.selected.contains(&entry.path);
@@ -121,7 +123,11 @@ fn tile(ui: &mut Ui, editor: &EditorState, entry: &Entry, keys: &Keys, acts: &mu
             EntryKind::Missing(_) => (Icon::UiWarning, colors.accent),
         };
         let centre = pos2(rect.center().x, rect.top() + space::S2 + ICON_AREA / 2.0);
-        icons::paint_at(ui.painter(), centre, Align2::CENTER_CENTER, icon, ICON, ink);
+        let area = Rect::from_center_size(centre, vec2(ICON_AREA, ICON_AREA));
+        // A picture, a material or a scene shows itself (#681); until its thumbnail is here, its kind's icon.
+        if !thumbnail(ui, editor, entry, area, decodes) {
+            icons::paint_at(ui.painter(), centre, Align2::CENTER_CENTER, icon, ICON, ink);
+        }
         let label = Rect::from_min_max(
             pos2(rect.left() + space::S1, rect.top() + space::S2 + ICON_AREA),
             pos2(rect.right() - space::S1, rect.bottom() - space::S1),
@@ -244,4 +250,64 @@ fn drag_chip(ui: &Ui) {
     );
     painter.galley(rect.min + vec2(space::S3, space::S2), galley, p.text);
     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+}
+
+/// How many pictures a frame decodes for their tiles.
+const DECODES_A_FRAME: usize = 2;
+
+/// Draws `entry`'s thumbnail in `area` when it has one (#681): a picture at its aspect ratio, a material on a sphere,
+/// a scene from its camera. Asks for what is missing or old. Returns whether it drew one.
+fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: Rect, decodes: &mut usize) -> bool {
+    use crate::editor::pictures::{Picture, Wanted};
+    let EntryKind::File(kind) = entry.kind else {
+        return false;
+    };
+    let Some(id) = editor.project.assets().id(&entry.path) else {
+        return false;
+    };
+    let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    match kind {
+        AssetKind::Image => {
+            if !editor.thumbnails.contains_key(&id) {
+                if *decodes >= DECODES_A_FRAME {
+                    ui.ctx().request_repaint();
+                    return false;
+                }
+                *decodes += 1;
+            }
+            let Some(texture) = crate::panels::material::thumbnail(ui.ctx(), editor, id) else {
+                return false;
+            };
+            let [width, height] = texture.size().map(|side| side.max(1) as f32);
+            let scale = (area.width() / width).min(area.height() / height);
+            let shown = Rect::from_center_size(area.center(), vec2(width * scale, height * scale));
+            ui.painter().image(texture.id(), shown, full, egui::Color32::WHITE);
+            true
+        }
+        AssetKind::Material | AssetKind::Scene => {
+            let Ok(fingerprint) = editor.project.fingerprint(&entry.path) else {
+                return false;
+            };
+            let drawn = editor.pictures.get(id, fingerprint);
+            if drawn.is_none_or(|(_, fresh)| !fresh) {
+                editor.pictures.want(Wanted {
+                    id,
+                    picture: if kind == AssetKind::Material {
+                        Picture::Material
+                    } else {
+                        Picture::Scene
+                    },
+                    path: entry.path.clone(),
+                    fingerprint,
+                });
+                ui.ctx().request_repaint();
+            }
+            let Some((texture, _)) = drawn else {
+                return false;
+            };
+            ui.painter().image(texture, area, full, egui::Color32::WHITE);
+            true
+        }
+        _ => false,
+    }
 }
