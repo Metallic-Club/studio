@@ -16,6 +16,7 @@ mod shell;
 pub mod sign_in;
 pub mod splash;
 pub mod startup;
+pub mod thumbnails;
 pub mod viewport;
 
 use std::path::{Path, PathBuf};
@@ -850,11 +851,21 @@ impl Studio {
         for script in cx.editor.scripts.take_opening() {
             self.dock.open_instance(&crate::code::pane(script));
         }
+        // The picture tabs asked for this frame (#681).
+        for image in cx.editor.images.take_opening() {
+            self.dock.open_instance(&crate::editor::images::pane(image));
+        }
         // The material tabs asked for this frame (#680).
         for material in cx.editor.materials.take_opening() {
             self.dock.open_instance(&crate::editor::materials::pane(material));
         }
         for pane in self.dock.instance_panes() {
+            if let Some(image) = crate::editor::images::image_of(&pane) {
+                if cx.editor.project.assets().path(image).is_none() {
+                    self.dock.close(&pane);
+                }
+                continue;
+            }
             if let Some(material) = crate::editor::materials::material_of(&pane) {
                 if cx.editor.project.assets().path(material).is_none() {
                     cx.editor.materials.close(material);
@@ -9755,4 +9766,5 @@ skip_sign_in = true
     mod team_scene;
     mod team_scripts;
     mod team_shots;
+    mod thumbnails;
 }

@@ -380,7 +380,7 @@ fn texture_row(ui: &mut Ui, editor: &mut EditorState, files: &Files, label: &str
 }
 
 /// A small picture of the project's image `id` (decoded once, then kept), or `None` when it cannot be read.
-fn thumbnail(ctx: &egui::Context, editor: &mut EditorState, id: AssetId) -> Option<egui::TextureHandle> {
+pub(crate) fn thumbnail(ctx: &egui::Context, editor: &mut EditorState, id: AssetId) -> Option<egui::TextureHandle> {
     if let Some(known) = editor.thumbnails.get(&id) {
         return known.clone();
     }

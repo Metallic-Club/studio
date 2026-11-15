@@ -7,6 +7,7 @@ pub mod assets;
 pub mod color_picker;
 pub mod explorer;
 pub mod game;
+pub mod image;
 pub mod insert;
 pub mod material;
 pub mod output;
@@ -38,6 +39,8 @@ pub static PANELS: &[&dyn Panel] = &[
     &script::ScriptEditor,
     // A tab per material, opened from the Assets panel (#680).
     &material::MaterialEditor,
+    // A tab per picture, opened from the Assets panel (#681).
+    &image::ImagePreview,
     // Text across every script (#555), on the left.
     &search::Search,
 ];

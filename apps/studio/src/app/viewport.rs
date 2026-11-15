@@ -33,6 +33,8 @@ pub struct ViewportRenderer {
     graphics: Option<GraphicsSettings>,
     /// The material editor's preview (#680).
     preview: super::material_preview::MaterialPreview,
+    /// The Assets panel's thumbnails of materials and scenes (#681).
+    thumbnails: super::thumbnails::Thumbnails,
 }
 
 impl ViewportRenderer {
@@ -64,6 +66,7 @@ impl ViewportRenderer {
                 }
             }
             self.preview.frame(context, painter, editor, &changed);
+            self.thumbnails.frame(context, painter, editor, &changed);
         }
         let shown = studio.editor().is_some_and(|editor| editor.viewport.shown);
         if !shown {

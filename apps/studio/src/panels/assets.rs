@@ -541,6 +541,7 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
             }
             browser::EntryKind::File(AssetKind::Script(_)) => editor.open_script_file(&entry.path),
             browser::EntryKind::File(AssetKind::Material) => editor.open_material(&entry.path),
+            browser::EntryKind::File(AssetKind::Image) => editor.open_image(&entry.path),
             _ => Ok(()),
         },
         Act::Click { path, .. } if path.is_empty() => {

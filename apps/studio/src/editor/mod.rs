@@ -7,9 +7,11 @@
 pub mod assets;
 pub mod edit;
 pub mod history;
+pub mod images;
 pub mod materials;
 pub mod multi;
 pub mod open;
+pub mod pictures;
 pub mod play;
 pub mod selection;
 
@@ -44,6 +46,10 @@ pub struct EditorState {
     pub browser: assets::AssetBrowser,
     /// The materials open in the material editor (#680).
     pub materials: materials::MaterialEditor,
+    /// The Assets panel's rendered thumbnails of materials and scenes (#681).
+    pub pictures: pictures::Pictures,
+    /// The pictures open in the image preview (#681).
+    pub images: images::ImagePreviews,
     /// Small pictures of the project's images, by asset id, for the material editor's slots (#680); `None` for one that
     /// could not be read.
     pub thumbnails: std::collections::HashMap<metallic_engine::metallic_project::AssetId, Option<egui::TextureHandle>>,
@@ -106,6 +112,8 @@ impl EditorState {
             assets,
             browser: assets::AssetBrowser::default(),
             materials: materials::MaterialEditor::default(),
+            pictures: pictures::Pictures::default(),
+            images: images::ImagePreviews::default(),
             thumbnails: std::collections::HashMap::new(),
             mesh_assets: Some(mesh_assets),
             selection: Selection::new(),
