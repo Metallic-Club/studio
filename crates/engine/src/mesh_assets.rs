@@ -25,11 +25,13 @@ use metallic_project::{AssetError, AssetReader, ImageAsset, MeshAsset};
 use metallic_render::parts::{MeshData, MeshVertex};
 use metallic_render::{InstanceScene, MaterialParams, Renderer};
 
-/// What the worker is asked to load: a mesh, a texture fitted to the device's largest size, or a material.
+/// What the worker is asked to load: a mesh, a texture fitted to the device's largest size, or a material; or a
+/// newer reader to load from from now on.
 enum Job {
     Mesh(Arc<str>),
     Texture(Arc<str>, u32),
     Material(Arc<str>),
+    Reader(Box<AssetReader>),
 }
 
 /// What the worker loaded.
@@ -89,7 +91,9 @@ impl MeshAssets {
             .name("metallic assets".into())
             .spawn(move || {
                 while let Ok(job) = inbox.recv() {
-                    if results.send(load(&mut reader, job)).is_err() {
+                    if let Some(loaded) = load(&mut reader, job)
+                        && results.send(loaded).is_err()
+                    {
                         break;
                     }
                 }
@@ -173,8 +177,18 @@ impl MeshAssets {
         self.seen_materials = None;
     }
 
-    /// Reads the material `key` names again at the next [`MeshAssets::update`], from `reader` (#678): for a material
-    /// file that changed, or a key whose file appeared. A key that could not be loaded before is tried again.
+    /// Loads from `reader` from now on (#678): a newer view of the project, with its unsaved edits, such as a
+    /// material file Studio changed. What was loaded stays; call [`MeshAssets::reload_material`] for what changed.
+    pub fn read_from(&mut self, reader: AssetReader) {
+        if let Some(jobs) = &self.jobs {
+            // A stopped worker loads nothing more anyway.
+            let _ = jobs.send(Job::Reader(Box::new(reader)));
+        }
+    }
+
+    /// Reads the material `key` names again at the next [`MeshAssets::update`] (#678): for a material file that
+    /// changed ([`MeshAssets::read_from`] first, for unsaved edits), or a key whose file appeared. A key that could not
+    /// be loaded before is tried again.
     pub fn reload_material(&mut self, key: &str) {
         self.materials.remove(key);
         self.failed.remove(key);
@@ -214,6 +228,8 @@ impl MeshAssets {
                 self.failed.insert(Arc::clone(&key));
                 self.warn(format!("asset {key}: the asset loader has stopped"));
             }
+            // Only [`MeshAssets::read_from`] sends a reader, and not through here.
+            Some(Err(mpsc::SendError(Job::Reader(_)))) => {}
         }
     }
 
@@ -281,9 +297,13 @@ impl std::fmt::Debug for MeshAssets {
     }
 }
 
-/// Reads and decodes one asset (on the worker).
-fn load(reader: &mut AssetReader, job: Job) -> Loaded {
-    match job {
+/// Reads and decodes one asset (on the worker); a newer reader takes the old one's place and loads nothing.
+fn load(reader: &mut AssetReader, job: Job) -> Option<Loaded> {
+    Some(match job {
+        Job::Reader(newer) => {
+            *reader = *newer;
+            return None;
+        }
         Job::Mesh(key) => {
             let mesh = reader.load_mesh(&key).map(mesh_data);
             Loaded::Mesh(key, mesh)
@@ -301,7 +321,7 @@ fn load(reader: &mut AssetReader, job: Job) -> Loaded {
                 .map(|loaded| (material_params(&loaded.material), loaded.warnings));
             Loaded::Material(key, material)
         }
-    }
+    })
 }
 
 /// A decoded mesh as the renderer's vertices and indices.
@@ -316,5 +336,36 @@ fn mesh_data(mesh: MeshAsset) -> MeshData {
     MeshData {
         vertices,
         indices: mesh.indices,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use metallic_project::material::{BUILTIN_NAMES, builtin};
+
+    use super::*;
+
+    /// The renderer keeps its own copy of the built-in materials, its fallback for a name nobody gave parameters
+    /// for: it must say what the project's set says.
+    #[test]
+    fn the_renderer_s_built_in_materials_are_the_project_s() {
+        for name in BUILTIN_NAMES {
+            let from_project = material_params(&builtin(name).expect("built in"));
+            assert_eq!(MaterialParams::builtin(name), Some(from_project), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_material_s_colours_reach_the_renderer_in_linear_light() {
+        let material = Material {
+            color: [0.5, 1.0, 0.0],
+            emission: [1.0, 0.0, 0.0],
+            emission_strength: 2.0,
+            ..Material::default()
+        };
+        let params = material_params(&material);
+        assert!((params.tint[0] - 0.214).abs() < 0.01, "{:?}", params.tint);
+        assert_eq!((params.tint[1], params.tint[2]), (1.0, 0.0));
+        assert_eq!((params.emission, params.emissive), ([1.0, 0.0, 0.0], 2.0));
     }
 }

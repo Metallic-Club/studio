@@ -53,8 +53,7 @@ fn rich_game() -> (DataModel, Id, Id) {
         .unwrap();
     dm.set_by_name(part, "Color", Value::Color3(Color3::new(0.1, 0.2, 0.3)))
         .unwrap();
-    dm.set_by_name(part, "Material", Value::String("Wood".into()))
-        .unwrap();
+    dm.set_by_name(part, "Material", Value::String("Wood".into())).unwrap();
     dm.set_by_name(part, "Shape", enum_item(&dm, "PartShape", "Wedge"))
         .unwrap();
     dm.set_by_name(part, "Transparency", Value::Number(0.1)).unwrap();

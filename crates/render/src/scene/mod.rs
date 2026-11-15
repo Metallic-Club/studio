@@ -70,8 +70,8 @@ mod gpu;
 mod grid;
 mod instance;
 mod lights;
-mod materials;
 mod lists;
+mod materials;
 mod slots;
 mod sync;
 #[cfg(test)]

@@ -449,20 +449,6 @@ declare extern type EnumMouseBehavior_INTERNAL extends Enum with
     function GetEnumItems(self): { EnumMouseBehavior }
 end
 
---- What a part's surface is made of, which sets how it looks: its texture, shine and glow.
-declare extern type EnumMaterial extends EnumItem with end
-declare extern type EnumMaterial_INTERNAL extends Enum with
-    read Plastic: EnumMaterial
-    read SmoothPlastic: EnumMaterial
-    read Metal: EnumMaterial
-    read Wood: EnumMaterial
-    read Glass: EnumMaterial
-    read Neon: EnumMaterial
-    read Concrete: EnumMaterial
-    read Grass: EnumMaterial
-    function GetEnumItems(self): { EnumMaterial }
-end
-
 --- The shape of a Part: a box, a sphere, a cylinder or a ramp.
 declare extern type EnumPartShape extends EnumItem with end
 declare extern type EnumPartShape_INTERNAL extends Enum with
@@ -481,7 +467,6 @@ declare Enum: {
     GraphicsPreset: EnumGraphicsPreset_INTERNAL,
     AntiAliasingMode: EnumAntiAliasingMode_INTERNAL,
     MouseBehavior: EnumMouseBehavior_INTERNAL,
-    Material: EnumMaterial_INTERNAL,
     PartShape: EnumPartShape_INTERNAL,
 }
 
@@ -817,8 +802,8 @@ declare extern type BasePart extends WorldObject with
     Size: Vector3
     --- The part's colour.
     Color: Color3
-    --- What the part looks like it is made of, such as Wood, Metal or Neon.
-    Material: EnumMaterial
+    --- The material the part looks like it is made of: a material asset of the project, by its id or by its name such as "Wood" or "Neon" (the project's material of that name, else the built-in one). Empty is plain plastic.
+    Material: string
     --- How see-through the part is: 0 is solid, 1 is invisible.
     Transparency: number
     --- Whether the part casts a shadow.

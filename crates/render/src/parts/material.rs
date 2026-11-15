@@ -82,7 +82,11 @@ impl MaterialParams {
 
     fn row(self) -> MaterialRow {
         let unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
-        let emissive = if self.emissive.is_finite() { self.emissive.max(0.0) } else { 0.0 };
+        let emissive = if self.emissive.is_finite() {
+            self.emissive.max(0.0)
+        } else {
+            0.0
+        };
         MaterialRow {
             // NaN stays NaN in roughness and metalness: a broken material should show, not be hidden (the post
             // tests poison a row on purpose).
@@ -221,7 +225,11 @@ impl MaterialTable {
         self.rows.get(row).map(|r| {
             let emissive = r.emission[0].max(r.emission[1]).max(r.emission[2]);
             let emission = if emissive > 0.0 {
-                [r.emission[0] / emissive, r.emission[1] / emissive, r.emission[2] / emissive]
+                [
+                    r.emission[0] / emissive,
+                    r.emission[1] / emissive,
+                    r.emission[2] / emissive,
+                ]
             } else {
                 [1.0; 3]
             };
@@ -256,7 +264,17 @@ mod tests {
 
     #[test]
     fn every_builtin_material_has_parameters_in_range() {
-        for name in ["Plastic", "SmoothPlastic", "Metal", "Wood", "Glass", "Neon", "Concrete", "Grass", "Marble"] {
+        for name in [
+            "Plastic",
+            "SmoothPlastic",
+            "Metal",
+            "Wood",
+            "Glass",
+            "Neon",
+            "Concrete",
+            "Grass",
+            "Marble",
+        ] {
             let params = MaterialParams::builtin(name).unwrap();
             assert!((0.0..=1.0).contains(&params.roughness), "{name}");
             assert!((0.0..=1.0).contains(&params.metalness), "{name}");

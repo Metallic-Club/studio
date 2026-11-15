@@ -20,7 +20,10 @@ const MATERIALS: &str = "Assets/Materials/";
 
 /// `members` without the template's materials.
 fn without_materials(members: Vec<&str>) -> Vec<&str> {
-    members.into_iter().filter(|member| !member.starts_with(MATERIALS)).collect()
+    members
+        .into_iter()
+        .filter(|member| !member.starts_with(MATERIALS))
+        .collect()
 }
 
 fn scratch(test: &str) -> PathBuf {

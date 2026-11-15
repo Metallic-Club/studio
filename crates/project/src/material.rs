@@ -541,13 +541,17 @@ mod tests {
         assert!(read.warnings.is_empty(), "{:?}", read.warnings);
         assert_eq!(read.material.to_json(), text, "writing again gives the same bytes");
         assert!(text.find("\"roughness\"") < text.find("\"textures\""), "{text}");
-        assert!(text.contains("\"packed\": {\"metallic\":\"a\",\"texture\":\"00000000000000000000000000009abc\"}"), "{text}");
+        assert!(
+            text.contains("\"packed\": {\"metallic\":\"a\",\"texture\":\"00000000000000000000000000009abc\"}"),
+            "{text}"
+        );
         assert_eq!(material.references().len(), 3);
     }
 
     #[test]
     fn unknown_keys_and_bad_values_are_warnings_and_a_newer_format_is_refused() {
-        let read = Material::from_bytes(br#"{"format": 1, "roughness": "rough", "metallic": 0.5, "sparkle": 3}"#).unwrap();
+        let read =
+            Material::from_bytes(br#"{"format": 1, "roughness": "rough", "metallic": 0.5, "sparkle": 3}"#).unwrap();
         assert_eq!(read.material.metallic, 0.5);
         assert_eq!(read.material.roughness, DEFAULT_ROUGHNESS);
         assert_eq!(read.warnings.len(), 2, "{:?}", read.warnings);
@@ -556,7 +560,9 @@ mod tests {
             Err(MaterialError::TooNew { found: 9 })
         ));
         assert!(Material::from_bytes(b"[1]").is_err());
-        let wild = Material::from_bytes(br#"{"roughness": 7, "tile_size": -1}"#).unwrap().material;
+        let wild = Material::from_bytes(br#"{"roughness": 7, "tile_size": -1}"#)
+            .unwrap()
+            .material;
         assert_eq!((wild.roughness, wild.tile_size), (1.0, DEFAULT_TILE));
     }
 

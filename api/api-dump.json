@@ -2355,10 +2355,8 @@
         },
         {
           "name": "Material",
-          "type": {
-            "Enum": "Material"
-          },
-          "default": "Plastic",
+          "type": "String",
+          "default": "",
           "flags": [
             "VISUAL"
           ],
@@ -2367,7 +2365,7 @@
           "range": null,
           "wraps": false,
           "group": "Appearance",
-          "description": "What the part looks like it is made of, such as Wood, Metal or Neon.",
+          "description": "The material the part looks like it is made of: a material asset of the project, by its id or by its name such as \"Wood\" or \"Neon\" (the project's material of that name, else the built-in one). Empty is plain plastic.",
           "aliases": [],
           "derived_from": []
         },
@@ -3962,44 +3960,6 @@
         {
           "name": "LockCurrentPosition",
           "value": 2
-        }
-      ]
-    },
-    {
-      "name": "Material",
-      "description": "What a part's surface is made of, which sets how it looks: its texture, shine and glow.",
-      "items": [
-        {
-          "name": "Plastic",
-          "value": 0
-        },
-        {
-          "name": "SmoothPlastic",
-          "value": 1
-        },
-        {
-          "name": "Metal",
-          "value": 2
-        },
-        {
-          "name": "Wood",
-          "value": 3
-        },
-        {
-          "name": "Glass",
-          "value": 4
-        },
-        {
-          "name": "Neon",
-          "value": 5
-        },
-        {
-          "name": "Concrete",
-          "value": 6
-        },
-        {
-          "name": "Grass",
-          "value": 7
         }
       ]
     },

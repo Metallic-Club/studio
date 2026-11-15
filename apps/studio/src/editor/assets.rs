@@ -362,6 +362,19 @@ impl EditorState {
         Ok(path)
     }
 
+    /// Makes a new material in `parent` (#678): plain plastic, called Material and made unique. Returns its path.
+    pub fn new_material_file(&mut self, parent: &str) -> Result<String, String> {
+        use metallic_engine::metallic_project::material::{MATERIAL_EXTENSION, Material};
+        let name = unique_name(&self.project, parent, &format!("Material.{MATERIAL_EXTENSION}"));
+        let path = join(parent, &name);
+        self.project
+            .create_member(&path, Material::default().to_json())
+            .map_err(|error| error.to_string())?;
+        self.browser.reveal(parent);
+        self.assets = asset_rows(&self.project);
+        Ok(path)
+    }
+
     /// Makes a new script file of type `script` in `parent` (#677), named after its class and made unique, holding
     /// the type's starter code. Returns its path.
     pub fn new_script_file(&mut self, parent: &str, script: ScriptType) -> Result<String, String> {
