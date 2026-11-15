@@ -4,6 +4,7 @@
 //! dock's panels read and change through [`crate::dock::PanelContext`]. The layout itself is the dock's, not the
 //! editor's, so it outlives the project.
 
+pub mod assets;
 pub mod edit;
 pub mod history;
 pub mod multi;
@@ -38,6 +39,8 @@ pub struct EditorState {
     pub scene_ids: SceneIds,
     /// The asset index, by path, as the Assets panel lists it.
     pub assets: Vec<AssetRow>,
+    /// The Assets browser: its open folder, selection and search (#676).
+    pub browser: assets::AssetBrowser,
     /// The mesh and texture loader the viewport's renderer is fed from, until the renderer takes it.
     pub mesh_assets: Option<MeshAssets>,
     /// What is selected (#347).
@@ -95,6 +98,7 @@ impl EditorState {
             dm,
             scene_ids,
             assets,
+            browser: assets::AssetBrowser::default(),
             mesh_assets: Some(mesh_assets),
             selection: Selection::new(),
             history: History::new(Selection::new()),
