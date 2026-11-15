@@ -2689,11 +2689,12 @@ mod tests {
 
     /// Clicks the node labelled `label` twice, a frame apart: a double-click.
     fn double_click(harness: &mut Harness<'_, Test>, label: &str) {
+        // Both clicks timed (#662): the second 50 ms after the first, whatever the frames between them take on a slow
+        // machine; and a second after any click before, so the first is not taken as the second of a double click.
+        let time = harness.ctx.input(|input| input.time) + 1.0;
+        harness.input_mut().time = Some(time);
         harness.get_by_label(label).click();
         harness.step();
-        // The harness's clock jumps by whole repaint delays between frames; a double-click is two clicks 50 ms
-        // apart.
-        let time = harness.ctx.input(|input| input.time);
         harness.input_mut().time = Some(time + 0.05);
         harness.get_by_label(label).click();
         settle(harness);
@@ -3838,8 +3839,10 @@ mod tests {
         // Two clicks 50 ms apart, as `double_click` does (#436).
         let row = |harness: &Harness<'_, Test>| harness.get_by_role_and_label(Role::TreeItem, "Baseplate").rect();
         let at = row(&harness);
+        // Both clicks timed (#662), whatever the frames between them take.
+        let time = harness.ctx.input(|input| input.time) + 1.0;
+        harness.input_mut().time = Some(time);
         left_click(&mut harness, at);
-        let time = harness.ctx.input(|input| input.time);
         harness.input_mut().time = Some(time + 0.05);
         left_click(&mut harness, at);
         harness.input_mut().time = None;
@@ -7753,9 +7756,10 @@ mod tests {
         let model = toolbar_tab(&harness, "Model");
         let before = text_at(&harness, "Model");
         // A double-click starts renaming: the name stays where it was, with no frame around it (#326).
+        // The second click 50 ms after the first, both timed (#662), whatever the frames between them take.
+        let time = harness.ctx.input(|input| input.time) + 1.0;
+        harness.input_mut().time = Some(time);
         left_click(&mut harness, model);
-        // The second click 50 ms after the first, as `double_click` does.
-        let time = harness.ctx.input(|input| input.time);
         harness.input_mut().time = Some(time + 0.05);
         left_click(&mut harness, model);
         harness.input_mut().time = None;
