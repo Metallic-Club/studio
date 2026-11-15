@@ -5919,6 +5919,58 @@ mod tests {
         harness.get_by_label("Writes its arguments to the output, separated by spaces.");
     }
 
+    /// #652: typing a ModuleScript's name suggests it; taking it puts the name in and its `require` at the top.
+    #[test]
+    fn taking_a_module_adds_its_require() {
+        let mut harness = editing(settings_file("editor-script-module", None), "Script Module Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            let dm = &mut editor.dm;
+            let storage = dm
+                .service(dm.registry().class_id("ReplicatedStorage").unwrap())
+                .unwrap();
+            let module = dm.create(dm.registry().class_id("ModuleScript").unwrap()).unwrap();
+            dm.set_name(module, "cheese".into()).unwrap();
+            dm.set_parent(module, Some(storage)).unwrap();
+        }
+        add_bare_script(&mut harness, "Eat");
+        two_clicks(&mut harness, "Eat", 0.05);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.key_press(Key::Delete);
+        settle(&mut harness);
+        harness.event(egui::Event::Text("chee".to_owned()));
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::ListItem, "cheese");
+        harness.key_press(Key::Enter);
+        settle(&mut harness);
+        let text = harness
+            .state_mut()
+            .studio
+            .editor_mut()
+            .unwrap()
+            .project
+            .read_text("Scripts/Eat.luau")
+            .unwrap();
+        assert_eq!(
+            text,
+            "local cheese = require(game:GetService(\"ReplicatedStorage\").cheese)\n\ncheese"
+        );
+        // The cursor stayed after the name: typing goes on there.
+        harness.event(egui::Event::Text(".x".to_owned()));
+        settle(&mut harness);
+        let text = harness
+            .state_mut()
+            .studio
+            .editor_mut()
+            .unwrap()
+            .project
+            .read_text("Scripts/Eat.luau")
+            .unwrap();
+        assert!(text.ends_with("\n\ncheese.x"), "{text}");
+    }
+
     /// #545: a colour written in a script has a swatch before it; picking a colour in its picker writes it back in the
     /// same form.
     #[test]

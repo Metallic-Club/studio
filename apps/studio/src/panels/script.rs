@@ -528,6 +528,25 @@ fn take(ctx: &egui::Context, id: Id, text: &mut String, completion: &Completion,
     let start = text[..completion.replace.start.min(text.len())].chars().count();
     let end = text[..completion.replace.end.min(text.len())].chars().count();
     code::view::replace_chars(ctx, id, &mut state, text, start..end, &item.label);
+    // A ModuleScript (#652): its `require` near the top, unless the file has it already; the cursor stays after the
+    // name.
+    if let Some(line) = &item.require
+        && !text.lines().any(|row| row.trim() == line)
+    {
+        let (at, with) = complete::require_insertion(text, line);
+        let before = text[..at].chars().count();
+        text.insert_str(at, &with);
+        let cursor = start + item.label.chars().count();
+        let moved = if before <= start {
+            cursor + with.chars().count()
+        } else {
+            cursor
+        };
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(CCursor::new(moved))));
+        state.store(ctx, id);
+    }
 }
 
 /// Draws the suggestions with their top-left at `place`, `selected` lit and its description under them. Returns the
