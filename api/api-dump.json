@@ -3244,6 +3244,40 @@
       "methods": [],
       "signals": [],
       "callbacks": []
+    },
+    {
+      "name": "SpawnLocation",
+      "parent": "Part",
+      "description": "A part that marks where players appear when they join or respawn.",
+      "category": "Parts",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Enabled",
+          "type": "Bool",
+          "default": true,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Behavior",
+          "description": "Whether players can appear on this spawn location. A disabled one is an ordinary part.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
     }
   ],
   "enums": [

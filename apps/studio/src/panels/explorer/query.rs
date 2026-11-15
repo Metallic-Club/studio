@@ -479,8 +479,9 @@ mod tests {
     #[test]
     fn class_name_is_exact_in_any_letter_case() {
         let dm = game();
-        assert_eq!(found(&dm, "ClassName=Part"), ["Baseplate", "SpawnLocation", "Panel"]);
-        assert_eq!(found(&dm, "class=part"), ["Baseplate", "SpawnLocation", "Panel"]);
+        assert_eq!(found(&dm, "ClassName=Part"), ["Baseplate", "Panel"]);
+        assert_eq!(found(&dm, "class=part"), ["Baseplate", "Panel"]);
+        assert_eq!(found(&dm, "IsA=Part"), ["Baseplate", "SpawnLocation", "Panel"]);
         // Exact: a PointLight is not a Light, and no class is called "Par".
         assert!(found(&dm, "ClassName=Light").is_empty());
         assert!(found(&dm, "ClassName=Par").is_empty());
@@ -578,7 +579,7 @@ mod tests {
     fn every_word_and_filter_must_hold() {
         let dm = game();
         assert_eq!(found(&dm, "spawn IsA=BasePart"), ["SpawnLocation"]);
-        assert_eq!(found(&dm, "part Anchored=true"), ["Baseplate", "SpawnLocation"]);
+        assert_eq!(found(&dm, "part Anchored=true"), ["Baseplate"]);
         assert_eq!(found(&dm, "IsA=BasePart Anchored=false Transparency>0"), ["Panel"]);
         assert!(found(&dm, "IsA=BasePart IsA=Light").is_empty());
         assert!(found(&dm, "teleporter Anchored=true").is_empty());

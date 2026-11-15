@@ -4833,7 +4833,13 @@ mod tests {
             harness.state_mut().studio.editor_mut().unwrap().explorer.query(),
             "ClassName=Part"
         );
-        harness.get_by_role_and_label(Role::TreeItem, "SpawnLocation");
+        harness.get_by_role_and_label(Role::TreeItem, "Baseplate");
+        assert!(
+            harness
+                .query_by_role_and_label(Role::TreeItem, "SpawnLocation")
+                .is_none(),
+            "a SpawnLocation is not of class Part"
+        );
         assert!(harness.query_by_role_and_label(Role::TreeItem, "Camera").is_none());
     }
 
