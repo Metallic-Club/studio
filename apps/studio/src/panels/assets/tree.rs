@@ -16,6 +16,14 @@ use crate::theme::{current_colors, fonts};
 const INDENT: f32 = 14.0;
 /// The caret's width.
 const CARET: f32 = 16.0;
+/// The room between the tree's left edge and its rows (#736).
+const LEFT: f32 = space::S1;
+
+/// Where a row at `depth` starts its caret, in a tree whose left edge is `left` (#736): the root (depth 0) has no
+/// caret, so the first level's carets start at the edge, under the root's icon, and each level is [`INDENT`] further.
+fn indent(left: f32, depth: usize) -> f32 {
+    left + LEFT + depth.saturating_sub(1) as f32 * INDENT
+}
 
 /// One row of the tree.
 struct Row {
@@ -103,8 +111,10 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
     let open = is_folder && entry.path == editor.browser.open && editor.browser.query.trim().is_empty();
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::click());
     response.widget_info(|| WidgetInfo::selected(Role::TreeItem, true, open, name));
-    let indent = rect.left() + space::S3 + row.depth as f32 * INDENT;
-    let caret = Rect::from_min_size(pos2(indent, rect.top()), vec2(CARET, rect.height()));
+    let caret = Rect::from_min_size(
+        pos2(indent(rect.left(), row.depth), rect.top()),
+        vec2(CARET, rect.height()),
+    );
     let caret_response = (row.has_children && !is_root).then(|| {
         let response = ui.interact(caret, response.id.with("caret"), Sense::click());
         let verb = if row.expanded { "Collapse" } else { "Expand" };
@@ -155,7 +165,12 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
             EntryKind::Missing(_) => colors.accent,
             _ => icon.color(&colors),
         };
-        let x = caret.right() + space::S1;
+        // The root has no caret, so its icon starts where its children's carets do.
+        let x = if is_root {
+            caret.left()
+        } else {
+            caret.right() + space::S1
+        };
         icons::paint_at(
             ui.painter(),
             pos2(x, rect.center().y),
