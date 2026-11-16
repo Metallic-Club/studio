@@ -612,9 +612,9 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
 pub(crate) fn shown_entries(editor: &EditorState) -> Vec<Entry> {
     let query = editor.browser.query.trim();
     if query.is_empty() {
-        browser::children(&editor.project, &editor.browser.open)
+        editor.asset_children(&editor.browser.open)
     } else {
-        browser::search(&editor.project, query)
+        editor.asset_search(query)
     }
 }
 
