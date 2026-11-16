@@ -16,7 +16,8 @@ const DISTANCE: f32 = 4.2;
 /// The preview's renderer, its little game, and the texture egui shows.
 #[derive(Default)]
 pub struct MaterialPreview {
-    scene: SceneRenderer,
+    /// Boxed, as the viewport's are: it lives in Studio's window, which must fit the main thread's stack.
+    scene: Box<SceneRenderer>,
     /// The ball's game and the ball.
     game: Option<(DataModel, Id)>,
     attached: bool,

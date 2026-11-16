@@ -17,7 +17,10 @@ const FILTER: wgpu::FilterMode = wgpu::FilterMode::Linear;
 /// project opened later is drawn by the same renderer, its pipelines compiled once.
 #[derive(Debug, Default)]
 pub struct ViewportRenderer {
-    scene: SceneRenderer,
+    // Every renderer here is boxed: a `SceneRenderer` is large, and Studio's window holds this one, the Server view's,
+    // the material preview's and the thumbnails'. Inline, they made the window too big for the main thread's stack,
+    // which overflowed at startup on Windows (1 MB) once the thumbnails' renderer was added (#681).
+    scene: Box<SceneRenderer>,
     /// Whether the renderer draws into a viewport target yet.
     attached: bool,
     /// Why it could not attach; it does not try again.
@@ -26,7 +29,7 @@ pub struct ViewportRenderer {
     /// scene, else the session drawn in the Server view).
     texture: Option<(egui::TextureId, (u64, u64))>,
     /// The Server view's renderer while a game runs, with the session it draws (ADR 0011 §8).
-    server: Option<(u64, SceneRenderer)>,
+    server: Option<(u64, Box<SceneRenderer>)>,
     /// The game drawn last ([`metallic_engine::metallic_core::DataModel::uid`]): another is a project opened.
     game: Option<u64>,
     /// The Rendering settings last applied.
@@ -114,7 +117,7 @@ impl ViewportRenderer {
         let source = match editor.play.as_mut() {
             Some(session) => {
                 if self.server.as_ref().map(|(number, _)| *number) != Some(session.number) {
-                    let mut scene = SceneRenderer::new(Default::default());
+                    let mut scene = Box::new(SceneRenderer::new(Default::default()));
                     if let Some(graphics) = &self.graphics {
                         scene.set_graphics(graphics.clone());
                     }
