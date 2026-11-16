@@ -611,10 +611,7 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
             Ok(())
         }
         Act::CopyPaths(paths) => {
-            ui.ctx().copy_text(paths.join(
-                "
-",
-            ));
+            ui.ctx().copy_text(paths.join("\n"));
             Ok(())
         }
     };
