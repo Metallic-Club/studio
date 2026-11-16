@@ -173,6 +173,11 @@ impl Projects {
         self.dialog.pick_font()
     }
 
+    /// Asks for files to import into the project with the file dialog (#706).
+    pub fn pick_files(&mut self) -> Vec<std::path::PathBuf> {
+        self.dialog.pick_files()
+    }
+
     /// The list the page shows.
     pub fn view(&self) -> View {
         self.view

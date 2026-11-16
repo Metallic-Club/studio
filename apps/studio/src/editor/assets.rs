@@ -392,6 +392,31 @@ pub fn unique_name(project: &Project, folder: &str, name: &str) -> String {
         .unwrap_or_else(|| name.to_owned())
 }
 
+/// What an import did (#706): what it brought in, and what it could not, with why.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Imported {
+    /// The files and folders made, by path in the project: each one imported, not what is inside a folder.
+    pub paths: Vec<String>,
+    /// Each file or folder it could not bring in, by its name, with why.
+    pub failed: Vec<String>,
+}
+
+impl Imported {
+    /// What the browser says when not everything came in: `None` when everything did.
+    pub fn error(&self) -> Option<String> {
+        match self.failed.as_slice() {
+            [] => None,
+            [one] => Some(format!("Could not import {one}.")),
+            [first, rest @ ..] => Some(format!("Could not import {first}, and {} more.", rest.len())),
+        }
+    }
+}
+
+/// The most files one import brings in, so a folder dropped by mistake (a whole drive) does not fill the project.
+pub const IMPORT_LIMIT: usize = 10_000;
+/// The deepest folder an import goes into.
+pub const IMPORT_DEPTH: usize = 32;
+
 /// Whether `name` can be a file or folder name: not empty, no `/` or `\`, not `.` or `..`.
 fn valid_name(name: &str) -> Result<(), String> {
     if name.trim().is_empty() {
@@ -560,6 +585,77 @@ impl EditorState {
         let path = join(parent, &name);
         self.project.create_folder(&path).map_err(|error| error.to_string())?;
         self.browser.reveal(parent);
+        Ok(path)
+    }
+
+    /// Copies the files and folders at `sources` on the computer into the project's `folder` (#706): each a new asset
+    /// (or folder, with what is in it), named as it is, made unique where the name is taken. Shows the folder, and
+    /// selects what came in. Up to [`IMPORT_LIMIT`] files; what cannot be read or added is noted and skipped.
+    pub fn import_files(&mut self, folder: &str, sources: &[std::path::PathBuf]) -> Imported {
+        let mut imported = Imported::default();
+        let mut files = 0;
+        for source in sources {
+            match self.import_one(folder, source, &mut files, 0) {
+                Ok(path) => imported.paths.push(path),
+                Err(why) => imported.failed.push(why),
+            }
+        }
+        self.assets = asset_rows(&self.project);
+        if !imported.paths.is_empty() {
+            if self.browser.open != folder || !self.browser.query.is_empty() {
+                self.browser.open_folder(folder);
+            }
+            self.browser.reveal(folder);
+            self.browser.selected = imported.paths.iter().cloned().collect();
+        }
+        imported
+    }
+
+    /// Imports the file or folder `source` into `folder` (see [`EditorState::import_files`]), counting the files in
+    /// `files`, `depth` folders down. Returns its path, or its name and why it could not come in.
+    fn import_one(
+        &mut self,
+        folder: &str,
+        source: &std::path::Path,
+        files: &mut usize,
+        depth: usize,
+    ) -> Result<String, String> {
+        let shown = source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| source.display().to_string());
+        let name = unique_name(&self.project, folder, &shown);
+        valid_name(&name).map_err(|why| format!("{shown} ({why})"))?;
+        let path = join(folder, &name);
+        if source.is_dir() {
+            // Deep enough for any real folder; a link back up the tree stops here rather than going round for ever.
+            if depth >= IMPORT_DEPTH {
+                return Err(format!("{shown} (folders more than {IMPORT_DEPTH} deep)"));
+            }
+            self.project
+                .create_folder(&path)
+                .map_err(|error| format!("{shown} ({error})"))?;
+            let mut inside: Vec<std::path::PathBuf> = std::fs::read_dir(source)
+                .map_err(|error| format!("{shown} ({error})"))?
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .collect();
+            inside.sort();
+            for item in inside {
+                // What is inside that cannot come in is left out; the folder still does.
+                if let Err(why) = self.import_one(&path, &item, files, depth + 1) {
+                    log::warn!("assets: could not import {why}");
+                }
+            }
+            return Ok(path);
+        }
+        if *files >= IMPORT_LIMIT {
+            return Err(format!("{shown} (more than {IMPORT_LIMIT} files at once)"));
+        }
+        let bytes = std::fs::read(source).map_err(|error| format!("{shown} ({error})"))?;
+        self.project
+            .create_member(&path, bytes)
+            .map_err(|error| format!("{shown} ({error})"))?;
+        *files += 1;
         Ok(path)
     }
 

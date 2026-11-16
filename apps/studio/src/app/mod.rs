@@ -948,11 +948,31 @@ impl Studio {
         }
     }
 
+    /// Asks for files with the file dialog and imports them into the project's `folder` (#706), showing them in the
+    /// Assets browser; what could not come in is said under its toolbar.
+    fn import_into(&mut self, folder: &str) {
+        let files = self.projects.pick_files();
+        if files.is_empty() {
+            return;
+        }
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        let imported = editor.import_files(folder, &files);
+        editor.browser.error = imported.error();
+        self.dock.open(crate::panels::ids::ASSETS);
+    }
+
     /// Does what a menu item asked for.
     fn menu_action(&mut self, action: MenuAction) {
         match action {
             MenuAction::Save => self.save(),
             MenuAction::Close => self.show_projects(),
+            MenuAction::Import => {
+                if let Some(folder) = self.editor().map(|editor| editor.browser.open.clone()) {
+                    self.import_into(&folder);
+                }
+            }
             MenuAction::Toggle(id) => self.dock.toggle(id),
             MenuAction::ResetLayout => self.reset_layout(),
             MenuAction::Settings => self.toggle_settings(),

@@ -904,6 +904,14 @@ impl FileDialog for NativeDialog {
             .set_parent(&*self.window)
             .pick_file()
     }
+
+    fn pick_files(&mut self) -> Vec<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Import into the project")
+            .set_parent(&*self.window)
+            .pick_files()
+            .unwrap_or_default()
+    }
 }
 
 /// Every monitor's area, in physical pixels: (left, top, width, height).
