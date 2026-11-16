@@ -23,6 +23,8 @@ const GAP: f32 = space::S2;
 const ICON: f32 = 30.0;
 /// The height of a tile's icon area, above its name.
 const ICON_AREA: f32 = 44.0;
+/// The room between the tiles and the area's edges (#700), so none sits flat against them.
+const PAD: f32 = space::S3;
 
 /// Draws the tiles.
 pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mut Vec<Act>) {
@@ -66,11 +68,12 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
         ground_drop(acts);
         return;
     }
-    let columns = (((area.width() + GAP) / (TILE.x + GAP)).floor() as usize).max(1);
+    let columns = (((area.width() - 2.0 * PAD + GAP) / (TILE.x + GAP)).floor() as usize).max(1);
     let lines = entries.len().div_ceil(columns);
     ScrollArea::vertical()
         .id_salt("assets.tiles")
         .auto_shrink([false, false])
+        .content_margin(egui::Margin::same(PAD as i8))
         .show_rows(ui, TILE.y + GAP, lines, |ui, range| {
             for line in range {
                 ui.horizontal(|ui| {

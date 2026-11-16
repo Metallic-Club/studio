@@ -538,3 +538,13 @@ fn tiles_have_squarer_corners() {
         .expect("the selected tile is filled");
     assert_eq!(fill, egui::CornerRadius::same(radius::TILE));
 }
+
+/// #700: the tiles keep some room from the edges of the area they are in.
+#[test]
+fn tiles_keep_room_from_the_edges() {
+    let harness = browsing("assets-padding");
+    let grid = harness.get_by_role_and_label(Role::Grid, "Assets").rect();
+    let first = harness.get_by_role_and_label(Role::GridCell, "Assets").rect();
+    assert!(first.left() - grid.left() >= 6.0, "{first:?} in {grid:?}");
+    assert!(first.top() - grid.top() >= 6.0, "{first:?} in {grid:?}");
+}
