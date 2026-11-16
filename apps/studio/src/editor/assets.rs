@@ -51,6 +51,8 @@ pub struct AssetBrowser {
     pub sort: Sort,
     /// The list's column widths (#738), dragged from its header. Kept while Studio runs.
     pub columns: ColumnWidths,
+    /// The file or folder the inspector was closed on (#740): it stays closed until something else is selected.
+    pub inspector_closed: Option<String>,
     /// A folder to import files into, asked for by the browser for Studio to ask which files (#707).
     pub import_request: Option<String>,
 }
@@ -218,6 +220,7 @@ impl Default for AssetBrowser {
             view: View::Grid,
             sort: Sort::default(),
             columns: ColumnWidths::default(),
+            inspector_closed: None,
             import_request: None,
         }
     }
@@ -495,6 +498,22 @@ impl AssetBrowser {
         self.reveal(folder);
     }
 
+    /// The file or folder the inspector shows (#740): the one selected, unless the inspector was closed on it.
+    pub fn inspected(&self) -> Option<&str> {
+        let mut selected = self.selected.iter();
+        let one = selected.next()?;
+        let closed = self.inspector_closed.as_deref() == Some(one.as_str());
+        (selected.next().is_none() && !closed).then_some(one.as_str())
+    }
+
+    /// Forgets that the inspector was closed once the selection is something else, so the next one shows (#740).
+    pub fn reopen_inspector(&mut self) {
+        let still = self.selected.len() == 1 && self.selected.first() == self.inspector_closed.as_ref();
+        if !still {
+            self.inspector_closed = None;
+        }
+    }
+
     /// Sorts the list by `column` (#699): the other way when it is sorted by it already, else that way up.
     pub fn sort_by(&mut self, column: Column) {
         self.sort = if self.sort.column == column {
@@ -587,6 +606,9 @@ impl AssetBrowser {
                 .iter()
                 .map(|path| remap(path).unwrap_or_else(|| path.clone()))
                 .collect();
+        }
+        if let Some(closed) = &mut self.inspector_closed {
+            map(closed);
         }
         if let Some(anchor) = &mut self.anchor {
             map(anchor);
