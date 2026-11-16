@@ -108,7 +108,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `ui.collapse` | An expanded tree item or section. | Interface | [`interface/chevron-down.svg`](https://lucide.dev/icons/chevron-down) | `ui.collapse.svg`, `ui.collapse.png` |
 | `ui.palette` | A colour of your own. | Interface | [`interface/palette.svg`](https://lucide.dev/icons/palette) | `ui.palette.svg`, `ui.palette.png` |
 | `ui.add` | Add another. | Interface | [`interface/plus.svg`](https://lucide.dev/icons/plus) | `ui.add.svg`, `ui.add.png` |
-| `ui.apply_material` | Give the material to the selected parts (#703), on a material's tile. | Interface | [`interface/paint-bucket.svg`](https://lucide.dev/icons/paint-bucket) | `ui.apply_material.svg`, `ui.apply_material.png` |
+| `ui.apply_material` | Give the material to the selected parts (#703), on a material's tile: a pointer clicking (#733). | Interface | [`interface/mouse-pointer-click.svg`](https://lucide.dev/icons/mouse-pointer-click) | `ui.apply_material.svg`, `ui.apply_material.png` |
 | `ui.grid_view` | Show the Assets browser's folder as tiles (#699). | Interface | [`interface/layout-grid.svg`](https://lucide.dev/icons/layout-grid) | `ui.grid_view.svg`, `ui.grid_view.png` |
 | `ui.list_view` | Show the Assets browser's folder as a list (#699). | Interface | [`interface/list.svg`](https://lucide.dev/icons/list) | `ui.list_view.svg`, `ui.list_view.png` |
 | `ui.import` | Import files into the project (#707). | Interface | [`interface/import.svg`](https://lucide.dev/icons/import) | `ui.import.svg`, `ui.import.png` |

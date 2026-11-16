@@ -365,8 +365,8 @@ icons! {
     UiPalette = "ui.palette", Interface, "palette";
     /// Add another.
     UiAdd = "ui.add", Interface, "plus";
-    /// Give the material to the selected parts (#703), on a material's tile.
-    UiApplyMaterial = "ui.apply_material", Interface, "paint-bucket";
+    /// Give the material to the selected parts (#703), on a material's tile: a pointer clicking (#733).
+    UiApplyMaterial = "ui.apply_material", Interface, "mouse-pointer-click";
     /// Show the Assets browser's folder as tiles (#699).
     UiGridView = "ui.grid_view", Interface, "layout-grid";
     /// Show the Assets browser's folder as a list (#699).
