@@ -518,3 +518,23 @@ fn the_search_field_is_wide() {
         .rect();
     assert!(narrow.width() < field.width(), "it shrinks with the panel: {narrow:?}");
 }
+
+/// #698: a selected tile's fill has the browser's squarer corners.
+#[test]
+fn tiles_have_squarer_corners() {
+    use crate::theme::tokens::radius;
+    let mut harness = browsing("assets-corners");
+    harness.get_by_role_and_label(Role::GridCell, "Assets").click();
+    settle(&mut harness);
+    let tile = harness.get_by_role_and_label(Role::GridCell, "Assets").rect();
+    let fill = harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) if rect.rect == tile => Some(rect.corner_radius),
+            _ => None,
+        })
+        .expect("the selected tile is filled");
+    assert_eq!(fill, egui::CornerRadius::same(radius::TILE));
+}

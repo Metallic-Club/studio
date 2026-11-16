@@ -428,7 +428,7 @@ fn back_button(ui: &mut Ui, editor: &EditorState, acts: &mut Vec<Act>) {
     back.widget_info(|| WidgetInfo::labeled(Role::Button, can_back, "Back"));
     if back.hovered() && can_back {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface);
+            .rect_filled(rect, CornerRadius::same(radius::TILE), p.surface);
     }
     let ink = if can_back { p.text } else { p.text.gamma_multiply(0.48) };
     icons::paint_at(
@@ -480,12 +480,12 @@ fn breadcrumbs(ui: &mut Ui, editor: &EditorState, acts: &mut Vec<Act>) {
         let dropping = drop_target(&crumb, folder);
         if crumb.hovered() || dropping {
             ui.painter()
-                .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface);
+                .rect_filled(rect, CornerRadius::same(radius::TILE), p.surface);
         }
         if dropping {
             let stroke = Stroke::new(2.0, colors.accent);
             ui.painter()
-                .rect_stroke(rect, CornerRadius::same(radius::ITEM), stroke, egui::StrokeKind::Inside);
+                .rect_stroke(rect, CornerRadius::same(radius::TILE), stroke, egui::StrokeKind::Inside);
         }
         let ink = if current || crumb.hovered() { p.text } else { p.muted };
         let at = pos2(rect.left() + space::S2, rect.center().y - galley.size().y / 2.0);
