@@ -197,7 +197,7 @@ impl EditorState {
         Ok(())
     }
 
-    /// Gives every selected part the material `id` (#680: a click on a material in the Assets panel), as one undo
+    /// Gives every selected part the material `id` (#703: the button on a material's tile), as one undo
     /// step of the scene. Returns how many parts took it; none when nothing selected is a part.
     pub fn apply_material(&mut self, id: AssetId) -> usize {
         let value = Value::String(id.to_string().into());

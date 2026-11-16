@@ -1,6 +1,6 @@
 //! The material editor (#680): a double-click on a material opens its tab; edits are written into its file and undone
-//! in the tab; a texture slot takes a project picture; a click on a material gives it to the selected parts, and a
-//! material dropped on a part in the viewport gives it to that part.
+//! in the tab; a texture slot takes a project picture; a click on a material only selects it (#735), and a material
+//! dropped on a part in the viewport gives it to that part.
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -109,35 +109,23 @@ fn a_material_opens_in_a_tab_and_its_edits_are_written_and_undone() {
     assert_eq!(editor(&mut harness).read_material(id).unwrap(), shiny);
 }
 
+/// #735: a click on a material selects it and leaves the selected parts as they are.
 #[test]
-fn a_click_gives_the_selected_parts_a_material_and_undo_takes_it_back() {
+fn a_click_on_a_material_only_selects_it() {
     let mut harness = materials("material-editor-apply", "Neon");
-    let neon = material_id(&mut harness, "Neon");
     let part = baseplate(&mut harness);
     let before = editor(&mut harness).dm.get_by_name(part, "Material").unwrap();
-
-    // With nothing selected, a click changes nothing.
-    harness.get_by_role_and_label(Role::GridCell, "Neon").click();
-    settle(&mut harness);
-    assert_eq!(
-        editor(&mut harness).dm.get_by_name(part, "Material"),
-        Ok(before.clone())
-    );
-
     editor(&mut harness).select(Some(part));
-    // A second after the first click, so this one is no double click.
-    let later = harness.ctx.input(|input| input.time) + 1.0;
-    harness.input_mut().time = Some(later);
     settle(&mut harness);
     harness.get_by_role_and_label(Role::GridCell, "Neon").click();
-    settle(&mut harness);
-    assert_eq!(
-        editor(&mut harness).dm.get_by_name(part, "Material"),
-        Ok(Value::String(neon.to_string().into()))
-    );
-    harness.state_mut().studio.menu_action(MenuAction::Undo);
     settle(&mut harness);
     assert_eq!(editor(&mut harness).dm.get_by_name(part, "Material"), Ok(before));
+    assert!(
+        editor(&mut harness)
+            .browser
+            .selected
+            .contains("Assets/Materials/Neon.material")
+    );
 }
 
 #[test]
