@@ -737,3 +737,69 @@ fn a_material_s_tile_has_a_button_that_applies_it() {
         "one undo step"
     );
 }
+
+/// #704: the pointer on a script file's tile shows a button that adds a script running it inside each selected object,
+/// as one undo step, selecting the new scripts; greyed out with nothing selected.
+#[test]
+fn a_script_file_s_tile_has_a_button_that_adds_it() {
+    let mut harness = browsing("assets-add-script");
+    editor(&mut harness).browser.open_folder("Scripts");
+    settle(&mut harness);
+    let label = "Add Door to the selected objects";
+    hover_tile(&mut harness, "Door");
+    let button = harness.get_by_role_and_label(Role::Button, label);
+    assert!(
+        egui_kittest::kittest::NodeT::accesskit_node(&button).is_disabled(),
+        "nothing is selected"
+    );
+
+    let part = baseplate(&mut harness);
+    let editor_state = editor(&mut harness);
+    let workspace = editor_state.dm.parent(part).unwrap().unwrap();
+    let spawn = editor_state
+        .dm
+        .find_first_child(workspace, "SpawnLocation", false)
+        .unwrap()
+        .unwrap();
+    editor_state.select(Some(part));
+    editor_state.selection.add(spawn);
+    settle(&mut harness);
+    hover_tile(&mut harness, "Door");
+    harness.get_by_role_and_label(Role::Button, label).click();
+    settle(&mut harness);
+    let editor_state = editor(&mut harness);
+    let scripts: Vec<_> = [part, spawn]
+        .into_iter()
+        .map(|parent| {
+            let door = editor_state
+                .dm
+                .find_first_child(parent, "Door", false)
+                .unwrap()
+                .expect("a script inside each");
+            assert_eq!(editor_state.dm.class_name(door).unwrap(), "Script");
+            assert_eq!(
+                editor_state.dm.get_by_name(door, "Source"),
+                Ok(Value::String("Scripts/Door.server.luau".into()))
+            );
+            door
+        })
+        .collect();
+    assert_eq!(
+        editor_state.selection.ids(),
+        scripts.as_slice(),
+        "the new scripts are selected"
+    );
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    settle(&mut harness);
+    let editor_state = editor(&mut harness);
+    for parent in [part, spawn] {
+        assert!(
+            editor_state
+                .dm
+                .find_first_child(parent, "Door", false)
+                .unwrap()
+                .is_none(),
+            "one undo step"
+        );
+    }
+}

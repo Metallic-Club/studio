@@ -273,6 +273,8 @@ pub(crate) enum Act {
     CopyPaths(Vec<String>),
     /// Give the material at this path to the selected parts (#703).
     ApplyMaterial(String),
+    /// Add a script running the file at this path to each selected object (#704).
+    AddScript(String),
     /// Back to the folder before.
     Back,
 }
@@ -621,6 +623,7 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
             Some(_) => Err("Select a part to give it the material.".to_owned()),
             None => Err(format!("{} is not an asset yet.", browser::file_name(&path))),
         },
+        Act::AddScript(path) => editor.add_script_to_selection(&path).map(|_| ()),
     };
     editor.browser.error = result.err();
     ui.ctx().request_repaint();

@@ -208,20 +208,26 @@ fn tile(
         }
     }
     // A material's tile has a button at its top right while the pointer is on it, which gives the material to the
-    // selected parts (#703).
-    if let EntryKind::File(AssetKind::Material) = entry.kind {
-        let enabled = editor.can_apply_material();
-        let label = format!("Apply {name} to the selected parts");
-        if corner_button(
-            ui,
-            rect,
-            response.id.with("apply"),
+    // selected parts (#703); a script file's, one that adds a script running it to the selected objects (#704).
+    let corner = match entry.kind {
+        EntryKind::File(AssetKind::Material) => Some((
             Icon::UiApplyMaterial,
-            &label,
-            enabled,
-        ) {
-            acts.push(Act::ApplyMaterial(entry.path.clone()));
-        }
+            format!("Apply {name} to the selected parts"),
+            editor.can_apply_material(),
+            Act::ApplyMaterial(entry.path.clone()),
+        )),
+        EntryKind::File(AssetKind::Script(_)) => Some((
+            Icon::UiAdd,
+            format!("Add {name} to the selected objects"),
+            editor.can_add_script(),
+            Act::AddScript(entry.path.clone()),
+        )),
+        _ => None,
+    };
+    if let Some((icon, label, enabled, act)) = corner
+        && corner_button(ui, rect, response.id.with("corner"), icon, &label, enabled)
+    {
+        acts.push(act);
     }
     let response = response.on_hover_text(hover_text(editor, entry));
     if let Some(paths) = dropped_on(&response).filter(|_| folder) {
