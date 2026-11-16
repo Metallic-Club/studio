@@ -247,6 +247,8 @@ fn module_items(env: &Env<'_>, named: &[String]) -> Vec<Item> {
                 return None;
             }
             let (path, shown) = require_path(dm, root, id)?;
+            // From the script itself when the module is beside it or inside it (#693), as a Roblox script does.
+            let path = relative_path(dm, env.script, id).unwrap_or(path);
             let line = format!("local {name} = require({path})");
             Some(Item {
                 label: name.to_owned(),
@@ -257,6 +259,28 @@ fn module_items(env: &Env<'_>, named: &[String]) -> Vec<Item> {
             })
         })
         .collect()
+}
+
+/// How the script `script` reaches the module `id` from itself (#693): `script.cheese` for one inside it,
+/// `script.Parent.cheese` for one beside it (in the same parent), with `:WaitForChild("…")` for a name that is not a
+/// Luau name; `None` for a module anywhere else, which [`require_path`] reaches from `game`.
+fn relative_path(dm: &DataModel, script: Option<Id>, id: Id) -> Option<String> {
+    let script = script?;
+    let parent = dm.parent(id).ok()??;
+    let base = if parent == script {
+        "script"
+    } else if dm.parent(script).ok()? == Some(parent) {
+        "script.Parent"
+    } else {
+        return None;
+    };
+    let name = dm.name(id).ok()?;
+    Some(if is_identifier(name) {
+        format!("{base}.{name}")
+    } else {
+        let quoted = name.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("{base}:WaitForChild(\"{quoted}\")")
+    })
 }
 
 /// How code reaches the instance `id` from `game` (`root`): `game:GetService("ReplicatedStorage").Folder.cheese`, with
@@ -787,6 +811,40 @@ mod tests {
             util.require.as_deref(),
             Some(r#"local Util = require(game:GetService("ReplicatedStorage"):WaitForChild("my folder").Util)"#)
         );
+    }
+
+    /// #693: a module beside the script is required from `script.Parent`, one inside it from `script`; one elsewhere
+    /// from `game` as before.
+    #[test]
+    fn a_module_near_the_script_is_required_from_it() {
+        let mut dm = game();
+        let class = |dm: &DataModel, name: &str| dm.registry().class_id(name).unwrap();
+        let tools = add_module(&mut dm, "Food", "Tools");
+        let folder = dm.parent(tools).unwrap().unwrap();
+        let script = dm.create(class(&dm, "LocalScript")).unwrap();
+        dm.set_name(script, "Hud".into()).unwrap();
+        dm.set_parent(script, Some(folder)).unwrap();
+        let inner = dm.create(class(&dm, "ModuleScript")).unwrap();
+        dm.set_name(inner, "inner".into()).unwrap();
+        dm.set_parent(inner, Some(script)).unwrap();
+        add_module(&mut dm, "Other", "far");
+        let require = |label: &str| {
+            items(&dm, &format!("{}|", &label[..2]), Some(script))
+                .into_iter()
+                .find(|item| item.label == label)
+                .and_then(|item| item.require)
+                .unwrap_or_else(|| panic!("{label} is suggested"))
+        };
+        assert_eq!(require("Tools"), "local Tools = require(script.Parent.Tools)");
+        assert_eq!(require("inner"), "local inner = require(script.inner)");
+        assert_eq!(
+            require("far"),
+            r#"local far = require(game:GetService("ReplicatedStorage").Other.far)"#
+        );
+        // Without a script (a file no script runs), from `game`.
+        let detached = items(&dm, "To|", None);
+        let tools_item = detached.iter().find(|item| item.label == "Tools").unwrap();
+        assert!(tools_item.require.as_deref().unwrap().contains("GetService"));
     }
 
     /// #652: the `require` goes after the comments, requires and services the file starts with, else on top.
