@@ -622,9 +622,9 @@ declare extern type Lighting extends Instance with
     ExposureCompensation: number
     --- The colour things fade to in the distance, and the sky becomes, when there is fog.
     FogColor: Color3
-    --- How far away, in studs, the fog hides everything. At 100000, the most and the default, there is no fog.
+    --- How far away, in units, the fog hides everything. At 100000, the most and the default, there is no fog.
     FogEnd: number
-    --- How far away, in studs, the fog begins: nearer than this, nothing is fogged.
+    --- How far away, in units, the fog begins: nearer than this, nothing is fogged.
     FogStart: number
     --- The colour of the sky overhead in the middle of the day. It also tints the light from the sky.
     SkyColor: Color3

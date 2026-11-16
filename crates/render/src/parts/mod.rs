@@ -243,7 +243,7 @@ struct FrameUniforms {
     color_shift_bottom: [f32; 4],
     /// rgb: the fog's colour; w: 1 when there is fog (#600).
     fog_color: [f32; 4],
-    /// x, y: where the fog starts and is whole, in studs; z: how far the sky is for it.
+    /// x, y: where the fog starts and is whole, in units; z: how far the sky is for it.
     fog_range: [f32; 4],
     /// x, y: the environment's diffuse and specular scales; z: the shadow filter's spread; w: the exposure (#600).
     environment: [f32; 4],
@@ -263,10 +263,10 @@ struct FrameUniforms {
 /// maps and their sampler, their see-through maps, and the sky map (#615).
 const SUN_ENTRIES: usize = 8;
 
-/// The sky map (#615): one cascade lit from straight overhead, out to 160 studs of the view, and no see-through
-/// casters (light through glass is not the sky's). At 512² a texel is under a stud; the shader's narrow 3×3 filter
+/// The sky map (#615): one cascade lit from straight overhead, out to 160 units of the view, and no see-through
+/// casters (light through glass is not the sky's). At 512² a texel is under a unit; the shader's narrow 3×3 filter
 /// counts a point open only where most of it is (#642, #648), so an edge between open and covered is a smooth ramp
-/// about a stud wide, all of it on the open side: it neither reaches through a thin wall into a room nor darkens open
+/// about a unit wide, all of it on the open side: it neither reaches through a thin wall into a room nor darkens open
 /// ground beside a part. The ground's light, on what faces down, looks wider (`sky_open` in parts.wgsl). The taps'
 /// texel plus the compare's one are within what the casters' slope bias (3 texels) covers, so slopes in the open stay
 /// open. The receiver offsets are in texels.

@@ -512,7 +512,7 @@ mod tests {
             fit_cascades(&camera, 1.6, Vec3::ZERO, sun, &settings, &view.lod, &mut fits),
             2
         );
-        // A 4-stud ball 10 studs off: the camera draws it at full detail.
+        // A 4-unit ball 10 units off: the camera draws it at full detail.
         let (center, radius) = (Vec3::new(0.0, 2.0, 0.0), 2.0 * 3f32.sqrt());
         let drawn = view.lod.choose(
             1,

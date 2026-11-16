@@ -198,7 +198,7 @@ mod tests {
         }
     }
 
-    /// Drags the sphere on the `sign` side of `axis` out by `by` studs, with `keys`, and ends the step.
+    /// Drags the sphere on the `sign` side of `axis` out by `by` units, with `keys`, and ends the step.
     fn pull(bench: &mut Bench, axis: usize, sign: f32, by: f32, keys: Keys) {
         let view = look(Vec3::new(20.0, 25.0, 30.0), Vec3::ZERO);
         let targets = targets(&bench.dm, &bench.selection);

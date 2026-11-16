@@ -142,7 +142,7 @@ pub fn range_lines(dm: &DataModel, id: Id) -> Vec<[Vec3; 2]> {
     lines
 }
 
-/// How long, at most, a piece of a range line is when parts can hide it (#572), in studs.
+/// How long, at most, a piece of a range line is when parts can hide it (#572), in units.
 const PIECE: f32 = 1.5;
 
 /// The pieces of the range line `line` of the light `id` that can be seen from `from` (#572): the line in short pieces,

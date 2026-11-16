@@ -1061,7 +1061,7 @@
           ],
           "wraps": false,
           "group": "Fog",
-          "description": "How far away, in studs, the fog hides everything. At 100000, the most and the default, there is no fog.",
+          "description": "How far away, in units, the fog hides everything. At 100000, the most and the default, there is no fog.",
           "aliases": [],
           "derived_from": []
         },
@@ -1080,7 +1080,7 @@
           ],
           "wraps": false,
           "group": "Fog",
-          "description": "How far away, in studs, the fog begins: nearer than this, nothing is fogged.",
+          "description": "How far away, in units, the fog begins: nearer than this, nothing is fogged.",
           "aliases": [],
           "derived_from": []
         },

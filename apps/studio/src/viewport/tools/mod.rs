@@ -75,7 +75,7 @@ pub struct Frame {
 /// The increments drags snap to (#359); 0 is free.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Snap {
-    /// Moves and sizes, in studs.
+    /// Moves and sizes, in units.
     pub move_step: f32,
     /// Turns, in degrees.
     pub turn_step: f32,

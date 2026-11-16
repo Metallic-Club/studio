@@ -785,7 +785,7 @@ fn a_moved_part_keeps_its_level() {
     game.dm
         .set_by_name(ball, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
         .unwrap();
-    // A ball one stud across (a part's default size would stretch it, #384).
+    // A ball one unit across (a part's default size would stretch it, #384).
     game.dm.set_by_name(ball, "Size", Value::Vector3(Vec3::ONE)).unwrap();
     frame(&mut scene, &mut game.dm);
     let mut set = crate::cull::VisibleSet::new();

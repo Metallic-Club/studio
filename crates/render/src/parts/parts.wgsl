@@ -364,7 +364,7 @@ fn sky_share(p: vec3<f32>, reach: i32, step: f32) -> f32 {
 //
 // - x, what comes down from the sky, onto what faces up and sideways: open where the point itself is, and closed under
 //   anything. A narrow box of 3×3 taps, of which half open is still closed (#642), so it never reaches through a wall
-//   into a room, and darkens open ground beside a part over about a stud only (#648; four studs before). The point
+//   into a room, and darkens open ground beside a part over about a unit only (#648; four units before). The point
 //   moves out along its normal first (a wall's outside is open, its inside under a roof is not); a wall's, by the
 //   filter's reach as well, so the wall's own top, beside it in the map, does not close it. Never down: under a ball,
 //   the floor would close its underside in a hard line (#642).

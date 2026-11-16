@@ -29,7 +29,7 @@ const MAX_PITCH: f32 = 88.0 * std::f32::consts::PI / 180.0;
 const MAX_STEP: f32 = 0.1;
 /// A wheel notch covers this share of the way to what is ahead...
 const ZOOM_STEP: f32 = 0.10;
-/// ...but never less than this many studs a notch...
+/// ...but never less than this many units a notch...
 const ZOOM_MIN_STEP: f32 = 0.2;
 /// ...nor more.
 const ZOOM_MAX_STEP: f32 = 150.0;
@@ -69,7 +69,7 @@ pub struct Focus {
 /// The editor camera: where it is, which way it looks (yaw and pitch, no roll), and what it is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EditorCamera {
-    /// World position, in studs.
+    /// World position, in units.
     pub position: Vec3,
     /// Turn about the world's up axis, in radians; 0 looks along −Z.
     yaw: f32,
