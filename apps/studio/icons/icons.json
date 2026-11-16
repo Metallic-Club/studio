@@ -364,11 +364,17 @@
     "ui.expand": {
       "file": "interface/chevron-right.svg"
     },
+    "ui.grid_view": {
+      "file": "interface/layout-grid.svg"
+    },
     "ui.grip": {
       "file": "interface/grip-vertical.svg"
     },
     "ui.info": {
       "file": "interface/info.svg"
+    },
+    "ui.list_view": {
+      "file": "interface/list.svg"
     },
     "ui.move_down": {
       "file": "interface/chevron-down.svg"

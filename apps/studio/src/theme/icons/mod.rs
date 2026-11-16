@@ -367,6 +367,10 @@ icons! {
     UiAdd = "ui.add", Interface, "plus";
     /// Give the material to the selected parts (#703), on a material's tile.
     UiApplyMaterial = "ui.apply_material", Interface, "paint-bucket";
+    /// Show the Assets browser's folder as tiles (#699).
+    UiGridView = "ui.grid_view", Interface, "layout-grid";
+    /// Show the Assets browser's folder as a list (#699).
+    UiListView = "ui.list_view", Interface, "list";
     /// Move up in a list.
     UiMoveUp = "ui.move_up", Interface, "chevron-up";
     /// Move down in a list.
