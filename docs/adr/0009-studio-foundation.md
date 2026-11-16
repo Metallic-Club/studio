@@ -633,6 +633,13 @@ Built after Forge-Engine's editor, which the owner wrote with these systems in i
   property's does, but adding or removing one is a step of its own. Scenes already saved attributes (#590). The
   forms are popups that close on a click outside them, not in them, as egui's menus otherwise do.
 
+### Requires near the script, and units (2026-11-15, #693, #709)
+
+- **A module near the script (#693)**: a ModuleScript's completion requires it from the script when it is inside it
+  (`script.Name`) or beside it (`script.Parent.Name`), as a Roblox script reaches it; any other module from `game`.
+- **Units (#709)**: Studio's text and the code's comments call the world's unit of length a unit, not a stud. The
+  ADRs keep what they said when written.
+
 ## Not in this slice
 
 Project Settings, real sign-in, thumbnails, and single-instance forwarding. (Gizmos, selection in the viewport, undo

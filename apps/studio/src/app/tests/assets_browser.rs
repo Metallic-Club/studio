@@ -991,3 +991,51 @@ fn the_browser_imports_from_its_toolbar_and_menus() {
     assert_eq!(dialog.asked(), ["files", "files", "files"]);
     let _ = std::fs::remove_dir_all(source);
 }
+
+/// A file dropped from the computer, as the window hands it over (#708).
+#[derive(Debug)]
+struct OnDisk(std::path::PathBuf);
+
+impl egui::DroppedFile for OnDisk {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
+}
+
+/// #708: while files from the computer are dragged over Studio, the browser says which folder they will go into;
+/// dropped, files and folders are imported there.
+#[test]
+fn files_dropped_from_the_computer_are_imported() {
+    let mut harness = browsing("assets-drop-files");
+    let source = import_source("drop");
+    editor(&mut harness).browser.open_folder("Assets/Trees");
+    settle(&mut harness);
+    harness.input_mut().hovered_files.push(egui::HoveredFile {
+        path: Some(source.join("bark.png")),
+        ..Default::default()
+    });
+    harness.step();
+    harness.step();
+    harness.get_by_label("Drop to import into Trees");
+    harness.input_mut().hovered_files.clear();
+    for path in [source.join("bark.png"), source.join("Pack")] {
+        harness
+            .input_mut()
+            .dropped_files
+            .push(std::sync::Arc::new(OnDisk(path)));
+    }
+    settle(&mut harness);
+    let editor_state = editor(&mut harness);
+    assert!(editor_state.project.contains("Assets/Trees/bark.png"));
+    assert!(editor_state.project.contains("Assets/Trees/Pack/Sounds/hit.ogg"));
+    assert!(
+        harness.query_by_label("Drop to import into Trees").is_none(),
+        "gone once dropped"
+    );
+    assert!(tile_exists(&harness, "bark") && tile_exists(&harness, "Pack"));
+    let _ = std::fs::remove_dir_all(source);
+}

@@ -360,12 +360,64 @@ impl Panel for Assets {
         let ink = if grip.dragged() { p.subtle } else { p.border };
         ui.painter()
             .vline(line.center().x, rect.y_range(), Stroke::new(size::BORDER, ink));
+        // Files dragged in from the system's file manager (#708) go into the open folder.
+        files_from_outside(ui, editor, grid_rect);
         ui.advance_cursor_after_rect(rect);
 
         for act in acts {
             apply(ui, editor, act);
         }
         delete_dialog(ui.ctx(), editor);
+    }
+}
+
+/// Files dragged in from the system's file manager (#708): while they are over Studio, the tiles' `area` says which
+/// folder they will go into; dropped, they are imported there ([`EditorState::import_files`]). The window does not say
+/// where in it they were dropped, so they go into the open folder wherever they land while the browser shows.
+fn files_from_outside(ui: &mut Ui, editor: &mut EditorState, area: Rect) {
+    let (hovering, dropped): (bool, Vec<std::path::PathBuf>) = ui.input(|input| {
+        let dropped = input
+            .raw
+            .dropped_files
+            .iter()
+            .map(|file| file.path().to_path_buf())
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect();
+        (!input.raw.hovered_files.is_empty(), dropped)
+    });
+    let folder = editor.browser.open.clone();
+    let shown = if folder.is_empty() {
+        ROOT
+    } else {
+        browser::file_name(&folder)
+    };
+    if hovering {
+        let colors = current_colors(ui.ctx());
+        let p = colors.palette;
+        let painter = ui.painter().with_clip_rect(area);
+        painter.rect(
+            area.shrink(space::S1),
+            CornerRadius::same(radius::TILE),
+            p.bg.gamma_multiply(0.85),
+            Stroke::new(2.0, colors.accent),
+            egui::StrokeKind::Inside,
+        );
+        let line = format!("Drop to import into {shown}");
+        painter.text(
+            area.center(),
+            Align2::CENTER_CENTER,
+            &line,
+            fonts::named(fonts::STRONG, text::BODY),
+            p.text,
+        );
+        let note = ui.interact(area, Id::unique("metallic.assets.drop_files"), Sense::hover());
+        note.widget_info(|| WidgetInfo::labeled(Role::Label, true, &line));
+        ui.ctx().request_repaint();
+    }
+    if !dropped.is_empty() {
+        let imported = editor.import_files(&folder, &dropped);
+        editor.browser.error = imported.error();
+        ui.ctx().request_repaint();
     }
 }
 
