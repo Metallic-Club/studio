@@ -78,6 +78,35 @@ fn walk(
     }
 }
 
+/// The carets' sweep (#737): a press on a caret opens or closes its folder at once, and while the button stays down,
+/// every other caret the pointer passes over gets the same state, all opened or all closed. Kept in egui's memory
+/// until the button is let go.
+fn sweep(ui: &Ui, caret_response: &egui::Response, caret: Rect, path: &str, expanded: bool, acts: &mut Vec<Act>) {
+    let id = egui::Id::unique("metallic.assets.caret_sweep");
+    let (down, pressed, pointer) = ui.input(|input| {
+        (
+            input.pointer.primary_down(),
+            input.pointer.primary_pressed(),
+            input.pointer.interact_pos(),
+        )
+    });
+    if !down {
+        ui.data_mut(|data| data.remove::<bool>(id));
+        return;
+    }
+    let target = ui.data(|data| data.get_temp::<bool>(id));
+    match target {
+        None if pressed && caret_response.is_pointer_button_down_on() => {
+            ui.data_mut(|data| data.insert_temp(id, !expanded));
+            acts.push(Act::Expand(path.to_owned(), !expanded));
+        }
+        Some(open) if open != expanded && pointer.is_some_and(|at| caret.contains(at)) => {
+            acts.push(Act::Expand(path.to_owned(), open));
+        }
+        _ => {}
+    }
+}
+
 /// Draws the tree.
 pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Vec<Act>) {
     let rows = rows(editor);
@@ -116,7 +145,8 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         vec2(CARET, rect.height()),
     );
     let caret_response = (row.has_children && !is_root).then(|| {
-        let response = ui.interact(caret, response.id.with("caret"), Sense::click());
+        // Click and drag, so a press here and a drag over other carets is the carets' (#737), not a scroll.
+        let response = ui.interact(caret, response.id.with("caret"), Sense::click_and_drag());
         let verb = if row.expanded { "Collapse" } else { "Expand" };
         response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("{verb} {name}")));
         response
@@ -234,8 +264,11 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         Some("Delete") => acts.push(Act::Delete(vec![path])),
         Some("Copy path") => acts.push(Act::CopyPaths(vec![path])),
         _ => {
+            if let Some(caret_response) = &caret_response {
+                sweep(ui, caret_response, caret, &path, row.expanded, acts);
+            }
             if caret_response.is_some_and(|caret| caret.clicked()) {
-                acts.push(Act::Toggle(path));
+                // Toggled when pressed, by `sweep`.
             } else if response.double_clicked() && !is_folder {
                 acts.push(Act::Activate(entry.clone()));
             } else if response.double_clicked() && !is_root {

@@ -259,6 +259,8 @@ pub(crate) enum Act {
     Click { path: String, add: bool, range: bool },
     /// Expand or collapse this folder in the tree.
     Toggle(String),
+    /// Expand (`true`) or collapse this folder in the tree (#737: a sweep across the carets).
+    Expand(String, bool),
     /// Edit this one's name in place.
     StartRename(String),
     /// This one's name, as typed.
@@ -673,6 +675,14 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
         Act::Toggle(folder) => {
             if !editor.browser.expanded.remove(&folder) {
                 editor.browser.expanded.insert(folder);
+            }
+            Ok(())
+        }
+        Act::Expand(folder, open) => {
+            if open {
+                editor.browser.expanded.insert(folder);
+            } else {
+                editor.browser.expanded.remove(&folder);
             }
             Ok(())
         }
