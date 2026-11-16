@@ -209,6 +209,10 @@ struct Entry {
     added: Option<u64>,
 }
 
+/// An indexed asset whose member is gone, which a new member of its fingerprint takes over: its path, its id and when
+/// it was added.
+type Gone<'a> = (&'a String, AssetId, Option<u64>);
+
 /// Now, in seconds since 1970; `None` on a clock set before then.
 pub(crate) fn now_seconds() -> Option<u64> {
     std::time::SystemTime::now()
@@ -425,7 +429,7 @@ impl AssetIndex {
         }
         // Gone members by fingerprint, each list in path order, so moving a folder of identical files pairs them
         // up by name.
-        let mut gone: BTreeMap<Fingerprint, VecDeque<(&String, AssetId, Option<u64>)>> = BTreeMap::new();
+        let mut gone: BTreeMap<Fingerprint, VecDeque<Gone<'_>>> = BTreeMap::new();
         for (path, entry) in &self.by_path {
             if !members.contains_key(path) {
                 gone.entry(entry.fingerprint)
