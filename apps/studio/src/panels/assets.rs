@@ -665,15 +665,9 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
         }
         Act::Click { path, add, range } => {
             let shown = shown_entries(editor);
+            // A click on a material only selects it (#735): its tile's button, a drop on a part or the inspector's
+            // Apply gives it to parts.
             editor.browser.click(&shown, &path, add, range);
-            // A plain click on a material gives it to the selected parts (#680); with none selected, nothing changes.
-            if !add
-                && !range
-                && AssetKind::of(&path) == AssetKind::Material
-                && let Some(id) = editor.project.assets().id(&path)
-            {
-                editor.apply_material(id);
-            }
             Ok(())
         }
         Act::Toggle(folder) => {
