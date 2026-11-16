@@ -107,12 +107,12 @@ fn tile(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, keys: &Keys, acts:
             None
         };
         if let Some(fill) = fill {
-            ui.painter().rect_filled(rect, CornerRadius::same(radius::ITEM), fill);
+            ui.painter().rect_filled(rect, CornerRadius::same(radius::TILE), fill);
         }
         if dropping {
             ui.painter().rect_stroke(
                 rect,
-                CornerRadius::same(radius::ITEM),
+                CornerRadius::same(radius::TILE),
                 Stroke::new(2.0, colors.accent),
                 egui::StrokeKind::Inside,
             );
@@ -243,7 +243,7 @@ fn drag_chip(ui: &Ui) {
     );
     painter.rect(
         rect,
-        CornerRadius::same(radius::ITEM),
+        CornerRadius::same(radius::TILE),
         p.surface,
         Stroke::new(1.0, p.border),
         egui::StrokeKind::Inside,

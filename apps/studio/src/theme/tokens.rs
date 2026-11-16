@@ -414,6 +414,8 @@ pub mod space {
 pub mod radius {
     /// Buttons, list items, tabs.
     pub const ITEM: u8 = 8;
+    /// The Assets browser's tiles and buttons (#698): squarer than other items, as a file browser's are.
+    pub const TILE: u8 = 4;
     /// Text fields.
     pub const INPUT: u8 = 9;
     /// Panels, cards, the splash.
@@ -704,6 +706,10 @@ mod tests {
         assert_eq!(
             [radius::ITEM, radius::INPUT, radius::PANEL, radius::DIALOG],
             [8, 9, 12, 15]
+        );
+        assert!(
+            radius::TILE < radius::ITEM,
+            "the Assets browser's tiles are squarer (#698)"
         );
         assert_eq!((size::BORDER, size::ACCENT_BAR, size::SELECTED_BAR), (1.0, 3.0, 19.0));
         assert!((10.0..=11.0).contains(&text::LABEL) && text::LABEL_TRACKING == 1.3);
