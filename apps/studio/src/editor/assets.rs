@@ -49,6 +49,8 @@ pub struct AssetBrowser {
     pub view: View,
     /// How the list is sorted (#699).
     pub sort: Sort,
+    /// The list's column widths (#738), dragged from its header. Kept while Studio runs.
+    pub columns: ColumnWidths,
     /// A folder to import files into, asked for by the browser for Studio to ask which files (#707).
     pub import_request: Option<String>,
 }
@@ -88,6 +90,51 @@ impl Column {
             Column::Type => "Type",
             Column::Created => "Date created",
             Column::Size => "Size",
+        }
+    }
+}
+
+/// The list's column widths (#738). Name takes what the others leave until its edge is dragged; then it keeps the
+/// width it was given, as the others do.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColumnWidths {
+    /// Name's width, once dragged.
+    pub name: Option<f32>,
+    /// Type's, Date created's and Size's widths.
+    pub others: [f32; 3],
+}
+
+/// The narrowest a column gets (#738).
+pub const MIN_COLUMN: f32 = 48.0;
+/// The narrowest Name gets while it takes what the others leave.
+pub const MIN_NAME: f32 = 120.0;
+
+impl Default for ColumnWidths {
+    fn default() -> Self {
+        Self {
+            name: None,
+            others: [120.0, 140.0, 80.0],
+        }
+    }
+}
+
+impl ColumnWidths {
+    /// Each column's width, left to right ([`Column::ALL`]), in a list `total` wide.
+    pub fn widths(&self, total: f32) -> [f32; 4] {
+        let [kind, created, size] = self.others;
+        let name = self
+            .name
+            .unwrap_or_else(|| (total - kind - created - size).max(MIN_NAME));
+        [name, kind, created, size]
+    }
+
+    /// Makes the `column`th column (of [`Column::ALL`]) `width` wide, at least [`MIN_COLUMN`].
+    pub fn set(&mut self, column: usize, width: f32) {
+        let width = width.max(MIN_COLUMN);
+        match column {
+            0 => self.name = Some(width),
+            1..=3 => self.others[column - 1] = width,
+            _ => {}
         }
     }
 }
@@ -170,6 +217,7 @@ impl Default for AssetBrowser {
             scale: 1.0,
             view: View::Grid,
             sort: Sort::default(),
+            columns: ColumnWidths::default(),
             import_request: None,
         }
     }

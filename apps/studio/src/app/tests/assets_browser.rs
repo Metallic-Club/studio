@@ -1123,3 +1123,33 @@ fn a_drag_across_the_carets_opens_or_closes_each() {
     settle(&mut harness);
     assert!(expanded(&mut harness, "Scripts") && !expanded(&mut harness, "Assets"));
 }
+
+/// #738: a column's right edge in the list's header is dragged to make it wider; the rows follow.
+#[test]
+fn the_list_s_columns_are_resized_from_its_header() {
+    let mut harness = browsing("assets-column-widths");
+    editor(&mut harness).browser.view = crate::editor::assets::View::List;
+    settle(&mut harness);
+    let header =
+        |harness: &Harness<'_, Test>, label: &str| harness.get_by_role_and_label(Role::ColumnHeader, label).rect();
+    let before = header(&harness, "Type");
+    let grip = harness
+        .get_by_role_and_label(Role::Splitter, "Type width")
+        .rect()
+        .center();
+    drag(&mut harness, grip, grip + egui::vec2(40.0, 0.0));
+    let after = header(&harness, "Type");
+    assert!(
+        (after.width() - before.width() - 40.0).abs() < 2.0,
+        "{before:?} {after:?}"
+    );
+    assert!((header(&harness, "Date created").left() - after.right()).abs() < 0.5);
+    // Name keeps the width it is dragged to.
+    let grip = harness
+        .get_by_role_and_label(Role::Splitter, "Name width")
+        .rect()
+        .center();
+    drag(&mut harness, grip, grip - egui::vec2(60.0, 0.0));
+    let name = editor(&mut harness).browser.columns.name;
+    assert!(name.is_some(), "Name has a width of its own now");
+}

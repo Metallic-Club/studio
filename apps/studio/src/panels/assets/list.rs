@@ -1,25 +1,20 @@
 //! The browser's right side as a list (#699): a header of Name, Type, Date created and Size, whose columns sort the
 //! rows (clicked again, the other way), and a row for each folder and file, which selects, opens, drags, renames and
-//! has the menu a tile has ([`super::grid::behave`]). Ctrl and the wheel make the rows taller or shorter (#696).
+//! has the menu a tile has ([`super::grid::behave`]). Ctrl and the wheel make the rows taller or shorter (#696). A
+//! column's right edge in the header is dragged to make it wider or narrower (#738).
 
 use egui::{Align2, CornerRadius, FontId, Id, Rect, Role, ScrollArea, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 
 use super::grid::{self, Ground};
 use super::{Act, Keys, file_size, rename_field};
 use crate::editor::EditorState;
-use crate::editor::assets::{Column, Entry, EntryKind, type_label};
+use crate::editor::assets::{Column, ColumnWidths, Entry, EntryKind, type_label};
 use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 
-/// The Type column's width.
-const TYPE_WIDTH: f32 = 120.0;
-/// The Date created column's width.
-const CREATED_WIDTH: f32 = 140.0;
-/// The Size column's width.
-const SIZE_WIDTH: f32 = 80.0;
-/// The narrowest the Name column gets.
-const MIN_NAME: f32 = 120.0;
+/// The width of the grip on a column's right edge in the header (#738).
+const GRIP: f32 = 8.0;
 /// The shortest and the tallest a row gets, however the list is scaled.
 const ROW_HEIGHTS: (f32, f32) = (20.0, 60.0);
 
@@ -28,16 +23,15 @@ fn row_height(scale: f32) -> f32 {
     (size::ROW * scale).round().clamp(ROW_HEIGHTS.0, ROW_HEIGHTS.1)
 }
 
-/// The cells of the row or header `rect`, left to right: Name (what the others leave), Type, Date created and Size.
-fn cells(rect: Rect) -> [Rect; 4] {
-    let name = (rect.width() - TYPE_WIDTH - CREATED_WIDTH - SIZE_WIDTH).max(MIN_NAME);
+/// The cells of the row or header `rect`, left to right: Name, Type, Date created and Size, as wide as `widths` makes
+/// them (#738).
+fn cells(rect: Rect, widths: &ColumnWidths) -> [Rect; 4] {
     let mut x = rect.left();
-    let mut cell = |width: f32| {
+    widths.widths(rect.width()).map(|width| {
         let cell = Rect::from_min_max(pos2(x, rect.top()), pos2(x + width, rect.bottom()));
         x += width;
         cell
-    };
-    [cell(name), cell(TYPE_WIDTH), cell(CREATED_WIDTH), cell(SIZE_WIDTH)]
+    })
 }
 
 /// When `seconds` (since 1970) was, in the local time: `2026-11-15 14:03`.
@@ -86,7 +80,8 @@ fn header(ui: &mut Ui, editor: &mut EditorState) {
         rect.bottom() - size::BORDER / 2.0,
         Stroke::new(size::BORDER, p.border),
     );
-    for (column, cell) in Column::ALL.into_iter().zip(cells(rect)) {
+    let cells = cells(rect, &editor.browser.columns);
+    for (column, cell) in Column::ALL.into_iter().zip(cells) {
         let response = ui.interact(
             cell,
             Id::unique(("metallic.assets.header", column.label())),
@@ -127,6 +122,30 @@ fn header(ui: &mut Ui, editor: &mut EditorState) {
             editor.browser.sort_by(column);
         }
     }
+    // The grips on the columns' right edges (#738), after the headers so they take the pointer there.
+    for (index, (column, cell)) in Column::ALL.into_iter().zip(cells).enumerate() {
+        let grip = Rect::from_center_size(pos2(cell.right(), cell.center().y), vec2(GRIP, cell.height()));
+        let response = ui.interact(
+            grip,
+            Id::unique(("metallic.assets.column_grip", column.label())),
+            Sense::drag(),
+        );
+        response.widget_info(|| WidgetInfo::labeled(Role::Splitter, true, format!("{} width", column.label())));
+        if response.dragged() {
+            let width = cell.width() + response.drag_delta().x;
+            editor.browser.columns.set(index, width);
+        }
+        let active = response.hovered() || response.dragged();
+        if active {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+        }
+        let ink = if active { p.subtle } else { p.border };
+        ui.painter().vline(
+            cell.right() - size::BORDER / 2.0,
+            cell.shrink2(vec2(0.0, space::S2)).y_range(),
+            Stroke::new(size::BORDER, ink),
+        );
+    }
 }
 
 /// One row on its `stripe`: the icon (or the picture) and the name, then the type, the date it was added and the size;
@@ -151,7 +170,7 @@ fn row(
     response.widget_info(|| WidgetInfo::selected(Role::Row, true, selected, &name));
     let folder = entry.is_folder();
     let dropping = folder && super::drop_target(&response, &entry.path);
-    let [name_cell, type_cell, created_cell, size_cell] = cells(rect);
+    let [name_cell, type_cell, created_cell, size_cell] = cells(rect, &editor.browser.columns);
     if ui.is_rect_visible(rect) {
         ui.painter().rect_filled(rect, CornerRadius::ZERO, stripe);
         if selected || response.hovered() {
@@ -255,16 +274,24 @@ mod tests {
 
     #[test]
     fn the_name_column_takes_what_the_others_leave() {
-        let [name, kind, created, bytes] = cells(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 24.0)));
-        assert_eq!(name.width(), 800.0 - TYPE_WIDTH - CREATED_WIDTH - SIZE_WIDTH);
+        use crate::editor::assets::{MIN_COLUMN, MIN_NAME};
+        let mut widths = ColumnWidths::default();
+        let [kind_width, created_width, size_width] = widths.others;
+        let row = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 24.0));
+        let [name, kind, created, bytes] = cells(row, &widths);
+        assert_eq!(name.width(), 800.0 - kind_width - created_width - size_width);
         assert_eq!(kind.left(), name.right());
         assert_eq!(bytes.right(), 800.0);
-        assert_eq!(created.width(), CREATED_WIDTH);
+        assert_eq!(created.width(), created_width);
         // Never narrower than its least, however narrow the list.
-        assert_eq!(
-            cells(Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 24.0)))[0].width(),
-            MIN_NAME
-        );
+        let narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 24.0));
+        assert_eq!(cells(narrow, &widths)[0].width(), MIN_NAME);
+        // #738: once dragged, a column keeps its width, at least the least.
+        widths.set(0, 300.0);
+        widths.set(2, 10.0);
+        let [name, _, created, _] = cells(row, &widths);
+        assert_eq!(name.width(), 300.0);
+        assert_eq!(created.width(), MIN_COLUMN);
     }
 
     #[test]
