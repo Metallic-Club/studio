@@ -54,52 +54,84 @@ impl Measures {
 /// The room between the tiles and the area's edges (#700), so none sits flat against them.
 const PAD: f32 = space::S3;
 
-/// Draws the tiles.
-pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mut Vec<Act>) {
-    // Pictures decoded this frame: a few a frame, so a folder of large pictures does not stall one (#681).
-    let mut decodes = 0;
-    let entries = super::shown_entries(editor);
-    let area = ui.available_rect_before_wrap();
-    // The empty space: a click there clears the selection, a right-click offers a new folder or file.
-    let ground = ui.interact(area, Id::unique("metallic.assets.ground"), Sense::click());
-    ground.widget_info(|| WidgetInfo::labeled(Role::Grid, true, "Assets"));
-    let folder = editor.browser.open.clone();
-    let searching = !editor.browser.query.trim().is_empty();
-    let ground_menu = [super::new_submenu(!searching)];
-    if let Some(new) = context_menu(&ground, &ground_menu).and_then(super::new_item) {
-        acts.push(Act::New(folder.clone(), new));
-    }
-    if ground.clicked() && !editor.browser.selected.is_empty() {
-        acts.push(Act::Click {
-            path: String::new(),
-            add: false,
-            range: false,
-        });
-    }
-    // Tiles dropped on the empty space go into the open folder (not while a search shows files from anywhere). Taken
-    // after the tiles, so a folder's tile under the pointer takes a drop first.
-    let ground_drop = |acts: &mut Vec<Act>| {
-        if let Some(paths) = dropped_on(&ground).filter(|_| !searching) {
-            acts.push(Act::Move(paths, folder.clone()));
+/// The empty space behind the tiles or the rows (#676): a click there clears the selection, a right-click offers a new
+/// folder or file, and what is dropped there goes into the open folder.
+pub(super) struct Ground {
+    response: egui::Response,
+    folder: String,
+    searching: bool,
+}
+
+impl Ground {
+    /// The empty space of `area`, labelled "Assets" with `role` for screen readers (a grid, or a list, #699).
+    pub(super) fn of(ui: &mut Ui, editor: &EditorState, area: Rect, role: Role, acts: &mut Vec<Act>) -> Self {
+        let response = ui.interact(area, Id::unique("metallic.assets.ground"), Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(role, true, "Assets"));
+        let folder = editor.browser.open.clone();
+        let searching = !editor.browser.query.trim().is_empty();
+        let ground_menu = [super::new_submenu(!searching)];
+        if let Some(new) = context_menu(&response, &ground_menu).and_then(super::new_item) {
+            acts.push(Act::New(folder.clone(), new));
         }
-    };
-    if entries.is_empty() {
-        let line = if searching {
+        if response.clicked() && !editor.browser.selected.is_empty() {
+            acts.push(Act::Click {
+                path: String::new(),
+                add: false,
+                range: false,
+            });
+        }
+        Self {
+            response,
+            folder,
+            searching,
+        }
+    }
+
+    /// What was dropped on the empty space goes into the open folder (not while a search shows files from anywhere).
+    /// Taken after the tiles or rows, so a folder's under the pointer takes a drop first.
+    pub(super) fn drop(&self, acts: &mut Vec<Act>) {
+        if let Some(paths) = dropped_on(&self.response).filter(|_| !self.searching) {
+            acts.push(Act::Move(paths, self.folder.clone()));
+        }
+    }
+
+    /// When nothing is shown, says so (and why) and takes what is dropped. Returns whether it did.
+    pub(super) fn empty(&self, ui: &mut Ui, editor: &EditorState, entries: &[Entry], acts: &mut Vec<Act>) -> bool {
+        if !entries.is_empty() {
+            return false;
+        }
+        let line = if self.searching {
             format!("Nothing is called \u{201C}{}\u{201D}.", editor.browser.query.trim())
         } else {
             "This folder is empty. Right-click to add a folder or a script.".to_owned()
         };
         crate::panels::empty_note(ui, &line);
-        ground_drop(acts);
-        return;
+        self.drop(acts);
+        true
     }
-    // Ctrl and the wheel over the tiles scale them (#696); the wheel alone scrolls.
+}
+
+/// Ctrl and the wheel over `area` scale the tiles or rows (#696); the wheel alone scrolls.
+pub(super) fn zoom(ui: &Ui, editor: &mut EditorState, area: Rect) {
     if ui.rect_contains_pointer(area) {
         let zoom = ui.input(|input| input.zoom_delta());
         if zoom != 1.0 {
             editor.browser.zoom(zoom);
         }
     }
+}
+
+/// Draws the tiles.
+pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mut Vec<Act>) {
+    // Pictures decoded this frame: a few a frame, so a folder of large pictures does not stall one (#681).
+    let mut decodes = 0;
+    let entries = super::shown_entries(editor);
+    let area = ui.available_rect_before_wrap();
+    let ground = Ground::of(ui, editor, area, Role::Grid, acts);
+    if ground.empty(ui, editor, &entries, acts) {
+        return;
+    }
+    zoom(ui, editor, area);
     let measures = Measures::at(editor.browser.scale);
     let tile_size = measures.tile;
     let columns = (((area.width() - 2.0 * PAD + GAP) / (tile_size.x + GAP)).floor() as usize).max(1);
@@ -120,7 +152,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
                 ui.add_space(GAP);
             }
         });
-    ground_drop(acts);
+    ground.drop(acts);
     drag_chip(ui);
 }
 
@@ -167,11 +199,7 @@ fn tile(
                 egui::StrokeKind::Inside,
             );
         }
-        let (icon, ink) = match entry.kind {
-            EntryKind::Folder => (Icon::AssetFolder, Icon::AssetFolder.color(&colors)),
-            EntryKind::File(kind) => (kind.icon(), kind.icon().color(&colors)),
-            EntryKind::Missing(_) => (Icon::UiWarning, colors.accent),
-        };
+        let (icon, ink) = icon_of(entry, &colors);
         let centre = pos2(rect.center().x, rect.top() + space::S2 + icon_area / 2.0);
         let area = Rect::from_center_size(centre, vec2(icon_area, icon_area));
         // A picture, a material or a scene shows itself (#681); until its thumbnail is here, its kind's icon.
@@ -207,7 +235,25 @@ fn tile(
             ui.painter().galley(pos2(label.center().x, label.top()), galley, ink);
         }
     }
-    // A material's tile has a button at its top right while the pointer is on it, which gives the material to the
+    behave(ui, editor, entry, rect, response, keys, acts);
+}
+
+/// What a tile or a list row does (#676, #699), drawn in `rect` with `response`: the button on its corner (#703,
+/// #704), its tooltip, taking a drop (a folder's), being dragged, its right-click menu, and clicks.
+pub(super) fn behave(
+    ui: &mut Ui,
+    editor: &mut EditorState,
+    entry: &Entry,
+    rect: Rect,
+    response: egui::Response,
+    keys: &Keys,
+    acts: &mut Vec<Act>,
+) {
+    let selected = editor.browser.selected.contains(&entry.path);
+    let renaming = editor.browser.renaming.as_deref() == Some(entry.path.as_str());
+    let folder = entry.is_folder();
+    let name = entry.name().to_owned();
+    // A material's has a button at its top right while the pointer is on it, which gives the material to the
     // selected parts (#703); a script file's, one that adds a script running it to the selected objects (#704).
     let corner = match entry.kind {
         EntryKind::File(AssetKind::Material) => Some((
@@ -277,6 +323,15 @@ fn tile(
     }
 }
 
+/// `entry`'s icon and its colour: its kind's, a folder's, or a warning for a missing file.
+pub(super) fn icon_of(entry: &Entry, colors: &crate::theme::Colors) -> (Icon, egui::Color32) {
+    match entry.kind {
+        EntryKind::Folder => (Icon::AssetFolder, Icon::AssetFolder.color(colors)),
+        EntryKind::File(kind) => (kind.icon(), kind.icon().color(colors)),
+        EntryKind::Missing(_) => (Icon::UiWarning, colors.accent),
+    }
+}
+
 /// The side of the button on a tile's corner (#703).
 const CORNER: f32 = 20.0;
 
@@ -289,10 +344,13 @@ fn corner_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, label: &str, enabl
     }
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
-    let button = Rect::from_min_size(
-        pos2(rect.right() - space::S1 - CORNER, rect.top() + space::S1),
-        vec2(CORNER, CORNER),
-    );
+    // At the top of a tile; in the middle of a row too short for it to sit lower (#699).
+    let top = if rect.height() < 2.0 * CORNER {
+        rect.center().y - CORNER / 2.0
+    } else {
+        rect.top() + space::S1
+    };
+    let button = Rect::from_min_size(pos2(rect.right() - space::S1 - CORNER, top), vec2(CORNER, CORNER));
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let response = ui.interact(button, id, sense);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
@@ -325,7 +383,7 @@ fn corner_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, label: &str, enabl
 }
 
 /// What a tile's tooltip says: its path, and its kind and size (or that it is missing).
-fn hover_text(editor: &EditorState, entry: &Entry) -> String {
+pub(super) fn hover_text(editor: &EditorState, entry: &Entry) -> String {
     match entry.kind {
         EntryKind::Folder => format!("{}\nFolder", entry.path),
         EntryKind::Missing(kind) => format!("{}\n{} \u{2022} {MISSING}", entry.path, kind.label()),
@@ -341,7 +399,7 @@ fn hover_text(editor: &EditorState, entry: &Entry) -> String {
 }
 
 /// While tiles are dragged, a chip beside the pointer saying what is dragged.
-fn drag_chip(ui: &Ui) {
+pub(super) fn drag_chip(ui: &Ui) {
     let Some(drag) = egui::DragAndDrop::payload::<AssetDrag>(ui.ctx()) else {
         return;
     };
@@ -420,7 +478,7 @@ const DECODES_A_FRAME: usize = 2;
 
 /// Draws `entry`'s thumbnail in `area` when it has one (#681): a picture at its aspect ratio, a material on a sphere,
 /// a scene from its camera. Asks for what is missing or old. Returns whether it drew one.
-fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: Rect, decodes: &mut usize) -> bool {
+pub(super) fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: Rect, decodes: &mut usize) -> bool {
     use crate::editor::pictures::{Picture, Wanted};
     let EntryKind::File(kind) = entry.kind else {
         return false;

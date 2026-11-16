@@ -45,6 +45,111 @@ pub struct AssetBrowser {
     /// How big the tiles are, 1 at first (#696): Ctrl and the wheel change it, between [`MIN_SCALE`] and
     /// [`MAX_SCALE`]. Kept while Studio runs.
     pub scale: f32,
+    /// Tiles or a list (#699).
+    pub view: View,
+    /// How the list is sorted (#699).
+    pub sort: Sort,
+}
+
+/// How the browser shows a folder (#699).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum View {
+    /// Tiles that wrap with the panel's width.
+    #[default]
+    Grid,
+    /// A row each, under a header that sorts them.
+    List,
+}
+
+/// A column of the list (#699), which it can be sorted by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Column {
+    /// The file or folder's name.
+    #[default]
+    Name,
+    /// What it is ([`AssetKind::label`]).
+    Type,
+    /// When it was added to the project (`metallic_project`'s asset index, #710).
+    Created,
+    /// Its size in bytes.
+    Size,
+}
+
+impl Column {
+    /// Every column, left to right.
+    pub const ALL: [Column; 4] = [Column::Name, Column::Type, Column::Created, Column::Size];
+
+    /// Its header.
+    pub fn label(self) -> &'static str {
+        match self {
+            Column::Name => "Name",
+            Column::Type => "Type",
+            Column::Created => "Date created",
+            Column::Size => "Size",
+        }
+    }
+}
+
+/// How the list is sorted (#699): by a column, one way or the other. Folders come first either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sort {
+    /// The column.
+    pub column: Column,
+    /// Largest, latest or last first.
+    pub descending: bool,
+}
+
+/// What `entry` is, as the list's Type column says: its kind's name, a folder's "Folder".
+pub fn type_label(entry: &Entry) -> &'static str {
+    match entry.kind {
+        EntryKind::Folder => "Folder",
+        EntryKind::File(kind) | EntryKind::Missing(kind) => kind.label(),
+    }
+}
+
+/// Sorts `entries` as `sort` says (#699): folders first, then by the column (an unknown date or size last either way),
+/// then by name.
+pub fn sort_entries(project: &Project, entries: &mut [Entry], sort: Sort) {
+    use std::cmp::Ordering;
+    let name = |entry: &Entry| entry.file_name().to_lowercase();
+    let size = |entry: &Entry| match entry.kind {
+        EntryKind::File(_) => project
+            .fingerprint(&entry.path)
+            .ok()
+            .map(|fingerprint| fingerprint.size),
+        _ => None,
+    };
+    let created = |entry: &Entry| project.assets().added(&entry.path);
+    // Known values in the order asked for, unknown ones after them.
+    let known_first = |a: Option<u64>, b: Option<u64>| match (a, b) {
+        (Some(a), Some(b)) if sort.descending => b.cmp(&a),
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    };
+    entries.sort_by(|a, b| {
+        let by_column = match sort.column {
+            Column::Name => Ordering::Equal,
+            Column::Type => {
+                let order = type_label(a).to_lowercase().cmp(&type_label(b).to_lowercase());
+                if sort.descending { order.reverse() } else { order }
+            }
+            Column::Created => known_first(created(a), created(b)),
+            Column::Size => known_first(size(a), size(b)),
+        };
+        let by_name = name(a).cmp(&name(b));
+        let by_name = if sort.descending && sort.column == Column::Name {
+            by_name.reverse()
+        } else {
+            by_name
+        };
+        b.is_folder()
+            .cmp(&a.is_folder())
+            .then(by_column)
+            .then(by_name)
+            .then_with(|| a.path.cmp(&b.path))
+    });
 }
 
 impl Default for AssetBrowser {
@@ -61,6 +166,8 @@ impl Default for AssetBrowser {
             command: None,
             error: None,
             scale: 1.0,
+            view: View::Grid,
+            sort: Sort::default(),
         }
     }
 }
@@ -310,6 +417,21 @@ impl AssetBrowser {
         self.selected.clear();
         self.anchor = None;
         self.reveal(folder);
+    }
+
+    /// Sorts the list by `column` (#699): the other way when it is sorted by it already, else that way up.
+    pub fn sort_by(&mut self, column: Column) {
+        self.sort = if self.sort.column == column {
+            Sort {
+                column,
+                descending: !self.sort.descending,
+            }
+        } else {
+            Sort {
+                column,
+                descending: false,
+            }
+        };
     }
 
     /// Scales the tiles by `factor` (Ctrl and the wheel, #696), between [`MIN_SCALE`] and [`MAX_SCALE`].

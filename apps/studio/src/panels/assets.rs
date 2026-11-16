@@ -11,6 +11,7 @@
 //! - A file the asset index names but the project lost is still shown where it was, marked missing.
 
 mod grid;
+mod list;
 mod tree;
 
 use egui::{
@@ -345,7 +346,10 @@ impl Panel for Assets {
         tree::show(&mut tree_ui, editor, &keys, &mut acts);
         let mut grid_ui = ui.new_child(column(grid_rect));
         grid_ui.set_clip_rect(grid_rect.intersect(ui.clip_rect()));
-        grid::show(&mut grid_ui, editor, &keys, &mut acts);
+        match editor.browser.view {
+            browser::View::Grid => grid::show(&mut grid_ui, editor, &keys, &mut acts),
+            browser::View::List => list::show(&mut grid_ui, editor, &keys, &mut acts),
+        }
         // Drawn after both sides, so nothing they draw covers it (#694).
         let p = current_colors(ui.ctx()).palette;
         let ink = if grip.dragged() { p.subtle } else { p.border };
@@ -409,25 +413,63 @@ fn keyboard(editor: &EditorState, edit: TreeEdit, acts: &mut Vec<Act>) {
     }
 }
 
-/// The toolbar: Back, the open folder's breadcrumbs (each a button, and a place to drop tiles), and the search.
+/// The toolbar: Back, the open folder's breadcrumbs (each a button, and a place to drop tiles), the search, and the
+/// buttons at the right end (#699: tiles or a list).
 fn toolbar(ui: &mut Ui, editor: &mut EditorState, acts: &mut Vec<Act>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = space::S1;
         back_button(ui, editor, acts);
         ui.add_space(space::S2);
-        let search_width = SEARCH_WIDTH.min(ui.available_width() / 2.0);
-        let crumbs_width = (ui.available_width() - search_width - space::S3).max(0.0);
+        let buttons = TOOLBAR_BUTTONS as f32 * (size::ROW + space::S1);
+        let search_width = SEARCH_WIDTH.min((ui.available_width() - buttons) / 2.0).max(0.0);
+        let crumbs_width = (ui.available_width() - search_width - buttons - space::S3).max(0.0);
         let layout = Layout::left_to_right(egui::Align::Center);
         ui.allocate_ui_with_layout(vec2(crumbs_width, size::ROW), layout, |ui| {
             ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
             breadcrumbs(ui, editor, acts);
         });
-        // At the right end, the magnifier before the field as everywhere else.
-        ui.add_space((ui.available_width() - search_width).max(0.0));
+        // At the right end, the magnifier before the field as everywhere else, then the buttons.
+        ui.add_space((ui.available_width() - search_width - buttons).max(0.0));
         ui.allocate_ui_with_layout(vec2(search_width, size::ROW), layout, |ui| {
             super::search_box(ui, &mut editor.browser.query, "Search the assets");
         });
+        view_button(ui, editor);
     });
+}
+
+/// How many buttons the toolbar has at its right end, after the search.
+const TOOLBAR_BUTTONS: usize = 1;
+
+/// A button of the toolbar's: `icon`, `label` for screen readers and in its tooltip. Returns its response.
+fn toolbar_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let (rect, response) = ui.allocate_exact_size(vec2(size::ROW, size::ROW), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(radius::TILE), p.surface);
+    }
+    let ink = if response.hovered() { p.text } else { p.muted };
+    icons::paint_at(
+        ui.painter(),
+        rect.center(),
+        Align2::CENTER_CENTER,
+        icon,
+        text::BODY,
+        ink,
+    );
+    response.on_hover_text(label)
+}
+
+/// Switches between the tiles and the list (#699): it shows the view it switches to.
+fn view_button(ui: &mut Ui, editor: &mut EditorState) {
+    let (icon, label, other) = match editor.browser.view {
+        browser::View::Grid => (Icon::UiListView, "Show as a list", browser::View::List),
+        browser::View::List => (Icon::UiGridView, "Show as tiles", browser::View::Grid),
+    };
+    if toolbar_button(ui, icon, label).clicked() {
+        editor.browser.view = other;
+    }
 }
 
 /// Back, greyed out with nowhere to go back to.
@@ -632,11 +674,16 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
 /// The tiles shown on the right, in order: the search's results, or the open folder's contents.
 pub(crate) fn shown_entries(editor: &EditorState) -> Vec<Entry> {
     let query = editor.browser.query.trim();
-    if query.is_empty() {
+    let mut entries = if query.is_empty() {
         editor.asset_children(&editor.browser.open)
     } else {
         editor.asset_search(query)
+    };
+    // The list sorts by its header (#699); the tiles keep the folders-then-names order.
+    if editor.browser.view == browser::View::List {
+        browser::sort_entries(&editor.project, &mut entries, editor.browser.sort);
     }
+    entries
 }
 
 /// One line of a right-click menu.

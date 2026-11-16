@@ -803,3 +803,73 @@ fn a_script_file_s_tile_has_a_button_that_adds_it() {
         );
     }
 }
+
+/// The names of the list's rows (#699), top to bottom, of those named in `among`.
+fn list_rows(harness: &Harness<'_, Test>, among: &[&str]) -> Vec<String> {
+    let mut rows: Vec<(f32, String)> = harness
+        .query_all_by_role(Role::Row)
+        .filter_map(|node| {
+            let label = egui_kittest::kittest::NodeT::accesskit_node(&node).label()?;
+            among.contains(&label.as_str()).then(|| (node.rect().top(), label))
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rows.into_iter().map(|(_, label)| label).collect()
+}
+
+/// #699: the button by the search shows the folder as a list, whose header sorts it by name, type or size (again,
+/// the other way), folders first; a row selects as a tile does, and the button goes back to the tiles.
+#[test]
+fn the_list_view_sorts_by_its_header() {
+    use crate::editor::assets::View;
+    let mut harness = browsing("assets-list");
+    let editor_state = editor(&mut harness);
+    editor_state
+        .project
+        .create_member("Assets/Trees/big.png", vec![1; 5000])
+        .unwrap();
+    editor_state
+        .project
+        .create_member("Assets/Trees/apple.glb", vec![1; 10])
+        .unwrap();
+    let _ = editor_state.project.create_folder("Assets/Trees/Saplings");
+    editor_state.browser.open_folder("Assets/Trees");
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Show as a list").click();
+    settle(&mut harness);
+    assert_eq!(editor(&mut harness).browser.view, View::List);
+    harness.get_by_role_and_label(Role::List, "Assets");
+    let names = ["Saplings", "apple", "big", "oak"];
+    assert_eq!(list_rows(&harness, &names), names, "folders first, then by name");
+    let sort = |harness: &mut Harness<'_, Test>, column: &str| {
+        harness.get_by_role_and_label(Role::ColumnHeader, column).click();
+        settle(harness);
+    };
+    sort(&mut harness, "Size");
+    assert_eq!(list_rows(&harness, &names), ["Saplings", "apple", "oak", "big"]);
+    sort(&mut harness, "Size");
+    assert_eq!(
+        list_rows(&harness, &names),
+        ["Saplings", "big", "oak", "apple"],
+        "the other way"
+    );
+    sort(&mut harness, "Type");
+    assert_eq!(
+        list_rows(&harness, &names),
+        ["Saplings", "big", "oak", "apple"],
+        "Image before Mesh"
+    );
+    sort(&mut harness, "Name");
+    sort(&mut harness, "Name");
+    assert_eq!(list_rows(&harness, &names), ["Saplings", "oak", "big", "apple"]);
+    sort(&mut harness, "Date created");
+    assert_eq!(list_rows(&harness, &names)[0], "Saplings");
+
+    harness.get_by_role_and_label(Role::Row, "big").click();
+    settle(&mut harness);
+    assert!(editor(&mut harness).browser.selected.contains("Assets/Trees/big.png"));
+    harness.get_by_role_and_label(Role::Button, "Show as tiles").click();
+    settle(&mut harness);
+    assert_eq!(editor(&mut harness).browser.view, View::Grid);
+    assert!(tile_exists(&harness, "big"));
+}
