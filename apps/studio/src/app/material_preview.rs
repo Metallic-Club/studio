@@ -1,17 +1,15 @@
 //! The material editor's preview (#680): a renderer of its own drawing a ball with the material, lit as a new game
-//! is, from where the tab turned it, into a texture the tab shows. One for Studio's lifetime; it draws the material
-//! tab shown this frame, and nothing while none is.
+//! is, into a texture the Assets browser's inspector shows (#742). One for Studio's lifetime. It draws from the
+//! thumbnails' camera ([`super::thumbnails::ball_camera`]), so the inspector cuts it to the ball alone, and only when
+//! something changed: another material or size, an edit of the material, or assets that were still loading.
 
-use metallic_engine::metallic_core::glam::{Quat, Vec3};
+use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{DataModel, EnumItem, Id, Value};
 use metallic_engine::metallic_project::AssetId;
-use metallic_engine::metallic_render::{Camera, RenderContext, wgpu};
+use metallic_engine::metallic_render::{RenderContext, wgpu};
 use metallic_engine::{FrameStats, SceneRenderer};
 
 use crate::editor::EditorState;
-
-/// How far the camera is from the ball's centre, in metres.
-const DISTANCE: f32 = 4.2;
 
 /// The preview's renderer, its little game, and the texture egui shows.
 #[derive(Default)]
@@ -25,6 +23,11 @@ pub struct MaterialPreview {
     texture: Option<(egui::TextureId, u64)>,
     /// The project whose assets the renderer reads.
     project: Option<std::path::PathBuf>,
+    /// What it drew last: the material and the size. Drawn again only when either changes, the material is edited,
+    /// or `again` says its assets were still loading.
+    drawn: Option<(AssetId, (u32, u32))>,
+    /// The last drawing was made while assets still loaded.
+    again: bool,
     /// Why it could not start; it does not try again.
     failed: bool,
 }
@@ -33,6 +36,7 @@ impl std::fmt::Debug for MaterialPreview {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MaterialPreview")
             .field("attached", &self.attached)
+            .field("drawn", &self.drawn)
             .finish_non_exhaustive()
     }
 }
@@ -56,8 +60,9 @@ fn ball_game() -> Option<(DataModel, Id)> {
 }
 
 impl MaterialPreview {
-    /// Draws the material tab shown this frame, if one asked (`editor.materials.preview`), at the size it asked, and
-    /// tells it the texture. `changed` are the materials edited since the last frame.
+    /// Draws the material the inspector shows this frame, if it asked (`editor.materials.preview`), at the size it
+    /// asked, when something changed since the last drawing, and tells it the texture. `changed` are the materials
+    /// edited since the last frame.
     pub fn frame(
         &mut self,
         context: &RenderContext,
@@ -71,7 +76,8 @@ impl MaterialPreview {
         if self.failed {
             return;
         }
-        if self.project.as_deref() != Some(editor.project.path()) {
+        let new_project = self.project.as_deref() != Some(editor.project.path());
+        if new_project {
             self.project = Some(editor.project.path().to_path_buf());
             self.scene.set_assets(editor.project.asset_reader());
         } else if !changed.is_empty()
@@ -81,6 +87,12 @@ impl MaterialPreview {
             for material in changed {
                 assets.reload_material(&material.to_string());
             }
+        }
+        let wanted = (id, (width.max(1), height.max(1)));
+        let stale = new_project || self.again || self.drawn != Some(wanted) || changed.contains(&id);
+        if !stale && let Some((texture, _)) = self.texture {
+            editor.materials.preview_texture = Some((id, texture));
+            return;
         }
         if self.game.is_none() {
             self.game = ball_game();
@@ -103,19 +115,12 @@ impl MaterialPreview {
                 }
             }
         }
-        let (yaw, pitch) = editor
-            .materials
-            .get(id)
-            .map_or((0.6, 0.35), |open| (open.yaw, open.pitch));
-        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
-        self.scene.set_camera(Some(Camera {
-            position: rotation * Vec3::new(0.0, 0.0, DISTANCE),
-            rotation,
-            fov_y: 35f32.to_radians(),
-            near: Camera::DEFAULT_NEAR,
-        }));
+        self.scene.set_camera(Some(super::thumbnails::ball_camera()));
         self.scene.resize_viewport(width.max(1), height.max(1));
         self.scene.render_viewport(dm, FrameStats::default());
+        self.drawn = Some(wanted);
+        self.again = self.scene.assets().is_some_and(|assets| assets.pending() > 0);
+        editor.materials.preview_loading = self.again;
         let Some(target) = self.scene.viewport() else {
             return;
         };

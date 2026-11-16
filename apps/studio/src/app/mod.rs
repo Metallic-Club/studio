@@ -864,10 +864,7 @@ impl Studio {
         for image in cx.editor.images.take_opening() {
             self.dock.open_instance(&crate::editor::images::pane(image));
         }
-        // The material tabs asked for this frame (#680).
-        for material in cx.editor.materials.take_opening() {
-            self.dock.open_instance(&crate::editor::materials::pane(material));
-        }
+
         for pane in self.dock.instance_panes() {
             if let Some(image) = crate::editor::images::image_of(&pane) {
                 if cx.editor.project.assets().path(image).is_none() {
@@ -875,13 +872,7 @@ impl Studio {
                 }
                 continue;
             }
-            if let Some(material) = crate::editor::materials::material_of(&pane) {
-                if cx.editor.project.assets().path(material).is_none() {
-                    cx.editor.materials.close(material);
-                    self.dock.close(&pane);
-                }
-                continue;
-            }
+
             if crate::code::script_of(&pane).is_none_or(|script| !crate::code::in_game(&cx.editor.dm, script)) {
                 self.dock.close(&pane);
             }
@@ -1651,8 +1642,22 @@ impl Studio {
                 ids::TEST_STOP if editing => self.menu_action(MenuAction::Stop),
                 ids::EDIT_SELECT_ALL if editing => self.menu_action(MenuAction::SelectAll),
                 ids::EDIT_INSERT if editing => self.open_insert(),
-                ids::EDIT_UNDO if editing => self.menu_action(MenuAction::Undo),
-                ids::EDIT_REDO if editing => self.menu_action(MenuAction::Redo),
+                // With the Assets panel focused on a material, its own edits (#742); else the scene's.
+                id @ (ids::EDIT_UNDO | ids::EDIT_REDO) if editing => {
+                    let redo = id == ids::EDIT_REDO;
+                    let material = (context == Context::Assets)
+                        .then(|| self.editor().and_then(|editor| editor.inspected_material()))
+                        .flatten();
+                    let undone = match (material, self.editor_mut()) {
+                        (Some(material), Some(editor)) => editor.undo_material(material, redo),
+                        _ => false,
+                    };
+                    if undone {
+                        ctx.request_repaint();
+                    } else {
+                        self.menu_action(if redo { MenuAction::Redo } else { MenuAction::Undo });
+                    }
+                }
                 ids::TOOL_SELECT if editing => self.menu_action(MenuAction::Transform(Tool::Select)),
                 ids::TOOL_MOVE if editing => self.menu_action(MenuAction::Transform(Tool::Move)),
                 ids::TOOL_SCALE if editing => self.menu_action(MenuAction::Transform(Tool::Scale)),
