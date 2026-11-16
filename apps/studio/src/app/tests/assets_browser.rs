@@ -1085,3 +1085,41 @@ fn the_folder_tree_starts_near_its_left_edge() {
     assert!(child <= 42.0, "a first-level name {child} from the edge");
     assert!(child > name, "indented under the root");
 }
+
+/// #737: a press on a folder's caret opens it, and dragging on over other carets opens them too; starting on an open
+/// folder's caret closes the ones passed over instead.
+#[test]
+fn a_drag_across_the_carets_opens_or_closes_each() {
+    let mut harness = browsing("assets-caret-sweep");
+    let expanded = |harness: &mut Harness<'_, Test>, folder: &str| editor(harness).browser.expanded.contains(folder);
+    assert!(!expanded(&mut harness, "Assets") && !expanded(&mut harness, "Scripts"));
+    let caret = |harness: &Harness<'_, Test>, label: &str| harness.get_by_label(label).rect().center();
+    let from = caret(&harness, "Expand Assets");
+    harness.drag_at(from);
+    settle(&mut harness);
+    assert!(expanded(&mut harness, "Assets"), "opened when pressed");
+    // Assets' folders are in the tree now, and Scripts lower down.
+    let to = caret(&harness, "Expand Scripts");
+    harness.event(egui::Event::PointerMoved(to));
+    settle(&mut harness);
+    harness.drop_at(to);
+    settle(&mut harness);
+    assert!(expanded(&mut harness, "Scripts"), "opened when passed over");
+    assert!(expanded(&mut harness, "Assets"), "still open");
+
+    // From an open folder's caret, the others passed over close.
+    let from = caret(&harness, "Collapse Assets");
+    harness.drag_at(from);
+    settle(&mut harness);
+    assert!(!expanded(&mut harness, "Assets"));
+    let to = caret(&harness, "Collapse Scripts");
+    harness.event(egui::Event::PointerMoved(to));
+    settle(&mut harness);
+    harness.drop_at(to);
+    settle(&mut harness);
+    assert!(!expanded(&mut harness, "Scripts"));
+    // A plain click still toggles one.
+    harness.get_by_label("Expand Scripts").click();
+    settle(&mut harness);
+    assert!(expanded(&mut harness, "Scripts") && !expanded(&mut harness, "Assets"));
+}
