@@ -66,7 +66,30 @@ which Luau tooling knows). The type is part of the extension, so renaming keeps 
 ### 5. Thumbnails are a cache
 
 Tiles show a picture's image, a rendered sphere for a material and a rendered view for a scene. Thumbnails are made
-a few a frame and kept in memory by the asset's content; nothing is written into the `.mtproj`.
+a few a frame and kept in memory by the asset's content; nothing is written into the `.mtproj`. A material's is the
+ball alone (#697): the ball is in the middle of the view, so its outline is a circle, and the tile shows that disc of
+the picture, no sky.
+
+### 6. Working in the browser (2026-11-15, #693-#710)
+
+- **A script file's type is its script's (#701)** when a script in the scene runs it, whatever its name says, so a
+  Script saved as `Name.luau` before #677 shows as a Script; a file no script runs keeps its name's type (§2).
+- **Tiles or a list (#699)**, switched at the top right. The list's header sorts by Name, Type, Date created or Size,
+  again the other way, folders first; rows do what tiles do. **Date created** is the asset index's own record (#710):
+  `assets.json` keeps, per asset, when it was first indexed (`added`, seconds since 1970), kept through moves; assets
+  from before have none. It is the project's fact, the same on every machine, so the index stays free of
+  machine-local data.
+- **Ctrl and the wheel scale** the tiles (their pictures; names keep their size) or the rows (#696). The tiles are
+  squarer (`radius::TILE`, #698) and kept off the area's edges (#700); the search is wider (#695); the line beside the
+  folder tree is drawn over it (#694).
+- **Menus (#702, #705)**: the New items are a submenu of one New item; every file and folder has Copy path.
+- **Buttons on tiles (#703, #704)**: while the pointer is on a material's tile, a button gives it to the selected
+  parts; on a script file's, one adds a script running it inside each selected object. Each is one undo step. A
+  plain click on a material still applies it (#680).
+- **Importing (#706-#708)**: File, Import; Import in the browser's menus and its toolbar; and files dragged in from
+  the system's file manager. Each copies files, and folders with what is in them, into a project folder as new
+  assets, names made unique (up to 10000 files, 32 folders deep). The window does not say where in it files were
+  dropped, so a drop goes into the browser's open folder, which the browser shows while files are dragged over.
 
 ## Consequences
 
