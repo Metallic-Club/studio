@@ -125,7 +125,7 @@ fn a_new_folder_is_named_in_place_and_files_are_renamed_duplicated_and_moved() {
     settle(&mut harness);
 
     // New Folder from the empty space's menu, then named where it is.
-    harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
+    ground_menu(&mut harness);
     settle(&mut harness);
     choose_new(&mut harness, "Folder");
     harness
@@ -346,7 +346,7 @@ fn script_files_of_each_type_are_made_opened_and_dragged_into_the_explorer() {
         ("LocalScript", "Scripts/LocalScript.client.luau"),
         ("ModuleScript", "Scripts/ModuleScript.luau"),
     ] {
-        harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
+        ground_menu(&mut harness);
         settle(&mut harness);
         choose_new(&mut harness, item);
         // Named in place at once; Escape keeps the name it was given.
@@ -602,7 +602,7 @@ fn new_items_are_in_a_submenu() {
     let mut harness = browsing("assets-new-submenu");
     harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
     settle(&mut harness);
-    harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
+    ground_menu(&mut harness);
     settle(&mut harness);
     let new = harness.get_by_role_and_label(Role::MenuItem, "New").rect();
     assert!(
@@ -975,7 +975,7 @@ fn the_browser_imports_from_its_toolbar_and_menus() {
     settle(&mut harness);
     assert!(editor(&mut harness).project.contains("Assets/bark.png"));
 
-    harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
+    ground_menu(&mut harness);
     settle(&mut harness);
     harness.get_by_role_and_label(Role::MenuItem, "Import\u{2026}").click();
     settle(&mut harness);
@@ -1152,4 +1152,79 @@ fn the_list_s_columns_are_resized_from_its_header() {
     drag(&mut harness, grip, grip - egui::vec2(60.0, 0.0));
     let name = editor(&mut harness).browser.columns.name;
     assert!(name.is_some(), "Name has a width of its own now");
+}
+
+/// #740: one file or folder selected shows the inspector at the right: its name (renamed in place), its path and its
+/// details. Closed, it stays closed until something else is selected; with two selected there is none.
+#[test]
+fn the_inspector_shows_the_one_thing_selected() {
+    let mut harness = browsing("assets-inspector");
+    harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
+    settle(&mut harness);
+    assert!(harness.query_by_label("Inspector").is_none(), "nothing selected");
+    harness.get_by_role_and_label(Role::GridCell, "Trees").click();
+    settle(&mut harness);
+    let pane = harness.get_by_label("Inspector").rect();
+    let grid = harness.get_by_role_and_label(Role::Grid, "Assets").rect();
+    assert!(pane.left() >= grid.right() - 1.0, "at the right: {pane:?} {grid:?}");
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::TextInput, "Name")
+            .value()
+            .as_deref(),
+        Some("Trees")
+    );
+    harness.get_by_label("Assets/Trees");
+    harness.get_by_label("Type: Folder");
+    harness.get_by_label("Contents: 1 item");
+
+    // Renamed from its name.
+    harness.get_by_role_and_label(Role::TextInput, "Name").click();
+    settle(&mut harness);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    harness
+        .get_by_role_and_label(Role::TextInput, "Name")
+        .type_text("Pines");
+    harness.key_press(Key::Enter);
+    settle(&mut harness);
+    assert!(editor(&mut harness).project.has_folder("Assets/Pines"));
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::TextInput, "Name")
+            .value()
+            .as_deref(),
+        Some("Pines"),
+        "it follows the rename"
+    );
+
+    // Closed: gone until something else is selected.
+    harness
+        .get_by_role_and_label(Role::Button, "Close the inspector")
+        .click();
+    settle(&mut harness);
+    assert!(harness.query_by_label("Inspector").is_none());
+    harness.get_by_role_and_label(Role::GridCell, "Materials").click();
+    settle(&mut harness);
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::TextInput, "Name")
+            .value()
+            .as_deref(),
+        Some("Materials")
+    );
+    // Two selected: none.
+    harness
+        .get_by_role_and_label(Role::GridCell, "Pines")
+        .click_modifiers(egui::Modifiers::COMMAND);
+    settle(&mut harness);
+    assert!(harness.query_by_label("Inspector").is_none());
+}
+
+/// Right-clicks the empty space behind the tiles, at its bottom right, where no tile is (the inspector, #740, can make
+/// the area narrow enough for a tile to sit in its middle).
+fn ground_menu(harness: &mut Harness<'_, Test>) {
+    let grid = harness.get_by_role_and_label(Role::Grid, "Assets").rect();
+    let at = grid.right_bottom() - egui::vec2(12.0, 12.0);
+    right_click(harness, egui::Rect::from_center_size(at, egui::vec2(2.0, 2.0)));
+    settle(harness);
 }
