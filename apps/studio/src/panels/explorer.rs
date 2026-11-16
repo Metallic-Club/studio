@@ -27,7 +27,7 @@ use self::query::{Query, SUGGESTED, with_term};
 use super::insert::Inserting;
 use super::{class_icon, empty_note, ids, search_box_then};
 use crate::dock::{Panel, PanelContext, Zone};
-use crate::editor::edit::is_movable;
+use crate::editor::edit::{is_movable, is_removable};
 use crate::editor::{Selection, TreeEdit};
 use crate::keymap::Context;
 use crate::theme::icons::{self, Icon};
@@ -823,8 +823,9 @@ fn row_ui(ui: &mut Ui, dm: &DataModel, row: Row, look: Look, keys: &MenuKeys) ->
             }
             ui.separator();
             let movable = is_movable(dm, row.id);
+            let removable = is_removable(dm, row.id);
             for ((label, edit), shortcut) in ROW_MENU.iter().zip(&keys.edits) {
-                let enabled = edit.pastes() || movable;
+                let enabled = edit.pastes() || if edit.removes() { removable } else { movable };
                 if menu::menu_item(ui, width, label, shortcut.clone(), None, enabled).clicked() {
                     chosen = Some(*edit);
                 }

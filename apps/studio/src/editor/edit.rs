@@ -172,9 +172,17 @@ impl Scene<'_> {
             .collect()
     }
 
+    /// What Delete, Cut and moves act on: [`Scene::movable_selection`] without Workspace's camera (#731).
+    fn removable_selection(&self) -> Vec<Id> {
+        self.movable_selection()
+            .into_iter()
+            .filter(|&id| is_removable(self.dm, id))
+            .collect()
+    }
+
     /// Delete: takes the selection out of the tree (kept for undo) and selects nothing. Returns how many went.
     pub fn delete(&mut self) -> usize {
-        let doomed = self.movable_selection();
+        let doomed = self.removable_selection();
         for &id in &doomed {
             if let Err(error) = self.move_to(id, None, None) {
                 log::warn!("edit: could not delete: {error}");
@@ -215,6 +223,11 @@ impl Scene<'_> {
     /// Copy: puts copies of the selection on the clipboard, in place of what it held. Returns how many.
     pub fn copy(&mut self) -> usize {
         let originals = self.movable_selection();
+        self.copy_these(originals)
+    }
+
+    /// Puts copies of `originals` on the clipboard, in place of what it held. Returns how many.
+    fn copy_these(&mut self, originals: Vec<Id>) -> usize {
         if originals.is_empty() {
             return 0;
         }
@@ -238,9 +251,11 @@ impl Scene<'_> {
         self.clipboard.items.len()
     }
 
-    /// Cut: copies the selection, then deletes it. Returns how many.
+    /// Cut: copies the selection, then deletes it; what Delete leaves (Workspace's camera, #731) is not copied either.
+    /// Returns how many.
     pub fn cut(&mut self) -> usize {
-        if self.copy() == 0 {
+        let originals = self.removable_selection();
+        if self.copy_these(originals) == 0 {
             return 0;
         }
         self.delete()
@@ -314,7 +329,7 @@ impl Scene<'_> {
     /// Whether the selection can move under `parent`: something in it moves, and `parent` is neither the root nor
     /// inside (or one of) what moves.
     pub fn can_move_selection(&self, parent: Id) -> bool {
-        let moving = self.movable_selection();
+        let moving = self.removable_selection();
         !moving.is_empty()
             && self.dm.root() != Some(parent)
             && moving
@@ -328,7 +343,7 @@ impl Scene<'_> {
         if !self.can_move_selection(parent) {
             return 0;
         }
-        let moving = self.movable_selection();
+        let moving = self.removable_selection();
         // Before an instance that moves too is before the next one that stays.
         let mut before = before;
         while let Some(id) = before.filter(|id| moving.contains(id)) {
@@ -361,7 +376,7 @@ impl Scene<'_> {
 
     /// Why the selection cannot go inside `parent`, if it cannot.
     fn why_not_parent(&self, parent: Id) -> Option<String> {
-        let moving = self.movable_selection();
+        let moving = self.removable_selection();
         let name = |id: Id| self.dm.name(id).unwrap_or_default().to_owned();
         if moving.is_empty() {
             return Some("The selection can't move: services stay where they are.".to_owned());
@@ -425,6 +440,11 @@ impl TreeEdit {
         matches!(self, TreeEdit::Paste | TreeEdit::PasteInto)
     }
 
+    /// Whether it takes the selection out of the tree, which Workspace's camera never leaves (#731).
+    pub fn removes(self) -> bool {
+        matches!(self, TreeEdit::Cut | TreeEdit::Delete)
+    }
+
     /// The keymap's command for it, whose shortcut menus show (#660).
     pub fn command(self) -> &'static str {
         use crate::keymap::ids;
@@ -438,6 +458,20 @@ impl TreeEdit {
             TreeEdit::Delete => ids::EDIT_DELETE,
         }
     }
+}
+
+/// Whether `id` can be deleted, cut or moved elsewhere: what [`is_movable`] allows but Workspace's camera, its
+/// `CurrentCamera` (#731), which the game looks through. It can still be copied, and its copies deleted.
+pub fn is_removable(dm: &DataModel, id: Id) -> bool {
+    is_movable(dm, id) && !is_current_camera(dm, id)
+}
+
+/// Whether `id` is Workspace's `CurrentCamera`.
+fn is_current_camera(dm: &DataModel, id: Id) -> bool {
+    let Some(workspace) = dm.registry().class_id("Workspace").and_then(|class| dm.service(class)) else {
+        return false;
+    };
+    matches!(dm.get_by_name(workspace, "CurrentCamera"), Ok(Value::Ref(Some(camera))) if camera == id)
 }
 
 /// Whether `id` can be moved, copied or deleted: anything but the root and the services.
