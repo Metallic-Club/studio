@@ -207,8 +207,8 @@ pub struct AssetDrag {
 const TREE_WIDTH: f32 = 190.0;
 /// The narrowest the tree or the tiles get.
 const MIN_SIDE: f32 = 110.0;
-/// The search field's width.
-const SEARCH_WIDTH: f32 = 180.0;
+/// The search field's width (#695: 180 was too small to read a search in), at most half the toolbar.
+const SEARCH_WIDTH: f32 = 300.0;
 /// The label of the root, in the tree and the breadcrumbs.
 pub const ROOT: &str = "Project";
 
