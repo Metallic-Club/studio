@@ -15,6 +15,20 @@ use crate::editor::pictures::{Picture, Wanted};
 /// A thumbnail's side, in pixels.
 pub const SIDE: u32 = 128;
 
+/// The ball a material is drawn on: its radius, in units.
+const BALL_RADIUS: f32 = 1.0;
+/// How far the camera is from the ball's centre.
+const BALL_DISTANCE: f32 = 4.0;
+/// The camera's vertical field of view, in degrees.
+const BALL_FOV: f32 = 35.0;
+
+/// How far a material's ball reaches from its picture's centre, as a share of the picture's side (#697). The ball is
+/// in the middle of the view, so its outline is a circle, which the Assets browser cuts the picture to.
+pub fn ball_radius() -> f32 {
+    let angular = (BALL_RADIUS / BALL_DISTANCE).asin();
+    angular.tan() / (BALL_FOV.to_radians() / 2.0).tan() / 2.0
+}
+
 /// The thumbnails' renderer and the textures it made.
 #[derive(Default)]
 pub struct Thumbnails {
@@ -40,14 +54,15 @@ impl std::fmt::Debug for Thumbnails {
     }
 }
 
-/// A game holding one ball, 2 m across, at the origin.
+/// A game holding one ball, [`BALL_RADIUS`] in radius, at the origin.
 fn ball_game() -> Option<(DataModel, Id)> {
     let mut dm = metallic_engine::metallic_classes::new_game().ok()?;
     let workspace = dm.service(dm.registry().class_id("Workspace")?)?;
     let ball = dm.create(dm.registry().class_id("Part")?).ok()?;
     dm.set_by_name(ball, "Shape", Value::Enum(EnumItem::new("PartShape", "Ball")))
         .ok()?;
-    dm.set_by_name(ball, "Size", Value::Vector3(Vec3::splat(2.0))).ok()?;
+    dm.set_by_name(ball, "Size", Value::Vector3(Vec3::splat(2.0 * BALL_RADIUS)))
+        .ok()?;
     dm.set_by_name(ball, "Color", Value::Color3(Color3::WHITE)).ok()?;
     dm.set_parent(ball, Some(workspace)).ok()?;
     Some((dm, ball))
@@ -124,9 +139,9 @@ impl Thumbnails {
         let _ = dm.set_by_name(*ball, "Material", Value::String(id.to_string().into()));
         let rotation = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-0.35);
         self.scene.set_camera(Some(Camera {
-            position: rotation * Vec3::new(0.0, 0.0, 4.0),
+            position: rotation * Vec3::new(0.0, 0.0, BALL_DISTANCE),
             rotation,
-            fov_y: 35f32.to_radians(),
+            fov_y: BALL_FOV.to_radians(),
             near: Camera::DEFAULT_NEAR,
         }));
         self.scene.render_viewport(dm, FrameStats::default());

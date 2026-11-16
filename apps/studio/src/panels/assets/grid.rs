@@ -303,6 +303,48 @@ fn drag_chip(ui: &Ui) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
 }
 
+/// The share of the ball's outline its disc is cut a little inside, so no sky shows at its rim.
+const BALL_INSET: f32 = 0.98;
+/// The sides of the ball's disc.
+const BALL_SIDES: usize = 64;
+
+/// Paints the material picture `texture` filling `area` as its ball alone (#697): a disc of the picture inside the
+/// ball's outline ([`crate::app::thumbnails::ball_radius`]), its rim faded out over a pixel so it is smooth.
+pub(crate) fn paint_ball(painter: &egui::Painter, texture: egui::TextureId, area: Rect) {
+    use egui::epaint::{Mesh, Vertex};
+    let share = crate::app::thumbnails::ball_radius() * BALL_INSET;
+    let radius = share * area.width();
+    let half_pixel = 0.5 / painter.ctx().pixels_per_point();
+    let centre = area.center();
+    let middle = pos2(0.5, 0.5);
+    let vertex = |distance: f32, angle: f32, color: egui::Color32| {
+        let towards = egui::Vec2::angled(angle);
+        Vertex {
+            pos: centre + distance * towards,
+            uv: middle + (distance / area.width()) * towards,
+            color,
+        }
+    };
+    let mut mesh = Mesh::with_texture(texture);
+    mesh.vertices.push(vertex(0.0, 0.0, egui::Color32::WHITE));
+    for side in 0..BALL_SIDES {
+        let angle = std::f32::consts::TAU * side as f32 / BALL_SIDES as f32;
+        mesh.vertices
+            .push(vertex(radius - half_pixel, angle, egui::Color32::WHITE));
+        mesh.vertices
+            .push(vertex(radius + half_pixel, angle, egui::Color32::TRANSPARENT));
+    }
+    for side in 0..BALL_SIDES {
+        let next = (side + 1) % BALL_SIDES;
+        let (inner, outer) = (1 + 2 * side as u32, 2 + 2 * side as u32);
+        let (next_inner, next_outer) = (1 + 2 * next as u32, 2 + 2 * next as u32);
+        mesh.add_triangle(0, inner, next_inner);
+        mesh.add_triangle(inner, outer, next_inner);
+        mesh.add_triangle(next_inner, outer, next_outer);
+    }
+    painter.add(mesh);
+}
+
 /// How many pictures a frame decodes for their tiles.
 const DECODES_A_FRAME: usize = 2;
 
@@ -356,9 +398,57 @@ fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: Rect, decod
             let Some((texture, _)) = drawn else {
                 return false;
             };
-            ui.painter().image(texture, area, full, egui::Color32::WHITE);
+            if kind == AssetKind::Material {
+                // The ball alone, no sky round it (#697).
+                paint_ball(ui.painter(), texture, area);
+            } else {
+                ui.painter().image(texture, area, full, egui::Color32::WHITE);
+            }
             true
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #697: a material's ball is a disc inside the ball's outline: nothing opaque outside it, and its picture read from
+    /// the middle of the thumbnail outwards as far as the ball reaches.
+    #[test]
+    fn a_ball_is_painted_as_a_disc_inside_its_outline() {
+        let ctx = egui::Context::default();
+        let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(44.0, 44.0));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_ball(ui.painter(), egui::TextureId::User(7), area);
+        });
+        output.textures_delta.clear();
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.clone()),
+                _ => None,
+            })
+            .expect("a mesh");
+        assert_eq!(mesh.texture_id, egui::TextureId::User(7));
+        let reach = crate::app::thumbnails::ball_radius();
+        assert!((0.35..0.5).contains(&reach), "{reach}");
+        let outline = reach * area.width();
+        for vertex in &mesh.vertices {
+            let distance = vertex.pos.distance(area.center());
+            if vertex.color.a() > 0 {
+                assert!(
+                    distance <= outline,
+                    "an opaque point outside the ball: {distance} > {outline}"
+                );
+            }
+            assert!(vertex.uv.distance(pos2(0.5, 0.5)) <= reach + 0.01, "{:?}", vertex.uv);
+        }
+        assert!(
+            mesh.vertices.iter().any(|vertex| vertex.color.a() == 0),
+            "the rim fades out"
+        );
     }
 }
