@@ -38,12 +38,22 @@ fn rows(editor: &EditorState) -> Vec<Row> {
         has_children: true,
         expanded: true,
     }];
-    walk(editor, "", 1, &mut out);
+    // Script files take their scripts' types (#701), worked out once for the whole tree.
+    let types = browser::script_types(&editor.dm);
+    walk(editor, &types, "", 1, &mut out);
     out
 }
 
-fn walk(editor: &EditorState, folder: &str, depth: usize, out: &mut Vec<Row>) {
-    for entry in browser::children(&editor.project, folder) {
+fn walk(
+    editor: &EditorState,
+    types: &std::collections::HashMap<String, crate::panels::assets::ScriptType>,
+    folder: &str,
+    depth: usize,
+    out: &mut Vec<Row>,
+) {
+    let mut entries = browser::children(&editor.project, folder);
+    browser::retype(&mut entries, types);
+    for entry in entries {
         let is_folder = entry.is_folder();
         let expanded = is_folder && editor.browser.expanded.contains(&entry.path);
         let has_children = is_folder && !browser::children(&editor.project, &entry.path).is_empty();
@@ -55,7 +65,7 @@ fn walk(editor: &EditorState, folder: &str, depth: usize, out: &mut Vec<Row>) {
             expanded,
         });
         if expanded {
-            walk(editor, &path, depth + 1, out);
+            walk(editor, types, &path, depth + 1, out);
         }
     }
 }

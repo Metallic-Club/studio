@@ -423,3 +423,53 @@ fn script_files_of_each_type_are_made_opened_and_dragged_into_the_explorer() {
     settle(&mut harness);
     assert!(!crate::code::in_game(&editor(&mut harness).dm, local));
 }
+
+/// #701: a script file takes the type of the script that runs it, so a Script saved as `Name.luau` (before #677) is a
+/// Script in the browser, not a ModuleScript; a file no script runs keeps the type its name gives.
+#[test]
+fn script_files_take_the_type_of_the_script_that_runs_them() {
+    use crate::editor::assets::EntryKind;
+    use crate::panels::assets::{AssetKind, ScriptType};
+    let mut harness = browsing("assets-script-types");
+    let editor_state = editor(&mut harness);
+    for member in ["Scripts/Old.luau", "Scripts/Hud.luau", "Scripts/Util.luau"] {
+        editor_state
+            .project
+            .create_member(member, b"print(1)".to_vec())
+            .unwrap();
+    }
+    let workspace = editor_state
+        .dm
+        .service(editor_state.dm.registry().class_id("Workspace").unwrap())
+        .unwrap();
+    for (class, member) in [("Script", "Scripts/Old.luau"), ("LocalScript", "Scripts/Hud.luau")] {
+        let id = editor_state
+            .dm
+            .create(editor_state.dm.registry().class_id(class).unwrap())
+            .unwrap();
+        editor_state
+            .dm
+            .set_by_name(id, "Source", Value::String(member.into()))
+            .unwrap();
+        editor_state.dm.set_parent(id, Some(workspace)).unwrap();
+    }
+    let kind = |entries: &[crate::editor::assets::Entry], path: &str| {
+        entries.iter().find(|entry| entry.path == path).map(|entry| entry.kind)
+    };
+    let shown = editor_state.asset_children("Scripts");
+    let script = |script| Some(EntryKind::File(AssetKind::Script(script)));
+    assert_eq!(kind(&shown, "Scripts/Old.luau"), script(ScriptType::Server));
+    assert_eq!(kind(&shown, "Scripts/Hud.luau"), script(ScriptType::Local));
+    assert_eq!(kind(&shown, "Scripts/Util.luau"), script(ScriptType::Module));
+    assert_eq!(kind(&shown, "Scripts/Door.server.luau"), script(ScriptType::Server));
+    let found = editor_state.asset_search("Old");
+    assert_eq!(kind(&found, "Scripts/Old.luau"), script(ScriptType::Server));
+    assert_eq!(editor_state.script_type("Scripts/Hud.luau"), Some(ScriptType::Local));
+    assert_eq!(editor_state.script_type("Scripts/Util.luau"), Some(ScriptType::Module));
+    assert_eq!(editor_state.script_type("Assets/Trees/oak.png"), None);
+
+    // Its tile is there, drawn with that type.
+    editor_state.browser.open_folder("Scripts");
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::GridCell, "Old");
+}

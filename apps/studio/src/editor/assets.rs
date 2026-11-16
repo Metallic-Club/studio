@@ -6,9 +6,9 @@
 //! a moved file in the saved scenes; [`EditorState`] then does the same for what it holds in memory: the scene being
 //! edited (its scripts' `Source`), the script editor's open files, and the browser's own paths.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-use metallic_engine::metallic_core::{Id, Value};
+use metallic_engine::metallic_core::{DataModel, Id, Value};
 use metallic_engine::metallic_project::asset_index::{is_asset, is_editor_data};
 use metallic_engine::metallic_project::{MemberMove, PATH_PROPERTIES, Project};
 
@@ -218,6 +218,31 @@ pub fn search(project: &Project, query: &str) -> Vec<Entry> {
     entries
 }
 
+/// The type of each script file a script of `dm` runs (#701): that script's, whatever the file's name says. Scripts
+/// saved before #677 are `Name.luau` whatever they are, which their names alone would make ModuleScripts. Of two
+/// scripts running one file, the first in the tree's order counts.
+pub fn script_types(dm: &DataModel) -> HashMap<String, ScriptType> {
+    let mut types = HashMap::new();
+    for (id, member) in crate::code::script_files(dm) {
+        types.entry(member).or_insert_with(|| ScriptType::of_class(dm, id));
+    }
+    types
+}
+
+/// Gives each script file among `entries` that a script runs that script's type ([`script_types`]).
+pub fn retype(entries: &mut [Entry], types: &HashMap<String, ScriptType>) {
+    for entry in entries {
+        let Some(&script) = types.get(&entry.path) else {
+            continue;
+        };
+        if let EntryKind::File(kind @ AssetKind::Script(_)) | EntryKind::Missing(kind @ AssetKind::Script(_)) =
+            &mut entry.kind
+        {
+            *kind = AssetKind::Script(script);
+        }
+    }
+}
+
 /// `name` made unique in `folder` with a number before its extension (`New Folder 2`, `Rock 2.png`).
 pub fn unique_name(project: &Project, folder: &str, name: &str) -> String {
     let taken = |name: &str| {
@@ -353,6 +378,27 @@ impl AssetBrowser {
 }
 
 impl EditorState {
+    /// What the browser shows in `folder` ([`children`]), script files of the type their scripts are (#701).
+    pub fn asset_children(&self, folder: &str) -> Vec<Entry> {
+        let mut entries = children(&self.project, folder);
+        retype(&mut entries, &script_types(&self.dm));
+        entries
+    }
+
+    /// What the browser's search for `query` finds ([`search`]), script files of the type their scripts are (#701).
+    pub fn asset_search(&self, query: &str) -> Vec<Entry> {
+        let mut entries = search(&self.project, query);
+        retype(&mut entries, &script_types(&self.dm));
+        entries
+    }
+
+    /// The type of the script file `path` (#701): the type of a script that runs it, else the type its name gives;
+    /// `None` for a file that is not a script.
+    pub fn script_type(&self, path: &str) -> Option<ScriptType> {
+        let named = ScriptType::of(path)?;
+        Some(script_types(&self.dm).get(path).copied().unwrap_or(named))
+    }
+
     /// Makes a new, empty folder in `parent` with a unique name, and returns its path.
     pub fn new_folder(&mut self, parent: &str) -> Result<String, String> {
         let name = unique_name(&self.project, parent, NEW_FOLDER);
@@ -396,7 +442,7 @@ impl EditorState {
     /// file no script runs yet gets one, of its type, where that type runs ([`ScriptType::home`]), as an edit of the
     /// scene that undo takes back.
     pub fn open_script_file(&mut self, path: &str) -> Result<(), String> {
-        let Some(script) = ScriptType::of(path) else {
+        let Some(script) = self.script_type(path) else {
             return Err(format!("{} is not a script.", file_name(path)));
         };
         let running = crate::code::script_files(&self.dm)
@@ -434,7 +480,7 @@ impl EditorState {
     /// Adds a script of the file `path`'s type inside `parent`, named after the file, its `Source` the file, as an
     /// edit of the scene (#677: a script file dragged into the Explorer). Returns the new script.
     pub fn script_from_file(&mut self, path: &str, parent: Id) -> Result<Id, String> {
-        let Some(script) = ScriptType::of(path) else {
+        let Some(script) = self.script_type(path) else {
             return Err(format!("{} is not a script.", file_name(path)));
         };
         let class = self
