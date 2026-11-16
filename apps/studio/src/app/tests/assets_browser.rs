@@ -502,3 +502,19 @@ fn the_line_beside_the_folder_tree_is_whole() {
         }
     }
 }
+
+/// #695: the search field is wide enough to read a search in, and still at most half the toolbar.
+#[test]
+fn the_search_field_is_wide() {
+    let mut harness = browsing("assets-search-width");
+    let field = harness
+        .get_by_role_and_label(Role::TextInput, "Search the assets")
+        .rect();
+    assert!(field.width() >= 260.0, "{field:?}");
+    harness.set_size(egui::vec2(700.0, 1000.0));
+    settle(&mut harness);
+    let narrow = harness
+        .get_by_role_and_label(Role::TextInput, "Search the assets")
+        .rect();
+    assert!(narrow.width() < field.width(), "it shrinks with the panel: {narrow:?}");
+}
