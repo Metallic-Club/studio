@@ -998,6 +998,31 @@ fn shape_as_splash(window: &Window) {
 mod tests {
     use super::*;
 
+    /// #691: Studio's window lives on the main thread's stack (1 MB on Windows), and a debug build copies it more than
+    /// once on the way there. With its scene renderers inline (about 32 KB each) it overflowed at startup, so each is
+    /// boxed: whatever holds one is smaller than one, and the window stays far enough under the stack that one renderer
+    /// added inline is caught here rather than by a crash.
+    #[test]
+    fn the_window_fits_the_main_thread_s_stack() {
+        use std::mem::size_of;
+        let renderer = size_of::<metallic_engine::SceneRenderer>();
+        for (holder, size) in [
+            ("the viewport", size_of::<ViewportRenderer>()),
+            (
+                "the material preview",
+                size_of::<crate::app::material_preview::MaterialPreview>(),
+            ),
+            ("the thumbnails", size_of::<crate::app::thumbnails::Thumbnails>()),
+        ] {
+            assert!(size < renderer, "{holder} holds a scene renderer inline: {size} bytes");
+        }
+        let window = size_of::<StudioWindow>();
+        assert!(
+            window < 80 * 1024,
+            "Studio's window is {window} bytes; box what made it grow"
+        );
+    }
+
     /// #505: a kept place is used only while its title bar is on a monitor.
     #[test]
     fn a_kept_window_place_is_used_only_on_a_monitor() {
