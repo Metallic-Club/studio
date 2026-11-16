@@ -2,7 +2,8 @@
 //! the hue at the top right, black along the bottom), a vertical hue slider to its right, and under them a hex field
 //! (`#rrggbb`) that a button switches to one field of R, G and B (`255, 255, 255`, 0 to 255, as the Properties panel
 //! has them; #574), each centred. Everything is in sRGB, as the colour is shown.
-//! The hue is kept while the picker is open, so a grey or black keeps the hue it was dragged from.
+//! The hue is kept while the picker is open, so a grey or black keeps the hue it was dragged from. The hue slider
+//! changes the hue alone (#732): a grey, white or black stays as it is, and the square shows the new hue.
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{Color32, CornerRadius, FontId, Id, Rect, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, pos2, vec2};
@@ -245,11 +246,6 @@ fn hue_strip(ui: &mut Ui, id: Id, hsv: &mut Hsv) {
         .filter(|_| response.is_pointer_button_down_on())
     {
         hsv.h = ((at.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
-        // A grey or black has no hue to show: picking one makes the colour show it.
-        if hsv.s <= 0.0 || hsv.v <= 0.0 {
-            hsv.s = hsv.s.max(1.0);
-            hsv.v = hsv.v.max(1.0);
-        }
     }
     let steps = 36;
     let mut mesh = Mesh::default();
@@ -368,6 +364,22 @@ mod tests {
         press(&mut harness, strip.center());
         harness.run();
         assert_eq!(*harness.state(), [0, 255, 255]);
+        // #732: the hue alone changes; the colour keeps how saturated and bright it is.
+        let square = harness
+            .get_by_role_and_label(Role::Slider, "Saturation and value")
+            .rect();
+        press(&mut harness, square.lerp_inside(vec2(0.5, 0.5)));
+        let half = *harness.state();
+        press(&mut harness, strip.center_top());
+        assert_eq!(Hsv::of(*harness.state(), 0.0).h, 0.0, "red now");
+        let (before, after) = (Hsv::of(half, 0.5), Hsv::of(*harness.state(), 0.0));
+        assert!((before.s - after.s).abs() < 0.02 && (before.v - after.v).abs() < 0.02);
+        // A grey keeps being that grey, whatever the hue.
+        press(&mut harness, square.left_top() + vec2(0.0, 60.0));
+        let grey = *harness.state();
+        assert!(grey[0] == grey[1] && grey[1] == grey[2], "{grey:?}");
+        press(&mut harness, strip.center());
+        assert_eq!(*harness.state(), grey);
         // The hex field.
         harness.get_by_role_and_label(Role::TextInput, "Hex").click();
         harness.run();
