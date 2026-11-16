@@ -365,6 +365,8 @@ icons! {
     UiPalette = "ui.palette", Interface, "palette";
     /// Add another.
     UiAdd = "ui.add", Interface, "plus";
+    /// Give the material to the selected parts (#703), on a material's tile.
+    UiApplyMaterial = "ui.apply_material", Interface, "paint-bucket";
     /// Move up in a list.
     UiMoveUp = "ui.move_up", Interface, "chevron-up";
     /// Move down in a list.

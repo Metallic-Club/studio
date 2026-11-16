@@ -219,6 +219,12 @@ impl EditorState {
         applied
     }
 
+    /// Whether a part is selected to give a material to (#703: the button on a material's tile).
+    pub fn can_apply_material(&mut self) -> bool {
+        let scene = self.scene();
+        scene.selection.ids().iter().any(|&id| is_a(scene.dm, id, "BasePart"))
+    }
+
     /// Gives the part `part` the material `id` (#680: a material dropped on it in the viewport), as an undo step.
     pub fn apply_material_to(&mut self, id: AssetId, part: Id) -> Result<(), String> {
         let mut scene = self.scene();
