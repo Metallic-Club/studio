@@ -707,10 +707,8 @@ mod tests {
             [radius::ITEM, radius::INPUT, radius::PANEL, radius::DIALOG],
             [8, 9, 12, 15]
         );
-        assert!(
-            radius::TILE < radius::ITEM,
-            "the Assets browser's tiles are squarer (#698)"
-        );
+        // The Assets browser's tiles are squarer than items (#698).
+        assert_eq!(radius::TILE, 4);
         assert_eq!((size::BORDER, size::ACCENT_BAR, size::SELECTED_BAR), (1.0, 3.0, 19.0));
         assert!((10.0..=11.0).contains(&text::LABEL) && text::LABEL_TRACKING == 1.3);
         assert!((14.0..=15.0).contains(&text::BODY) && (14.0..=15.0).contains(&text::BODY_LG));
