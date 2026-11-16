@@ -15,14 +15,40 @@ use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, space, text};
 
-/// A tile's size.
-pub(super) const TILE: egui::Vec2 = egui::vec2(84.0, 82.0);
+/// A tile's width at scale 1.
+const TILE_WIDTH: f32 = 84.0;
 /// The space between tiles.
 const GAP: f32 = space::S2;
-/// A tile's icon.
+/// A tile's icon at scale 1.
 const ICON: f32 = 30.0;
-/// The height of a tile's icon area, above its name.
+/// The height of a tile's icon area, above its name, at scale 1.
 const ICON_AREA: f32 = 44.0;
+/// The height of a tile's name: two lines of small text, the same at every scale.
+const NAME_AREA: f32 = 38.0;
+
+/// A tile's measures at the browser's scale (#696, Ctrl and the wheel): its picture grows and shrinks, its name keeps
+/// its size and gets the tile's width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Measures {
+    /// The tile.
+    pub tile: egui::Vec2,
+    /// Its icon's size.
+    pub icon: f32,
+    /// Its picture's square, above its name.
+    pub icon_area: f32,
+}
+
+impl Measures {
+    /// The measures at `scale` ([`crate::editor::assets::AssetBrowser::scale`]).
+    pub(crate) fn at(scale: f32) -> Self {
+        let icon_area = (ICON_AREA * scale).round();
+        Self {
+            tile: vec2((TILE_WIDTH * scale).round().max(64.0), icon_area + NAME_AREA),
+            icon: (ICON * scale).round(),
+            icon_area,
+        }
+    }
+}
 /// The room between the tiles and the area's edges (#700), so none sits flat against them.
 const PAD: f32 = space::S3;
 
@@ -68,19 +94,28 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
         ground_drop(acts);
         return;
     }
-    let columns = (((area.width() - 2.0 * PAD + GAP) / (TILE.x + GAP)).floor() as usize).max(1);
+    // Ctrl and the wheel over the tiles scale them (#696); the wheel alone scrolls.
+    if ui.rect_contains_pointer(area) {
+        let zoom = ui.input(|input| input.zoom_delta());
+        if zoom != 1.0 {
+            editor.browser.zoom(zoom);
+        }
+    }
+    let measures = Measures::at(editor.browser.scale);
+    let tile_size = measures.tile;
+    let columns = (((area.width() - 2.0 * PAD + GAP) / (tile_size.x + GAP)).floor() as usize).max(1);
     let lines = entries.len().div_ceil(columns);
     ScrollArea::vertical()
         .id_salt("assets.tiles")
         .auto_shrink([false, false])
         .content_margin(egui::Margin::same(PAD as i8))
-        .show_rows(ui, TILE.y + GAP, lines, |ui, range| {
+        .show_rows(ui, tile_size.y + GAP, lines, |ui, range| {
             for line in range {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
                     let start = line * columns;
                     for entry in &entries[start..(start + columns).min(entries.len())] {
-                        tile(ui, editor, entry, keys, acts, &mut decodes);
+                        tile(ui, editor, entry, measures, keys, acts, &mut decodes);
                     }
                 });
                 ui.add_space(GAP);
@@ -91,12 +126,25 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
 }
 
 /// One tile: its icon on a fill when selected or under the pointer, its name under it (two lines at most).
-fn tile(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, keys: &Keys, acts: &mut Vec<Act>, decodes: &mut usize) {
+fn tile(
+    ui: &mut Ui,
+    editor: &mut EditorState,
+    entry: &Entry,
+    measures: Measures,
+    keys: &Keys,
+    acts: &mut Vec<Act>,
+    decodes: &mut usize,
+) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let selected = editor.browser.selected.contains(&entry.path);
     let renaming = editor.browser.renaming.as_deref() == Some(entry.path.as_str());
-    let (rect, response) = ui.allocate_exact_size(TILE, Sense::click_and_drag());
+    let Measures {
+        tile: tile_size,
+        icon: icon_size,
+        icon_area,
+    } = measures;
+    let (rect, response) = ui.allocate_exact_size(tile_size, Sense::click_and_drag());
     let name = entry.name().to_owned();
     response.widget_info(|| WidgetInfo::selected(Role::GridCell, true, selected, &name));
     let folder = entry.is_folder();
@@ -125,14 +173,14 @@ fn tile(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, keys: &Keys, acts:
             EntryKind::File(kind) => (kind.icon(), kind.icon().color(&colors)),
             EntryKind::Missing(_) => (Icon::UiWarning, colors.accent),
         };
-        let centre = pos2(rect.center().x, rect.top() + space::S2 + ICON_AREA / 2.0);
-        let area = Rect::from_center_size(centre, vec2(ICON_AREA, ICON_AREA));
+        let centre = pos2(rect.center().x, rect.top() + space::S2 + icon_area / 2.0);
+        let area = Rect::from_center_size(centre, vec2(icon_area, icon_area));
         // A picture, a material or a scene shows itself (#681); until its thumbnail is here, its kind's icon.
         if !thumbnail(ui, editor, entry, area, decodes) {
-            icons::paint_at(ui.painter(), centre, Align2::CENTER_CENTER, icon, ICON, ink);
+            icons::paint_at(ui.painter(), centre, Align2::CENTER_CENTER, icon, icon_size, ink);
         }
         let label = Rect::from_min_max(
-            pos2(rect.left() + space::S1, rect.top() + space::S2 + ICON_AREA),
+            pos2(rect.left() + space::S1, rect.top() + space::S2 + icon_area),
             pos2(rect.right() - space::S1, rect.bottom() - space::S1),
         );
         if renaming {

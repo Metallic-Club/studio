@@ -548,3 +548,43 @@ fn tiles_keep_room_from_the_edges() {
     assert!(first.left() - grid.left() >= 6.0, "{first:?} in {grid:?}");
     assert!(first.top() - grid.top() >= 6.0, "{first:?} in {grid:?}");
 }
+
+/// #696: Ctrl and the wheel over the tiles make them bigger or smaller, within limits; the wheel alone does not.
+#[test]
+fn ctrl_and_the_wheel_scale_the_tiles() {
+    use crate::editor::assets::{MAX_SCALE, MIN_SCALE};
+    let mut harness = browsing("assets-scale");
+    let before = harness.get_by_role_and_label(Role::GridCell, "Assets").rect();
+    let wheel = |harness: &mut Harness<'_, Test>, y: f32, modifiers: egui::Modifiers| {
+        let over = harness.get_by_role_and_label(Role::GridCell, "Assets").rect().center();
+        harness.event(egui::Event::PointerMoved(over));
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, y),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        settle(harness);
+    };
+    wheel(&mut harness, 1.0, egui::Modifiers::NONE);
+    assert_eq!(editor(&mut harness).browser.scale, 1.0, "the wheel alone scrolls");
+    wheel(&mut harness, 3.0, egui::Modifiers::COMMAND);
+    let scale = editor(&mut harness).browser.scale;
+    assert!(scale > 1.0, "{scale}");
+    let after = harness.get_by_role_and_label(Role::GridCell, "Assets").rect();
+    assert!(
+        after.width() > before.width() && after.height() > before.height(),
+        "{before:?} {after:?}"
+    );
+    for _ in 0..40 {
+        wheel(&mut harness, 3.0, egui::Modifiers::COMMAND);
+    }
+    assert_eq!(editor(&mut harness).browser.scale, MAX_SCALE);
+    for _ in 0..80 {
+        wheel(&mut harness, -3.0, egui::Modifiers::COMMAND);
+    }
+    assert_eq!(editor(&mut harness).browser.scale, MIN_SCALE);
+    let small = harness.get_by_role_and_label(Role::GridCell, "Assets").rect();
+    assert!(small.width() < before.width());
+}
