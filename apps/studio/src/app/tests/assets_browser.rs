@@ -1039,3 +1039,20 @@ fn files_dropped_from_the_computer_are_imported() {
     assert!(tile_exists(&harness, "bark") && tile_exists(&harness, "Pack"));
     let _ = std::fs::remove_dir_all(source);
 }
+
+/// #734: the button on a material's tile grows and shrinks with the tiles.
+#[test]
+fn a_tile_s_button_scales_with_the_tiles() {
+    let mut harness = browsing("assets-corner-scale");
+    editor(&mut harness).new_material_file("Assets").unwrap();
+    editor(&mut harness).browser.open_folder("Assets");
+    settle(&mut harness);
+    let label = "Apply Material to the selected parts";
+    hover_tile(&mut harness, "Material");
+    let small = harness.get_by_role_and_label(Role::Button, label).rect();
+    editor(&mut harness).browser.zoom(2.0);
+    settle(&mut harness);
+    hover_tile(&mut harness, "Material");
+    let big = harness.get_by_role_and_label(Role::Button, label).rect();
+    assert!(big.width() > small.width() * 1.5, "{small:?} {big:?}");
+}
