@@ -4127,6 +4127,49 @@ mod tests {
         assert_eq!(children_of(&harness, "Workspace"), ["Camera", "Baseplate", "Baseplate"]);
     }
 
+    /// #731: Workspace's camera stays: Delete and Cut leave it (their menu items greyed out on its row), it is not
+    /// dragged out; a copy of it is an ordinary camera, which goes.
+    #[test]
+    fn workspace_s_camera_is_never_deleted() {
+        let mut harness = editing(settings_file("editor-camera-stays", None), "Camera Game");
+        harness.set_size(egui::vec2(1280.0, 1000.0));
+        settle(&mut harness);
+        let press = |harness: &mut Harness<'_, Test>, modifiers: Modifiers, key: Key| {
+            harness.key_press_modifiers(modifiers, key);
+            settle(harness);
+        };
+        let start = children_of(&harness, "Workspace");
+        harness.get_by_role_and_label(Role::TreeItem, "Camera").click();
+        settle(&mut harness);
+        press(&mut harness, Modifiers::NONE, Key::Delete);
+        press(&mut harness, Modifiers::COMMAND, Key::X);
+        assert_eq!(children_of(&harness, "Workspace"), start);
+        let disabled = |harness: &Harness<'_, Test>, label: &str| {
+            let item = harness.get_by_role_and_label(Role::MenuItem, label);
+            egui_kittest::kittest::NodeT::accesskit_node(&item).is_disabled()
+        };
+        let row = harness.get_by_role_and_label(Role::TreeItem, "Camera").rect();
+        right_click(&mut harness, row);
+        assert!(disabled(&harness, "Delete") && disabled(&harness, "Cut"));
+        assert!(!disabled(&harness, "Copy") && !disabled(&harness, "Duplicate"));
+        harness.get_by_role_and_label(Role::MenuItem, "Duplicate").click();
+        settle(&mut harness);
+        let mut with_copy = start.clone();
+        with_copy.insert(1, "Camera".to_owned());
+        assert_eq!(children_of(&harness, "Workspace"), with_copy, "a copy, selected");
+        // The copy is not the game's camera: it goes.
+        press(&mut harness, Modifiers::NONE, Key::Delete);
+        assert_eq!(children_of(&harness, "Workspace"), start);
+        // Nor does it move out of Workspace.
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let dm = &editor.dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let camera = dm.find_first_child(workspace, "Camera", false).unwrap().unwrap();
+        let lighting = dm.service(dm.registry().class_id("Lighting").unwrap()).unwrap();
+        editor.selection = crate::editor::Selection::of([camera]);
+        assert!(!editor.scene().can_move_selection(lighting));
+    }
+
     #[test]
     fn insert_object_creates_the_chosen_class_inside_the_row_selected_and_undoes() {
         let mut harness = editing(settings_file("editor-insert", None), "Insert Game");

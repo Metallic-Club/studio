@@ -12,7 +12,7 @@ use egui::{
 };
 
 use crate::dock::Dock;
-use crate::editor::edit::is_movable;
+use crate::editor::edit::{is_movable, is_removable};
 use crate::editor::{EditorState, STEPS, TreeEdit};
 use crate::keymap::{Keymap, ids};
 use crate::theme::icons::{self, Icon};
@@ -93,6 +93,8 @@ pub(crate) struct MenuState {
     pub can_redo: bool,
     /// Something that can be moved, copied or deleted is selected (#351).
     pub can_edit: bool,
+    /// Something that can be deleted or cut is selected: not only Workspace's camera (#731).
+    pub can_remove: bool,
     /// The clipboard pastes into the game the panels show.
     pub can_paste: bool,
 }
@@ -109,6 +111,10 @@ impl MenuState {
                 let (dm, selection) = editor.shown();
                 selection.ids().iter().any(|&id| is_movable(dm, id))
             },
+            can_remove: {
+                let (dm, selection) = editor.shown();
+                selection.ids().iter().any(|&id| is_removable(dm, id))
+            },
             can_paste: editor.clipboard.can_paste_into(editor.shown().0),
         }
     }
@@ -123,6 +129,7 @@ impl MenuState {
             MenuAction::Undo => self.can_undo,
             MenuAction::Redo => self.can_redo,
             MenuAction::Tree(edit) if edit.pastes() => self.can_paste,
+            MenuAction::Tree(edit) if edit.removes() => self.can_remove,
             MenuAction::Tree(_) => self.can_edit,
             _ => true,
         }
