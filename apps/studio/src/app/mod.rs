@@ -3320,9 +3320,12 @@ mod tests {
         assert_eq!(studio.dock().context(), Context::Explorer);
         harness.get_by_label("TRANSFORM");
         harness.get_by_role_and_label(Role::Label, "Size");
-        // Edited in place (#349): a vector's text (#380), the enum's drop-down, the colour's swatch.
+        // Edited in place (#349): a vector's text (#380), the enum's drop-down, the colour's swatch; the material's
+        // field and its button (#739).
         harness.get_by_role_and_label(Role::TextInput, "Size");
-        harness.get_by_role_and_label(Role::ComboBox, "Material");
+        harness.get_by_role_and_label(Role::ComboBox, "Shape");
+        harness.get_by_role_and_label(Role::TextInput, "Material");
+        harness.get_by_role_and_label(Role::Button, "Choose Material");
         // The colour's swatch (#415): a small square inside the row, left of the line, the value's text where the others'
         // is.
         let swatch = harness.get_by_role_and_label(Role::ColorWell, "Color").rect();

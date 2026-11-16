@@ -141,3 +141,83 @@ fn a_file_dragged_from_the_assets_panel_onto_a_picker_is_chosen() {
     // Only the picker it was let go on changed.
     assert_eq!(editor.dm.get_by_name(part, "TextureId"), Ok(Value::String("".into())));
 }
+
+/// #739: a part's Material is a field showing the material's name, its path while it is edited; a path or a name
+/// typed is taken on Enter, and the button beside it opens a window to choose one.
+#[test]
+fn a_part_s_material_is_typed_or_chosen_in_a_window() {
+    let mut harness = editing(settings_file("editor-material-field", None), "Material Field Game");
+    harness.set_size(egui::vec2(1280.0, 1400.0));
+    let (part, neon, wood) = {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let id = |path: &str| editor.project.assets().id(path).unwrap().to_string();
+        let (neon, wood) = (
+            id("Assets/Materials/Neon.material"),
+            id("Assets/Materials/Wood.material"),
+        );
+        let dm = &editor.dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap();
+        editor.select(Some(part));
+        (part, neon, wood)
+    };
+    settle(&mut harness);
+    let material = |harness: &mut Harness<'_, Test>| {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        editor.dm.get_by_name(part, "Material").unwrap()
+    };
+    let field = |harness: &Harness<'_, Test>| harness.get_by_role_and_label(Role::TextInput, "Material").value();
+    assert_eq!(field(&harness).as_deref(), Some("Concrete"));
+
+    // Focused, it shows the file's path; a path typed is the material's id.
+    harness.get_by_role_and_label(Role::TextInput, "Material").click();
+    settle(&mut harness);
+    assert_eq!(field(&harness).as_deref(), Some("Assets/Materials/Concrete.material"));
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness
+        .get_by_role_and_label(Role::TextInput, "Material")
+        .type_text("Assets/Materials/Neon.material");
+    harness.key_press(egui::Key::Enter);
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(neon.as_str().into()));
+    assert_eq!(field(&harness).as_deref(), Some("Neon"));
+
+    // The window: a row picked out, then Select.
+    // Clicks a second apart, so none is a double click (which chooses at once).
+    let later = |harness: &mut Harness<'_, Test>| {
+        let time = harness.ctx.input(|input| input.time) + 1.0;
+        harness.input_mut().time = Some(time);
+        settle(harness);
+    };
+    harness.get_by_role_and_label(Role::Button, "Choose Material").click();
+    settle(&mut harness);
+    // The search narrows the list to what it names.
+    harness.get_by_label("Search the materials").click();
+    settle(&mut harness);
+    harness.get_by_label("Search the materials").type_text("wood");
+    settle(&mut harness);
+    assert!(harness.query_by_role_and_label(Role::Row, "Neon").is_none());
+    harness.get_by_role_and_label(Role::Row, "WoodPlanks");
+    later(&mut harness);
+    harness.get_by_role_and_label(Role::Row, "Wood").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Select").click();
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(wood.as_str().into()));
+    assert!(harness.query_by_label("Search the materials").is_none(), "closed");
+
+    // Escape closes it without a change; None empties the value.
+    harness.get_by_role_and_label(Role::Button, "Choose Material").click();
+    settle(&mut harness);
+    harness.key_press(egui::Key::Escape);
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(wood.as_str().into()));
+    harness.get_by_role_and_label(Role::Button, "Choose Material").click();
+    settle(&mut harness);
+    later(&mut harness);
+    harness.get_by_role_and_label(Role::Row, "None").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Select").click();
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String("".into()));
+}
