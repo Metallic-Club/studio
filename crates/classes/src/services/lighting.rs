@@ -273,7 +273,7 @@ static PROPS: &[PropMeta] = &[
         .group("Fog")
         .order(1)
         .desc(
-            "How far away, in studs, the fog hides everything. At 100000, the most and the default, there is no \
+            "How far away, in units, the fog hides everything. At 100000, the most and the default, there is no \
              fog.",
         ),
     PropMeta::number("FogStart", 0.0)
@@ -281,7 +281,7 @@ static PROPS: &[PropMeta] = &[
         .visual()
         .group("Fog")
         .order(2)
-        .desc("How far away, in studs, the fog begins: nearer than this, nothing is fogged.",),
+        .desc("How far away, in units, the fog begins: nearer than this, nothing is fogged.",),
     PropMeta::color3("SkyColor", 0.53, 0.72, 0.95)
         .visual()
         .group("Sky")

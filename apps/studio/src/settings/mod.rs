@@ -164,7 +164,7 @@ pub struct General {
 pub struct Editing {
     /// Whether moves and sizes snap to [`Editing::move_step`].
     pub snap_moves: bool,
-    /// The move increment, in studs.
+    /// The move increment, in units.
     pub move_step: f32,
     /// Whether turns snap to [`Editing::turn_step`].
     pub snap_turns: bool,
@@ -186,7 +186,7 @@ impl Default for Editing {
     }
 }
 
-/// The move increment's range, in studs.
+/// The move increment's range, in units.
 pub const MOVE_STEP: (f32, f32) = (0.01, 1000.0);
 /// The rotate increment's range, in degrees.
 pub const TURN_STEP: (f32, f32) = (0.1, 180.0);
@@ -196,7 +196,7 @@ pub const TURN_STEP: (f32, f32) = (0.1, 180.0);
 /// Viewport's own menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Viewport {
-    /// How fast the camera flies, in studs a second.
+    /// How fast the camera flies, in units a second.
     pub fly_speed: f32,
     /// What Shift multiplies the fly speed by: above one faster, below it slower and more careful.
     pub secondary_speed: f32,
@@ -223,7 +223,7 @@ impl Default for Viewport {
     }
 }
 
-/// The fly speed's range, in studs a second.
+/// The fly speed's range, in units a second.
 pub const FLY_SPEED: (f32, f32) = (0.1, 1000.0);
 /// The secondary speed's range, a multiple of the fly speed.
 pub const SECONDARY_SPEED: (f32, f32) = (0.05, 50.0);

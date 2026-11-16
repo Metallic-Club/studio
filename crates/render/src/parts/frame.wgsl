@@ -62,7 +62,7 @@ struct Frame {
     color_shift_bottom: vec4<f32>,
     // rgb: the fog's colour; w: 1 when there is fog (#600).
     fog_color: vec4<f32>,
-    // x, y: where the fog starts and is whole, in studs; z: how far the sky is for it.
+    // x, y: where the fog starts and is whole, in units; z: how far the sky is for it.
     fog_range: vec4<f32>,
     // x, y: the environment's diffuse and specular scales; z: the shadow filter's spread; w: the exposure.
     environment: vec4<f32>,

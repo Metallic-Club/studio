@@ -42,7 +42,7 @@ use metallic_engine::perf::{StatsViewer, StatsViewers};
 use crate::keymap::{Activation, ActivationKind, Keymap, ids};
 use crate::settings::{FLY_SPEED, SECONDARY_SPEED};
 
-/// How far ahead the camera takes there to be something when nothing is in front (open space), in studs.
+/// How far ahead the camera takes there to be something when nothing is in front (open space), in units.
 const OPEN_REACH: f32 = 20.0;
 
 /// Which camera speed the wheel last changed, for the viewport's readout.
@@ -353,7 +353,7 @@ mod tests {
             .activations;
         assert!(nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, &[])));
         let moved = (viewport.camera.position - start.position).length();
-        assert!((moved - 2.0).abs() < 1e-3, "40 studs a second for 0.05 s: {moved}");
+        assert!((moved - 2.0).abs() < 1e-3, "40 units a second for 0.05 s: {moved}");
         keymap.process(&[key(Key::W, false, Modifiers::NONE)], focused);
         assert!(
             !nav(&mut viewport, &[], &keymap, input(egui::Vec2::ZERO, false, &[])),

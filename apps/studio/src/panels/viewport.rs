@@ -118,11 +118,11 @@ fn indented(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
 fn speed_text(change: SpeedChange, speeds: &crate::settings::Viewport) -> String {
     let fly = crate::panels::properties::number(f64::from(speeds.fly_speed));
     match change {
-        SpeedChange::Fly => format!("Fly speed  {fly} studs/s"),
+        SpeedChange::Fly => format!("Fly speed  {fly} units/s"),
         SpeedChange::Secondary => {
             let fast = crate::panels::properties::number(f64::from(speeds.fly_speed * speeds.secondary_speed));
             let times = crate::panels::properties::number(f64::from(speeds.secondary_speed));
-            format!("Secondary speed  \u{D7}{times}  ({fast} studs/s)")
+            format!("Secondary speed  \u{D7}{times}  ({fast} units/s)")
         }
     }
 }

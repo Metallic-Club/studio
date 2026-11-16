@@ -37,7 +37,7 @@ use metallic_core::{Color3, DataModel, Id, PropId, Value};
 /// The sun's radiance per unit of `Brightness`, linear. The default `Brightness` of 2 gives about 2.3: a white
 /// surface facing the noon sun reflects about 0.73 of it, plus the sky's ambient.
 pub const SUN_RADIANCE: f32 = 1.15;
-/// `FogEnd` from which there is no fog: Roblox's default, 100,000 studs.
+/// `FogEnd` from which there is no fog: Roblox's default, 100,000 units.
 pub const NO_FOG: f32 = 100_000.0;
 /// How far the sky is, for the fog (#600): with `FogEnd` well short of it, the sky is the fog's colour.
 pub const SKY_FOG_DISTANCE: f32 = 10_000.0;
@@ -108,7 +108,7 @@ pub struct SceneLighting {
     pub exposure_compensation: f32,
     /// `FogColor`: the colour things fade to with distance.
     pub fog_color: Color3,
-    /// `FogStart` and `FogEnd`: the distances the fog starts at and is whole at, in studs. No fog from
+    /// `FogStart` and `FogEnd`: the distances the fog starts at and is whole at, in units. No fog from
     /// [`NO_FOG`] on, Roblox's default.
     pub fog_start: f32,
     /// See [`SceneLighting::fog_start`].
@@ -165,7 +165,7 @@ pub(crate) struct ResolvedLighting {
     /// The fog's colour, and whether there is fog.
     pub fog_color: Vec3,
     pub fog: bool,
-    /// Where the fog starts and is whole, in studs.
+    /// Where the fog starts and is whole, in units.
     pub fog_start: f32,
     pub fog_end: f32,
     /// The environment's diffuse and specular scales, the shadow filter's spread (1 at the default softness) and

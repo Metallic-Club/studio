@@ -18,7 +18,7 @@ const STACKED_FROM: f32 = 40.0;
 pub fn width(row: f32) -> f32 {
     if row >= STACKED_FROM { WIDTH } else { 2.0 * WIDTH }
 }
-/// The common move increments the arrows step through, in studs.
+/// The common move increments the arrows step through, in units.
 const MOVES: &[f32] = &[
     0.01, 0.05, 0.1, 0.125, 0.2, 0.25, 0.5, 1.0, 2.0, 4.0, 5.0, 10.0, 20.0, 50.0, 100.0,
 ];

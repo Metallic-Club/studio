@@ -335,7 +335,7 @@ fn fog_exposure_and_the_environment_change_the_image() {
     set_clock_time(&mut game, 12.0);
     let plain = render(&context, &mut game, PassSet::default(), 1);
 
-    // Fog: pure red from 20 studs, whole at 60.
+    // Fog: pure red from 20 units, whole at 60.
     set(
         &mut game,
         "FogColor",
@@ -409,7 +409,7 @@ fn outdoor_ambient_lights_only_what_the_sky_reaches() {
         Vec3::new(400.0, 2.0, 400.0),
         CFrame::new(Vec3::new(0.0, -1.0, 0.0)),
     );
-    // A roof over the left half of the view, 6 studs up.
+    // A roof over the left half of the view, 6 units up.
     game.part(
         Look::new("Block", "Plastic", [160, 160, 160]),
         Vec3::new(20.0, 1.0, 40.0),
@@ -462,7 +462,7 @@ fn the_sky_fades_out_smoothly_under_a_roof() {
         Vec3::new(400.0, 2.0, 400.0),
         CFrame::new(Vec3::new(0.0, -1.0, 0.0)),
     );
-    // A roof over everything left of x = 0, 6 studs up.
+    // A roof over everything left of x = 0, 6 units up.
     game.part(
         Look::new("Block", "Plastic", [160, 160, 160]),
         Vec3::new(40.0, 1.0, 60.0),
@@ -482,8 +482,8 @@ fn the_sky_fades_out_smoothly_under_a_roof() {
         "Ambient",
         Value::Color3(metallic_core::Color3::new(0.1, 0.1, 0.1)),
     );
-    // Where the floor across the roof's edge (every fifth of a stud from x = -8 to 8) and the block's front wall (2
-    // studs up) land on the target.
+    // Where the floor across the roof's edge (every fifth of a unit from x = -8 to 8) and the block's front wall (2
+    // units up) land on the target.
     let floor_spots: Vec<(f32, f32)> = (-40..=40)
         .map(|i| project(&game, Vec3::new(i as f32 * 0.2, 0.0, -12.0) - eye))
         .collect();
@@ -498,11 +498,11 @@ fn the_sky_fades_out_smoothly_under_a_roof() {
     scenes::write_png(&out, SIZE, SIZE, &lit);
     eprintln!("the roof's edge is in {}", out.display());
     let profile: Vec<f32> = floor_spots.iter().map(|&at| level(&lit, at)).collect();
-    eprintln!("floor across the edge, every 0.2 studs from x = -8: {profile:?}");
+    eprintln!("floor across the edge, every 0.2 units from x = -8: {profile:?}");
     let (under, open) = (profile[0], profile[80]);
     assert!(under < open * 0.75, "under {under}, open {open}");
     // Smooth: a ramp, not a step, rising all the way (dithering moves a pixel by a level or two either way). Since
-    // #648 it is about a stud wide: wider reached through thin walls (#642) or darkened open ground beside parts.
+    // #648 it is about a unit wide: wider reached through thin walls (#642) or darkened open ground beside parts.
     let change = open - under;
     for (i, pair) in profile.windows(2).enumerate() {
         let step = pair[1] - pair[0];
@@ -517,8 +517,8 @@ fn the_sky_fades_out_smoothly_under_a_roof() {
         .filter(|&&v| v > under + change * 0.15 && v < open - change * 0.15)
         .count();
     eprintln!("{ramp} samples on the ramp");
-    assert!(ramp >= 3, "the ramp is {:.1} studs wide", ramp as f32 * 0.2);
-    // All of it out in the open (#642): just under the roof's edge the floor is as dark as deep under it, and a stud and
+    assert!(ramp >= 3, "the ramp is {:.1} units wide", ramp as f32 * 0.2);
+    // All of it out in the open (#642): just under the roof's edge the floor is as dark as deep under it, and a unit and
     // a half out it is as bright as far out (#648).
     assert!(
         profile[39] <= under + 6.0,
@@ -592,7 +592,7 @@ fn outdoor_ambient_does_not_leak_into_a_closed_room() {
         );
     };
     grey(&mut game, Vec3::new(400.0, 2.0, 400.0), Vec3::new(0.0, -1.0, 0.0));
-    // A 20-stud room: walls a stud thick and 8 high, and a roof.
+    // A 20-unit room: walls a unit thick and 8 high, and a roof.
     grey(&mut game, Vec3::new(1.0, 8.0, 22.0), Vec3::new(-10.5, 4.0, 0.0));
     grey(&mut game, Vec3::new(1.0, 8.0, 22.0), Vec3::new(10.5, 4.0, 0.0));
     grey(&mut game, Vec3::new(22.0, 8.0, 1.0), Vec3::new(0.0, 4.0, -10.5));
@@ -620,7 +620,7 @@ fn outdoor_ambient_does_not_leak_into_a_closed_room() {
         let p = pixel(pixels, x as u32, y as u32);
         i32::from(p[0]) + i32::from(p[1]) + i32::from(p[2])
     };
-    // The middle of the floor, and the floor, walls and ceiling half a stud from the edges and corners.
+    // The middle of the floor, and the floor, walls and ceiling half a unit from the edges and corners.
     for (what, at) in [
         ("the middle of the floor", Vec3::new(0.0, 0.0, -2.0)),
         ("the floor by the back wall", Vec3::new(0.0, 0.0, -9.5)),
@@ -640,7 +640,7 @@ fn outdoor_ambient_does_not_leak_into_a_closed_room() {
 }
 
 /// #648: open ground right beside a part is as bright as open ground away from it, but for a thin line at the part's
-/// foot. It once darkened over about four studs, as if half covered.
+/// foot. It once darkened over about four units, as if half covered.
 #[test]
 fn open_ground_beside_a_part_is_not_darkened() {
     let Some(context) = gpu() else { return };
@@ -674,10 +674,10 @@ fn open_ground_beside_a_part_is_not_darkened() {
     let away = level(Vec3::new(0.0, 0.0, -6.0));
     for gap in [1.5f32, 2.5, 4.0] {
         let beside = level(Vec3::new(0.0, 0.0, -14.0 + gap));
-        eprintln!("the floor {gap} studs from the block: {beside}, away from it {away}");
+        eprintln!("the floor {gap} units from the block: {beside}, away from it {away}");
         assert!(
             beside * 100 >= away * 95,
-            "the floor {gap} studs from the block is darkened: {beside} against {away}"
+            "the floor {gap} units from the block is darkened: {beside} against {away}"
         );
     }
 }
