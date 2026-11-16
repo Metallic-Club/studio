@@ -895,6 +895,7 @@ impl EditorState {
         .map_err(|error| error.to_string())?;
         self.follow_moves(&report.moved);
         self.browser.follow(&[(from.to_owned(), to.to_owned())]);
+        self.folder_colors_moved(from, to);
         self.assets = asset_rows(&self.project);
         Ok(())
     }
@@ -962,6 +963,7 @@ impl EditorState {
                     }
                 }
             }
+            self.folder_colors_copied(path, &copy);
             copies.push(copy);
         }
         self.assets = asset_rows(&self.project);
@@ -1016,6 +1018,7 @@ impl EditorState {
             }
         }
         self.browser.forget(paths);
+        self.folder_colors_removed(paths);
         self.assets = asset_rows(&self.project);
         Ok(())
     }

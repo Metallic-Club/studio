@@ -208,7 +208,7 @@ fn tile(
                 egui::StrokeKind::Inside,
             );
         }
-        let (icon, ink) = icon_of(entry, &colors);
+        let (icon, ink) = icon_of(editor, entry, &colors);
         let centre = pos2(rect.center().x, rect.top() + space::S2 + icon_area / 2.0);
         let area = Rect::from_center_size(centre, vec2(icon_area, icon_area));
         // A picture, a material or a scene shows itself (#681); until its thumbnail is here, its kind's icon.
@@ -338,12 +338,21 @@ pub(super) fn behave(
     }
 }
 
-/// `entry`'s icon and its colour: its kind's, a folder's, or a warning for a missing file.
-pub(super) fn icon_of(entry: &Entry, colors: &crate::theme::Colors) -> (Icon, egui::Color32) {
+/// `entry`'s icon and its colour: its kind's, a folder's (its own, #741, if it was given one), or a warning for a
+/// missing file.
+pub(super) fn icon_of(editor: &EditorState, entry: &Entry, colors: &crate::theme::Colors) -> (Icon, egui::Color32) {
     match entry.kind {
-        EntryKind::Folder => (Icon::AssetFolder, Icon::AssetFolder.color(colors)),
+        EntryKind::Folder => (Icon::AssetFolder, folder_ink(editor, &entry.path, colors)),
         EntryKind::File(kind) => (kind.icon(), kind.icon().color(colors)),
         EntryKind::Missing(_) => (Icon::UiWarning, colors.accent),
+    }
+}
+
+/// The colour of the folder `path`'s icon: its own (#741), or a folder's.
+pub(super) fn folder_ink(editor: &EditorState, path: &str, colors: &crate::theme::Colors) -> egui::Color32 {
+    match editor.folder_color(path) {
+        Some([r, g, b]) => egui::Color32::from_rgb(r, g, b),
+        None => Icon::AssetFolder.color(colors),
     }
 }
 
