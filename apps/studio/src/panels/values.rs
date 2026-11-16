@@ -12,7 +12,9 @@
 //! - `CFrame`: two rows, its position and its orientation in degrees ([`Part`]);
 //! - `Color3`: its channels as text; a small square swatch at the right of the name column ([`swatch`], #415) opens
 //!   Studio's colour picker ([`super::color_picker`], #416);
-//! - enums: a drop-down of the enum's items, its list in the panel's style ([`choice_row`], #418).
+//! - enums: a drop-down of the enum's items, its list in the panel's style ([`choice_row`], #418);
+//! - a part's Material: a field of the material's name (its path while it is edited) and a button that opens a window
+//!   to choose one ([`material_field`], #739).
 //!
 //! With several instances selected (#350) a value they disagree on is **mixed** ([`Mixed`]): a component shows a
 //! dash (a text field "Mixed" in grey, a drop-down "Mixed", a check box a bar), and an edit of some components of a
@@ -29,6 +31,8 @@ use metallic_engine::metallic_core::{CFrame, Color3, DataModel, PropMeta, PropTy
 use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
+
+mod material_field;
 
 /// Which part of a `CFrame` a row edits: the Properties panel shows a `CFrame` as two rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,6 +220,11 @@ pub fn edit(
             };
             number(ui, n, field, label, width, mixed.whole).map(|n| Edit::Whole(Value::Number(n)))
         }
+        // A material (#739): its name or path typed, or chosen in a window.
+        Value::String(s) if is_material(meta.widget) => {
+            material_field::material_field(ui, files, meta.widget, label, &s, width, mixed.whole)
+                .map(|s| Edit::Whole(Value::String(s.into())))
+        }
         // A project file's path or asset id (#55): picked from the project's files.
         Value::String(s) if meta.widget.file_extensions().is_some() => {
             file_picker(ui, files, meta.widget, label, &s, width, mixed.whole)
@@ -317,6 +326,11 @@ impl Files {
             .find(|(_, own)| own.as_deref() == Some(id))
             .map(|(path, _)| path.as_str())
     }
+}
+
+/// Whether a property with `widget` takes a material (#739).
+fn is_material(widget: metallic_engine::metallic_core::Widget) -> bool {
+    matches!(widget, metallic_engine::metallic_core::Widget::AssetId { extensions } if extensions.contains(&"material"))
 }
 
 /// What a file picker shows for nothing chosen.
