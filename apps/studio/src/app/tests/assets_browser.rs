@@ -1228,3 +1228,56 @@ fn ground_menu(harness: &mut Harness<'_, Test>) {
     right_click(harness, egui::Rect::from_center_size(at, egui::vec2(2.0, 2.0)));
     settle(harness);
 }
+
+/// #741: a folder's inspector gives it a colour, kept in the project's editor data; it follows a rename, and the
+/// usual colour comes back from its button.
+#[test]
+fn a_folder_s_colour_is_set_in_its_inspector_and_follows_it() {
+    let mut harness = browsing("assets-folder-colour");
+    harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::GridCell, "Trees").click();
+    settle(&mut harness);
+    // In a short panel, the inspector is scrolled to its colour.
+    let pane = harness.get_by_label("Inspector").rect();
+    harness.event(egui::Event::PointerMoved(pane.center()));
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, -20.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+    });
+    settle(&mut harness);
+    // The swatch opens Studio's colour picker; a hex typed there is the folder's colour.
+    harness.get_by_role_and_label(Role::ColorWell, "Folder colour").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::TextInput, "Hex").click();
+    settle(&mut harness);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
+    harness
+        .get_by_role_and_label(Role::TextInput, "Hex")
+        .type_text("#ff8000");
+    harness.key_press(Key::Enter);
+    settle(&mut harness);
+    harness.key_press(Key::Escape);
+    settle(&mut harness);
+    assert_eq!(editor(&mut harness).folder_color("Assets/Trees"), Some([255, 128, 0]));
+    let member = crate::editor::folder_colors::member();
+    let kept = editor(&mut harness).project.read_text(&member).unwrap();
+    assert!(kept.contains("\"Assets/Trees\": \"#ff8000\""), "{kept}");
+
+    // It follows a rename.
+    editor(&mut harness).rename_asset("Assets/Trees", "Pines").unwrap();
+    settle(&mut harness);
+    assert_eq!(editor(&mut harness).folder_color("Assets/Pines"), Some([255, 128, 0]));
+    assert_eq!(editor(&mut harness).folder_color("Assets/Trees"), None);
+
+    // The usual colour back: the editor data goes with the last colour.
+    harness
+        .get_by_role_and_label(Role::Button, "Use the usual colour")
+        .click();
+    settle(&mut harness);
+    assert_eq!(editor(&mut harness).folder_color("Assets/Pines"), None);
+    assert!(!editor(&mut harness).project.contains(&member));
+}

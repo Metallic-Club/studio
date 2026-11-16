@@ -192,7 +192,7 @@ fn row(
             vec2(side, side),
         );
         if !grid::thumbnail(ui, editor, entry, picture, decodes) {
-            let (icon, ink) = grid::icon_of(entry, &colors);
+            let (icon, ink) = grid::icon_of(editor, entry, &colors);
             let icon_size = (side * 0.75).max(text::SMALL);
             icons::paint_at(
                 ui.painter(),

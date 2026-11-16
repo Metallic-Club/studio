@@ -193,6 +193,7 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         };
         let ink = match entry.kind {
             EntryKind::Missing(_) => colors.accent,
+            EntryKind::Folder if !is_root => super::grid::folder_ink(editor, &entry.path, &colors),
             _ => icon.color(&colors),
         };
         // The root has no caret, so its icon starts where its children's carets do.

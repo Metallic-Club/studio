@@ -6,6 +6,7 @@
 
 pub mod assets;
 pub mod edit;
+pub mod folder_colors;
 pub mod history;
 pub mod images;
 pub mod materials;
@@ -46,6 +47,8 @@ pub struct EditorState {
     pub browser: assets::AssetBrowser,
     /// The materials open in the material editor (#680).
     pub materials: materials::MaterialEditor,
+    /// The Assets browser's folder colours (#741), kept in the project.
+    pub folder_colors: folder_colors::FolderColors,
     /// The Assets panel's rendered thumbnails of materials and scenes (#681).
     pub pictures: pictures::Pictures,
     /// The pictures open in the image preview (#681).
@@ -102,6 +105,8 @@ impl EditorState {
         let mut explorer = ExplorerState::new(&dm);
         // The folders' icon colours (#603), kept beside the scene.
         explorer.icon_colors = crate::panels::explorer::colors::IconColors::load(&mut project, &scene_ids);
+        // The Assets browser's folder colours (#741).
+        let folder_colors = folder_colors::FolderColors::load(&mut project);
         let viewport = ViewportState::new(&dm);
         // Picking meets a MeshPart by its triangles once they are read (#494).
         crate::viewport::shapes::register_meshes(dm.uid(), project.asset_reader());
@@ -112,6 +117,7 @@ impl EditorState {
             assets,
             browser: assets::AssetBrowser::default(),
             materials: materials::MaterialEditor::default(),
+            folder_colors,
             pictures: pictures::Pictures::default(),
             images: images::ImagePreviews::default(),
             thumbnails: std::collections::HashMap::new(),

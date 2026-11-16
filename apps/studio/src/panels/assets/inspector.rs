@@ -1,6 +1,6 @@
 //! The browser's inspector (#740): at its right, what the one file or folder selected is. Its picture (or icon), its
-//! name, renamed in place, its path, and its type, size and date created. A close button at its top right hides it
-//! until something else is selected.
+//! name, renamed in place, its path, and its type, size and date created; a folder's colour (#741). A close button at
+//! its top right hides it until something else is selected.
 
 use egui::{
     Align2, CornerRadius, FontId, Id, Key, Rect, Role, ScrollArea, Sense, TextEdit, Ui, WidgetInfo, pos2, vec2,
@@ -50,7 +50,86 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, acts: &
             );
             ui.add_space(space::S5);
             details(ui, editor, entry);
+            if entry.is_folder() {
+                folder_color(ui, editor, entry);
+            }
         });
+}
+
+/// A folder's colour (#741): a swatch that opens Studio's colour picker, its hex, and a button back to the usual
+/// colour when it has one of its own.
+fn folder_color(ui: &mut Ui, editor: &mut EditorState, entry: &Entry) {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let own = editor.folder_color(&entry.path);
+    let shown = super::grid::folder_ink(editor, &entry.path, &colors);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::hover());
+    let label_width = (rect.width() * 0.4).min(110.0);
+    ui.painter().text(
+        pos2(rect.left(), rect.center().y),
+        Align2::LEFT_CENTER,
+        "Colour",
+        FontId::proportional(text::SMALL),
+        p.muted,
+    );
+    let side = size::ROW - 8.0;
+    let swatch = Rect::from_min_size(
+        pos2(rect.left() + label_width, rect.center().y - side / 2.0),
+        vec2(side * 1.6, side),
+    );
+    let [r, g, b, _] = shown.to_array();
+    let current =
+        metallic_engine::metallic_core::Color3::new(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
+    let mut chosen = None;
+    if let Some(crate::panels::values::Edit::Whole(metallic_engine::metallic_core::Value::Color3(picked))) =
+        crate::panels::values::swatch(ui, swatch, current, "Folder colour", true)
+    {
+        let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+        chosen = Some(Some([channel(picked.r), channel(picked.g), channel(picked.b)]));
+    }
+    let hex = if own.is_some() {
+        crate::panels::color_picker::hex([r, g, b])
+    } else {
+        "Usual".to_owned()
+    };
+    ui.painter().text(
+        pos2(swatch.right() + space::S3, rect.center().y),
+        Align2::LEFT_CENTER,
+        hex,
+        FontId::proportional(text::SMALL),
+        p.text,
+    );
+    if own.is_some() {
+        let side = size::ROW;
+        let reset = Rect::from_min_size(pos2(rect.right() - side, rect.top()), vec2(side, side));
+        let response = ui.interact(
+            reset,
+            Id::unique("metallic.assets.inspector.usual_color"),
+            Sense::click(),
+        );
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Use the usual colour"));
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(reset, CornerRadius::same(radius::TILE), p.surface_hover);
+        }
+        let ink = if response.hovered() { p.text } else { p.muted };
+        icons::paint_at(
+            ui.painter(),
+            reset.center(),
+            Align2::CENTER_CENTER,
+            Icon::UiClose,
+            text::SMALL,
+            ink,
+        );
+        if response.on_hover_text("Use the usual colour").clicked() {
+            chosen = Some(None);
+        }
+    }
+    if let Some(color) = chosen
+        && let Err(error) = editor.set_folder_color(&entry.path, color)
+    {
+        editor.browser.error = Some(error);
+    }
 }
 
 /// The close button at the top right of `rect`.
@@ -93,7 +172,7 @@ fn picture(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, height: f32) {
     let mut decodes = 0;
     if !grid::thumbnail(ui, editor, entry, area, &mut decodes) {
         let colors = current_colors(ui.ctx());
-        let (icon, ink) = grid::icon_of(entry, &colors);
+        let (icon, ink) = grid::icon_of(editor, entry, &colors);
         icons::paint_at(
             ui.painter(),
             area.center(),
