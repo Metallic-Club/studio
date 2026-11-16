@@ -324,11 +324,6 @@ impl Panel for Assets {
         if grip.hovered() || grip.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        let p = current_colors(ui.ctx()).palette;
-        let ink = if grip.dragged() { p.subtle } else { p.border };
-        ui.painter()
-            .vline(line.center().x, rect.y_range(), Stroke::new(size::BORDER, ink));
-
         let column = |rect: Rect| {
             egui::UiBuilder::new()
                 .max_rect(rect)
@@ -340,6 +335,11 @@ impl Panel for Assets {
         let mut grid_ui = ui.new_child(column(grid_rect));
         grid_ui.set_clip_rect(grid_rect.intersect(ui.clip_rect()));
         grid::show(&mut grid_ui, editor, &keys, &mut acts);
+        // Drawn after both sides, so nothing they draw covers it (#694).
+        let p = current_colors(ui.ctx()).palette;
+        let ink = if grip.dragged() { p.subtle } else { p.border };
+        ui.painter()
+            .vline(line.center().x, rect.y_range(), Stroke::new(size::BORDER, ink));
         ui.advance_cursor_after_rect(rect);
 
         for act in acts {

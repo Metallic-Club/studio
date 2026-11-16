@@ -113,7 +113,9 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
     });
     let dropping = is_folder && drop_target(&response, &entry.path);
     if ui.is_rect_visible(rect) {
-        let (band_painter, band) = crate::panels::row_band(ui, rect);
+        let (band_painter, mut band) = crate::panels::row_band(ui, rect);
+        // To the panel's left edge, but not past the tree's right one: the line beside it stays whole (#694).
+        band.max.x = band.max.x.min(rect.right());
         band_painter.rect_filled(band, CornerRadius::ZERO, stripe);
         let fill = if open {
             p.surface_hover
