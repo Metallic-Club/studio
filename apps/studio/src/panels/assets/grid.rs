@@ -279,8 +279,9 @@ pub(super) fn behave(
         )),
         _ => None,
     };
+    let scale = editor.browser.scale;
     if let Some((icon, label, enabled, act)) = corner
-        && corner_button(ui, rect, response.id.with("corner"), icon, &label, enabled)
+        && corner_button(ui, rect, response.id.with("corner"), icon, &label, enabled, scale)
     {
         acts.push(act);
     }
@@ -346,25 +347,37 @@ pub(super) fn icon_of(entry: &Entry, colors: &crate::theme::Colors) -> (Icon, eg
     }
 }
 
-/// The side of the button on a tile's corner (#703).
+/// The side of the button on a tile's corner (#703), at scale 1.
 const CORNER: f32 = 20.0;
+/// The smallest and the largest the button gets, however the tiles are scaled (#734).
+const CORNER_SIDES: (f32, f32) = (14.0, 40.0);
+
+/// The side of the corner button of `rect`, a tile or a row, at the browser's `scale` (#734): it grows and shrinks
+/// with the tiles, within [`CORNER_SIDES`], and never outgrows a row.
+fn corner_side(rect: Rect, scale: f32) -> f32 {
+    (CORNER * scale)
+        .round()
+        .clamp(CORNER_SIDES.0, CORNER_SIDES.1)
+        .min(rect.height() - 2.0)
+}
 
 /// A small button at the top right of the tile `rect` while the pointer is over the tile (#703): `icon` on a raised
-/// fill, `label` for screen readers and in its tooltip; greyed out when not `enabled`. Returns whether it was clicked.
-/// Made after the tile, so it takes the click rather than the tile.
-fn corner_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, label: &str, enabled: bool) -> bool {
+/// fill, `label` for screen readers and in its tooltip; greyed out when not `enabled`; at the browser's `scale`.
+/// Returns whether it was clicked. Made after the tile, so it takes the click rather than the tile.
+fn corner_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, label: &str, enabled: bool, scale: f32) -> bool {
     if !ui.rect_contains_pointer(rect) {
         return false;
     }
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
+    let side = corner_side(rect, scale);
     // At the top of a tile; in the middle of a row too short for it to sit lower (#699).
-    let top = if rect.height() < 2.0 * CORNER {
-        rect.center().y - CORNER / 2.0
+    let top = if rect.height() < 2.0 * side {
+        rect.center().y - side / 2.0
     } else {
         rect.top() + space::S1
     };
-    let button = Rect::from_min_size(pos2(rect.right() - space::S1 - CORNER, top), vec2(CORNER, CORNER));
+    let button = Rect::from_min_size(pos2(rect.right() - space::S1 - side, top), vec2(side, side));
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let response = ui.interact(button, id, sense);
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
@@ -390,7 +403,7 @@ fn corner_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, label: &str, enabl
         button.center(),
         Align2::CENTER_CENTER,
         icon,
-        text::SMALL,
+        (side * text::SMALL / CORNER).round(),
         ink,
     );
     response.on_hover_text(label).clicked()
@@ -558,6 +571,18 @@ mod tests {
 
     /// #697: a material's ball is a disc inside the ball's outline: nothing opaque outside it, and its picture read from
     /// the middle of the thumbnail outwards as far as the ball reaches.
+    #[test]
+    fn the_corner_button_scales_within_limits() {
+        let tile = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 200.0));
+        assert_eq!(corner_side(tile, 1.0), CORNER);
+        assert_eq!(corner_side(tile, 1.5), 30.0);
+        assert_eq!(corner_side(tile, 0.1), CORNER_SIDES.0);
+        assert_eq!(corner_side(tile, 9.0), CORNER_SIDES.1);
+        // A row keeps it inside itself.
+        let row = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 20.0));
+        assert_eq!(corner_side(row, 2.0), 18.0);
+    }
+
     #[test]
     fn a_ball_is_painted_as_a_disc_inside_its_outline() {
         let ctx = egui::Context::default();
