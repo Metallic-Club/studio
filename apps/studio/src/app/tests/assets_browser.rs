@@ -473,3 +473,32 @@ fn script_files_take_the_type_of_the_script_that_runs_them() {
     settle(&mut harness);
     harness.get_by_role_and_label(Role::GridCell, "Old");
 }
+
+/// #694: the line between the folder tree and the tiles is drawn after both, so nothing in them covers it.
+#[test]
+fn the_line_beside_the_folder_tree_is_whole() {
+    let mut harness = browsing("assets-tree-line");
+    harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
+    settle(&mut harness);
+    let grip = harness
+        .get_by_role_and_label(Role::Splitter, "Folder tree width")
+        .rect();
+    let x = grip.center().x;
+    let shapes = &harness.output().shapes;
+    let vertical_at_x = |shape: &egui::Shape| match shape {
+        egui::Shape::LineSegment { points, .. } => {
+            (points[0].x - x).abs() < 1.0 && (points[1].x - x).abs() < 1.0 && points[0].y != points[1].y
+        }
+        _ => false,
+    };
+    let line = shapes
+        .iter()
+        .rposition(|clipped| vertical_at_x(&clipped.shape))
+        .expect("the line is drawn");
+    let covers = |rect: egui::Rect| rect.x_range().contains(x) && rect.intersects(grip);
+    for clipped in &shapes[line + 1..] {
+        if let egui::Shape::Rect(rect) = &clipped.shape {
+            assert!(!covers(rect.rect), "{:?} is drawn over the line at {x}", rect.rect);
+        }
+    }
+}
