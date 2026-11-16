@@ -94,7 +94,7 @@ impl Project {
         };
         let mut assets = self.assets.clone();
         assets
-            .insert(member, id, Fingerprint::of(&bytes))
+            .insert(member, id, Fingerprint::of(&bytes), crate::asset_index::now_seconds())
             .map_err(|source| self.index_error(source))?;
         self.edits.insert(member.to_owned(), Some(bytes));
         self.set_assets(assets);

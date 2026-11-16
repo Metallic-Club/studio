@@ -298,3 +298,18 @@ fn create_gives_ids_and_every_new_path_is_checked() {
         ]
     );
 }
+
+/// #710: a member created now is noted as added now, and the time is saved with the project and kept by a move.
+#[test]
+fn a_new_member_knows_when_it_was_added() {
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after 1970")
+        .as_secs();
+    let (mut project, _) = referencing_project("added-time");
+    let added = project.assets().added(DOOR).expect("a time");
+    assert!(added >= before, "{added} >= {before}");
+    project.rename_member(DOOR, "Scripts/Gate.server.luau").expect("moved");
+    let project = save_and_reopen(project);
+    assert_eq!(project.assets().added("Scripts/Gate.server.luau"), Some(added));
+}

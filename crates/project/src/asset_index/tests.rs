@@ -262,3 +262,80 @@ fn ids_have_one_spelling_and_random_ones_differ() {
     );
     assert_ne!(AssetId::random().unwrap(), AssetId::random().unwrap());
 }
+
+/// #710: an added asset is noted with the time given; one already indexed keeps its time, a moved one takes its time
+/// with it, and a new one at a missing asset's path through `insert` keeps the missing one's.
+#[test]
+fn assets_keep_when_they_were_added() {
+    let mut index = AssetIndex::new();
+    index
+        .update_at(&members(&[("Assets/a.png", b"aaa")]), counter(0), Some(100))
+        .unwrap();
+    assert_eq!(index.added("Assets/a.png"), Some(100));
+    index
+        .update_at(
+            &members(&[("Assets/a.png", b"changed"), ("Assets/b.png", b"bbb")]),
+            counter(10),
+            Some(200),
+        )
+        .unwrap();
+    assert_eq!(
+        index.added("Assets/a.png"),
+        Some(100),
+        "kept, though its contents changed"
+    );
+    assert_eq!(index.added("Assets/b.png"), Some(200));
+    let report = index
+        .update_at(
+            &members(&[("Assets/a.png", b"changed"), ("Moved/b.png", b"bbb")]),
+            counter(20),
+            Some(300),
+        )
+        .unwrap();
+    assert_eq!(report.moved.len(), 1);
+    assert_eq!(index.added("Moved/b.png"), Some(200), "a move keeps the time");
+    // Without a time (an index updated by `update`), none.
+    index
+        .update(
+            &members(&[("Assets/a.png", b"changed"), ("Assets/c.png", b"c")]),
+            counter(30),
+        )
+        .unwrap();
+    assert_eq!(index.added("Assets/c.png"), None);
+    // `insert` notes the time given, but the same asset back at its path keeps its own.
+    index
+        .insert("Assets/d.png", id(99), Fingerprint::of(b"d"), Some(400))
+        .unwrap();
+    assert_eq!(index.added("Assets/d.png"), Some(400));
+    let a = index.id("Assets/a.png").unwrap();
+    index
+        .insert("Assets/a.png", a, Fingerprint::of(b"again"), Some(500))
+        .unwrap();
+    assert_eq!(index.added("Assets/a.png"), Some(100));
+}
+
+/// #710: `added` is written when known and read back; an index written before it reads as before, with no times.
+#[test]
+fn added_times_are_written_and_read_back() {
+    let mut index = AssetIndex::new();
+    index
+        .update_at(&members(&[("Assets/a.png", b"aaa")]), counter(0), Some(1_794_787_200))
+        .unwrap();
+    index
+        .update(
+            &members(&[("Assets/a.png", b"aaa"), ("Assets/b.png", b"bbb")]),
+            counter(10),
+        )
+        .unwrap();
+    let json = index.to_json();
+    assert!(json.contains("\"added\": 1794787200"), "{json}");
+    assert_eq!(json.matches("\"added\"").count(), 1, "only where it is known: {json}");
+    assert_eq!(AssetIndex::from_bytes(json.as_bytes()).unwrap(), index);
+    let old = format!(
+        "{{\"format\": 1, \"assets\": {{\"Assets/a.png\": {{\"id\": \"{}\", \"size\": 3, \"crc32\": 1}}}}}}",
+        id(5)
+    );
+    let read = AssetIndex::from_bytes(old.as_bytes()).unwrap();
+    assert_eq!(read.id("Assets/a.png"), Some(id(5)));
+    assert_eq!(read.added("Assets/a.png"), None);
+}
