@@ -20,7 +20,7 @@ use crate::panels::assets::{AssetKind, ScriptType};
 pub const NEW_FOLDER: &str = "New Folder";
 
 /// What the browser keeps between frames.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AssetBrowser {
     /// The folder shown on the right: its path, `""` for the project's root.
     pub open: String,
@@ -42,7 +42,33 @@ pub struct AssetBrowser {
     pub command: Option<crate::editor::TreeEdit>,
     /// The last operation's error, shown under the toolbar until the next one.
     pub error: Option<String>,
+    /// How big the tiles are, 1 at first (#696): Ctrl and the wheel change it, between [`MIN_SCALE`] and
+    /// [`MAX_SCALE`]. Kept while Studio runs.
+    pub scale: f32,
 }
+
+impl Default for AssetBrowser {
+    fn default() -> Self {
+        Self {
+            open: String::new(),
+            back: Vec::new(),
+            expanded: BTreeSet::new(),
+            selected: BTreeSet::new(),
+            anchor: None,
+            query: String::new(),
+            renaming: None,
+            deleting: None,
+            command: None,
+            error: None,
+            scale: 1.0,
+        }
+    }
+}
+
+/// The smallest the browser's tiles get (#696).
+pub const MIN_SCALE: f32 = 0.6;
+/// The biggest the browser's tiles get (#696).
+pub const MAX_SCALE: f32 = 2.5;
 
 /// Delete's confirmation: what is deleted and what refers to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,6 +310,13 @@ impl AssetBrowser {
         self.selected.clear();
         self.anchor = None;
         self.reveal(folder);
+    }
+
+    /// Scales the tiles by `factor` (Ctrl and the wheel, #696), between [`MIN_SCALE`] and [`MAX_SCALE`].
+    pub fn zoom(&mut self, factor: f32) {
+        if factor.is_finite() && factor > 0.0 {
+            self.scale = (self.scale * factor).clamp(MIN_SCALE, MAX_SCALE);
+        }
     }
 
     /// Goes back to the folder opened before this one. Returns whether there was one.
