@@ -531,6 +531,28 @@ impl EditorState {
         Ok(id)
     }
 
+    /// Whether something is selected to add a script to (#704: the button on a script file's tile).
+    pub fn can_add_script(&mut self) -> bool {
+        !self.scene().selection.is_empty()
+    }
+
+    /// Adds a script running the file `path`, of its type ([`EditorState::script_type`]), inside each selected object
+    /// (#704), as one undo step, and selects the new scripts. Returns them.
+    pub fn add_script_to_selection(&mut self, path: &str) -> Result<Vec<Id>, String> {
+        let parents: Vec<Id> = self.scene().selection.ids().to_vec();
+        if parents.is_empty() {
+            return Err("Select an object to add the script to.".into());
+        }
+        let mut made = Vec::with_capacity(parents.len());
+        for parent in parents {
+            made.push(self.script_from_file(path, parent)?);
+        }
+        let scene = self.scene();
+        scene.selection.clear();
+        scene.selection.extend(made.iter().copied());
+        Ok(made)
+    }
+
     /// Renames the file or folder at `path` to `name`, keeping a file's extension (its type) when `name` has none
     /// of its own. Returns the new path.
     pub fn rename_asset(&mut self, path: &str, name: &str) -> Result<String, String> {
