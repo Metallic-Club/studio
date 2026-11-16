@@ -238,6 +238,9 @@ pub(crate) fn new_item(label: &str) -> Option<New> {
     NEW_ITEMS.iter().find(|(item, _)| *item == label).map(|(_, new)| *new)
 }
 
+/// The menus' Import item (#707), into the folder they are for.
+pub(crate) const IMPORT_ITEM: &str = "Import\u{2026}";
+
 /// A folder menu's New item, which opens [`NEW_ITEMS`] to its side (#702); greyed out when not `enabled`.
 pub(crate) fn new_submenu(enabled: bool) -> MenuLine<'static> {
     MenuLine::Sub("New", NEW_ITEMS.iter().map(|(label, _)| (*label, enabled)).collect())
@@ -276,6 +279,8 @@ pub(crate) enum Act {
     ApplyMaterial(String),
     /// Add a script running the file at this path to each selected object (#704).
     AddScript(String),
+    /// Ask which files to import into this folder (#707).
+    Import(String),
     /// Back to the folder before.
     Back,
 }
@@ -434,11 +439,15 @@ fn toolbar(ui: &mut Ui, editor: &mut EditorState, acts: &mut Vec<Act>) {
             super::search_box(ui, &mut editor.browser.query, "Search the assets");
         });
         view_button(ui, editor);
+        // Import, into the open folder (#707).
+        if toolbar_button(ui, Icon::UiImport, "Import into this folder").clicked() {
+            acts.push(Act::Import(editor.browser.open.clone()));
+        }
     });
 }
 
-/// How many buttons the toolbar has at its right end, after the search.
-const TOOLBAR_BUTTONS: usize = 1;
+/// How many buttons the toolbar has at its right end, after the search: the view and Import.
+const TOOLBAR_BUTTONS: usize = 2;
 
 /// A button of the toolbar's: `icon`, `label` for screen readers and in its tooltip. Returns its response.
 fn toolbar_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
@@ -666,6 +675,10 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
             None => Err(format!("{} is not an asset yet.", browser::file_name(&path))),
         },
         Act::AddScript(path) => editor.add_script_to_selection(&path).map(|_| ()),
+        Act::Import(folder) => {
+            editor.browser.import_request = Some(folder);
+            Ok(())
+        }
     };
     editor.browser.error = result.err();
     ui.ctx().request_repaint();

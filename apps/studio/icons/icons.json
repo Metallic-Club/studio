@@ -370,6 +370,9 @@
     "ui.grip": {
       "file": "interface/grip-vertical.svg"
     },
+    "ui.import": {
+      "file": "interface/import.svg"
+    },
     "ui.info": {
       "file": "interface/info.svg"
     },

@@ -953,3 +953,41 @@ fn file_import_asks_for_files_and_brings_them_in() {
     assert!(tile_exists(&harness, "bark"), "shown in the browser");
     let _ = std::fs::remove_dir_all(source);
 }
+
+/// #707: the toolbar's Import button imports into the open folder; the empty space's menu does too, and a folder's
+/// menu in the tree into that folder.
+#[test]
+fn the_browser_imports_from_its_toolbar_and_menus() {
+    let mut harness = browsing("assets-browser-import");
+    let source = import_source("browser");
+    let dialog = crate::projects::dialog::ScriptedDialog::new([
+        Some(source.join("bark.png")),
+        Some(source.join("Pack")),
+        Some(source.join("Pack/rock.glb")),
+    ]);
+    harness.state_mut().studio.set_file_dialog(Box::new(dialog.clone()));
+    harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
+    settle(&mut harness);
+
+    harness
+        .get_by_role_and_label(Role::Button, "Import into this folder")
+        .click();
+    settle(&mut harness);
+    assert!(editor(&mut harness).project.contains("Assets/bark.png"));
+
+    harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::MenuItem, "Import\u{2026}").click();
+    settle(&mut harness);
+    assert!(editor(&mut harness).project.contains("Assets/Pack/Sounds/hit.ogg"));
+
+    harness
+        .get_by_role_and_label(Role::TreeItem, "Assets")
+        .click_secondary();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::MenuItem, "Import\u{2026}").click();
+    settle(&mut harness);
+    assert!(editor(&mut harness).project.contains("Assets/rock.glb"));
+    assert_eq!(dialog.asked(), ["files", "files", "files"]);
+    let _ = std::fs::remove_dir_all(source);
+}

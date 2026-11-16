@@ -69,9 +69,18 @@ impl Ground {
         response.widget_info(|| WidgetInfo::labeled(role, true, "Assets"));
         let folder = editor.browser.open.clone();
         let searching = !editor.browser.query.trim().is_empty();
-        let ground_menu = [super::new_submenu(!searching)];
-        if let Some(new) = context_menu(&response, &ground_menu).and_then(super::new_item) {
-            acts.push(Act::New(folder.clone(), new));
+        let ground_menu = [
+            super::new_submenu(!searching),
+            MenuLine::Item(super::IMPORT_ITEM, None, !searching),
+        ];
+        match context_menu(&response, &ground_menu) {
+            Some(super::IMPORT_ITEM) => acts.push(Act::Import(folder.clone())),
+            Some(label) => {
+                if let Some(new) = super::new_item(label) {
+                    acts.push(Act::New(folder.clone(), new));
+                }
+            }
+            None => {}
         }
         if response.clicked() && !editor.browser.selected.is_empty() {
             acts.push(Act::Click {
@@ -289,7 +298,7 @@ pub(super) fn behave(
         response.dnd_set_drag_payload(AssetDrag { paths: dragged });
     }
     let present = !matches!(entry.kind, EntryKind::Missing(_));
-    let menu = vec![
+    let mut menu = vec![
         MenuLine::Item("Open", None, folder),
         MenuLine::Item("Copy path", None, true),
         MenuLine::Separator,
@@ -297,6 +306,10 @@ pub(super) fn behave(
         MenuLine::Item("Duplicate", keys.duplicate.clone(), present),
         MenuLine::Item("Delete", keys.delete.clone(), present),
     ];
+    // A folder's takes imports too (#707).
+    if folder {
+        menu.insert(1, MenuLine::Item(super::IMPORT_ITEM, None, true));
+    }
     let targets: Vec<String> = if selected {
         editor.browser.selected.iter().cloned().collect()
     } else {
@@ -304,6 +317,7 @@ pub(super) fn behave(
     };
     match context_menu(&response, &menu) {
         Some("Open") => acts.push(Act::Activate(entry.clone())),
+        Some(super::IMPORT_ITEM) => acts.push(Act::Import(entry.path.clone())),
         Some("Rename") => acts.push(Act::StartRename(entry.path.clone())),
         Some("Duplicate") => acts.push(Act::Duplicate(targets)),
         Some("Delete") => acts.push(Act::Delete(targets)),
