@@ -29,6 +29,18 @@ pub fn ball_radius() -> f32 {
     angular.tan() / (BALL_FOV.to_radians() / 2.0).tan() / 2.0
 }
 
+/// The camera a material's ball is drawn from: from above and to the side, its outline [`ball_radius`] of the picture.
+/// The inspector's preview (#742) is drawn from it too, so it is cut to the ball the same way.
+pub fn ball_camera() -> Camera {
+    let rotation = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-0.35);
+    Camera {
+        position: rotation * Vec3::new(0.0, 0.0, BALL_DISTANCE),
+        rotation,
+        fov_y: BALL_FOV.to_radians(),
+        near: Camera::DEFAULT_NEAR,
+    }
+}
+
 /// The thumbnails' renderer and the textures it made.
 #[derive(Default)]
 pub struct Thumbnails {
@@ -137,13 +149,7 @@ impl Thumbnails {
             return false;
         };
         let _ = dm.set_by_name(*ball, "Material", Value::String(id.to_string().into()));
-        let rotation = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-0.35);
-        self.scene.set_camera(Some(Camera {
-            position: rotation * Vec3::new(0.0, 0.0, BALL_DISTANCE),
-            rotation,
-            fov_y: BALL_FOV.to_radians(),
-            near: Camera::DEFAULT_NEAR,
-        }));
+        self.scene.set_camera(Some(ball_camera()));
         self.scene.render_viewport(dm, FrameStats::default());
         true
     }

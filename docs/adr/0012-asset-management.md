@@ -85,11 +85,31 @@ the picture, no sky.
 - **Menus (#702, #705)**: the New items are a submenu of one New item; every file and folder has Copy path.
 - **Buttons on tiles (#703, #704)**: while the pointer is on a material's tile, a button gives it to the selected
   parts; on a script file's, one adds a script running it inside each selected object. Each is one undo step. A
-  plain click on a material still applies it (#680).
+  plain click on a material applied it too (#680) until #735: now it only selects it (§7).
 - **Importing (#706-#708)**: File, Import; Import in the browser's menus and its toolbar; and files dragged in from
   the system's file manager. Each copies files, and folders with what is in them, into a project folder as new
   assets, names made unique (up to 10000 files, 32 folders deep). The window does not say where in it files were
   dropped, so a drop goes into the browser's open folder, which the browser shows while files are dragged over.
+
+### 7. The inspector (2026-11-16, #733-#742)
+
+- **An inspector at the browser's right (#740)** shows the one file or folder selected: its picture or icon, its
+  name (renamed in place), its path, and its type, size or contents and date created. Its width is dragged; closed,
+  it stays closed until something else is selected.
+- **Materials are edited there (#742)**, not in a tab of their own: the ball alone, drawn from the thumbnails' camera
+  and cut to the ball as a tile is (§5), drawn again only when the material or its size changes; the name with Apply
+  and Copy; the path; then Colour, Normal, Roughness, Metallic, Emission, Ambient occlusion, Packed map and Mapping.
+  Undo and Redo with the Assets panel focused take back a material's edits (each material keeps its own steps), not
+  the scene's. A click on a material only selects it (#735); its tile's button (a pointer clicking, #733, scaled
+  with the tiles, #734), the inspector's Apply and a drop on a part give it to parts.
+- **Folder colours (#741)** tint a folder's icon in the tree, the tiles and the list. They are Studio's, kept in the
+  project's editor data as `.studio/browser.json` by path (as the Explorer's are in `.studio/explorer.json`, #603),
+  and follow renames, moves, deletes and copies.
+- **The tree (#736, #737)** starts at its left edge, and a press on a caret dragged across others opens or closes
+  them all. **The list's columns (#738)** are resized from its header; Name takes what the others leave until its
+  own edge is dragged.
+- **A part's Material in Properties (#739)** is a field of the material's name, its path while it is edited, with a
+  button that opens a window to choose one, as Godot's resource slots do.
 
 ## Consequences
 

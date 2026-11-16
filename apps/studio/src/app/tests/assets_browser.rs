@@ -1169,7 +1169,7 @@ fn the_inspector_shows_the_one_thing_selected() {
     assert!(pane.left() >= grid.right() - 1.0, "at the right: {pane:?} {grid:?}");
     assert_eq!(
         harness
-            .get_by_role_and_label(Role::TextInput, "Name")
+            .get_by_role_and_label(Role::TextInput, "Asset name")
             .value()
             .as_deref(),
         Some("Trees")
@@ -1179,18 +1179,18 @@ fn the_inspector_shows_the_one_thing_selected() {
     harness.get_by_label("Contents: 1 item");
 
     // Renamed from its name.
-    harness.get_by_role_and_label(Role::TextInput, "Name").click();
+    harness.get_by_role_and_label(Role::TextInput, "Asset name").click();
     settle(&mut harness);
     harness.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
     harness
-        .get_by_role_and_label(Role::TextInput, "Name")
+        .get_by_role_and_label(Role::TextInput, "Asset name")
         .type_text("Pines");
     harness.key_press(Key::Enter);
     settle(&mut harness);
     assert!(editor(&mut harness).project.has_folder("Assets/Pines"));
     assert_eq!(
         harness
-            .get_by_role_and_label(Role::TextInput, "Name")
+            .get_by_role_and_label(Role::TextInput, "Asset name")
             .value()
             .as_deref(),
         Some("Pines"),
@@ -1207,7 +1207,7 @@ fn the_inspector_shows_the_one_thing_selected() {
     settle(&mut harness);
     assert_eq!(
         harness
-            .get_by_role_and_label(Role::TextInput, "Name")
+            .get_by_role_and_label(Role::TextInput, "Asset name")
             .value()
             .as_deref(),
         Some("Materials")

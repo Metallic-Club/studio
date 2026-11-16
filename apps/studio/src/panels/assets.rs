@@ -700,7 +700,13 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
                 Ok(())
             }
             browser::EntryKind::File(AssetKind::Script(_)) => editor.open_script_file(&entry.path),
-            browser::EntryKind::File(AssetKind::Material) => editor.open_material(&entry.path),
+            // A material opens in the inspector (#742).
+            browser::EntryKind::File(AssetKind::Material) => {
+                editor.browser.selected = [entry.path.clone()].into();
+                editor.browser.anchor = Some(entry.path.clone());
+                editor.browser.inspector_closed = None;
+                Ok(())
+            }
             browser::EntryKind::File(AssetKind::Image) => editor.open_image(&entry.path),
             _ => Ok(()),
         },

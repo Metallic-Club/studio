@@ -37,8 +37,6 @@ pub static PANELS: &[&dyn Panel] = &[
     &game::Game,
     // A tab per script, opened from the Explorer (#528).
     &script::ScriptEditor,
-    // A tab per material, opened from the Assets panel (#680).
-    &material::MaterialEditor,
     // A tab per picture, opened from the Assets panel (#681).
     &image::ImagePreview,
     // Text across every script (#555), on the left.
