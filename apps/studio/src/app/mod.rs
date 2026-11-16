@@ -4108,12 +4108,19 @@ mod tests {
         let copy = harness.get_by_role_and_label(Role::MenuItem, "Copy").rect();
         let paste = harness.get_by_role_and_label(Role::MenuItem, "Paste").rect();
         assert!(paste.top() - copy.bottom() <= 2.0, "{copy:?} {paste:?}");
+        // The keymap's label, as the menu draws it: Ctrl+D here, ⌘D on macOS (#729).
+        let keys = harness
+            .state()
+            .studio
+            .keymap()
+            .shortcut_text(ids::EDIT_DUPLICATE)
+            .unwrap();
         assert!(
             harness.output().shapes.iter().any(|clipped| matches!(
                 &clipped.shape,
-                egui::Shape::Text(text) if text.galley.text() == "Ctrl+D" && duplicate.contains(text.pos)
+                egui::Shape::Text(text) if text.galley.text() == keys && duplicate.contains(text.pos)
             )),
-            "Duplicate's shortcut is drawn on its row"
+            "Duplicate's shortcut {keys} is drawn on its row"
         );
         harness.get_by_role_and_label(Role::MenuItem, "Duplicate").click();
         settle(&mut harness);
