@@ -269,6 +269,8 @@ pub(crate) enum Act {
     Delete(Vec<String>),
     /// Move these into this folder.
     Move(Vec<String>, String),
+    /// Put these paths on the clipboard, one a line (#705).
+    CopyPaths(Vec<String>),
     /// Back to the folder before.
     Back,
 }
@@ -606,6 +608,10 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
         Act::Move(paths, folder) => editor.move_assets(&paths, &folder),
         Act::Back => {
             editor.browser.go_back();
+            Ok(())
+        }
+        Act::CopyPaths(paths) => {
+            ui.ctx().copy_text(paths.join("\n"));
             Ok(())
         }
     };

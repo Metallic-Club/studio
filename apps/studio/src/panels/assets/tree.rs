@@ -182,6 +182,7 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         acts.push(Act::Move(paths, entry.path.clone()));
     }
     let edits = [
+        MenuLine::Item("Copy path", None, true),
         MenuLine::Separator,
         MenuLine::Item("Rename", keys.rename.clone(), true),
         MenuLine::Item("Duplicate", keys.duplicate.clone(), true),
@@ -212,6 +213,7 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         }
         Some("Duplicate") => acts.push(Act::Duplicate(vec![path])),
         Some("Delete") => acts.push(Act::Delete(vec![path])),
+        Some("Copy path") => acts.push(Act::CopyPaths(vec![path])),
         _ => {
             if caret_response.is_some_and(|caret| caret.clicked()) {
                 acts.push(Act::Toggle(path));

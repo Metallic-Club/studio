@@ -223,6 +223,7 @@ fn tile(
     let present = !matches!(entry.kind, EntryKind::Missing(_));
     let menu = vec![
         MenuLine::Item("Open", None, folder),
+        MenuLine::Item("Copy path", None, true),
         MenuLine::Separator,
         MenuLine::Item("Rename", keys.rename.clone(), present),
         MenuLine::Item("Duplicate", keys.duplicate.clone(), present),
@@ -238,6 +239,7 @@ fn tile(
         Some("Rename") => acts.push(Act::StartRename(entry.path.clone())),
         Some("Duplicate") => acts.push(Act::Duplicate(targets)),
         Some("Delete") => acts.push(Act::Delete(targets)),
+        Some("Copy path") => acts.push(Act::CopyPaths(targets)),
         _ => {
             let modifiers = ui.input(|input| input.modifiers);
             if response.double_clicked() && !renaming {
