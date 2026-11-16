@@ -18,7 +18,8 @@ pub const SIDE: u32 = 128;
 /// The thumbnails' renderer and the textures it made.
 #[derive(Default)]
 pub struct Thumbnails {
-    scene: SceneRenderer,
+    /// Boxed, as the viewport's are: it lives in Studio's window, which must fit the main thread's stack.
+    scene: Box<SceneRenderer>,
     attached: bool,
     failed: bool,
     /// The project whose assets the renderer reads.
