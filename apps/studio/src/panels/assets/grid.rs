@@ -8,7 +8,9 @@ use egui::{
 };
 use egui::{pos2, vec2};
 
-use super::{Act, AssetDrag, AssetKind, Keys, MISSING, context_menu, drop_target, dropped_on, file_size, rename_field};
+use super::{
+    Act, AssetDrag, AssetKind, Keys, MISSING, MenuLine, context_menu, drop_target, dropped_on, file_size, rename_field,
+};
 use crate::editor::EditorState;
 use crate::editor::assets::{Entry, EntryKind};
 use crate::theme::current_colors;
@@ -63,11 +65,8 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
     ground.widget_info(|| WidgetInfo::labeled(Role::Grid, true, "Assets"));
     let folder = editor.browser.open.clone();
     let searching = !editor.browser.query.trim().is_empty();
-    let ground_menu: Vec<super::MenuLine<'_>> = super::NEW_ITEMS
-        .iter()
-        .map(|(label, _)| (*label, None, !searching))
-        .collect();
-    if let Some(new) = context_menu(&ground, &ground_menu).and_then(|i| super::new_item(ground_menu[i].0)) {
+    let ground_menu = [super::new_submenu(!searching)];
+    if let Some(new) = context_menu(&ground, &ground_menu).and_then(super::new_item) {
         acts.push(Act::New(folder.clone(), new));
     }
     if ground.clicked() && !editor.browser.selected.is_empty() {
@@ -222,19 +221,19 @@ fn tile(
         response.dnd_set_drag_payload(AssetDrag { paths: dragged });
     }
     let present = !matches!(entry.kind, EntryKind::Missing(_));
-    let menu: Vec<super::MenuLine<'_>> = vec![
-        ("Open", None, folder),
-        ("", None, true),
-        ("Rename", keys.rename.clone(), present),
-        ("Duplicate", keys.duplicate.clone(), present),
-        ("Delete", keys.delete.clone(), present),
+    let menu = vec![
+        MenuLine::Item("Open", None, folder),
+        MenuLine::Separator,
+        MenuLine::Item("Rename", keys.rename.clone(), present),
+        MenuLine::Item("Duplicate", keys.duplicate.clone(), present),
+        MenuLine::Item("Delete", keys.delete.clone(), present),
     ];
     let targets: Vec<String> = if selected {
         editor.browser.selected.iter().cloned().collect()
     } else {
         vec![entry.path.clone()]
     };
-    match context_menu(&response, &menu).map(|i| menu[i].0) {
+    match context_menu(&response, &menu) {
         Some("Open") => acts.push(Act::Activate(entry.clone())),
         Some("Rename") => acts.push(Act::StartRename(entry.path.clone())),
         Some("Duplicate") => acts.push(Act::Duplicate(targets)),
