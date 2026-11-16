@@ -1056,3 +1056,32 @@ fn a_tile_s_button_scales_with_the_tiles() {
     let big = harness.get_by_role_and_label(Role::Button, label).rect();
     assert!(big.width() > small.width() * 1.5, "{small:?} {big:?}");
 }
+
+/// Where the text `label` is drawn in the row `row`, left edge.
+fn text_left(harness: &Harness<'_, Test>, label: &str, row: egui::Rect) -> f32 {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.text() == label && row.y_range().contains(text.pos.y + 1.0) => {
+                Some(text.pos.x)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no {label}"))
+}
+
+/// #736: the folder tree starts near its left edge: the root has no empty caret column, and the first level's carets
+/// sit under the root's icon.
+#[test]
+fn the_folder_tree_starts_near_its_left_edge() {
+    let harness = browsing("assets-tree-left");
+    let root = harness.get_by_role_and_label(Role::TreeItem, "Project").rect();
+    let name = text_left(&harness, "Project", root) - root.left();
+    assert!(name <= 24.0, "the root's name {name} from the edge");
+    let assets = harness.get_by_role_and_label(Role::TreeItem, "Assets").rect();
+    let child = text_left(&harness, "Assets", assets) - root.left();
+    assert!(child <= 42.0, "a first-level name {child} from the edge");
+    assert!(child > name, "indented under the root");
+}
