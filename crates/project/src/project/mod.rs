@@ -405,8 +405,8 @@ impl Project {
         &self.assets
     }
 
-    /// Brings the asset index up to date with the project's members ([`AssetIndex::update`]), giving new assets
-    /// random ids, and says what was added, moved and is missing. A change to the index is an edit, saved by
+    /// Brings the asset index up to date with the project's members ([`AssetIndex::update_at`]), giving new assets
+    /// random ids and the time now, and says what was added, moved and is missing. A change to the index is an edit, saved by
     /// [`Project::save`]. On an error the index is unchanged.
     pub fn refresh_assets(&mut self) -> Result<IndexReport, ProjectError> {
         let mut members = BTreeMap::new();
@@ -415,7 +415,7 @@ impl Project {
         }
         let mut assets = self.assets.clone();
         let report = assets
-            .update(&members, AssetId::random)
+            .update_at(&members, AssetId::random, crate::asset_index::now_seconds())
             .map_err(|source| ProjectError::AssetIndex {
                 path: self.path.clone(),
                 source,

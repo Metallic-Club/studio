@@ -28,17 +28,21 @@
 //!
 //! # `assets.json`
 //!
-//! Sorted by member path, one asset per line, with nothing machine-local (no file system paths or dates):
+//! Sorted by member path, one asset per line, with nothing machine-local (no file system paths):
 //!
 //! ```json
 //! {
 //!   "format": 1,
 //!   "assets": {
-//!     "Assets/Textures/grass.png": {"id": "9f3c0a5e1b7d4c2a8e6f0b1d3a5c7e9f", "size": 48213, "crc32": 2774035466},
+//!     "Assets/Textures/grass.png": {"id": "9f3c0a5e1b7d4c2a8e6f0b1d3a5c7e9f", "size": 48213, "crc32": 2774035466, "added": 1794787200},
 //!     "Scenes/Main.scene": {"id": "0d4e8b2f6a1c3e5d7f9b0a2c4e6d8f1a", "size": 1532, "crc32": 914311107}
 //!   }
 //! }
 //! ```
+//!
+//! `added` is when the asset was first indexed, in seconds since 1970 (#710: the Assets browser sorts by it). It is
+//! the project's own fact, the same on every machine, and kept when the asset moves. Assets indexed before it was
+//! recorded have none, and an engine that does not know it reads the file as before.
 //!
 //! An id is 128 random bits written as 32 lowercase hex digits. Ids are never reused: a new one is random, so two
 //! projects (or two branches of one) do not hand out the same id.
@@ -201,6 +205,20 @@ pub struct IndexReport {
 struct Entry {
     id: AssetId,
     fingerprint: Fingerprint,
+    /// When it was first indexed, in seconds since 1970 (#710), if that is known.
+    added: Option<u64>,
+}
+
+/// An indexed asset whose member is gone, which a new member of its fingerprint takes over: its path, its id and when
+/// it was added.
+type Gone<'a> = (&'a String, AssetId, Option<u64>);
+
+/// Now, in seconds since 1970; `None` on a clock set before then.
+pub(crate) fn now_seconds() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|since| since.as_secs())
 }
 
 /// A project's assets: a stable [`AssetId`] for every asset member, by path. See the [module docs](self).
@@ -245,7 +263,14 @@ impl AssetIndex {
                 size: entry.size,
                 crc32: entry.crc32,
             };
-            by_path.insert(path, Entry { id, fingerprint });
+            by_path.insert(
+                path,
+                Entry {
+                    id,
+                    fingerprint,
+                    added: entry.added,
+                },
+            );
         }
         Self::from_paths(by_path)
     }
@@ -259,8 +284,12 @@ impl AssetIndex {
             // Serializing a string cannot fail; serde_json escapes it as JSON needs.
             let path = serde_json::to_string(path).unwrap_or_default();
             let separator = if i == 0 { "\n    " } else { ",\n    " };
+            let added = entry
+                .added
+                .map(|added| format!(", \"added\": {added}"))
+                .unwrap_or_default();
             out.push_str(&format!(
-                "{separator}{path}: {{\"id\": \"{}\", \"size\": {size}, \"crc32\": {crc32}}}",
+                "{separator}{path}: {{\"id\": \"{}\", \"size\": {size}, \"crc32\": {crc32}{added}}}",
                 entry.id
             ));
         }
@@ -287,6 +316,11 @@ impl AssetIndex {
         self.by_path.get(path).map(|entry| entry.fingerprint)
     }
 
+    /// When the asset at `path` was first indexed, in seconds since 1970 (#710), if that is known.
+    pub fn added(&self, path: &str) -> Option<u64> {
+        self.by_path.get(path).and_then(|entry| entry.added)
+    }
+
     /// Every indexed asset, sorted by path.
     pub fn iter(&self) -> impl Iterator<Item = (&str, AssetId)> {
         self.by_path.iter().map(|(path, entry)| (path.as_str(), entry.id))
@@ -309,9 +343,16 @@ impl AssetIndex {
         Some(path)
     }
 
-    /// Indexes the asset at `path` as `id` with `fingerprint`, replacing what was indexed at `path`. Refuses an id
-    /// another path has.
-    pub(crate) fn insert(&mut self, path: &str, id: AssetId, fingerprint: Fingerprint) -> Result<(), AssetIndexError> {
+    /// Indexes the asset at `path` as `id` with `fingerprint`, added at `added` (seconds since 1970), replacing what
+    /// was indexed at `path`; the same asset indexed there before keeps when it was added. Refuses an id another path
+    /// has.
+    pub(crate) fn insert(
+        &mut self,
+        path: &str,
+        id: AssetId,
+        fingerprint: Fingerprint,
+        added: Option<u64>,
+    ) -> Result<(), AssetIndexError> {
         if let Some(other) = self.by_id.get(&id).filter(|other| *other != path) {
             return Err(AssetIndexError::DuplicateId {
                 id,
@@ -319,7 +360,17 @@ impl AssetIndex {
                 second: path.to_owned(),
             });
         }
-        if let Some(old) = self.by_path.insert(path.to_owned(), Entry { id, fingerprint }) {
+        let kept = self
+            .by_path
+            .get(path)
+            .filter(|entry| entry.id == id)
+            .and_then(|entry| entry.added);
+        let entry = Entry {
+            id,
+            fingerprint,
+            added: kept.or(added),
+        };
+        if let Some(old) = self.by_path.insert(path.to_owned(), entry) {
             self.by_id.remove(&old.id);
         }
         self.by_id.insert(id, path.to_owned());
@@ -340,11 +391,22 @@ impl AssetIndex {
     /// Brings the index up to date with `members`, a project's members by path with their fingerprints, and says
     /// what changed (see the [module docs](self)). Members that are not assets ([`is_asset`]) are skipped. `new_id`
     /// makes the id of each added asset, in path order ([`AssetId::random`] in a project). On an error the index is
-    /// unchanged.
+    /// unchanged. Added assets get no time ([`AssetIndex::update_at`] gives them one).
     pub fn update(
         &mut self,
         members: &BTreeMap<String, Fingerprint>,
+        new_id: impl FnMut() -> Result<AssetId, AssetIndexError>,
+    ) -> Result<IndexReport, AssetIndexError> {
+        self.update_at(members, new_id, None)
+    }
+
+    /// [`AssetIndex::update`], noting `now` (seconds since 1970) as when each added asset was added (#710). A moved
+    /// asset keeps its time.
+    pub fn update_at(
+        &mut self,
+        members: &BTreeMap<String, Fingerprint>,
         mut new_id: impl FnMut() -> Result<AssetId, AssetIndexError>,
+        now: Option<u64>,
     ) -> Result<IndexReport, AssetIndexError> {
         let mut report = IndexReport::default();
         let mut by_path = BTreeMap::new();
@@ -358,6 +420,7 @@ impl AssetIndex {
                         Entry {
                             id: entry.id,
                             fingerprint,
+                            added: entry.added,
                         },
                     );
                 }
@@ -366,10 +429,12 @@ impl AssetIndex {
         }
         // Gone members by fingerprint, each list in path order, so moving a folder of identical files pairs them
         // up by name.
-        let mut gone: BTreeMap<Fingerprint, VecDeque<(&String, AssetId)>> = BTreeMap::new();
+        let mut gone: BTreeMap<Fingerprint, VecDeque<Gone<'_>>> = BTreeMap::new();
         for (path, entry) in &self.by_path {
             if !members.contains_key(path) {
-                gone.entry(entry.fingerprint).or_default().push_back((path, entry.id));
+                gone.entry(entry.fingerprint)
+                    .or_default()
+                    .push_back((path, entry.id, entry.added));
             }
         }
         let mut used: BTreeSet<AssetId> = self.by_id.keys().copied().collect();
@@ -377,14 +442,14 @@ impl AssetIndex {
             let moved = (fingerprint.size > 0)
                 .then(|| gone.get_mut(&fingerprint).and_then(VecDeque::pop_front))
                 .flatten();
-            let id = match moved {
-                Some((from, id)) => {
+            let (id, added) = match moved {
+                Some((from, id, added)) => {
                     report.moved.push(AssetMove {
                         id,
                         from: from.clone(),
                         to: path.clone(),
                     });
-                    id
+                    (id, added)
                 }
                 None => {
                     let id = new_id()?;
@@ -392,14 +457,14 @@ impl AssetIndex {
                         return Err(AssetIndexError::IdInUse(id));
                     }
                     report.added.push(Asset { id, path: path.clone() });
-                    id
+                    (id, now)
                 }
             };
-            by_path.insert(path.clone(), Entry { id, fingerprint });
+            by_path.insert(path.clone(), Entry { id, fingerprint, added });
         }
         for (fingerprint, paths) in gone {
-            for (path, id) in paths {
-                by_path.insert(path.clone(), Entry { id, fingerprint });
+            for (path, id, added) in paths {
+                by_path.insert(path.clone(), Entry { id, fingerprint, added });
                 report.missing.push(Asset { id, path: path.clone() });
             }
         }
@@ -489,6 +554,9 @@ struct EntryIn {
     id: String,
     size: u64,
     crc32: u32,
+    /// When it was first indexed (#710); none in an index from before.
+    #[serde(default)]
+    added: Option<u64>,
 }
 
 #[cfg(test)]
