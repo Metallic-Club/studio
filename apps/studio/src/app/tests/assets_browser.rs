@@ -50,6 +50,15 @@ fn tile_exists(harness: &Harness<'_, Test>, name: &str) -> bool {
     harness.query_by_role_and_label(Role::GridCell, name).is_some()
 }
 
+/// Chooses `item` from the New submenu of the right-click menu open now (#702): the pointer over New opens it to the side.
+fn choose_new(harness: &mut Harness<'_, Test>, item: &str) {
+    let new = harness.get_by_role_and_label(Role::MenuItem, "New").rect();
+    harness.event(egui::Event::PointerMoved(new.center()));
+    settle(harness);
+    harness.get_by_role_and_label(Role::MenuItem, item).click();
+    settle(harness);
+}
+
 #[test]
 fn folders_open_from_the_tree_the_tiles_the_breadcrumbs_and_back() {
     let mut harness = browsing("assets-navigate");
@@ -118,8 +127,7 @@ fn a_new_folder_is_named_in_place_and_files_are_renamed_duplicated_and_moved() {
     // New Folder from the empty space's menu, then named where it is.
     harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
     settle(&mut harness);
-    harness.get_by_role_and_label(Role::MenuItem, "New Folder").click();
-    settle(&mut harness);
+    choose_new(&mut harness, "Folder");
     harness
         .get_by_role_and_label(Role::TextInput, "Name of New Folder")
         .type_text("Rocks");
@@ -334,14 +342,13 @@ fn script_files_of_each_type_are_made_opened_and_dragged_into_the_explorer() {
     harness.get_by_role_and_label(Role::TreeItem, "Scripts").click();
     settle(&mut harness);
     for (item, file) in [
-        ("New Script", "Scripts/Script.server.luau"),
-        ("New LocalScript", "Scripts/LocalScript.client.luau"),
-        ("New ModuleScript", "Scripts/ModuleScript.luau"),
+        ("Script", "Scripts/Script.server.luau"),
+        ("LocalScript", "Scripts/LocalScript.client.luau"),
+        ("ModuleScript", "Scripts/ModuleScript.luau"),
     ] {
         harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
         settle(&mut harness);
-        harness.get_by_role_and_label(Role::MenuItem, item).click();
-        settle(&mut harness);
+        choose_new(&mut harness, item);
         // Named in place at once; Escape keeps the name it was given.
         harness.key_press(Key::Escape);
         settle(&mut harness);
@@ -587,4 +594,44 @@ fn ctrl_and_the_wheel_scale_the_tiles() {
     assert_eq!(editor(&mut harness).browser.scale, MIN_SCALE);
     let small = harness.get_by_role_and_label(Role::GridCell, "Assets").rect();
     assert!(small.width() < before.width());
+}
+
+/// #702: the menus show one New item; its items open to the side, not in the menu itself.
+#[test]
+fn new_items_are_in_a_submenu() {
+    let mut harness = browsing("assets-new-submenu");
+    harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Grid, "Assets").click_secondary();
+    settle(&mut harness);
+    let new = harness.get_by_role_and_label(Role::MenuItem, "New").rect();
+    assert!(
+        harness.query_by_role_and_label(Role::MenuItem, "Material").is_none(),
+        "not until New opens"
+    );
+    harness.event(egui::Event::PointerMoved(new.center()));
+    settle(&mut harness);
+    let material = harness.get_by_role_and_label(Role::MenuItem, "Material").rect();
+    assert!(
+        material.left() >= new.right() - 1.0,
+        "to the side: {material:?} beside {new:?}"
+    );
+    harness.get_by_role_and_label(Role::MenuItem, "Material").click();
+    settle(&mut harness);
+    harness.key_press(Key::Escape);
+    settle(&mut harness);
+    assert!(editor(&mut harness).project.contains("Assets/Material.material"));
+    assert!(
+        harness.query_by_role_and_label(Role::MenuItem, "New").is_none(),
+        "the menus closed"
+    );
+    // A folder's row in the tree has the same New.
+    harness
+        .get_by_role_and_label(Role::TreeItem, "Assets")
+        .click_secondary();
+    settle(&mut harness);
+    choose_new(&mut harness, "Folder");
+    harness.key_press(Key::Escape);
+    settle(&mut harness);
+    assert!(editor(&mut harness).project.has_folder("Assets/New Folder"));
 }

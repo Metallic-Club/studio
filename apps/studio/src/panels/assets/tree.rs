@@ -5,7 +5,7 @@
 use egui::Role;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, ScrollArea, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 
-use super::{Act, Keys, ROOT, context_menu, drop_target, dropped_on};
+use super::{Act, Keys, MenuLine, ROOT, context_menu, drop_target, dropped_on};
 use crate::editor::EditorState;
 use crate::editor::assets::{self as browser, Entry, EntryKind};
 use crate::theme::icons::{self, Icon};
@@ -181,29 +181,23 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
     if let Some(paths) = dropped_on(&response).filter(|_| is_folder) {
         acts.push(Act::Move(paths, entry.path.clone()));
     }
-    let new_items = super::NEW_ITEMS.iter().map(|(label, _)| (*label, None, true));
-    let menu: Vec<super::MenuLine<'_>> = if is_root {
-        new_items.collect()
+    let edits = [
+        MenuLine::Separator,
+        MenuLine::Item("Rename", keys.rename.clone(), true),
+        MenuLine::Item("Duplicate", keys.duplicate.clone(), true),
+        MenuLine::Item("Delete", keys.delete.clone(), true),
+    ];
+    let menu: Vec<MenuLine<'_>> = if is_root {
+        vec![super::new_submenu(true)]
     } else if is_folder {
-        new_items
-            .chain([
-                ("", None, true),
-                ("Rename", keys.rename.clone(), true),
-                ("Duplicate", keys.duplicate.clone(), true),
-                ("Delete", keys.delete.clone(), true),
-            ])
-            .collect()
+        std::iter::once(super::new_submenu(true)).chain(edits).collect()
     } else {
-        vec![
-            ("Show in Folder", None, true),
-            ("", None, true),
-            ("Rename", keys.rename.clone(), true),
-            ("Duplicate", keys.duplicate.clone(), true),
-            ("Delete", keys.delete.clone(), true),
-        ]
+        std::iter::once(MenuLine::Item("Show in Folder", None, true))
+            .chain(edits)
+            .collect()
     };
     let path = entry.path.clone();
-    let chosen = context_menu(&response, &menu).map(|i| menu[i].0);
+    let chosen = context_menu(&response, &menu);
     match chosen {
         Some(label) if super::new_item(label).is_some() => {
             if let Some(new) = super::new_item(label) {

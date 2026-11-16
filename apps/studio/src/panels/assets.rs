@@ -223,18 +223,23 @@ pub(crate) enum New {
     Material,
 }
 
-/// The New items of a folder's menus, in order.
+/// The items of a folder's New submenu (#702), in order.
 pub(crate) const NEW_ITEMS: [(&str, New); 5] = [
-    ("New Folder", New::Folder),
-    ("New Script", New::Script(ScriptType::Server)),
-    ("New LocalScript", New::Script(ScriptType::Local)),
-    ("New ModuleScript", New::Script(ScriptType::Module)),
-    ("New Material", New::Material),
+    ("Folder", New::Folder),
+    ("Script", New::Script(ScriptType::Server)),
+    ("LocalScript", New::Script(ScriptType::Local)),
+    ("ModuleScript", New::Script(ScriptType::Module)),
+    ("Material", New::Material),
 ];
 
-/// The New item called `label`, if it is one.
+/// The New submenu's item called `label`, if it is one.
 pub(crate) fn new_item(label: &str) -> Option<New> {
     NEW_ITEMS.iter().find(|(item, _)| *item == label).map(|(_, new)| *new)
+}
+
+/// A folder menu's New item, which opens [`NEW_ITEMS`] to its side (#702); greyed out when not `enabled`.
+pub(crate) fn new_submenu(enabled: bool) -> MenuLine<'static> {
+    MenuLine::Sub("New", NEW_ITEMS.iter().map(|(label, _)| (*label, enabled)).collect())
 }
 
 /// What the tree and the tiles asked for this frame, done after they are drawn.
@@ -618,12 +623,21 @@ pub(crate) fn shown_entries(editor: &EditorState) -> Vec<Entry> {
     }
 }
 
-/// One line of a right-click menu: its label (empty for a separator), its shortcut, and whether it can be chosen.
-pub(crate) type MenuLine<'a> = (&'a str, Option<String>, bool);
+/// One line of a right-click menu.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum MenuLine<'a> {
+    /// An item: its label, its shortcut, and whether it can be chosen.
+    Item(&'a str, Option<String>, bool),
+    /// A line between items.
+    Separator,
+    /// An item that opens a submenu of these items (each a label and whether it can be chosen) to its side, on
+    /// hover or a click (#702).
+    Sub(&'a str, Vec<(&'a str, bool)>),
+}
 
-/// A right-click menu on `response` of `items`, drawn as Studio's menus are (#660). Returns the index of the item
-/// chosen.
-pub(crate) fn context_menu(response: &egui::Response, items: &[MenuLine<'_>]) -> Option<usize> {
+/// A right-click menu on `response` of `items`, drawn as Studio's menus are (#660). Returns the label of the item
+/// chosen, in the menu or a submenu.
+pub(crate) fn context_menu<'a>(response: &egui::Response, items: &[MenuLine<'a>]) -> Option<&'a str> {
     let p = current_colors(&response.ctx).palette;
     let mut chosen = None;
     egui::Popup::context_menu(response)
@@ -636,21 +650,51 @@ pub(crate) fn context_menu(response: &egui::Response, items: &[MenuLine<'_>]) ->
                 .shadow(shadow::MENU)
                 .inner_margin(space::S2),
         )
-        .show(|ui| {
-            ui.spacing_mut().item_spacing.y = menu::ITEM_GAP;
-            let lines = items.iter().map(|(label, keys, _)| (*label, keys.as_deref(), false));
-            let width = menu::menu_width(ui, lines);
-            ui.set_min_width(width);
-            ui.set_max_width(width);
-            for (i, (label, keys, enabled)) in items.iter().enumerate() {
-                if label.is_empty() {
-                    ui.separator();
-                } else if menu::menu_item(ui, width, label, keys.clone(), None, *enabled).clicked() {
-                    chosen = Some(i);
+        .show(|ui| menu_lines(ui, items, &mut chosen));
+    chosen
+}
+
+/// Draws a menu's `items` as wide as the widest, and notes the one chosen.
+fn menu_lines<'a>(ui: &mut Ui, items: &[MenuLine<'a>], chosen: &mut Option<&'a str>) {
+    ui.spacing_mut().item_spacing.y = menu::ITEM_GAP;
+    // A submenu's item has room for its chevron where an item has its shortcut.
+    let lines = items.iter().filter_map(|line| match line {
+        MenuLine::Item(label, keys, _) => Some((*label, keys.as_deref(), false)),
+        MenuLine::Sub(label, _) => Some((*label, Some("\u{2003}"), false)),
+        MenuLine::Separator => None,
+    });
+    let width = menu::menu_width(ui, lines);
+    ui.set_min_width(width);
+    ui.set_max_width(width);
+    for line in items {
+        match line {
+            MenuLine::Separator => {
+                ui.separator();
+            }
+            MenuLine::Item(label, keys, enabled) => {
+                if menu::menu_item(ui, width, label, keys.clone(), None, *enabled).clicked() {
+                    *chosen = Some(label);
                 }
             }
-        });
-    chosen
+            MenuLine::Sub(label, items) => {
+                let enabled = items.iter().any(|(_, enabled)| *enabled);
+                let button = menu::submenu_item(ui, width, label, enabled);
+                // The submenu's frame as the menu's: Studio's item corners rather than a panel's.
+                let config = egui::containers::menu::MenuConfig::new().style(|style: &mut egui::Style| {
+                    style.visuals.menu_corner_radius = CornerRadius::same(radius::ITEM);
+                });
+                egui::containers::menu::SubMenu::new()
+                    .config(config)
+                    .show(ui, &button, |ui| {
+                        let lines: Vec<MenuLine<'a>> = items
+                            .iter()
+                            .map(|(label, enabled)| MenuLine::Item(label, None, *enabled))
+                            .collect();
+                        menu_lines(ui, &lines, chosen);
+                    });
+            }
+        }
+    }
 }
 
 /// A file or folder's name being edited in place, in `field`: focused, all of it selected at first. Enter, or a click

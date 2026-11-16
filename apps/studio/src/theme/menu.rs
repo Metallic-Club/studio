@@ -101,3 +101,37 @@ pub fn menu_item(
     }
     response
 }
+
+/// A menu item `width` wide that opens a submenu to its side (#702): the label, and a chevron on the right. Unlike
+/// [`menu_item`], a click does not close the menu; the caller shows the submenu from the response
+/// (`egui::containers::menu::SubMenu`).
+pub fn submenu_item(ui: &mut Ui, width: f32, label: &str, enabled: bool) -> Response {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, ITEM_HEIGHT), sense);
+    response.widget_info(|| WidgetInfo::labeled(Role::MenuItem, enabled, label));
+    let ink = if enabled { p.text } else { p.text.gamma_multiply(0.48) };
+    if ui.is_rect_visible(rect) {
+        if enabled && response.hovered() {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface_hover);
+        }
+        ui.painter().text(
+            pos2(rect.left() + space::S4, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(text::BODY),
+            ink,
+        );
+        icons::paint_at(
+            ui.painter(),
+            pos2(rect.right() - space::S3, rect.center().y),
+            Align2::RIGHT_CENTER,
+            Icon::UiExpand,
+            text::SMALL,
+            p.subtle,
+        );
+    }
+    response
+}
