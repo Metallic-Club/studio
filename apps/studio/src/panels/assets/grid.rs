@@ -15,7 +15,7 @@ use crate::editor::EditorState;
 use crate::editor::assets::{Entry, EntryKind};
 use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
-use crate::theme::tokens::{radius, space, text};
+use crate::theme::tokens::{radius, size, space, text};
 
 /// A tile's width at scale 1.
 const TILE_WIDTH: f32 = 84.0;
@@ -207,6 +207,22 @@ fn tile(
             ui.painter().galley(pos2(label.center().x, label.top()), galley, ink);
         }
     }
+    // A material's tile has a button at its top right while the pointer is on it, which gives the material to the
+    // selected parts (#703).
+    if let EntryKind::File(AssetKind::Material) = entry.kind {
+        let enabled = editor.can_apply_material();
+        let label = format!("Apply {name} to the selected parts");
+        if corner_button(
+            ui,
+            rect,
+            response.id.with("apply"),
+            Icon::UiApplyMaterial,
+            &label,
+            enabled,
+        ) {
+            acts.push(Act::ApplyMaterial(entry.path.clone()));
+        }
+    }
     let response = response.on_hover_text(hover_text(editor, entry));
     if let Some(paths) = dropped_on(&response).filter(|_| folder) {
         acts.push(Act::Move(paths, entry.path.clone()));
@@ -253,6 +269,53 @@ fn tile(
             }
         }
     }
+}
+
+/// The side of the button on a tile's corner (#703).
+const CORNER: f32 = 20.0;
+
+/// A small button at the top right of the tile `rect` while the pointer is over the tile (#703): `icon` on a raised
+/// fill, `label` for screen readers and in its tooltip; greyed out when not `enabled`. Returns whether it was clicked.
+/// Made after the tile, so it takes the click rather than the tile.
+fn corner_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, label: &str, enabled: bool) -> bool {
+    if !ui.rect_contains_pointer(rect) {
+        return false;
+    }
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let button = Rect::from_min_size(
+        pos2(rect.right() - space::S1 - CORNER, rect.top() + space::S1),
+        vec2(CORNER, CORNER),
+    );
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let response = ui.interact(button, id, sense);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
+    let fill = if enabled && response.hovered() {
+        p.surface_hover
+    } else {
+        p.surface
+    };
+    ui.painter().rect(
+        button,
+        CornerRadius::same(radius::TILE),
+        fill,
+        Stroke::new(size::BORDER, p.border),
+        egui::StrokeKind::Inside,
+    );
+    let ink = match (enabled, response.hovered()) {
+        (false, _) => p.text.gamma_multiply(0.48),
+        (true, true) => colors.accent,
+        (true, false) => p.text,
+    };
+    icons::paint_at(
+        ui.painter(),
+        button.center(),
+        Align2::CENTER_CENTER,
+        icon,
+        text::SMALL,
+        ink,
+    );
+    response.on_hover_text(label).clicked()
 }
 
 /// What a tile's tooltip says: its path, and its kind and size (or that it is missing).

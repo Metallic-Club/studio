@@ -674,3 +674,66 @@ fn copy_path_puts_the_path_on_the_clipboard() {
     harness.get_by_role_and_label(Role::MenuItem, "Copy path").click();
     assert_eq!(copied_text(&mut harness).as_deref(), Some("Assets"));
 }
+
+/// The editor's Baseplate.
+fn baseplate(harness: &mut Harness<'_, Test>) -> metallic_engine::metallic_core::Id {
+    let editor_state = editor(harness);
+    let workspace = editor_state
+        .dm
+        .service(editor_state.dm.registry().class_id("Workspace").unwrap())
+        .unwrap();
+    editor_state
+        .dm
+        .find_first_child(workspace, "Baseplate", false)
+        .unwrap()
+        .unwrap()
+}
+
+/// Puts the pointer on the tile `name`.
+fn hover_tile(harness: &mut Harness<'_, Test>, name: &str) {
+    let tile = harness.get_by_role_and_label(Role::GridCell, name).rect();
+    harness.event(egui::Event::PointerMoved(tile.center()));
+    settle(harness);
+}
+
+/// #703: the pointer on a material's tile shows a button that gives it to the selected parts, as one undo step;
+/// greyed out with no part selected.
+#[test]
+fn a_material_s_tile_has_a_button_that_applies_it() {
+    let mut harness = browsing("assets-apply-material");
+    let path = editor(&mut harness).new_material_file("Assets").unwrap();
+    let id = editor(&mut harness).project.assets().id(&path).unwrap();
+    editor(&mut harness).browser.open_folder("Assets");
+    settle(&mut harness);
+    let label = "Apply Material to the selected parts";
+    assert!(
+        harness.query_by_label(label).is_none(),
+        "only while the pointer is on the tile"
+    );
+    hover_tile(&mut harness, "Material");
+    let button = harness.get_by_role_and_label(Role::Button, label);
+    assert!(
+        egui_kittest::kittest::NodeT::accesskit_node(&button).is_disabled(),
+        "no part is selected"
+    );
+
+    let part = baseplate(&mut harness);
+    editor(&mut harness).select(Some(part));
+    settle(&mut harness);
+    hover_tile(&mut harness, "Material");
+    harness.get_by_role_and_label(Role::Button, label).click();
+    settle(&mut harness);
+    let material = |harness: &mut Harness<'_, Test>| editor(harness).dm.get_by_name(part, "Material").unwrap();
+    assert_eq!(material(&mut harness), Value::String(id.to_string().into()));
+    assert!(
+        editor(&mut harness).browser.selected.is_empty(),
+        "the button does not select the tile"
+    );
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, Key::Z);
+    settle(&mut harness);
+    assert_ne!(
+        material(&mut harness),
+        Value::String(id.to_string().into()),
+        "one undo step"
+    );
+}

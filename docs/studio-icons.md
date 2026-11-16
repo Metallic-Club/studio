@@ -108,6 +108,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `ui.collapse` | An expanded tree item or section. | Interface | [`interface/chevron-down.svg`](https://lucide.dev/icons/chevron-down) | `ui.collapse.svg`, `ui.collapse.png` |
 | `ui.palette` | A colour of your own. | Interface | [`interface/palette.svg`](https://lucide.dev/icons/palette) | `ui.palette.svg`, `ui.palette.png` |
 | `ui.add` | Add another. | Interface | [`interface/plus.svg`](https://lucide.dev/icons/plus) | `ui.add.svg`, `ui.add.png` |
+| `ui.apply_material` | Give the material to the selected parts (#703), on a material's tile. | Interface | [`interface/paint-bucket.svg`](https://lucide.dev/icons/paint-bucket) | `ui.apply_material.svg`, `ui.apply_material.png` |
 | `ui.move_up` | Move up in a list. | Interface | [`interface/chevron-up.svg`](https://lucide.dev/icons/chevron-up) | `ui.move_up.svg`, `ui.move_up.png` |
 | `ui.move_down` | Move down in a list. | Interface | [`interface/chevron-down.svg`](https://lucide.dev/icons/chevron-down) | `ui.move_down.svg`, `ui.move_down.png` |
 | `ui.delete` | Delete. | Interface | [`interface/trash-2.svg`](https://lucide.dev/icons/trash-2) | `ui.delete.svg`, `ui.delete.png` |

@@ -271,6 +271,8 @@ pub(crate) enum Act {
     Move(Vec<String>, String),
     /// Put these paths on the clipboard, one a line (#705).
     CopyPaths(Vec<String>),
+    /// Give the material at this path to the selected parts (#703).
+    ApplyMaterial(String),
     /// Back to the folder before.
     Back,
 }
@@ -614,6 +616,11 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
             ui.ctx().copy_text(paths.join("\n"));
             Ok(())
         }
+        Act::ApplyMaterial(path) => match editor.project.assets().id(&path) {
+            Some(id) if editor.apply_material(id) > 0 => Ok(()),
+            Some(_) => Err("Select a part to give it the material.".to_owned()),
+            None => Err(format!("{} is not an asset yet.", browser::file_name(&path))),
+        },
     };
     editor.browser.error = result.err();
     ui.ctx().request_repaint();
