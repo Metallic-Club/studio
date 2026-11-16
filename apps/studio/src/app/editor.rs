@@ -37,6 +37,8 @@ pub(crate) enum MenuAction {
     Save,
     /// File, Close project.
     Close,
+    /// File, Import: files from the computer into the Assets browser's open folder (#706).
+    Import,
     /// View: open or close a panel.
     Toggle(&'static str),
     /// Window, Reset layout.
@@ -171,6 +173,8 @@ pub(crate) static MENUS: &[Menu] = &[
             Entry::Separator,
             item("Save", MenuAction::Save, Some(ids::FILE_SAVE)),
             Entry::Planned("Save as"),
+            Entry::Separator,
+            item("Import\u{2026}", MenuAction::Import, None),
             Entry::Separator,
             item("Settings", MenuAction::Settings, Some(ids::SETTINGS_OPEN)),
             Entry::Separator,

@@ -873,3 +873,83 @@ fn the_list_view_sorts_by_its_header() {
     assert_eq!(editor(&mut harness).browser.view, View::Grid);
     assert!(tile_exists(&harness, "big"));
 }
+
+/// A fresh folder on the computer for `test` to import from.
+fn import_source(test: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("metallic-import-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Pack/Sounds")).unwrap();
+    std::fs::write(dir.join("bark.png"), vec![9; 64]).unwrap();
+    std::fs::write(dir.join("Pack/rock.glb"), vec![8; 32]).unwrap();
+    std::fs::write(dir.join("Pack/Sounds/hit.ogg"), vec![7; 16]).unwrap();
+    dir
+}
+
+/// #706: files and folders from the computer come into a project folder as new assets, a folder with what is in it;
+/// a name already taken is made unique; what cannot be read is said, and the rest still comes in.
+#[test]
+fn files_and_folders_are_imported_as_assets() {
+    let mut harness = browsing("assets-import-files");
+    let source = import_source("files");
+    let editor_state = editor(&mut harness);
+    editor_state
+        .project
+        .create_member("Assets/bark.png", vec![1; 4])
+        .unwrap();
+    let imported = editor_state.import_files(
+        "Assets",
+        &[
+            source.join("bark.png"),
+            source.join("Pack"),
+            source.join("nothing-here.png"),
+        ],
+    );
+    assert_eq!(imported.paths, ["Assets/bark 2.png", "Assets/Pack"]);
+    assert_eq!(imported.failed.len(), 1);
+    assert!(
+        imported.failed[0].starts_with("nothing-here.png"),
+        "{:?}",
+        imported.failed
+    );
+    assert!(imported.error().unwrap().contains("nothing-here.png"));
+    for (member, bytes) in [
+        ("Assets/bark 2.png", vec![9; 64]),
+        ("Assets/Pack/rock.glb", vec![8; 32]),
+        ("Assets/Pack/Sounds/hit.ogg", vec![7; 16]),
+    ] {
+        assert_eq!(editor_state.project.read(member).unwrap(), bytes, "{member}");
+        assert!(
+            editor_state.project.assets().id(member).is_some(),
+            "{member} is an asset"
+        );
+    }
+    assert_eq!(editor_state.browser.open, "Assets");
+    assert_eq!(
+        editor_state.browser.selected.iter().collect::<Vec<_>>(),
+        ["Assets/Pack", "Assets/bark 2.png"]
+    );
+    let _ = std::fs::remove_dir_all(source);
+}
+
+/// #706: File, Import asks for files and brings them into the Assets browser's open folder, showing the browser.
+#[test]
+fn file_import_asks_for_files_and_brings_them_in() {
+    let mut harness = browsing("assets-file-import");
+    let source = import_source("menu");
+    let dialog = crate::projects::dialog::ScriptedDialog::new([Some(source.join("bark.png"))]);
+    harness.state_mut().studio.set_file_dialog(Box::new(dialog.clone()));
+    editor(&mut harness).browser.open_folder("Assets/Trees");
+    settle(&mut harness);
+    harness
+        .get_all_by_label("File")
+        .find(|node| egui_kittest::kittest::NodeT::accesskit_node(node).role() != Role::Tab)
+        .unwrap()
+        .click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::MenuItem, "Import\u{2026}").click();
+    settle(&mut harness);
+    assert_eq!(dialog.asked(), ["files"]);
+    assert!(editor(&mut harness).project.contains("Assets/Trees/bark.png"));
+    assert!(tile_exists(&harness, "bark"), "shown in the browser");
+    let _ = std::fs::remove_dir_all(source);
+}
