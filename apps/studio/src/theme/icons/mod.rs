@@ -371,6 +371,8 @@ icons! {
     UiGridView = "ui.grid_view", Interface, "layout-grid";
     /// Show the Assets browser's folder as a list (#699).
     UiListView = "ui.list_view", Interface, "list";
+    /// Import files into the project (#707).
+    UiImport = "ui.import", Interface, "import";
     /// Move up in a list.
     UiMoveUp = "ui.move_up", Interface, "chevron-up";
     /// Move down in a list.

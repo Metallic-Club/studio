@@ -49,6 +49,8 @@ pub struct AssetBrowser {
     pub view: View,
     /// How the list is sorted (#699).
     pub sort: Sort,
+    /// A folder to import files into, asked for by the browser for Studio to ask which files (#707).
+    pub import_request: Option<String>,
 }
 
 /// How the browser shows a folder (#699).
@@ -168,6 +170,7 @@ impl Default for AssetBrowser {
             scale: 1.0,
             view: View::Grid,
             sort: Sort::default(),
+            import_request: None,
         }
     }
 }

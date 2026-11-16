@@ -189,9 +189,12 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         MenuLine::Item("Delete", keys.delete.clone(), true),
     ];
     let menu: Vec<MenuLine<'_>> = if is_root {
-        vec![super::new_submenu(true)]
+        vec![super::new_submenu(true), MenuLine::Item(super::IMPORT_ITEM, None, true)]
     } else if is_folder {
-        std::iter::once(super::new_submenu(true)).chain(edits).collect()
+        [super::new_submenu(true), MenuLine::Item(super::IMPORT_ITEM, None, true)]
+            .into_iter()
+            .chain(edits)
+            .collect()
     } else {
         std::iter::once(MenuLine::Item("Show in Folder", None, true))
             .chain(edits)
@@ -206,6 +209,7 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
             }
         }
         Some("Show in Folder") => acts.push(Act::Show(path)),
+        Some(super::IMPORT_ITEM) => acts.push(Act::Import(path)),
         Some("Rename") => {
             // Named on its tile, in its folder.
             acts.push(Act::Show(path.clone()));

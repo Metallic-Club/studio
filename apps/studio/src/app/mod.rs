@@ -749,7 +749,16 @@ impl Studio {
                 }
                 self.page_actions();
             }
-            Screen::Editor => self.editor_ui(ui),
+            Screen::Editor => {
+                self.editor_ui(ui);
+                // Import asked for in the Assets browser (#707): the file dialog is Studio's, so it is asked here.
+                if let Some(folder) = self
+                    .editor_mut()
+                    .and_then(|editor| editor.browser.import_request.take())
+                {
+                    self.import_into(&folder);
+                }
+            }
         }
         if let Some(before) = before {
             if self.screen != Screen::Editor {
