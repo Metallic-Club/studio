@@ -635,3 +635,42 @@ fn new_items_are_in_a_submenu() {
     settle(&mut harness);
     assert!(editor(&mut harness).project.has_folder("Assets/New Folder"));
 }
+
+/// What the frames run until it is there put on the clipboard (at most a few).
+fn copied_text(harness: &mut Harness<'_, Test>) -> Option<String> {
+    for _ in 0..4 {
+        harness.step();
+        let copied = harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            });
+        if copied.is_some() {
+            return copied;
+        }
+    }
+    None
+}
+
+/// #705: Copy path, on a tile and on a tree row, puts the path in the project on the clipboard.
+#[test]
+fn copy_path_puts_the_path_on_the_clipboard() {
+    let mut harness = browsing("assets-copy-path");
+    harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::GridCell, "Trees").click_secondary();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::MenuItem, "Copy path").click();
+    assert_eq!(copied_text(&mut harness).as_deref(), Some("Assets/Trees"));
+    settle(&mut harness);
+    harness
+        .get_by_role_and_label(Role::TreeItem, "Assets")
+        .click_secondary();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::MenuItem, "Copy path").click();
+    assert_eq!(copied_text(&mut harness).as_deref(), Some("Assets"));
+}
