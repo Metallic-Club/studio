@@ -1076,7 +1076,7 @@ fn text_left(harness: &Harness<'_, Test>, label: &str, row: egui::Rect) -> f32 {
 /// sit under the root's icon.
 #[test]
 fn the_folder_tree_starts_near_its_left_edge() {
-    let mut harness = browsing("assets-tree-left");
+    let harness = browsing("assets-tree-left");
     let root = harness.get_by_role_and_label(Role::TreeItem, "Project").rect();
     let name = text_left(&harness, "Project", root) - root.left();
     assert!(name <= 24.0, "the root's name {name} from the edge");
