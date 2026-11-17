@@ -102,8 +102,11 @@ fn materials_and_scenes_ask_for_thumbnails_and_again_once_they_change() {
         .assets()
         .id("Assets/Materials/Neon.material")
         .unwrap();
-    let asked = editor_state.pictures.take_next().expect("asked for");
-    assert_eq!((asked.id, asked.picture), (neon, Picture::Material));
+    // Its tile asks for it (and the tree's rows for theirs, #756).
+    let asked = std::iter::from_fn(|| editor_state.pictures.take_next())
+        .find(|wanted| wanted.id == neon)
+        .expect("asked for");
+    assert_eq!(asked.picture, Picture::Material);
     // Drawn (as the renderer would), then the file changes: asked for again, the old one shown meanwhile.
     let texture = egui::TextureId::User(1);
     editor_state.pictures.done(neon, asked.fingerprint, texture);
@@ -116,8 +119,9 @@ fn materials_and_scenes_ask_for_thumbnails_and_again_once_they_change() {
         .unwrap();
     settle(&mut harness);
     let editor_state = editor(&mut harness);
-    let again = editor_state.pictures.take_next().expect("asked for again");
-    assert_eq!(again.id, neon);
+    let again = std::iter::from_fn(|| editor_state.pictures.take_next())
+        .find(|wanted| wanted.id == neon)
+        .expect("asked for again");
     assert_ne!(again.fingerprint, asked.fingerprint);
 
     // A scene's tile asks for its picture too.
