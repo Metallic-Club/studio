@@ -12,7 +12,7 @@
 //! - **The inspector** ([`inspector`], #740): at the right, what the one file or folder selected is.
 
 mod grid;
-pub(crate) use grid::WHOLE;
+pub(crate) use grid::{WHOLE, paint_ball};
 mod inspector;
 mod list;
 mod tree;

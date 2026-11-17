@@ -295,12 +295,25 @@ pub fn edit(
     }
 }
 
+/// A file's thumbnail, as a file field draws it (#761): a material's ball or a picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Thumbnail {
+    /// Its texture.
+    pub texture: egui::TextureId,
+    /// Whether it is a material's ball, drawn cut to the ball ([`crate::panels::assets::paint_ball`]).
+    pub ball: bool,
+    /// Its size in pixels, for a picture's aspect ratio.
+    pub size: [usize; 2],
+}
+
 /// The project's files, as a file picker offers them (#55): every member's path with its asset id, taken before the
-/// panel borrows the scene.
+/// panel borrows the scene; and the thumbnails the fields asked for (#761).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Files {
     /// Each member's path and asset id (as text), sorted by path.
     members: Vec<(String, Option<String>)>,
+    /// The thumbnails drawn of the files a field asked for in the last frame ([`want_picture`]), by path.
+    pictures: std::collections::HashMap<String, Thumbnail>,
 }
 
 impl Files {
@@ -316,7 +329,32 @@ impl Files {
                 (member.to_owned(), id)
             })
             .collect();
-        Self { members }
+        Self {
+            members,
+            pictures: Default::default(),
+        }
+    }
+
+    /// [`Files::of`] the editor's project, with the thumbnails of the files the fields have asked for
+    /// ([`want_picture`], #761); those not drawn yet are asked for, and shown once they are.
+    pub fn with_pictures(ctx: &egui::Context, editor: &mut crate::editor::EditorState) -> Self {
+        let mut files = Self::of(&editor.project);
+        // Kept, not taken: the Properties panel and the Assets browser's inspector both read them each frame.
+        let wanted = ctx
+            .data(|data| data.get_temp::<Vec<String>>(wanted_pictures()))
+            .unwrap_or_default();
+        let mut decodes = 0;
+        for path in wanted {
+            if let Some(thumbnail) = thumbnail_of(ctx, editor, &path, &mut decodes) {
+                files.pictures.insert(path, thumbnail);
+            }
+        }
+        files
+    }
+
+    /// The thumbnail of the file at `path`, when a field asked for it and it is drawn.
+    pub(crate) fn picture(&self, path: &str) -> Option<Thumbnail> {
+        self.pictures.get(path).copied()
     }
 
     /// The path of the file whose asset id is `id`.
@@ -326,6 +364,80 @@ impl Files {
             .find(|(_, own)| own.as_deref() == Some(id))
             .map(|(path, _)| path.as_str())
     }
+}
+
+/// Where the fields list the files whose thumbnails they have asked for: a file once shown in a field is kept drawn.
+fn wanted_pictures() -> egui::Id {
+    egui::Id::unique("metallic.values.wanted_pictures")
+}
+
+/// Asks for the thumbnail of the file at `path` (a material or a picture), for [`Files::with_pictures`] from the next
+/// frame on.
+pub(crate) fn want_picture(ctx: &egui::Context, path: &str) {
+    ctx.data_mut(|data| {
+        let wanted = data.get_temp_mut_or_default::<Vec<String>>(wanted_pictures());
+        if !wanted.iter().any(|known| known == path) {
+            wanted.push(path.to_owned());
+        }
+    });
+}
+
+/// How many pictures a frame decodes for the fields.
+const DECODES_A_FRAME: usize = 2;
+
+/// The thumbnail of the file at `path` in `editor`'s project, if it is drawn: a material's ball, which is asked for
+/// when it is missing or old, or a picture, decoded here (at most [`DECODES_A_FRAME`] a frame).
+fn thumbnail_of(
+    ctx: &egui::Context,
+    editor: &mut crate::editor::EditorState,
+    path: &str,
+    decodes: &mut usize,
+) -> Option<Thumbnail> {
+    use crate::editor::pictures::{Picture, Wanted};
+    let id = editor.project.assets().id(path)?;
+    if path.ends_with(".material") {
+        let fingerprint = editor.project.fingerprint(path).ok()?;
+        let drawn = editor.pictures.get(id, fingerprint);
+        if drawn.is_none_or(|(_, fresh)| !fresh) {
+            editor.pictures.want(Wanted {
+                id,
+                picture: Picture::Material,
+                path: path.to_owned(),
+                fingerprint,
+            });
+            ctx.request_repaint();
+        }
+        return drawn.map(|(texture, _)| Thumbnail {
+            texture,
+            ball: true,
+            size: [1, 1],
+        });
+    }
+    if !editor.thumbnails.contains_key(&id) {
+        if *decodes >= DECODES_A_FRAME {
+            ctx.request_repaint();
+            return None;
+        }
+        *decodes += 1;
+    }
+    crate::panels::material::thumbnail(ctx, editor, id).map(|texture| Thumbnail {
+        texture: texture.id(),
+        ball: false,
+        size: texture.size(),
+    })
+}
+
+/// Draws `thumbnail` filling `area`: a ball cut to its outline, a picture at its aspect ratio.
+pub(crate) fn paint_thumbnail(painter: &egui::Painter, thumbnail: Thumbnail, area: egui::Rect) {
+    use crate::panels::assets::{WHOLE, paint_ball};
+    if thumbnail.ball {
+        paint_ball(painter, thumbnail.texture, area, WHOLE);
+        return;
+    }
+    let [width, height] = thumbnail.size.map(|side| side.max(1) as f32);
+    let scale = (area.width() / width).min(area.height() / height);
+    let shown = egui::Rect::from_center_size(area.center(), vec2(width * scale, height * scale));
+    painter.image(thumbnail.texture, shown, WHOLE, Color32::WHITE);
 }
 
 /// Whether a property with `widget` takes a material (#739).
