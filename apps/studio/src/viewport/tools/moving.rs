@@ -7,7 +7,7 @@ use egui::{Color32, Painter, Pos2, Shape, Stroke, pos2};
 use metallic_engine::metallic_core::glam::{Vec2, Vec3};
 use metallic_engine::metallic_core::{CFrame, DataModel};
 
-use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, axis_colour, label, place, trail};
+use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, axis_colour, label, place};
 use crate::viewport::gizmo::{self, MoveHandle};
 use crate::viewport::view::{Ray, View};
 
@@ -131,6 +131,37 @@ fn cone(painter: &Painter, view: &View, base: Vec3, tip: Vec3, radius: f32, fill
     }
 }
 
+/// A move's trail (#776), in the colours of the axes it moves along: along one axis, a line from where the drag
+/// started to where it is now; on a plane, the rectangle between the two, each side in the colour of the axis it
+/// runs along. A dot marks where it started.
+fn axis_trail(painter: &Painter, view: &View, f: &Frame, axes: &[usize], drag: &MoveDrag) {
+    let along = |axis: usize| f.dirs[axis] * drag.moved[axis];
+    let side = |from: Vec3, to: Vec3, axis: usize| {
+        if let Some(line) = view.segment(from, to) {
+            painter.line_segment(line, Stroke::new(2.0, axis_colour(axis, false, 255)));
+        }
+    };
+    let o = f.origin;
+    let dot = match *axes {
+        [axis] => {
+            side(o, o + along(axis), axis);
+            axis_colour(axis, false, 255)
+        }
+        [a, b] => {
+            let (ta, tb) = (along(a), along(b));
+            side(o, o + ta, a);
+            side(o + tb, o + ta + tb, a);
+            side(o, o + tb, b);
+            side(o + ta, o + ta + tb, b);
+            Color32::from_gray(235)
+        }
+        _ => return,
+    };
+    if let Some(at) = view.project(o) {
+        painter.circle_filled(at, 4.0, dot);
+    }
+}
+
 /// A ruler along each axis the drag moves on, with the distance where the targets are now.
 pub(super) fn paint_measurement(painter: &Painter, view: &View, f: &Frame, drag: &MoveDrag) {
     let axes = match drag.handle {
@@ -141,7 +172,7 @@ pub(super) fn paint_measurement(painter: &Painter, view: &View, f: &Frame, drag:
         }
     };
     let end = f.origin + axes.iter().map(|&axis| f.dirs[axis] * drag.moved[axis]).sum::<Vec3>();
-    trail(painter, view, f.origin, end);
+    axis_trail(painter, view, f, &axes, drag);
     let text: Vec<String> = axes
         .iter()
         .map(|&axis| format!("{} {:+.2}", AXIS_NAMES[axis], drag.moved[axis]))
@@ -161,6 +192,48 @@ mod tests {
     use super::super::testing::{Bench, look, position};
     use super::super::*;
     use super::{MoveDrag, paint_measurement};
+
+    #[test]
+    fn a_move_drag_s_trail_is_in_its_axes_colours() {
+        let view = look(Vec3::new(0.0, 10.0, 30.0), Vec3::ZERO);
+        let frame = Frame {
+            origin: Vec3::ZERO,
+            dirs: gizmo::AXES,
+            len: 3.0,
+            bounds: None,
+        };
+        let lines = |handle: MoveHandle| -> Vec<egui::Color32> {
+            let drag = MoveDrag {
+                handle,
+                t0: 0.0,
+                grab: Vec3::ZERO,
+                moved: [7.0, 0.0, -2.0],
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                paint_measurement(ui.painter(), &view, &frame, &drag);
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                    _ => None,
+                })
+                .collect()
+        };
+        let x = axis_colour(0, false, 255);
+        let z = axis_colour(2, false, 255);
+        // Along X: one line, in X's colour, where it was yellow.
+        assert_eq!(lines(MoveHandle::Arrow(0, 1.0)), [x]);
+        // On the XZ plane: the rectangle's four sides, two in each axis's colour.
+        let mut plane = lines(MoveHandle::Plane(1));
+        plane.sort_by_key(|colour| colour.to_array());
+        let mut want = vec![x, x, z, z];
+        want.sort_by_key(|colour| colour.to_array());
+        assert_eq!(plane, want);
+    }
 
     #[test]
     fn a_move_drag_shows_a_dot_where_it_started_and_one_line_without_marks() {
@@ -185,8 +258,8 @@ mod tests {
         let count = |want: fn(&egui::Shape) -> bool| output.shapes.iter().filter(|s| want(&s.shape)).count();
         assert_eq!(
             count(|s| matches!(s, egui::Shape::LineSegment { .. })),
-            1,
-            "one line, no marks"
+            4,
+            "the plane's rectangle, no marks"
         );
         assert_eq!(count(|s| matches!(s, egui::Shape::Circle(_))), 1, "one dot");
     }
