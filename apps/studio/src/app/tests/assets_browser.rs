@@ -101,6 +101,24 @@ fn folders_open_from_the_tree_the_tiles_the_breadcrumbs_and_back() {
 }
 
 #[test]
+fn the_tree_shows_a_picture_s_thumbnail() {
+    let mut harness = browsing("assets-tree-thumbnails");
+    harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
+    settle(&mut harness);
+    double_click_tile(&mut harness, "Trees");
+    harness.get_by_role_and_label(Role::Button, "Back").click();
+    settle(&mut harness);
+    // Assets is open, so no tile shows oak.png; its row in the tree does, and asks for its thumbnail (#756).
+    assert!(!tile_exists(&harness, "oak"));
+    harness.get_by_role_and_label(Role::TreeItem, "oak.png");
+    let editor_state = editor(&mut harness);
+    let oak = editor_state.project.assets().id("Assets/Trees/oak.png").unwrap();
+    editor_state.thumbnails.clear();
+    settle(&mut harness);
+    assert!(editor(&mut harness).thumbnails.contains_key(&oak));
+}
+
+#[test]
 fn the_search_finds_files_anywhere_by_name() {
     let mut harness = browsing("assets-search");
     harness
