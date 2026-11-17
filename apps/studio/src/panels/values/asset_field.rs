@@ -1,5 +1,7 @@
-//! A part's Material in the Properties panel (#739): a text field and, at its right, a button that opens a window to
-//! pick one, as Godot's resource slots have it.
+//! A field naming a project asset, as Godot's resource slots have it: a text field and, at its right, a button that
+//! opens a window to pick one. It is a part's Material in the Properties panel (#739), and each texture map of the
+//! material editor (#762), which shows a small preview of the picture at its left. The material's is described here;
+//! a picture's is the same, its name the file's without the extension, and a name typed is the picture of that name.
 //!
 //! - **The field** shows the material's name, without `.material`. Focused, it shows the material file's whole path,
 //!   which can be typed or pasted; Enter (or leaving it) takes what it names: a material file's path gives that
@@ -18,6 +20,7 @@ use egui::{
     Align2, CornerRadius, FontId, Id, Key, Modal, Modifiers, Rect, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, pos2,
     vec2,
 };
+use metallic_engine::metallic_core::Widget;
 use metallic_engine::metallic_project::material::{BUILTIN_NAMES, material_name};
 
 use super::{Files, NO_FILE, field_height, labelled, paint_thumbnail, want_picture};
@@ -36,24 +39,89 @@ const COMPLETIONS_WIDTH: f32 = 240.0;
 /// The side of a tile of the window's grid (#761), its name below it.
 const TILE: f32 = 84.0;
 
-/// Where the window keeps whether it shows a grid (#761), for the next window.
-fn grid_view() -> Id {
-    Id::unique("metallic.material_field.grid")
+/// What a field names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// A material: its value is the file's asset id or a material's name (#739).
+    Material,
+    /// A picture (#762): its value is the file's asset id.
+    Picture,
 }
 
-/// One material the field or the window can name: its file's path and its asset id.
+impl Kind {
+    /// The files it takes.
+    fn widget(self) -> Widget {
+        match self {
+            Kind::Material => Widget::AssetId {
+                extensions: &["material"],
+            },
+            Kind::Picture => Widget::AssetId {
+                extensions: &["png", "jpg", "jpeg"],
+            },
+        }
+    }
+
+    /// The name the file at `path` is shown by: its file name without the extension.
+    fn name(self, path: &str) -> &str {
+        match self {
+            Kind::Material => material_name(path),
+            Kind::Picture => {
+                let file = path.rsplit_once('/').map_or(path, |(_, file)| file);
+                file.rsplit_once('.').map_or(file, |(stem, _)| stem)
+            }
+        }
+    }
+
+    /// `path` without its extension.
+    fn stem(self, path: &str) -> &str {
+        path.rsplit_once('.')
+            .filter(|(_, extension)| !extension.contains('/'))
+            .map_or(path, |(stem, _)| stem)
+    }
+
+    /// The window's title, and its tooltip on the field's button.
+    fn title(self) -> &'static str {
+        match self {
+            Kind::Material => "Choose a material",
+            Kind::Picture => "Choose a picture",
+        }
+    }
+
+    /// The window's search's hint.
+    fn search(self) -> &'static str {
+        match self {
+            Kind::Material => "Search the materials",
+            Kind::Picture => "Search the pictures",
+        }
+    }
+
+    /// A file's icon, until its thumbnail is drawn.
+    fn icon(self) -> Icon {
+        match self {
+            Kind::Material => Icon::AssetMaterial,
+            Kind::Picture => Icon::AssetImage,
+        }
+    }
+}
+
+/// Where the window keeps whether it shows a grid (#761), for the next window of `kind`.
+fn grid_view(kind: Kind) -> Id {
+    Id::unique(("metallic.asset_field.grid", kind == Kind::Picture))
+}
+
+/// One file the field or the window can name: its path and its asset id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Choice {
     path: String,
     id: String,
 }
 
-/// The project's materials, by path.
-fn choices(files: &Files, widget: metallic_engine::metallic_core::Widget) -> Vec<Choice> {
+/// The project's files of `kind`, by path.
+fn choices(files: &Files, kind: Kind) -> Vec<Choice> {
     files
         .members
         .iter()
-        .filter(|(path, _)| widget.takes_file(path))
+        .filter(|(path, _)| kind.widget().takes_file(path))
         .filter_map(|(path, id)| {
             Some(Choice {
                 path: path.clone(),
@@ -63,44 +131,49 @@ fn choices(files: &Files, widget: metallic_engine::metallic_core::Widget) -> Vec
         .collect()
 }
 
-/// What the field shows for the value `current`: a material file's name, the name a value gives, or nothing.
-fn short(choices: &[Choice], current: &str) -> String {
+/// What the field shows for the value `current`: the file's name, the name a value gives, or nothing.
+fn short(kind: Kind, choices: &[Choice], current: &str) -> String {
     match choices.iter().find(|choice| choice.id == current) {
-        Some(choice) => material_name(&choice.path).to_owned(),
+        Some(choice) => kind.name(&choice.path).to_owned(),
         None => current.to_owned(),
     }
 }
 
-/// What the focused field shows for `current`: the material file's path, the path of the project's material of the
-/// name a value gives, or that name when the project has none.
-fn long(choices: &[Choice], current: &str) -> String {
+/// What the focused field shows for `current`: the file's path, the path of the project's file of the name a value
+/// gives, or that name when the project has none.
+fn long(kind: Kind, choices: &[Choice], current: &str) -> String {
     choices
         .iter()
         .find(|choice| choice.id == current)
-        .or_else(|| choices.iter().find(|choice| material_name(&choice.path) == current))
+        .or_else(|| choices.iter().find(|choice| kind.name(&choice.path) == current))
         .map_or_else(|| current.to_owned(), |choice| choice.path.clone())
 }
 
-/// The value `typed` names: a material file's id (by its path, `.material` or not), a material's name, or `""` for
-/// nothing. `None` when it names no material.
-fn value_of(choices: &[Choice], typed: &str) -> Option<String> {
+/// The value `typed` names: a file's id (by its path, with its extension or not), or `""` for nothing; for a material
+/// a material's name, kept as the name, and for a picture the id of the one picture of that name. `None` when it
+/// names nothing.
+fn value_of(kind: Kind, choices: &[Choice], typed: &str) -> Option<String> {
     let typed = typed.trim();
     if typed.is_empty() {
         return Some(String::new());
     }
-    let path = |choice: &&Choice| {
-        choice.path == typed || choice.path.strip_suffix(".material").is_some_and(|stem| stem == typed)
-    };
+    let path = |choice: &&Choice| choice.path == typed || kind.stem(&choice.path) == typed;
     if let Some(choice) = choices.iter().find(path) {
         return Some(choice.id.clone());
     }
-    let named = choices.iter().any(|choice| material_name(&choice.path) == typed);
-    (named || BUILTIN_NAMES.contains(&typed)).then(|| typed.to_owned())
+    let mut named = choices.iter().filter(|choice| kind.name(&choice.path) == typed);
+    match kind {
+        Kind::Material => (named.next().is_some() || BUILTIN_NAMES.contains(&typed)).then(|| typed.to_owned()),
+        Kind::Picture => match (named.next(), named.next()) {
+            (Some(only), None) => Some(only.id.clone()),
+            _ => None,
+        },
+    }
 }
 
-/// The materials offered for `typed` (#760): those whose name or path holds it, ignoring case, at most
-/// [`COMPLETIONS`]. Those whose name starts with it come first, then those whose path does, each by name.
-fn completions<'a>(choices: &'a [Choice], typed: &str) -> Vec<&'a Choice> {
+/// The files offered for `typed` (#760): those whose name or path holds it, ignoring case, at most [`COMPLETIONS`].
+/// Those whose name starts with it come first, then those whose path does, each by name.
+fn completions<'a>(kind: Kind, choices: &'a [Choice], typed: &str) -> Vec<&'a Choice> {
     let typed = typed.trim().to_lowercase();
     if typed.is_empty() {
         return Vec::new();
@@ -108,7 +181,7 @@ fn completions<'a>(choices: &'a [Choice], typed: &str) -> Vec<&'a Choice> {
     let mut found: Vec<(u8, String, &Choice)> = choices
         .iter()
         .filter_map(|choice| {
-            let name = material_name(&choice.path).to_lowercase();
+            let name = kind.name(&choice.path).to_lowercase();
             let path = choice.path.to_lowercase();
             let rank = if name.starts_with(&typed) {
                 0
@@ -148,12 +221,13 @@ struct Window {
     picked: Option<String>,
 }
 
-/// The Material field of property `label`, whose value is `current` (an asset id, a name, or nothing), `width` wide.
-/// Returns the value chosen: an asset id, a name, or `""` for none.
-pub(super) fn material_field(
+/// The field of `kind` labelled `label`, whose value is `current` (an asset id, a material's name, or nothing),
+/// `width` wide; a picture's with its preview at its left. Returns the value chosen: an asset id, a material's name,
+/// or `""` for none.
+pub(super) fn asset_field(
     ui: &mut Ui,
     files: &Files,
-    widget: metallic_engine::metallic_core::Widget,
+    kind: Kind,
     label: &str,
     current: &str,
     width: f32,
@@ -161,17 +235,25 @@ pub(super) fn material_field(
 ) -> Option<String> {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
-    let choices = choices(files, widget);
-    let id = ui.make_persistent_id(("metallic.properties.material", label));
+    let choices = choices(files, kind);
+    let id = ui.make_persistent_id(("metallic.properties.asset", label));
     let field_id = id.with("field");
     let window_id = id.with("window");
     let focused = ui.memory(|memory| memory.has_focus(field_id));
-    let shown = if mixed { String::new() } else { short(&choices, current) };
+    let shown = if mixed {
+        String::new()
+    } else {
+        short(kind, &choices, current)
+    };
     // Focused, the field holds what is typed, from the whole path on.
     let mut typing = if focused {
         ui.data_mut(|data| data.get_temp::<Typing>(id))
             .unwrap_or_else(|| Typing {
-                text: if mixed { String::new() } else { long(&choices, current) },
+                text: if mixed {
+                    String::new()
+                } else {
+                    long(kind, &choices, current)
+                },
                 ..Typing::default()
             })
     } else {
@@ -182,7 +264,7 @@ pub(super) fn material_field(
     };
     // The completions shown since the last frame, and Up and Down moving through them before the field sees them.
     let offered = if focused && typing.edited {
-        completions(&choices, &typing.text)
+        completions(kind, &choices, &typing.text)
     } else {
         Vec::new()
     };
@@ -198,10 +280,25 @@ pub(super) fn material_field(
     let mut typed = typing.text.clone();
     let height = field_height(ui);
     let button_side = height;
-    let field_width = (width - button_side - space::S1).max(0.0);
+    // A picture's preview, at the field's left (#762).
+    let preview = kind == Kind::Picture;
+    let preview_room = if preview { height + space::S2 } else { 0.0 };
+    let field_width = (width - button_side - space::S1 - preview_room).max(0.0);
     let mut chosen = None;
     let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = space::S1;
+        if preview {
+            let (rect, _) = ui.allocate_exact_size(vec2(height, height), Sense::hover());
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(radius::TILE), p.surface);
+            if let Some(choice) = choices.iter().find(|choice| choice.id == current) {
+                want_picture(ui.ctx(), &choice.path);
+                if let Some(thumbnail) = files.picture(&choice.path) {
+                    paint_thumbnail(ui.painter(), thumbnail, rect);
+                }
+            }
+            ui.add_space(space::S2 - space::S1);
+        }
         let hint = if mixed { "Mixed" } else { NO_FILE };
         let response = ui.add_sized(
             [field_width, height],
@@ -222,7 +319,11 @@ pub(super) fn material_field(
         }
         if response.has_focus() && !focused {
             // Just focused: the whole path, all of it selected, from the next frame on.
-            let path = if mixed { String::new() } else { long(&choices, current) };
+            let path = if mixed {
+                String::new()
+            } else {
+                long(kind, &choices, current)
+            };
             if let Some(mut state) = TextEdit::load_state(ui.ctx(), field_id) {
                 let all = egui::text::CCursorRange::two(
                     egui::text::CCursor::new(0),
@@ -255,7 +356,7 @@ pub(super) fn material_field(
             });
             // Enter takes the completion picked out, else what is typed when it names one, else the first; Tab the
             // one picked out or the first.
-            let completed = match (typing.picked, value_of(&choices, &typed)) {
+            let completed = match (typing.picked, value_of(kind, &choices, &typed)) {
                 (Some(picked), _) if entered || tabbed => offered.get(picked),
                 (None, None) if entered => offered.first(),
                 (None, _) if tabbed => offered.first(),
@@ -263,7 +364,7 @@ pub(super) fn material_field(
             };
             let value = match completed {
                 Some(choice) => Some(choice.id.clone()),
-                None => value_of(&choices, &typed),
+                None => value_of(kind, &choices, &typed),
             };
             if !cancelled
                 && let Some(value) = value
@@ -288,7 +389,7 @@ pub(super) fn material_field(
             text::SMALL,
             ink,
         );
-        if open.on_hover_text("Choose a material").clicked() {
+        if open.on_hover_text(kind.title()).clicked() {
             let picked = (!mixed).then(|| current.to_owned());
             ui.data_mut(|data| {
                 data.insert_temp(
@@ -306,13 +407,13 @@ pub(super) fn material_field(
     // and the click is the completion's).
     if focused && !offered.is_empty() {
         let field = row.inner.rect;
-        if let Some(clicked) = completion_list(ui, id.with("completions"), field, &offered, typing.picked)
+        if let Some(clicked) = completion_list(ui, id.with("completions"), kind, field, &offered, typing.picked)
             && let Some(choice) = offered.get(clicked)
         {
             chosen = Some(choice.id.clone()).filter(|value| value != current || mixed);
         }
     }
-    // A material dragged from the Assets panel and let go on the field (#676).
+    // A file dragged from the Assets panel and let go on the field (#676).
     let response = &row.inner;
     let fits = |drag: &crate::panels::assets::AssetDrag| match drag.paths.as_slice() {
         [path] => choices
@@ -337,14 +438,15 @@ pub(super) fn material_field(
     {
         chosen = Some(value);
     }
-    if let Some(picked) = window(ui.ctx(), window_id, &choices, files) {
+    if let Some(picked) = window(ui.ctx(), window_id, kind, &choices, files) {
         chosen = Some(picked).filter(|picked| picked != current || mixed);
     }
     chosen
 }
 
-/// The window, while it is open: returns the value chosen when it closes with one. `files` has the balls drawn.
-fn window(ctx: &egui::Context, id: Id, choices: &[Choice], files: &Files) -> Option<String> {
+/// The window of `kind`, while it is open: returns the value chosen when it closes with one. `files` has the
+/// thumbnails drawn.
+fn window(ctx: &egui::Context, id: Id, kind: Kind, choices: &[Choice], files: &Files) -> Option<String> {
     let mut state = ctx.data(|data| data.get_temp::<Window>(id))?;
     let p = current_colors(ctx).palette;
     let frame = egui::Frame::new()
@@ -357,14 +459,14 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice], files: &Files) -> Opt
     let modal = Modal::new(id.with("modal")).frame(frame).show(ctx, |ui| {
         ui.set_width(WINDOW_WIDTH);
         ui.label(
-            egui::RichText::new("Choose a material")
+            egui::RichText::new(kind.title())
                 .font(fonts::named(fonts::HEADING, text::TITLE))
                 .color(p.text),
         );
         ui.add_space(space::S4);
-        let grid = ctx.data(|data| data.get_temp::<bool>(grid_view())).unwrap_or(false);
+        let grid = ctx.data(|data| data.get_temp::<bool>(grid_view(kind))).unwrap_or(false);
         let mut switch = false;
-        crate::panels::search_box_then(ui, &mut state.query, "Search the materials", size::ROW, |ui| {
+        crate::panels::search_box_then(ui, &mut state.query, kind.search(), size::ROW, |ui| {
             let (icon, label) = if grid {
                 (Icon::UiListView, "Show as a list")
             } else {
@@ -373,7 +475,7 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice], files: &Files) -> Opt
             switch = icon_button(ui, icon, label, size::ROW).clicked();
         });
         if switch {
-            ctx.data_mut(|data| data.insert_temp(grid_view(), !grid));
+            ctx.data_mut(|data| data.insert_temp(grid_view(kind), !grid));
         }
         ui.add_space(space::S3);
         let query = state.query.trim().to_lowercase();
@@ -387,20 +489,16 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice], files: &Files) -> Opt
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 let none = std::iter::once((NO_FILE, None, String::new()));
-                let materials = shown.iter().map(|choice| {
-                    (
-                        material_name(&choice.path),
-                        Some(choice.path.as_str()),
-                        choice.id.clone(),
-                    )
-                });
+                let files_shown = shown
+                    .iter()
+                    .map(|choice| (kind.name(&choice.path), Some(choice.path.as_str()), choice.id.clone()));
                 let items = |ui: &mut Ui| {
-                    for (index, (name, path, value)) in none.chain(materials).enumerate() {
+                    for (index, (name, path, value)) in none.chain(files_shown).enumerate() {
                         let on = state.picked.as_deref() == Some(value.as_str());
                         let response = if grid {
-                            tile(ui, files, name, path, on)
+                            tile(ui, files, kind.icon(), name, path, on)
                         } else {
-                            row(ui, Role::Row, index, name, path, on)
+                            row(ui, Role::Row, kind.icon(), index, name, path, on)
                         };
                         if response.clicked() {
                             state.picked = Some(value.clone());
@@ -463,9 +561,9 @@ fn icon_button(ui: &mut Ui, icon: Icon, label: &str, side: f32) -> egui::Respons
     response.on_hover_text(label)
 }
 
-/// A tile of the window's grid (#761): the material's ball (its icon until the ball is drawn) over its name, picked
-/// out when `on`. None's has its name alone.
-fn tile(ui: &mut Ui, files: &Files, name: &str, path: Option<&str>, on: bool) -> egui::Response {
+/// A tile of the window's grid (#761): the file's thumbnail (its `icon` until the thumbnail is drawn) over its name,
+/// picked out when `on`. None's has its name alone.
+fn tile(ui: &mut Ui, files: &Files, icon: Icon, name: &str, path: Option<&str>, on: bool) -> egui::Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let (rect, response) = ui.allocate_exact_size(vec2(TILE, TILE + size::ROW), Sense::click());
@@ -486,9 +584,9 @@ fn tile(ui: &mut Ui, files: &Files, name: &str, path: Option<&str>, on: bool) ->
                 Some(thumbnail) => paint_thumbnail(ui.painter(), thumbnail, picture),
                 None => icons::paint(
                     ui.painter(),
-                    Icon::AssetMaterial,
+                    icon,
                     picture.shrink(picture.width() / 4.0),
-                    Icon::AssetMaterial.color(&colors),
+                    icon.color(&colors),
                 ),
             }
         }
@@ -507,7 +605,14 @@ fn tile(ui: &mut Ui, files: &Files, name: &str, path: Option<&str>, on: bool) ->
 
 /// The completions `offered` for the field at `field`, in a list under it, the `picked`th picked out. Returns the one
 /// clicked.
-fn completion_list(ui: &Ui, id: Id, field: Rect, offered: &[&Choice], picked: Option<usize>) -> Option<usize> {
+fn completion_list(
+    ui: &Ui,
+    id: Id,
+    kind: Kind,
+    field: Rect,
+    offered: &[&Choice],
+    picked: Option<usize>,
+) -> Option<usize> {
     let p = current_colors(ui.ctx()).palette;
     let frame = egui::Frame::new()
         .fill(p.surface)
@@ -524,9 +629,10 @@ fn completion_list(ui: &Ui, id: Id, field: Rect, offered: &[&Choice], picked: Op
                 ui.set_width(field.width().max(COMPLETIONS_WIDTH));
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for (index, choice) in offered.iter().enumerate() {
-                    let name = material_name(&choice.path);
+                    let name = kind.name(&choice.path);
                     let on = picked == Some(index);
-                    if row(ui, Role::ListBoxOption, index, name, Some(&choice.path), on).clicked() {
+                    let path = Some(choice.path.as_str());
+                    if row(ui, Role::ListBoxOption, kind.icon(), index, name, path, on).clicked() {
                         clicked = Some(index);
                     }
                 }
@@ -535,9 +641,17 @@ fn completion_list(ui: &Ui, id: Id, field: Rect, offered: &[&Choice], picked: Op
     clicked
 }
 
-/// One row of a list, the `index`th, for screen readers a `role`: the material's icon, its name and its path, picked
-/// out when `on`.
-fn row(ui: &mut Ui, role: Role, index: usize, name: &str, path: Option<&str>, on: bool) -> egui::Response {
+/// One row of a list, the `index`th, for screen readers a `role`: the file's `icon`, its name and its path, picked out
+/// when `on`.
+fn row(
+    ui: &mut Ui,
+    role: Role,
+    file_icon: Icon,
+    index: usize,
+    name: &str,
+    path: Option<&str>,
+    on: bool,
+) -> egui::Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::click());
@@ -556,12 +670,7 @@ fn row(ui: &mut Ui, role: Role, index: usize, name: &str, path: Option<&str>, on
             vec2(text::BODY, text::BODY),
         );
         if path.is_some() {
-            icons::paint(
-                ui.painter(),
-                Icon::AssetMaterial,
-                icon,
-                Icon::AssetMaterial.color(&colors),
-            );
+            icons::paint(ui.painter(), file_icon, icon, file_icon.color(&colors));
         }
         let name_x = icon.right() + space::S3;
         let ink = if on { p.text } else { p.muted };
@@ -605,28 +714,45 @@ mod tests {
     #[test]
     fn the_field_shows_the_name_and_focused_the_path() {
         let choices = some();
-        assert_eq!(short(&choices, "bb"), "Rust");
-        assert_eq!(long(&choices, "bb"), "Assets/Rust.material");
+        assert_eq!(short(Kind::Material, &choices, "bb"), "Rust");
+        assert_eq!(long(Kind::Material, &choices, "bb"), "Assets/Rust.material");
         // A value naming a material shows the name, and focused the project's file of that name.
-        assert_eq!(short(&choices, "Concrete"), "Concrete");
-        assert_eq!(long(&choices, "Concrete"), "Assets/Materials/Concrete.material");
-        assert_eq!(long(&choices, "Neon"), "Neon", "a built-in the project has no file of");
-        assert_eq!(short(&choices, ""), "");
+        assert_eq!(short(Kind::Material, &choices, "Concrete"), "Concrete");
+        assert_eq!(
+            long(Kind::Material, &choices, "Concrete"),
+            "Assets/Materials/Concrete.material"
+        );
+        assert_eq!(
+            long(Kind::Material, &choices, "Neon"),
+            "Neon",
+            "a built-in the project has no file of"
+        );
+        assert_eq!(short(Kind::Material, &choices, ""), "");
     }
 
     #[test]
     fn what_is_typed_names_a_file_a_name_or_nothing() {
         let choices = some();
-        assert_eq!(value_of(&choices, "Assets/Rust.material").as_deref(), Some("bb"));
         assert_eq!(
-            value_of(&choices, " Assets/Rust ").as_deref(),
+            value_of(Kind::Material, &choices, "Assets/Rust.material").as_deref(),
+            Some("bb")
+        );
+        assert_eq!(
+            value_of(Kind::Material, &choices, " Assets/Rust ").as_deref(),
             Some("bb"),
             "without .material"
         );
-        assert_eq!(value_of(&choices, "Concrete").as_deref(), Some("Concrete"));
-        assert_eq!(value_of(&choices, "Neon").as_deref(), Some("Neon"), "a built-in name");
-        assert_eq!(value_of(&choices, "").as_deref(), Some(""));
-        assert_eq!(value_of(&choices, "Assets/Nope.material"), None);
+        assert_eq!(
+            value_of(Kind::Material, &choices, "Concrete").as_deref(),
+            Some("Concrete")
+        );
+        assert_eq!(
+            value_of(Kind::Material, &choices, "Neon").as_deref(),
+            Some("Neon"),
+            "a built-in name"
+        );
+        assert_eq!(value_of(Kind::Material, &choices, "").as_deref(), Some(""));
+        assert_eq!(value_of(Kind::Material, &choices, "Assets/Nope.material"), None);
     }
 
     #[test]
@@ -641,7 +767,7 @@ mod tests {
             id: "dd".into(),
         });
         let names = |typed: &str| -> Vec<&str> {
-            completions(&choices, typed)
+            completions(Kind::Material, &choices, typed)
                 .into_iter()
                 .map(|choice| material_name(&choice.path))
                 .collect()
@@ -650,5 +776,45 @@ mod tests {
         assert_eq!(names("assets/old"), ["Wet Concrete"], "a path's start");
         assert_eq!(names("RUST"), ["Rust"], "whatever the case");
         assert!(names("  ").is_empty() && names("glass").is_empty());
+    }
+
+    #[test]
+    fn a_picture_is_named_by_its_file_and_a_name_gives_its_id() {
+        let choices = vec![
+            Choice {
+                path: "Assets/Textures/bark.png".into(),
+                id: "aa".into(),
+            },
+            Choice {
+                path: "Assets/moss.v2.jpg".into(),
+                id: "bb".into(),
+            },
+            Choice {
+                path: "Assets/Old/moss.v2.png".into(),
+                id: "cc".into(),
+            },
+        ];
+        let kind = Kind::Picture;
+        assert_eq!(short(kind, &choices, "aa"), "bark");
+        assert_eq!(short(kind, &choices, "bb"), "moss.v2", "only the last extension goes");
+        assert_eq!(long(kind, &choices, "aa"), "Assets/Textures/bark.png");
+        assert_eq!(
+            value_of(kind, &choices, "Assets/Textures/bark.png").as_deref(),
+            Some("aa")
+        );
+        assert_eq!(value_of(kind, &choices, "Assets/Textures/bark").as_deref(), Some("aa"));
+        assert_eq!(
+            value_of(kind, &choices, "bark").as_deref(),
+            Some("aa"),
+            "the one picture of that name"
+        );
+        assert_eq!(value_of(kind, &choices, "moss.v2"), None, "two of that name");
+        assert_eq!(value_of(kind, &choices, "Concrete"), None, "no built-in pictures");
+        assert_eq!(value_of(kind, &choices, "").as_deref(), Some(""));
+        let found: Vec<&str> = completions(kind, &choices, "mo")
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(found, ["bb", "cc"]);
     }
 }

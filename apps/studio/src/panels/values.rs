@@ -14,7 +14,8 @@
 //!   Studio's colour picker ([`super::color_picker`], #416);
 //! - enums: a drop-down of the enum's items, its list in the panel's style ([`choice_row`], #418);
 //! - a part's Material: a field of the material's name (its path while it is edited) and a button that opens a window
-//!   to choose one ([`material_field`], #739).
+//!   to choose one ([`asset_field`], #739), which the material editor's texture maps use too ([`picture_field`],
+//!   #762).
 //!
 //! With several instances selected (#350) a value they disagree on is **mixed** ([`Mixed`]): a component shows a
 //! dash (a text field "Mixed" in grey, a drop-down "Mixed", a check box a bar), and an edit of some components of a
@@ -32,7 +33,7 @@ use crate::theme::current_colors;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{size, space, text};
 
-mod material_field;
+mod asset_field;
 
 /// Which part of a `CFrame` a row edits: the Properties panel shows a `CFrame` as two rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,7 +223,7 @@ pub fn edit(
         }
         // A material (#739): its name or path typed, or chosen in a window.
         Value::String(s) if is_material(meta.widget) => {
-            material_field::material_field(ui, files, meta.widget, label, &s, width, mixed.whole)
+            asset_field::asset_field(ui, files, asset_field::Kind::Material, label, &s, width, mixed.whole)
                 .map(|s| Edit::Whole(Value::String(s.into())))
         }
         // A project file's path or asset id (#55): picked from the project's files.
@@ -438,6 +439,13 @@ pub(crate) fn paint_thumbnail(painter: &egui::Painter, thumbnail: Thumbnail, are
     let scale = (area.width() / width).min(area.height() / height);
     let shown = egui::Rect::from_center_size(area.center(), vec2(width * scale, height * scale));
     painter.image(thumbnail.texture, shown, WHOLE, Color32::WHITE);
+}
+
+/// A field naming a project picture by its asset id (#762), `label` for screen readers, whose value is `current`,
+/// `width` wide: its preview, its name (its path while it is edited, with completions), and a button that opens a
+/// window to choose one. Returns the asset id chosen, or `""` for none.
+pub(crate) fn picture_field(ui: &mut Ui, files: &Files, label: &str, current: &str, width: f32) -> Option<String> {
+    asset_field::asset_field(ui, files, asset_field::Kind::Picture, label, current, width, false)
 }
 
 /// Whether a property with `widget` takes a material (#739).

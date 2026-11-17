@@ -1,6 +1,6 @@
 //! The material editor (#680), in the Assets browser's inspector (#742): a material selected shows its ball, its name
 //! with Apply and Copy, and its settings; edits are written into its file and undone with the Assets panel's Undo; a
-//! texture slot takes a project picture; a click on a material only selects it (#735), and a material dropped on a
+//! texture map is a picture field (#762); a click on a material only selects it (#735), and a material dropped on a
 //! part in the viewport gives it to that part.
 
 use egui::accesskit::Role;
@@ -105,12 +105,30 @@ fn a_material_is_edited_in_the_inspector_and_its_edits_are_written_and_undone() 
             .as_deref(),
         Some("Wood")
     );
-    // The sections, in order.
-    let sliders: Vec<f32> = ["Normal strength", "Roughness", "Metallic", "Emission strength"]
+    // The texture maps first, in order (#762), then the values.
+    let maps = [
+        "Color map",
+        "Normal map",
+        "Roughness map",
+        "Metalness map",
+        "Emissive map",
+        "Ambient occlusion map",
+    ];
+    let mut tops: Vec<f32> = maps
         .iter()
-        .map(|label| harness.get_by_role_and_label(Role::Slider, label).rect().top())
+        .map(|label| harness.get_by_role_and_label(Role::TextInput, label).rect().top())
         .collect();
-    assert!(sliders.windows(2).all(|pair| pair[0] < pair[1]), "{sliders:?}");
+    tops.extend(
+        ["Normal strength", "Roughness", "Metalness", "Emissive strength"]
+            .iter()
+            .map(|label| harness.get_by_role_and_label(Role::Slider, label).rect().top()),
+    );
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "{tops:?}");
+    // Each map is a field with a button that opens a window to choose a picture; none has a slider.
+    for map in maps {
+        harness.get_by_role_and_label(Role::Button, &format!("Choose {map}"));
+        assert!(harness.query_by_role_and_label(Role::Slider, map).is_none());
+    }
 
     // An edit is written into the file at once, and noted for the renderers.
     let before = editor(&mut harness).read_material(id).unwrap();
@@ -124,12 +142,23 @@ fn a_material_is_edited_in_the_inspector_and_its_edits_are_written_and_undone() 
     // (The viewport's renderer took the change; kittest draws no viewport.)
     let _ = editor(&mut harness).materials.take_changed();
 
-    // A picture in the colour's texture slot, from its picker.
-    scroll_to(&mut harness, Role::ComboBox, "Colour texture");
-    harness.get_by_role_and_label(Role::ComboBox, "Colour texture").click();
+    // A picture in the colour map, typed by its path.
+    scroll_to(&mut harness, Role::TextInput, "Color map");
+    harness.get_by_role_and_label(Role::TextInput, "Color map").click();
     settle(&mut harness);
-    harness.get_by_role_and_label(Role::Button, "Assets/bark.png").click();
+    harness
+        .get_by_role_and_label(Role::TextInput, "Color map")
+        .type_text("Assets/bark.png");
+    harness.key_press(egui::Key::Enter);
     settle(&mut harness);
+    assert_eq!(
+        harness
+            .get_by_role_and_label(Role::TextInput, "Color map")
+            .value()
+            .as_deref(),
+        Some("bark"),
+        "the picture's name"
+    );
     let bark = editor(&mut harness).project.assets().id("Assets/bark.png").unwrap();
     assert_eq!(
         editor(&mut harness).read_material(id).unwrap().textures.color,
@@ -153,6 +182,22 @@ fn a_material_is_edited_in_the_inspector_and_its_edits_are_written_and_undone() 
         editor(&mut harness).history().can_undo(),
         scene_steps,
         "the scene's steps untouched"
+    );
+
+    // A picture chosen in the window, for the normal map.
+    scroll_to(&mut harness, Role::Button, "Choose Normal map");
+    harness.get_by_role_and_label(Role::Button, "Choose Normal map").click();
+    settle(&mut harness);
+    harness.get_by_label("Search the pictures");
+    let time = harness.ctx.input(|input| input.time) + 1.0;
+    harness.input_mut().time = Some(time);
+    harness.get_by_role_and_label(Role::Row, "bark").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Select").click();
+    settle(&mut harness);
+    assert_eq!(
+        editor(&mut harness).read_material(id).unwrap().textures.normal,
+        Some(bark)
     );
 }
 
