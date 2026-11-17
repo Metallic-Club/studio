@@ -111,6 +111,22 @@ the picture, no sky.
 - **A part's Material in Properties (#739)** is a field of the material's name, its path while it is edited, with a
   button that opens a window to choose one, as Godot's resource slots do.
 
+### 8. Asset fields and thumbnails (2026-11-16, #756-#762)
+
+- **One asset field** serves a part's Material and the material editor's texture maps (#762): the name, the path
+  while it is edited, completions while typing (#760: names that start with the text first; Up, Down, Enter, Tab or
+  a click), and a window to choose one as a list or a grid of thumbnails (#761), the choice of view kept for the next
+  window. A picture's field shows a small preview at its left. A material's value may be a material's name; a
+  picture's is always an asset id, a name typed giving the one picture of that name.
+- **The material editor (#762)** puts the texture maps first, in the order Color, Normal, Roughness, Metalness,
+  Emissive, Ambient occlusion, each a picture field with no slider; the values (tint, Glass, normal strength,
+  roughness, metalness, emissive colour and strength) follow in their own section, then Packed map and Mapping.
+- **Thumbnails reach the fields** through `Files::with_pictures`: a field asks for a file's thumbnail, and from the
+  next frame on the Properties panel and the inspector have it (a material's ball, asked of the thumbnails' renderer;
+  a picture, decoded a couple a frame). The tree shows them too, in place of a material's or a picture's icon (#756).
+- **The inspector's ball (#757)** is painted from the part of the preview's target the frame fills: the target keeps
+  room beyond the size drawn, as the viewport's does.
+
 ## Consequences
 
 - Scenes from before #678 hold `Material` enum items; they migrate to the project's material of that name, created

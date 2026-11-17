@@ -1,19 +1,19 @@
-//! The material editor (#680, ADR 0012), in the Assets browser's inspector (#742): a selected material's settings, a
-//! section each, in Studio's style.
+//! The material editor (#680, ADR 0012), in the Assets browser's inspector (#742): a selected material's settings, in
+//! sections, in Studio's style.
 //!
-//! - **Colour**: the tint, its texture (the base colour), and Glass.
-//! - **Normal**: the normal map and how strongly it bends the light.
-//! - **Roughness**, **Metallic**: the value and its texture.
-//! - **Emission**: the glow's colour, its strength and its texture.
-//! - **Ambient occlusion**: its texture.
+//! - **Texture maps** (#762): Color, Normal, Roughness, Metalness, Emissive and Ambient occlusion, in that order. Each
+//!   is a picture field ([`values::picture_field`]): a small preview, the picture's name (its path while it is
+//!   edited, with completions), and a button that opens a window to choose one, as a list or a grid. A picture
+//!   dragged from the Assets panel is taken too.
+//! - **Values**: the tint and Glass, how strongly the normal map bends the light, the roughness and metalness, and
+//!   the glow's colour and strength.
 //! - **Packed map**: one picture holding ambient occlusion, roughness and metallic, and which channel holds each.
 //! - **Mapping**: how the textures are laid on a part (tile size, scale, offset, filtering, wrapping).
 //!
-//! Each texture is a picker of the project's pictures that also takes one dragged from the Assets panel, with a
-//! thumbnail. Every change is written into the material's file at once and is one of its undo steps.
+//! Every change is written into the material's file at once and is one of its undo steps.
 
-use egui::{ComboBox, CornerRadius, Grid, Rect, RichText, Sense, Slider, Ui, Vec2, pos2, vec2};
-use metallic_engine::metallic_core::{Color3, Widget};
+use egui::{ComboBox, Grid, RichText, Sense, Slider, Ui, vec2};
+use metallic_engine::metallic_core::Color3;
 use metallic_engine::metallic_project::AssetId;
 use metallic_engine::metallic_project::material::{Channel, Filter, Material, Packed, Wrap};
 
@@ -22,75 +22,52 @@ use crate::editor::EditorState;
 use crate::theme::current_colors;
 use crate::theme::tokens::{size, space, text};
 
-/// The pictures a texture slot takes.
-const IMAGES: Widget = Widget::AssetId {
-    extensions: &["png", "jpg", "jpeg"],
-};
-
-/// A slot's thumbnail side.
-const THUMB: f32 = 22.0;
 /// The width of the labels' column.
 const LABELS: f32 = 84.0;
 
-/// The material's settings, changed in place, a section each.
-pub(crate) fn sections(ui: &mut Ui, editor: &mut EditorState, files: &Files, material: &mut Material) {
+/// The material's settings, changed in place, in sections. `files` has the pictures' thumbnails.
+pub(crate) fn sections(ui: &mut Ui, files: &Files, material: &mut Material) {
     let textures = &mut material.textures;
-    section(ui, "Colour", |ui| {
+    section(ui, "Texture maps", |ui| {
+        texture_row(ui, files, "Color", "Color map", &mut textures.color);
+        texture_row(ui, files, "Normal", "Normal map", &mut textures.normal);
+        texture_row(ui, files, "Roughness", "Roughness map", &mut textures.roughness);
+        texture_row(ui, files, "Metalness", "Metalness map", &mut textures.metallic);
+        texture_row(ui, files, "Emissive", "Emissive map", &mut textures.emission);
+        texture_row(
+            ui,
+            files,
+            "Ambient occlusion",
+            "Ambient occlusion map",
+            &mut textures.occlusion,
+        );
+    });
+    section(ui, "Values", |ui| {
         color_row(ui, "Tint", "Colour", &mut material.color);
-        texture_row(ui, editor, files, "Texture", "Colour texture", &mut textures.color);
         ui.label(row_label("Glass"));
         ui.checkbox(&mut material.glass, "")
             .on_hover_text("When the part is see-through, its reflections stay at full strength.")
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, true, "Glass"));
         ui.end_row();
-    });
-    section(ui, "Normal", |ui| {
-        texture_row(ui, editor, files, "Texture", "Normal texture", &mut textures.normal);
         number_row(
             ui,
-            "Strength",
+            "Normal strength",
             "Normal strength",
             &mut material.normal_strength,
             0.0..=2.0,
         );
-    });
-    section(ui, "Roughness", |ui| {
-        number_row(ui, "Value", "Roughness", &mut material.roughness, 0.0..=1.0);
-        texture_row(
-            ui,
-            editor,
-            files,
-            "Texture",
-            "Roughness texture",
-            &mut textures.roughness,
-        );
-    });
-    section(ui, "Metallic", |ui| {
-        number_row(ui, "Value", "Metallic", &mut material.metallic, 0.0..=1.0);
-        texture_row(ui, editor, files, "Texture", "Metallic texture", &mut textures.metallic);
-    });
-    section(ui, "Emission", |ui| {
-        color_row(ui, "Colour", "Emission", &mut material.emission);
+        number_row(ui, "Roughness", "Roughness", &mut material.roughness, 0.0..=1.0);
+        number_row(ui, "Metalness", "Metalness", &mut material.metallic, 0.0..=1.0);
+        color_row(ui, "Emissive", "Emissive colour", &mut material.emission);
         number_row(
             ui,
-            "Strength",
-            "Emission strength",
+            "Emissive strength",
+            "Emissive strength",
             &mut material.emission_strength,
             0.0..=10.0,
         );
-        texture_row(ui, editor, files, "Texture", "Emission texture", &mut textures.emission);
     });
-    section(ui, "Ambient occlusion", |ui| {
-        texture_row(
-            ui,
-            editor,
-            files,
-            "Texture",
-            "Ambient occlusion texture",
-            &mut textures.occlusion,
-        );
-    });
-    packed_section(ui, editor, files, material);
+    packed_section(ui, files, material);
     mapping_section(ui, material);
     *material = material.clamped();
 }
@@ -116,10 +93,10 @@ fn row_label(label: &str) -> RichText {
 }
 
 /// The packed map: one picture for three channels, and which of its channels holds each.
-fn packed_section(ui: &mut Ui, editor: &mut EditorState, files: &Files, material: &mut Material) {
+fn packed_section(ui: &mut Ui, files: &Files, material: &mut Material) {
     section(ui, "Packed map", |ui| {
         let mut texture = material.packed.map(|packed| packed.texture);
-        texture_row(ui, editor, files, "Texture", "Packed map", &mut texture);
+        texture_row(ui, files, "Texture", "Packed map", &mut texture);
         match (texture, material.packed) {
             (None, _) => material.packed = None,
             (Some(texture), Some(packed)) => material.packed = Some(Packed { texture, ..packed }),
@@ -239,38 +216,15 @@ fn channel_row(ui: &mut Ui, label: &str, channel: &mut Option<Channel>) {
     ui.end_row();
 }
 
-/// A texture slot: `shown`, then its thumbnail and a picker of the project's pictures (None clears it; a picture
-/// dragged from the Assets panel onto it is taken), labelled `label` for screen readers.
-fn texture_row(
-    ui: &mut Ui,
-    editor: &mut EditorState,
-    files: &Files,
-    shown: &str,
-    label: &str,
-    slot: &mut Option<AssetId>,
-) {
+/// A texture map: `shown`, then a picture field (#762, [`values::picture_field`]) labelled `label` for screen
+/// readers; emptied, it clears the slot.
+fn texture_row(ui: &mut Ui, files: &Files, shown: &str, label: &str, slot: &mut Option<AssetId>) {
     ui.label(row_label(shown));
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = space::S2;
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(THUMB), Sense::hover());
-        let p = current_colors(ui.ctx()).palette;
-        ui.painter().rect_filled(rect, CornerRadius::same(4), p.surface);
-        if let Some(id) = *slot
-            && let Some(thumbnail) = thumbnail(ui.ctx(), editor, id)
-        {
-            ui.painter().image(
-                thumbnail.id(),
-                rect,
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        }
-        let current = slot.map(|id| id.to_string()).unwrap_or_default();
-        let width = ui.available_width().max(80.0);
-        if let Some(chosen) = values::file_picker(ui, files, IMAGES, label, &current, width, false) {
-            *slot = chosen.parse().ok();
-        }
-    });
+    let current = slot.map(|id| id.to_string()).unwrap_or_default();
+    let width = ui.available_width().max(120.0);
+    if let Some(chosen) = values::picture_field(ui, files, label, &current, width) {
+        *slot = chosen.parse().ok();
+    }
     ui.end_row();
 }
 
