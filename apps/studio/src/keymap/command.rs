@@ -124,8 +124,8 @@ pub struct Command {
     /// Whether it still fires while a running game has the keyboard and mouse (Play in Studio): Stop, Pause, Step and
     /// Settings. Every other key goes to the game.
     pub during_play: bool,
-    /// Whether its keys still fire with Shift held as well (#385): the fly keys, which Shift makes go at the secondary
-    /// speed.
+    /// Whether its keys and buttons still fire with Shift held as well (#385): the fly keys, which Shift makes go at
+    /// the secondary speed, and looking and orbiting, so a drag starts while Shift is held to fly slowly (#758).
     pub with_shift: bool,
 }
 
@@ -632,18 +632,24 @@ pub const STUDIO_COMMANDS: &[Command] = &[
     ),
     fly(ids::FLY_UP, "Fly up", "Moves the camera up while held.", &["[E]"]),
     fly(ids::FLY_DOWN, "Fly down", "Moves the camera down while held.", &["[Q]"]),
-    pointer(
-        ids::LOOK,
-        "Look around",
-        "Turns the camera with the mouse while the button is held.",
-        &["DragRight"],
-    ),
-    pointer(
-        ids::ORBIT,
-        "Orbit",
-        "Circles the camera around the point under the pointer while the button is held.",
-        &["Alt+DragRight", "Alt+DragLeft"],
-    ),
+    Command {
+        with_shift: true,
+        ..pointer(
+            ids::LOOK,
+            "Look around",
+            "Turns the camera with the mouse while the button is held.",
+            &["DragRight"],
+        )
+    },
+    Command {
+        with_shift: true,
+        ..pointer(
+            ids::ORBIT,
+            "Orbit",
+            "Circles the camera around the point under the pointer while the button is held.",
+            &["Alt+DragRight", "Alt+DragLeft"],
+        )
+    },
     pointer(
         ids::ZOOM,
         "Zoom",

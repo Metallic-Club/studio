@@ -467,11 +467,20 @@ impl Keymap {
                         continue;
                     }
                     let mods = Mods::from_egui(modifiers, self.platform);
-                    let chords = [
-                        Chord::new(mods, Trigger::Mouse(button)),
-                        Chord::new(mods, Trigger::Drag(button)),
-                    ];
-                    if let Some(slot) = self.best(&chords, focus, true) {
+                    let chords = |mods: Mods| {
+                        [
+                            Chord::new(mods, Trigger::Mouse(button)),
+                            Chord::new(mods, Trigger::Drag(button)),
+                        ]
+                    };
+                    let mut found = self.best(&chords(mods), focus, true);
+                    if found.is_none() && mods.shift {
+                        // Looking still starts with Shift held, as a fly key does (#758).
+                        found = self
+                            .best(&chords(Mods { shift: false, ..mods }), focus, true)
+                            .filter(|slot| self.registry.commands()[slot.command].with_shift);
+                    }
+                    if let Some(slot) = found {
                         out.activations.push(self.fire(slot.command, ActivationKind::Press));
                         self.held.push(Held {
                             command: slot.command,
@@ -1079,6 +1088,11 @@ mod tests {
         assert_eq!(fired(&mut keymap, &[right], over), [ids::LOOK]);
         assert!(keymap.is_held(ids::LOOK), "a drag is held until the button is released");
         keymap.process(&[button(PointerButton::Secondary, false, Modifiers::NONE)], over);
+        assert!(!keymap.is_held(ids::LOOK));
+        // With Shift held too (#758): Shift is the secondary speed while flying.
+        let shifted = button(PointerButton::Secondary, true, Modifiers::SHIFT);
+        assert_eq!(fired(&mut keymap, &[shifted], over), [ids::LOOK]);
+        keymap.process(&[button(PointerButton::Secondary, false, Modifiers::SHIFT)], over);
         assert!(!keymap.is_held(ids::LOOK));
 
         assert_eq!(
