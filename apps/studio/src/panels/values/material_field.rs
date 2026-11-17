@@ -5,12 +5,17 @@
 //!   which can be typed or pasted; Enter (or leaving it) takes what it names: a material file's path gives that
 //!   asset's id, a material's name (`Concrete`) is kept as the name, and nothing is no material. Anything else leaves
 //!   the value as it was, as Escape does.
+//! - **Completions** (#760): once something is typed, a list under the field offers the materials whose name or path
+//!   holds it, those whose name starts with it first. Up and Down pick one out, Enter takes the one picked out (or
+//!   what is typed, when it names a material, else the first), Tab takes the one picked out or the first, and a click
+//!   takes the one clicked.
 //! - **The window** lists the project's materials, searched by name or path, under None: a click picks one out, a
 //!   double-click or Select chooses it, Cancel or Escape closes.
 //! - A material dragged from the Assets panel and let go on the field is chosen, as on any file picker (#676).
 
 use egui::{
-    Align2, CornerRadius, FontId, Id, Key, Modal, Rect, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, pos2, vec2,
+    Align2, CornerRadius, FontId, Id, Key, Modal, Modifiers, Rect, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, pos2,
+    vec2,
 };
 use metallic_engine::metallic_project::material::{BUILTIN_NAMES, material_name};
 
@@ -23,6 +28,10 @@ use crate::theme::{ButtonKind, button, current_colors, fonts};
 const LIST_ROWS: f32 = 12.0;
 /// The window's width.
 const WINDOW_WIDTH: f32 = 460.0;
+/// The most completions offered at once (#760).
+const COMPLETIONS: usize = 8;
+/// The narrowest the completions' list is, however narrow the field.
+const COMPLETIONS_WIDTH: f32 = 240.0;
 
 /// One material the field or the window can name: its file's path and its asset id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,6 +90,47 @@ fn value_of(choices: &[Choice], typed: &str) -> Option<String> {
     (named || BUILTIN_NAMES.contains(&typed)).then(|| typed.to_owned())
 }
 
+/// The materials offered for `typed` (#760): those whose name or path holds it, ignoring case, at most
+/// [`COMPLETIONS`]. Those whose name starts with it come first, then those whose path does, each by name.
+fn completions<'a>(choices: &'a [Choice], typed: &str) -> Vec<&'a Choice> {
+    let typed = typed.trim().to_lowercase();
+    if typed.is_empty() {
+        return Vec::new();
+    }
+    let mut found: Vec<(u8, String, &Choice)> = choices
+        .iter()
+        .filter_map(|choice| {
+            let name = material_name(&choice.path).to_lowercase();
+            let path = choice.path.to_lowercase();
+            let rank = if name.starts_with(&typed) {
+                0
+            } else if path.starts_with(&typed) {
+                1
+            } else if name.contains(&typed) || path.contains(&typed) {
+                2
+            } else {
+                return None;
+            };
+            Some((rank, name, choice))
+        })
+        .collect();
+    found.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    found
+        .into_iter()
+        .take(COMPLETIONS)
+        .map(|(_, _, choice)| choice)
+        .collect()
+}
+
+/// What is typed in the focused field: the text, whether it was changed since the field was focused (completions
+/// show only then), and the completion picked out with Up and Down.
+#[derive(Clone, Debug, Default)]
+struct Typing {
+    text: String,
+    edited: bool,
+    picked: Option<usize>,
+}
+
 /// The window's state while it is open.
 #[derive(Clone, Debug, Default)]
 struct Window {
@@ -110,12 +160,34 @@ pub(super) fn material_field(
     let focused = ui.memory(|memory| memory.has_focus(field_id));
     let shown = if mixed { String::new() } else { short(&choices, current) };
     // Focused, the field holds what is typed, from the whole path on.
-    let mut typed = if focused {
-        ui.data_mut(|data| data.get_temp::<String>(id))
-            .unwrap_or_else(|| if mixed { String::new() } else { long(&choices, current) })
+    let mut typing = if focused {
+        ui.data_mut(|data| data.get_temp::<Typing>(id))
+            .unwrap_or_else(|| Typing {
+                text: if mixed { String::new() } else { long(&choices, current) },
+                ..Typing::default()
+            })
     } else {
-        shown.clone()
+        Typing {
+            text: shown.clone(),
+            ..Typing::default()
+        }
     };
+    // The completions shown since the last frame, and Up and Down moving through them before the field sees them.
+    let offered = if focused && typing.edited {
+        completions(&choices, &typing.text)
+    } else {
+        Vec::new()
+    };
+    if !offered.is_empty() {
+        let last = offered.len() - 1;
+        if ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::ArrowDown)) {
+            typing.picked = Some(typing.picked.map_or(0, |picked| (picked + 1).min(last)));
+        }
+        if ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::ArrowUp)) {
+            typing.picked = typing.picked.and_then(|picked| picked.checked_sub(1));
+        }
+    }
+    let mut typed = typing.text.clone();
     let height = field_height(ui);
     let button_side = height;
     let field_width = (width - button_side - space::S1).max(0.0);
@@ -133,6 +205,10 @@ pub(super) fn material_field(
                 .text_color(p.text),
         );
         labelled(&response, Role::TextInput, label);
+        if response.changed() {
+            typing.edited = true;
+            typing.picked = None;
+        }
         if let Some(choice) = choices.iter().find(|choice| choice.id == current) {
             response.clone().on_hover_text(choice.path.as_str());
         }
@@ -147,15 +223,42 @@ pub(super) fn material_field(
                 state.cursor.set_char_range(Some(all));
                 state.store(ui.ctx(), field_id);
             }
-            ui.data_mut(|data| data.insert_temp(id, path));
+            ui.data_mut(|data| {
+                data.insert_temp(
+                    id,
+                    Typing {
+                        text: path,
+                        ..Typing::default()
+                    },
+                )
+            });
             ui.ctx().request_repaint();
         } else if response.has_focus() {
-            ui.data_mut(|data| data.insert_temp(id, typed.clone()));
+            typing.text = typed.clone();
+            ui.data_mut(|data| data.insert_temp(id, typing.clone()));
         } else if focused {
-            ui.data_mut(|data| data.remove::<String>(id));
-            let cancelled = ui.input(|input| input.key_pressed(Key::Escape));
+            ui.data_mut(|data| data.remove::<Typing>(id));
+            let (cancelled, entered, tabbed) = ui.input(|input| {
+                (
+                    input.key_pressed(Key::Escape),
+                    input.key_pressed(Key::Enter),
+                    input.key_pressed(Key::Tab),
+                )
+            });
+            // Enter takes the completion picked out, else what is typed when it names one, else the first; Tab the
+            // one picked out or the first.
+            let completed = match (typing.picked, value_of(&choices, &typed)) {
+                (Some(picked), _) if entered || tabbed => offered.get(picked),
+                (None, None) if entered => offered.first(),
+                (None, _) if tabbed => offered.first(),
+                _ => None,
+            };
+            let value = match completed {
+                Some(choice) => Some(choice.id.clone()),
+                None => value_of(&choices, &typed),
+            };
             if !cancelled
-                && let Some(value) = value_of(&choices, &typed)
+                && let Some(value) = value
                 && (value != current || mixed)
             {
                 chosen = Some(value);
@@ -191,6 +294,16 @@ pub(super) fn material_field(
         }
         response
     });
+    // The completions, under the field, while it is focused (a click on one makes it let go of the focus this frame,
+    // and the click is the completion's).
+    if focused && !offered.is_empty() {
+        let field = row.inner.rect;
+        if let Some(clicked) = completion_list(ui, id.with("completions"), field, &offered, typing.picked)
+            && let Some(choice) = offered.get(clicked)
+        {
+            chosen = Some(choice.id.clone()).filter(|value| value != current || mixed);
+        }
+    }
     // A material dragged from the Assets panel and let go on the field (#676).
     let response = &row.inner;
     let fits = |drag: &crate::panels::assets::AssetDrag| match drag.paths.as_slice() {
@@ -264,7 +377,7 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice]) -> Option<String> {
                 });
                 for (index, (name, path, value)) in none.chain(materials).enumerate() {
                     let on = state.picked.as_deref() == Some(value.as_str());
-                    let response = row(ui, index, name, path, on);
+                    let response = row(ui, Role::Row, index, name, path, on);
                     if response.clicked() {
                         state.picked = Some(value.clone());
                     }
@@ -297,12 +410,43 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice]) -> Option<String> {
     None
 }
 
-/// One row of the window's list, the `index`th: the material's icon, its name and its path, picked out when `on`.
-fn row(ui: &mut Ui, index: usize, name: &str, path: Option<&str>, on: bool) -> egui::Response {
+/// The completions `offered` for the field at `field`, in a list under it, the `picked`th picked out. Returns the one
+/// clicked.
+fn completion_list(ui: &Ui, id: Id, field: Rect, offered: &[&Choice], picked: Option<usize>) -> Option<usize> {
+    let p = current_colors(ui.ctx()).palette;
+    let frame = egui::Frame::new()
+        .fill(p.surface)
+        .stroke(Stroke::new(size::BORDER, p.border))
+        .corner_radius(CornerRadius::same(radius::ITEM))
+        .shadow(shadow::MENU)
+        .inner_margin(space::S1);
+    let mut clicked = None;
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(field.left_bottom() + vec2(0.0, space::S1))
+        .show(ui.ctx(), |ui| {
+            frame.show(ui, |ui| {
+                ui.set_width(field.width().max(COMPLETIONS_WIDTH));
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (index, choice) in offered.iter().enumerate() {
+                    let name = material_name(&choice.path);
+                    let on = picked == Some(index);
+                    if row(ui, Role::ListBoxOption, index, name, Some(&choice.path), on).clicked() {
+                        clicked = Some(index);
+                    }
+                }
+            });
+        });
+    clicked
+}
+
+/// One row of a list, the `index`th, for screen readers a `role`: the material's icon, its name and its path, picked
+/// out when `on`.
+fn row(ui: &mut Ui, role: Role, index: usize, name: &str, path: Option<&str>, on: bool) -> egui::Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::click());
-    response.widget_info(|| WidgetInfo::selected(Role::Row, true, on, name));
+    response.widget_info(|| WidgetInfo::selected(role, true, on, name));
     if ui.is_rect_visible(rect) {
         let fill = if on {
             p.surface_hover
@@ -388,5 +532,28 @@ mod tests {
         assert_eq!(value_of(&choices, "Neon").as_deref(), Some("Neon"), "a built-in name");
         assert_eq!(value_of(&choices, "").as_deref(), Some(""));
         assert_eq!(value_of(&choices, "Assets/Nope.material"), None);
+    }
+
+    #[test]
+    fn completions_put_names_that_start_with_the_text_first() {
+        let mut choices = some();
+        choices.push(Choice {
+            path: "Assets/Concrete Rough.material".into(),
+            id: "cc".into(),
+        });
+        choices.push(Choice {
+            path: "Assets/Old/Wet Concrete.material".into(),
+            id: "dd".into(),
+        });
+        let names = |typed: &str| -> Vec<&str> {
+            completions(&choices, typed)
+                .into_iter()
+                .map(|choice| material_name(&choice.path))
+                .collect()
+        };
+        assert_eq!(names("conc"), ["Concrete", "Concrete Rough", "Wet Concrete"]);
+        assert_eq!(names("assets/old"), ["Wet Concrete"], "a path's start");
+        assert_eq!(names("RUST"), ["Rust"], "whatever the case");
+        assert!(names("  ").is_empty() && names("glass").is_empty());
     }
 }

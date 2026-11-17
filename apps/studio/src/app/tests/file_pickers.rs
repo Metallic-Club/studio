@@ -221,3 +221,92 @@ fn a_part_s_material_is_typed_or_chosen_in_a_window() {
     settle(&mut harness);
     assert_eq!(material(&mut harness), Value::String("".into()));
 }
+
+/// #760: what is typed in the Material field is completed from the project's materials: Up and Down and Enter, Tab,
+/// or a click.
+#[test]
+fn the_material_field_completes_what_is_typed() {
+    let mut harness = editing(settings_file("editor-material-completions", None), "Completions Game");
+    harness.set_size(egui::vec2(1280.0, 1400.0));
+    let (part, id) = {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let dm = &editor.dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap();
+        editor.select(Some(part));
+        let assets = editor.project.assets();
+        let id = |name: &str| {
+            assets
+                .id(&format!("Assets/Materials/{name}.material"))
+                .unwrap()
+                .to_string()
+        };
+        (part, [id("Wood"), id("WoodPlanks"), id("Neon"), id("Concrete")])
+    };
+    let [wood, planks, neon, _] = id;
+    settle(&mut harness);
+    let material = |harness: &mut Harness<'_, Test>| {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        editor.dm.get_by_name(part, "Material").unwrap()
+    };
+    let type_in = |harness: &mut Harness<'_, Test>, text: &str| {
+        harness.get_by_role_and_label(Role::TextInput, "Material").click();
+        settle(harness);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get_by_role_and_label(Role::TextInput, "Material")
+            .type_text(text);
+        settle(harness);
+        // The list of completions is laid out unseen the frame it first shows.
+        settle(harness);
+    };
+
+    // Nothing is offered until something is typed.
+    harness.get_by_role_and_label(Role::TextInput, "Material").click();
+    settle(&mut harness);
+    assert!(
+        harness
+            .query_by_role_and_label(Role::ListBoxOption, "Concrete")
+            .is_none()
+    );
+    harness.key_press(egui::Key::Escape);
+    settle(&mut harness);
+
+    // Names that start with it first; Down twice and Enter takes the second.
+    type_in(&mut harness, "woo");
+    harness.get_by_role_and_label(Role::ListBoxOption, "Wood");
+    harness.get_by_role_and_label(Role::ListBoxOption, "WoodPlanks");
+    assert!(harness.query_by_role_and_label(Role::ListBoxOption, "Neon").is_none());
+    harness.key_press(egui::Key::ArrowDown);
+    harness.key_press(egui::Key::ArrowDown);
+    settle(&mut harness);
+    harness.key_press(egui::Key::Enter);
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(planks.as_str().into()));
+    assert!(
+        harness.query_by_role_and_label(Role::ListBoxOption, "Wood").is_none(),
+        "closed"
+    );
+
+    // Enter on text naming nothing takes the first; Tab does too.
+    type_in(&mut harness, "neo");
+    harness.key_press(egui::Key::Enter);
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(neon.as_str().into()));
+    type_in(&mut harness, "wood");
+    harness.key_press(egui::Key::Tab);
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(wood.as_str().into()));
+
+    // A click takes the one clicked.
+    type_in(&mut harness, "planks");
+    harness.get_by_role_and_label(Role::ListBoxOption, "WoodPlanks").click();
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(planks.as_str().into()));
+
+    // Escape keeps the value.
+    type_in(&mut harness, "neo");
+    harness.key_press(egui::Key::Escape);
+    settle(&mut harness);
+    assert_eq!(material(&mut harness), Value::String(planks.as_str().into()));
+}
