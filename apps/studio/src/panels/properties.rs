@@ -691,7 +691,7 @@ impl Panel for Properties {
         let revision = cx.editor.parts.revision();
         // The running game's values while one runs, live (ADR 0010 §5).
         // The project's files, for the file pickers (#55), before the scene borrows the editor.
-        let files = values::Files::of(&cx.editor.project);
+        let files = values::Files::with_pictures(ui.ctx(), cx.editor);
         let mut scene = cx.editor.scene();
         let playing = scene.playing;
         if playing {

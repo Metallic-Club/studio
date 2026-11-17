@@ -101,7 +101,7 @@ fn material_view(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, id: Asset
         }
     };
     let before = material;
-    let files = crate::panels::values::Files::of(&editor.project);
+    let files = crate::panels::values::Files::with_pictures(ui.ctx(), editor);
     crate::panels::material::sections(ui, editor, &files, &mut material);
     if material != before
         && let Err(error) = editor.edit_material(id, material)

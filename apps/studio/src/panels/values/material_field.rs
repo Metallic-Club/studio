@@ -10,7 +10,8 @@
 //!   what is typed, when it names a material, else the first), Tab takes the one picked out or the first, and a click
 //!   takes the one clicked.
 //! - **The window** lists the project's materials, searched by name or path, under None: a click picks one out, a
-//!   double-click or Select chooses it, Cancel or Escape closes.
+//!   double-click or Select chooses it, Cancel or Escape closes. A button beside the search shows them as a grid of
+//!   their balls instead, and back (#761); the next window opens the way the last was left.
 //! - A material dragged from the Assets panel and let go on the field is chosen, as on any file picker (#676).
 
 use egui::{
@@ -19,7 +20,7 @@ use egui::{
 };
 use metallic_engine::metallic_project::material::{BUILTIN_NAMES, material_name};
 
-use super::{Files, NO_FILE, field_height, labelled};
+use super::{Files, NO_FILE, field_height, labelled, paint_thumbnail, want_picture};
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, shadow, size, space, text};
 use crate::theme::{ButtonKind, button, current_colors, fonts};
@@ -32,6 +33,13 @@ const WINDOW_WIDTH: f32 = 460.0;
 const COMPLETIONS: usize = 8;
 /// The narrowest the completions' list is, however narrow the field.
 const COMPLETIONS_WIDTH: f32 = 240.0;
+/// The side of a tile of the window's grid (#761), its name below it.
+const TILE: f32 = 84.0;
+
+/// Where the window keeps whether it shows a grid (#761), for the next window.
+fn grid_view() -> Id {
+    Id::unique("metallic.material_field.grid")
+}
 
 /// One material the field or the window can name: its file's path and its asset id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -329,14 +337,14 @@ pub(super) fn material_field(
     {
         chosen = Some(value);
     }
-    if let Some(picked) = window(ui.ctx(), window_id, &choices) {
+    if let Some(picked) = window(ui.ctx(), window_id, &choices, files) {
         chosen = Some(picked).filter(|picked| picked != current || mixed);
     }
     chosen
 }
 
-/// The window, while it is open: returns the value chosen when it closes with one.
-fn window(ctx: &egui::Context, id: Id, choices: &[Choice]) -> Option<String> {
+/// The window, while it is open: returns the value chosen when it closes with one. `files` has the balls drawn.
+fn window(ctx: &egui::Context, id: Id, choices: &[Choice], files: &Files) -> Option<String> {
     let mut state = ctx.data(|data| data.get_temp::<Window>(id))?;
     let p = current_colors(ctx).palette;
     let frame = egui::Frame::new()
@@ -354,7 +362,19 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice]) -> Option<String> {
                 .color(p.text),
         );
         ui.add_space(space::S4);
-        crate::panels::search_box(ui, &mut state.query, "Search the materials");
+        let grid = ctx.data(|data| data.get_temp::<bool>(grid_view())).unwrap_or(false);
+        let mut switch = false;
+        crate::panels::search_box_then(ui, &mut state.query, "Search the materials", size::ROW, |ui| {
+            let (icon, label) = if grid {
+                (Icon::UiListView, "Show as a list")
+            } else {
+                (Icon::UiGridView, "Show as a grid")
+            };
+            switch = icon_button(ui, icon, label, size::ROW).clicked();
+        });
+        if switch {
+            ctx.data_mut(|data| data.insert_temp(grid_view(), !grid));
+        }
         ui.add_space(space::S3);
         let query = state.query.trim().to_lowercase();
         let shown: Vec<&Choice> = choices
@@ -366,7 +386,6 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice]) -> Option<String> {
             .max_height(size::ROW * LIST_ROWS)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
                 let none = std::iter::once((NO_FILE, None, String::new()));
                 let materials = shown.iter().map(|choice| {
                     (
@@ -375,16 +394,29 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice]) -> Option<String> {
                         choice.id.clone(),
                     )
                 });
-                for (index, (name, path, value)) in none.chain(materials).enumerate() {
-                    let on = state.picked.as_deref() == Some(value.as_str());
-                    let response = row(ui, Role::Row, index, name, path, on);
-                    if response.clicked() {
-                        state.picked = Some(value.clone());
+                let items = |ui: &mut Ui| {
+                    for (index, (name, path, value)) in none.chain(materials).enumerate() {
+                        let on = state.picked.as_deref() == Some(value.as_str());
+                        let response = if grid {
+                            tile(ui, files, name, path, on)
+                        } else {
+                            row(ui, Role::Row, index, name, path, on)
+                        };
+                        if response.clicked() {
+                            state.picked = Some(value.clone());
+                        }
+                        if response.double_clicked() {
+                            state.picked = Some(value);
+                            choose = true;
+                        }
                     }
-                    if response.double_clicked() {
-                        state.picked = Some(value);
-                        choose = true;
-                    }
+                };
+                if grid {
+                    ui.spacing_mut().item_spacing = vec2(space::S2, space::S2);
+                    ui.horizontal_wrapped(items);
+                } else {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    items(ui);
                 }
             });
         ui.add_space(space::S5);
@@ -408,6 +440,69 @@ fn window(ctx: &egui::Context, id: Id, choices: &[Choice]) -> Option<String> {
     }
     ctx.data_mut(|data| data.insert_temp(id, state));
     None
+}
+
+/// A square button `side` across of `icon`, `label` for screen readers and in its tooltip.
+fn icon_button(ui: &mut Ui, icon: Icon, label: &str, side: f32) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(radius::TILE), p.surface_hover);
+    }
+    let ink = if response.hovered() { p.text } else { p.muted };
+    icons::paint_at(
+        ui.painter(),
+        rect.center(),
+        Align2::CENTER_CENTER,
+        icon,
+        text::BODY,
+        ink,
+    );
+    response.on_hover_text(label)
+}
+
+/// A tile of the window's grid (#761): the material's ball (its icon until the ball is drawn) over its name, picked
+/// out when `on`. None's has its name alone.
+fn tile(ui: &mut Ui, files: &Files, name: &str, path: Option<&str>, on: bool) -> egui::Response {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let (rect, response) = ui.allocate_exact_size(vec2(TILE, TILE + size::ROW), Sense::click());
+    response.widget_info(|| WidgetInfo::selected(Role::GridCell, true, on, name));
+    if ui.is_rect_visible(rect) {
+        let fill = if on {
+            p.surface_hover
+        } else if response.hovered() {
+            p.surface
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(radius::TILE), fill);
+        let picture = Rect::from_min_size(rect.min, vec2(TILE, TILE)).shrink(space::S3);
+        if let Some(path) = path {
+            want_picture(ui.ctx(), path);
+            match files.picture(path) {
+                Some(thumbnail) => paint_thumbnail(ui.painter(), thumbnail, picture),
+                None => icons::paint(
+                    ui.painter(),
+                    Icon::AssetMaterial,
+                    picture.shrink(picture.width() / 4.0),
+                    Icon::AssetMaterial.color(&colors),
+                ),
+            }
+        }
+        let ink = if on { p.text } else { p.muted };
+        let label = Rect::from_min_max(pos2(rect.left(), rect.bottom() - size::ROW), rect.max);
+        ui.painter().with_clip_rect(label.shrink2(vec2(space::S1, 0.0))).text(
+            label.center(),
+            Align2::CENTER_CENTER,
+            name,
+            FontId::proportional(text::SMALL),
+            ink,
+        );
+    }
+    response
 }
 
 /// The completions `offered` for the field at `field`, in a list under it, the `picked`th picked out. Returns the one

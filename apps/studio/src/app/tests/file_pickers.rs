@@ -222,6 +222,67 @@ fn a_part_s_material_is_typed_or_chosen_in_a_window() {
     assert_eq!(material(&mut harness), Value::String("".into()));
 }
 
+/// #761: the Choose a material window shows the materials as a grid of their balls too, and the next window opens
+/// the way the last was left.
+#[test]
+fn the_material_window_shows_a_grid() {
+    let mut harness = editing(settings_file("editor-material-grid", None), "Material Grid Game");
+    harness.set_size(egui::vec2(1280.0, 1400.0));
+    let (part, wood, ball) = {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let dm = &editor.dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap();
+        editor.select(Some(part));
+        let path = "Assets/Materials/Wood.material";
+        let wood = editor.project.assets().id(path).unwrap();
+        // Its ball, as the thumbnails' renderer would have drawn it.
+        let fingerprint = editor.project.fingerprint(path).unwrap();
+        let ball = egui::TextureId::User(41);
+        editor.pictures.done(wood, fingerprint, ball);
+        (part, wood, ball)
+    };
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Choose Material").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Row, "Concrete");
+    harness.get_by_role_and_label(Role::Button, "Show as a grid").click();
+    settle(&mut harness);
+    assert!(harness.query_by_role_and_label(Role::Row, "Concrete").is_none());
+    harness.get_by_label("Search the materials").click();
+    settle(&mut harness);
+    harness.get_by_label("Search the materials").type_text("wood");
+    settle(&mut harness);
+    settle(&mut harness);
+    // Its tile shows its ball.
+    let tile = harness.get_by_role_and_label(Role::GridCell, "Wood").rect();
+    let output = harness.output();
+    let drawn = output.shapes.iter().any(|clipped| match &clipped.shape {
+        egui::Shape::Mesh(mesh) => mesh.texture_id == ball && tile.contains(mesh.vertices[0].pos),
+        _ => false,
+    });
+    assert!(drawn, "the ball is drawn on its tile");
+    // A click picks it out, then Select.
+    let time = harness.ctx.input(|input| input.time) + 1.0;
+    harness.input_mut().time = Some(time);
+    harness.get_by_role_and_label(Role::GridCell, "Wood").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Select").click();
+    settle(&mut harness);
+    let material = |harness: &mut Harness<'_, Test>| {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        editor.dm.get_by_name(part, "Material").unwrap()
+    };
+    assert_eq!(material(&mut harness), Value::String(wood.to_string().into()));
+    // The next window is a grid too, until it is switched back.
+    harness.get_by_role_and_label(Role::Button, "Choose Material").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::GridCell, "Concrete");
+    harness.get_by_role_and_label(Role::Button, "Show as a list").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Row, "Concrete");
+}
+
 /// #760: what is typed in the Material field is completed from the project's materials: Up and Down and Enter, Tab,
 /// or a click.
 #[test]
