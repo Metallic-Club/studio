@@ -272,7 +272,7 @@ pub(super) fn behave(
             Act::ApplyMaterial(entry.path.clone()),
         )),
         EntryKind::File(AssetKind::Script(_)) => Some((
-            Icon::UiAdd,
+            Icon::UiAddScript,
             format!("Add {name} to the selected objects"),
             editor.can_add_script(),
             Act::AddScript(entry.path.clone()),
