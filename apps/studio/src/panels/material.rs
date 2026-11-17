@@ -18,7 +18,7 @@ use metallic_engine::metallic_core::{Color3, DataModel, PropMeta, Value};
 use metallic_engine::metallic_project::AssetId;
 use metallic_engine::metallic_project::material::{Channel, Filter, Material, Packed, Wrap};
 
-use super::properties::{category_heading, plain_row};
+use super::properties::{Mark, category_heading, plain_row};
 use super::values::{self, Edit, Files, Mixed, Part};
 use crate::editor::EditorState;
 use crate::theme::current_colors;
@@ -227,16 +227,26 @@ fn field_row(ui: &mut Ui, dm: &DataModel, files: &Files, field: Field<'_>, fill:
     match field {
         Field::Picture(name, label, tip, slot) => {
             let current = slot.map(|id| id.to_string()).unwrap_or_default();
-            let (chosen, _) = plain_row(ui, name, tip, fill, last, None, |ui| {
+            // Its preview at the right of the name, as a colour's swatch (#780): a click opens the chooser.
+            let thumbnail = files.path_of(&current).and_then(|path| {
+                values::want_picture(ui.ctx(), path);
+                files.picture(path)
+            });
+            let (chosen, marked) = plain_row(ui, name, tip, fill, last, Mark::Picture(thumbnail, label), |ui| {
                 values::picture_field(ui, files, label, &current, ui.available_width())
             });
+            if marked.clicked {
+                values::open_picture_window(ui.ctx(), label);
+            }
             if let Some(chosen) = chosen.flatten() {
                 *slot = chosen.parse().ok();
             }
         }
         Field::Number(meta, value) => {
             let current = Value::Number(f64::from(*value));
-            let (typed, _) = plain_row(ui, meta.name, "", fill, last, None, |ui| edit(ui, &meta, &current));
+            let (typed, _) = plain_row(ui, meta.name, "", fill, last, Mark::None, |ui| {
+                edit(ui, &meta, &current)
+            });
             if let Some(Value::Number(n)) = changed(typed.flatten(), &current) {
                 *value = n as f32;
             }
@@ -244,29 +254,33 @@ fn field_row(ui: &mut Ui, dm: &DataModel, files: &Files, field: Field<'_>, fill:
         Field::Color(meta, value) => {
             let color = Color3::new(value[0], value[1], value[2]);
             let current = Value::Color3(color);
-            let (typed, picked) = plain_row(ui, meta.name, "", fill, last, Some((color, meta.name)), |ui| {
+            let (typed, marked) = plain_row(ui, meta.name, "", fill, last, Mark::Color(color, meta.name), |ui| {
                 edit(ui, &meta, &current)
             });
-            if let Some(Value::Color3(c)) = changed(typed.flatten().or(picked), &current) {
+            if let Some(Value::Color3(c)) = changed(typed.flatten().or(marked.picked), &current) {
                 *value = [c.r, c.g, c.b];
             }
         }
         Field::Check(meta, tip, value) => {
             let current = Value::Bool(*value);
-            let (typed, _) = plain_row(ui, meta.name, tip, fill, last, None, |ui| edit(ui, &meta, &current));
+            let (typed, _) = plain_row(ui, meta.name, tip, fill, last, Mark::None, |ui| {
+                edit(ui, &meta, &current)
+            });
             if let Some(Value::Bool(on)) = changed(typed.flatten(), &current) {
                 *value = on;
             }
         }
         Field::Pair(meta, value) => {
             let current = Value::Vector2(Vec2::new(value[0], value[1]));
-            let (typed, _) = plain_row(ui, meta.name, "", fill, last, None, |ui| edit(ui, &meta, &current));
+            let (typed, _) = plain_row(ui, meta.name, "", fill, last, Mark::None, |ui| {
+                edit(ui, &meta, &current)
+            });
             if let Some(Value::Vector2(v)) = changed(typed.flatten(), &current) {
                 *value = [v.x, v.y];
             }
         }
         Field::Choice(name, items, current, mut set) => {
-            let (chosen, _) = plain_row(ui, name, "", fill, last, None, |ui| {
+            let (chosen, _) = plain_row(ui, name, "", fill, last, Mark::None, |ui| {
                 values::choice_field(ui, name, items, current, ui.available_width())
             });
             if let Some(index) = chosen.flatten() {

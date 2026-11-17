@@ -1216,26 +1216,46 @@ fn row_ui(
     out
 }
 
+/// What a [`plain_row`] shows at the right of its name column, as an instance's colour shows its swatch (#415).
+pub(crate) enum Mark<'a> {
+    /// Nothing.
+    None,
+    /// A colour's swatch, which opens Studio's colour picker: the colour, and its label for screen readers.
+    Color(Color3, &'a str),
+    /// A picture's preview (#780): its thumbnail when it has one, and the label of what it previews; a click on it
+    /// is reported.
+    Picture(Option<values::Thumbnail>, &'a str),
+}
+
+/// What a row's [`Mark`] did: the colour its picker chose, or a click on a picture's preview.
+#[derive(Default)]
+pub(crate) struct Marked {
+    /// The colour chosen.
+    pub(crate) picked: Option<Edit>,
+    /// The picture's preview was clicked.
+    pub(crate) clicked: bool,
+}
+
 /// A row in the Properties panel's look for a value that is not an instance's property (#779: an asset's): `name` in
 /// the left column, with `tip` in its tooltip when there is one, and what `value` draws in the right, filling its
-/// cell; `fill` is its stripe and `last` draws the line under it. A colour's row gives its `swatch` (the colour and its
-/// label), drawn at the right of the name column as an instance's colour's is. Returns what `value` returned and what
-/// the colour picker chose; nothing while the row is off screen.
+/// cell; `fill` is its stripe and `last` draws the line under it. Its `mark` (a colour's swatch, a picture's preview)
+/// is drawn at the right of the name column. Returns what `value` returned and what the mark did; nothing while the
+/// row is off screen.
 pub(crate) fn plain_row<R>(
     ui: &mut Ui,
     name: &str,
     tip: &str,
     fill: Color32,
     last: bool,
-    swatch: Option<(Color3, &str)>,
+    mark: Mark<'_>,
     value: impl FnOnce(&mut Ui) -> R,
-) -> (Option<R>, Option<Edit>) {
+) -> (Option<R>, Marked) {
     let p = current_colors(ui.ctx()).palette;
     let line = Stroke::new(size::BORDER, p.rows().line);
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, size::ROW), Sense::hover());
     if !ui.is_rect_visible(rect) {
-        return (None, None);
+        return (None, Marked::default());
     }
     let split = split_x(rect.left(), width, name_share(ui.ctx()));
     let (band_painter, band) = super::row_band(ui, rect);
@@ -1253,18 +1273,39 @@ pub(crate) fn plain_row<R>(
         )
     };
     let (mut name_cell, value_cell) = (cell(rect.left() + INDENT, split), cell(split, rect.right()));
-    let mut picked = None;
-    if let Some((color, label)) = swatch {
-        let side = size::ROW - 2.0 * values::SWATCH_PAD;
-        let square = Rect::from_min_size(
-            pos2(
-                split - size::BORDER - values::SWATCH_PAD - side,
-                rect.top() + values::SWATCH_PAD,
-            ),
-            vec2(side, side),
-        );
-        name_cell.max.x = name_cell.max.x.min(square.left() - space::S2);
-        picked = values::swatch(ui, square, color, label, true);
+    let mut marked = Marked::default();
+    let side = size::ROW - 2.0 * values::SWATCH_PAD;
+    let square = Rect::from_min_size(
+        pos2(
+            split - size::BORDER - values::SWATCH_PAD - side,
+            rect.top() + values::SWATCH_PAD,
+        ),
+        vec2(side, side),
+    );
+    match mark {
+        Mark::None => {}
+        Mark::Color(color, label) => {
+            name_cell.max.x = name_cell.max.x.min(square.left() - space::S2);
+            marked.picked = values::swatch(ui, square, color, label, true);
+        }
+        Mark::Picture(thumbnail, label) => {
+            name_cell.max.x = name_cell.max.x.min(square.left() - space::S2);
+            let response = ui.interact(square, ui.scope_id().with(("picture", label)), Sense::click());
+            response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("{label} preview")));
+            ui.painter()
+                .rect_filled(square, CornerRadius::same(radius::TILE), p.surface);
+            if let Some(thumbnail) = thumbnail {
+                values::paint_thumbnail(ui.painter(), thumbnail, square);
+            }
+            let edge = if response.hovered() { p.subtle } else { p.border };
+            ui.painter().rect_stroke(
+                square,
+                CornerRadius::same(radius::TILE),
+                Stroke::new(size::BORDER, edge),
+                egui::StrokeKind::Inside,
+            );
+            marked.clicked = response.tip("Choose a picture").clicked();
+        }
     }
     let in_cell = |cell: Rect| {
         UiBuilder::new()
@@ -1288,7 +1329,7 @@ pub(crate) fn plain_row<R>(
             value(ui)
         })
         .inner;
-    (Some(out), picked)
+    (Some(out), marked)
 }
 
 /// A read-only value's text in a row's value cell, selectable (#779).
