@@ -1,7 +1,7 @@
-//! The material editor (#680), in the Assets browser's inspector (#742): a material selected shows its ball, its name
-//! with Apply and Copy, and its settings; edits are written into its file and undone with the Assets panel's Undo; a
-//! texture map is a picture field (#762); a click on a material only selects it (#735), and a material dropped on a
-//! part in the viewport gives it to that part.
+//! The material editor (#680), in the Properties panel (#742, #779): a material selected in the Assets browser shows
+//! its ball, its name with Apply and Copy, and its settings; edits are written into its file and undone with Undo in
+//! the Assets or the Properties panel; a texture map is a picture field (#762); a click on a material only selects it
+//! (#735), and a material dropped on a part in the viewport gives it to that part.
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -65,10 +65,10 @@ fn materials(test: &str, name: &str) -> Harness<'static, Test> {
     harness
 }
 
-/// Scrolls the inspector until the node `label` (with `role`) is inside it, and returns its rect.
+/// Scrolls the Properties panel until the node `label` (with `role`) is inside it, and returns its rect.
 fn scroll_to(harness: &mut Harness<'_, Test>, role: Role, label: &str) -> egui::Rect {
     for _ in 0..40 {
-        let pane = harness.get_by_label("Inspector").rect();
+        let pane = harness.get_by_label("Asset properties").rect();
         let node = harness.get_by_role_and_label(role, label).rect();
         if node.top() >= pane.top() && node.bottom() <= pane.bottom() {
             return node;
@@ -84,28 +84,30 @@ fn scroll_to(harness: &mut Harness<'_, Test>, role: Role, label: &str) -> egui::
         });
         settle(harness);
     }
-    panic!("{label} is not in the inspector's view");
+    panic!("{label} is not in the Properties panel's view");
 }
 
 #[test]
-fn a_material_is_edited_in_the_inspector_and_its_edits_are_written_and_undone() {
+fn a_material_is_edited_in_the_properties_panel_and_its_edits_are_written_and_undone() {
     let mut harness = materials("material-editor-edit", "Wood");
+    // Tall enough for every row to show.
+    harness.set_size(egui::vec2(1400.0, 3000.0));
     let id = material_id(&mut harness, "Wood");
     double_click_tile(&mut harness, "Wood");
     assert!(
         harness.query_by_role_and_label(Role::Tab, "Wood").is_none(),
         "no tab of its own"
     );
-    harness.get_by_label("Inspector");
+    harness.get_by_label("Asset properties");
     harness.get_by_role_and_label(Role::Image, "Material preview");
     assert_eq!(
         harness
-            .get_by_role_and_label(Role::TextInput, "Asset name")
+            .get_by_role_and_label(Role::TextInput, "Name")
             .value()
             .as_deref(),
         Some("Wood")
     );
-    // The texture maps first, in order (#762), then the values.
+    // The texture maps first, in order (#762), then the values, typed and dragged as numbers are (#779).
     let maps = [
         "Color map",
         "Normal map",
@@ -121,7 +123,7 @@ fn a_material_is_edited_in_the_inspector_and_its_edits_are_written_and_undone() 
     tops.extend(
         ["Normal strength", "Roughness", "Metalness", "Emissive strength"]
             .iter()
-            .map(|label| harness.get_by_role_and_label(Role::Slider, label).rect().top()),
+            .map(|label| harness.get_by_role_and_label(Role::SpinButton, label).rect().top()),
     );
     assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "{tops:?}");
     // Each map is a field with a button that opens a window to choose a picture; none has a slider.
@@ -166,8 +168,12 @@ fn a_material_is_edited_in_the_inspector_and_its_edits_are_written_and_undone() 
     );
     assert_eq!(editor(&mut harness).materials.take_changed(), [id]);
 
-    // Undo, with the Assets panel focused, takes the material's edits back one at a time; Redo does the last again.
-    assert_eq!(harness.state().studio.dock().context(), crate::keymap::Context::Assets);
+    // Undo, with the Properties panel focused (where the field was typed in), takes the material's edits back one at a
+    // time; Redo does the last again.
+    assert_eq!(
+        harness.state().studio.dock().context(),
+        crate::keymap::Context::Properties
+    );
     let scene_steps = editor(&mut harness).history().can_undo();
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
     settle(&mut harness);
@@ -201,10 +207,10 @@ fn a_material_is_edited_in_the_inspector_and_its_edits_are_written_and_undone() 
     );
 }
 
-/// #742: the inspector's buttons beside the name give the material to the selected parts, and make a copy of it,
-/// which the inspector then shows.
+/// #742, #779: the buttons beside a material's name in the Properties panel give it to the selected parts, and make a
+/// copy of it, which the panel then shows. Selecting a part shows the part; a click on the material shows it again.
 #[test]
-fn the_inspector_applies_and_copies_a_material() {
+fn the_properties_panel_applies_and_copies_a_material() {
     let mut harness = materials("material-editor-buttons", "Neon");
     let neon = material_id(&mut harness, "Neon");
     let part = baseplate(&mut harness);
@@ -216,6 +222,9 @@ fn the_inspector_applies_and_copies_a_material() {
         "no part selected"
     );
     editor(&mut harness).select(Some(part));
+    settle(&mut harness);
+    assert!(harness.query_by_label("Asset properties").is_none(), "the part shows");
+    harness.get_by_role_and_label(Role::GridCell, "Neon").click();
     settle(&mut harness);
     harness.get_by_role_and_label(Role::Button, apply).click();
     settle(&mut harness);
@@ -232,7 +241,7 @@ fn the_inspector_applies_and_copies_a_material() {
     );
     assert_eq!(
         harness
-            .get_by_role_and_label(Role::TextInput, "Asset name")
+            .get_by_role_and_label(Role::TextInput, "Name")
             .value()
             .as_deref(),
         Some("Neon 2")

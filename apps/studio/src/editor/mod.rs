@@ -75,6 +75,8 @@ pub struct EditorState {
     pub viewport: ViewportState,
     /// The game session, while one runs (Play in Studio, ADR 0010).
     pub play: Option<PlaySession>,
+    /// The file or folder the Properties panel shows in place of the selected instances (#779), set as it draws.
+    pub properties_asset: Option<String>,
     /// The parts and lights in the editor's Workspace by where they are (#596), for picking; [`EditorState::refresh_parts`]
     /// brings it up to date.
     pub parts: crate::viewport::index::PartIndex,
@@ -133,6 +135,7 @@ impl EditorState {
             output: OutputState::new(log),
             viewport,
             play: None,
+            properties_asset: None,
             scripts: crate::code::Scripts::default(),
             parts: crate::viewport::index::PartIndex::new(),
             presence: Default::default(),

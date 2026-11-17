@@ -9,12 +9,13 @@
 //!   confirmation that says what refers to what goes), and moving by dragging tiles onto a folder: a tile, a tree
 //!   row or a breadcrumb.
 //! - A file the asset index names but the project lost is still shown where it was, marked missing.
-//! - **The inspector** ([`inspector`], #740): at the right, what the one file or folder selected is.
+//! - **Properties** ([`properties`], #740, #779): the one file or folder selected shows in the Properties panel.
 
 mod grid;
-pub(crate) use grid::{WHOLE, paint_ball};
-mod inspector;
 mod list;
+mod properties;
+pub(crate) use grid::{WHOLE, paint_ball};
+pub(crate) use properties::show as asset_properties;
 mod tree;
 
 use crate::theme::Tip as _;
@@ -326,25 +327,8 @@ impl Panel for Assets {
         ui.add_space(space::S3);
 
         let full = ui.available_rect_before_wrap();
-        // The inspector at the right (#740), while one file or folder is selected and it was not closed on it.
-        editor.browser.reopen_inspector();
-        let inspected = editor
-            .browser
-            .inspected()
-            .map(str::to_owned)
-            .and_then(|path| inspector::entry(editor, &path));
-        let inspector_id = Id::unique("metallic.assets.inspector_width");
-        let inspector_width = inspected.as_ref().map(|_| {
-            let widest = (full.width() / 2.0).max(inspector::MIN_WIDTH);
-            let stored = ui
-                .data(|data| data.get_temp::<f32>(inspector_id))
-                .unwrap_or(inspector::WIDTH);
-            stored.clamp(inspector::MIN_WIDTH, widest)
-        });
-        let rect = match inspector_width {
-            Some(width) => Rect::from_min_max(full.min, pos2(full.right() - width - space::S3, full.bottom())),
-            None => full,
-        };
+        // What is selected shows in the Properties panel (#779), not in a pane of the browser's own.
+        let rect = full;
         let width_id = Id::unique("metallic.assets.tree_width");
         let widest = (rect.width() - MIN_SIDE).max(MIN_SIDE);
         let stored = ui.data(|data| data.get_temp::<f32>(width_id)).unwrap_or(TREE_WIDTH);
@@ -385,29 +369,7 @@ impl Panel for Assets {
         let ink = if grip.dragged() { p.subtle } else { p.border };
         ui.painter()
             .vline(line.center().x, rect.y_range(), Stroke::new(size::BORDER, ink));
-        if let (Some(entry), Some(width)) = (&inspected, inspector_width) {
-            let pane = Rect::from_min_max(pos2(full.right() - width, full.top()), full.max);
-            let line = Rect::from_center_size(
-                pos2(pane.left() - space::S3 / 2.0, full.center().y),
-                vec2(space::S3, full.height()),
-            );
-            let grip = ui.interact(line, Id::unique("metallic.assets.inspector_split"), Sense::drag());
-            grip.widget_info(|| WidgetInfo::labeled(Role::Splitter, true, "Inspector width"));
-            if grip.dragged() {
-                let widest = (full.width() / 2.0).max(inspector::MIN_WIDTH);
-                let width = (width - grip.drag_delta().x).clamp(inspector::MIN_WIDTH, widest);
-                ui.data_mut(|data| data.insert_temp(inspector_id, width));
-            }
-            if grip.hovered() || grip.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-            let mut pane_ui = ui.new_child(column(pane));
-            pane_ui.set_clip_rect(pane.intersect(ui.clip_rect()));
-            inspector::show(&mut pane_ui, editor, entry, &mut acts);
-            let ink = if grip.dragged() { p.subtle } else { p.border };
-            ui.painter()
-                .vline(line.center().x, full.y_range(), Stroke::new(size::BORDER, ink));
-        }
+
         // Files dragged in from the system's file manager (#708) go into the open folder.
         files_from_outside(ui, editor, grid_rect);
         ui.advance_cursor_after_rect(full);
@@ -685,6 +647,10 @@ fn accepts(paths: &[String], folder: &str) -> bool {
 
 /// Does what the tree or the tiles asked for.
 fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
+    // A click on a file or folder, or opening one, shows it in the Properties panel (#779).
+    if matches!(&act, Act::Click { path, .. } if !path.is_empty()) || matches!(&act, Act::Activate(_)) {
+        editor.browser.picks += 1;
+    }
     let result = match act {
         Act::Open(folder) => {
             editor.browser.open_folder(&folder);
@@ -702,11 +668,10 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
                 Ok(())
             }
             browser::EntryKind::File(AssetKind::Script(_)) => editor.open_script_file(&entry.path),
-            // A material opens in the inspector (#742).
+            // A material opens in the Properties panel (#742, #779).
             browser::EntryKind::File(AssetKind::Material) => {
                 editor.browser.selected = [entry.path.clone()].into();
                 editor.browser.anchor = Some(entry.path.clone());
-                editor.browser.inspector_closed = None;
                 Ok(())
             }
             browser::EntryKind::File(AssetKind::Image) => editor.open_image(&entry.path),

@@ -1172,70 +1172,60 @@ fn the_list_s_columns_are_resized_from_its_header() {
     assert!(name.is_some(), "Name has a width of its own now");
 }
 
-/// #740: one file or folder selected shows the inspector at the right: its name (renamed in place), its path and its
-/// details. Closed, it stays closed until something else is selected; with two selected there is none.
+/// #740, #779: one file or folder selected in the browser shows in the Properties panel: its name (renamed in place),
+/// its path and its details, in the panel's rows; the browser has no pane of its own for it. Selecting an instance
+/// shows the instance; a click on the file shows it again; with two selected there is none.
 #[test]
-fn the_inspector_shows_the_one_thing_selected() {
-    let mut harness = browsing("assets-inspector");
+fn the_properties_panel_shows_the_one_asset_selected() {
+    let mut harness = browsing("assets-properties");
+    harness.set_size(egui::vec2(1280.0, 1600.0));
+    settle(&mut harness);
     harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
     settle(&mut harness);
-    assert!(harness.query_by_label("Inspector").is_none(), "nothing selected");
+    assert!(harness.query_by_label("Asset properties").is_none(), "nothing selected");
     harness.get_by_role_and_label(Role::GridCell, "Trees").click();
     settle(&mut harness);
-    let pane = harness.get_by_label("Inspector").rect();
+    let pane = harness.get_by_label("Asset properties").rect();
     let grid = harness.get_by_role_and_label(Role::Grid, "Assets").rect();
-    assert!(pane.left() >= grid.right() - 1.0, "at the right: {pane:?} {grid:?}");
-    assert_eq!(
+    assert!(!pane.intersects(grid), "in the Properties panel: {pane:?} {grid:?}");
+    let name = |harness: &Harness<'_, Test>| {
         harness
-            .get_by_role_and_label(Role::TextInput, "Asset name")
+            .get_by_role_and_label(Role::TextInput, "Name")
             .value()
-            .as_deref(),
-        Some("Trees")
-    );
-    harness.get_by_label("Assets/Trees");
+            .unwrap_or_default()
+    };
+    assert_eq!(name(&harness), "Trees");
+    harness.get_by_label("Path: Assets/Trees");
     harness.get_by_label("Type: Folder");
     harness.get_by_label("Contents: 1 item");
+    harness.get_by_label("FILE");
 
     // Renamed from its name.
-    harness.get_by_role_and_label(Role::TextInput, "Asset name").click();
+    harness.get_by_role_and_label(Role::TextInput, "Name").click();
     settle(&mut harness);
     harness.key_press_modifiers(egui::Modifiers::COMMAND, Key::A);
     harness
-        .get_by_role_and_label(Role::TextInput, "Asset name")
+        .get_by_role_and_label(Role::TextInput, "Name")
         .type_text("Pines");
     harness.key_press(Key::Enter);
     settle(&mut harness);
     assert!(editor(&mut harness).project.has_folder("Assets/Pines"));
-    assert_eq!(
-        harness
-            .get_by_role_and_label(Role::TextInput, "Asset name")
-            .value()
-            .as_deref(),
-        Some("Pines"),
-        "it follows the rename"
-    );
+    assert_eq!(name(&harness), "Pines", "it follows the rename");
 
-    // Closed: gone until something else is selected.
-    harness
-        .get_by_role_and_label(Role::Button, "Close the inspector")
-        .click();
+    // An instance selected shows the instance; a click on the folder shows it again.
+    harness.get_by_role_and_label(Role::TreeItem, "Baseplate").click();
     settle(&mut harness);
-    assert!(harness.query_by_label("Inspector").is_none());
-    harness.get_by_role_and_label(Role::GridCell, "Materials").click();
+    assert!(harness.query_by_label("Asset properties").is_none());
+    assert_eq!(name(&harness), "Baseplate");
+    harness.get_by_role_and_label(Role::GridCell, "Pines").click();
     settle(&mut harness);
-    assert_eq!(
-        harness
-            .get_by_role_and_label(Role::TextInput, "Asset name")
-            .value()
-            .as_deref(),
-        Some("Materials")
-    );
+    assert_eq!(name(&harness), "Pines");
     // Two selected: none.
     harness
-        .get_by_role_and_label(Role::GridCell, "Pines")
+        .get_by_role_and_label(Role::GridCell, "Materials")
         .click_modifiers(egui::Modifiers::COMMAND);
     settle(&mut harness);
-    assert!(harness.query_by_label("Inspector").is_none());
+    assert!(harness.query_by_label("Asset properties").is_none());
 }
 
 /// Right-clicks the empty space behind the tiles, at its bottom right, where no tile is (the inspector, #740, can make
@@ -1247,17 +1237,17 @@ fn ground_menu(harness: &mut Harness<'_, Test>) {
     settle(harness);
 }
 
-/// #741: a folder's inspector gives it a colour, kept in the project's editor data; it follows a rename, and the
+/// #741: a folder's properties give it a colour, kept in the project's editor data; it follows a rename, and the
 /// usual colour comes back from its button.
 #[test]
-fn a_folder_s_colour_is_set_in_its_inspector_and_follows_it() {
+fn a_folder_s_colour_is_set_in_its_properties_and_follows_it() {
     let mut harness = browsing("assets-folder-colour");
     harness.get_by_role_and_label(Role::TreeItem, "Assets").click();
     settle(&mut harness);
     harness.get_by_role_and_label(Role::GridCell, "Trees").click();
     settle(&mut harness);
-    // In a short panel, the inspector is scrolled to its colour.
-    let pane = harness.get_by_label("Inspector").rect();
+    // In a short panel, the Properties panel is scrolled to its colour.
+    let pane = harness.get_by_label("Asset properties").rect();
     harness.event(egui::Event::PointerMoved(pane.center()));
     harness.event(egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Line,

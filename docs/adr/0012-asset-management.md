@@ -135,6 +135,16 @@ frame from screen-space derivatives (Schüler's cotangent frame); WGSL's `dpdy` 
 `dFdy` runs up, so the frame is the GLSL one negated, which had left red inverted against either convention until
 #773. A GPU test lights a tilted map from each side to hold the convention.
 
+### 10. Assets in the Properties panel (2026-11-17, #778, #779)
+
+The browser's inspector (§7) moved into the **Properties panel**: a file or folder picked in the browser after the
+instances were selected shows there in their place (an instance selected afterwards shows again, and a click on the
+file brings it back). Its icon, name and type head it, a preview (a picture, a material's ball) follows, and its
+properties are categories of the panel's own rows and inputs: File (name, path, type, size, created, a folder's
+colour), and a material's Texture Maps, Surface (numbers typed and dragged, colours with swatches: no sliders),
+Packed Map and Mapping. Undo in the Assets or the Properties panel takes back a material's edits while one shows.
+Every category's heading collapses it (#778).
+
 ## Consequences
 
 - Scenes from before #678 hold `Material` enum items; they migrate to the project's material of that name, created
