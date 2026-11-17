@@ -18,6 +18,7 @@
 pub mod colors;
 pub mod query;
 
+use crate::theme::Tip as _;
 use std::collections::{BTreeSet, HashSet};
 
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Role, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
@@ -568,7 +569,7 @@ const FILTER_BUTTON: f32 = 22.0;
 fn filter_button(ui: &mut Ui, dm: &DataModel) -> Option<String> {
     let id = ui.make_persistent_id("metallic.explorer.filters");
     let response = crate::code::find_bar::icon_button(ui, id, Icon::UiCollapse, "Search filters", true)
-        .on_hover_text("Add a filter to the search");
+        .tip("Add a filter to the search");
     let mut chosen = None;
     egui::Popup::menu(&response).id(id.with("menu")).show(|ui| {
         for (label, term) in SUGGESTED {

@@ -2,6 +2,7 @@
 //! the panel's width (#676). A tile is its icon and its name; it is selected by a click, opened by a double-click,
 //! and dragged onto a folder to move it there.
 
+use crate::theme::Tip as _;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{
     Align2, CornerRadius, FontId, Id, Order, Rect, Role, ScrollArea, Sense, Stroke, TextFormat, Ui, WidgetInfo,
@@ -276,7 +277,7 @@ pub(super) fn behave(
     {
         acts.push(act);
     }
-    let response = response.on_hover_text(hover_text(editor, entry));
+    let response = response.tip(hover_text(editor, entry));
     if let Some(paths) = dropped_on(&response).filter(|_| folder) {
         acts.push(Act::Move(paths, entry.path.clone()));
     }
@@ -406,7 +407,7 @@ fn corner_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, label: &str, enabl
         (side * text::SMALL / CORNER).round(),
         ink,
     );
-    response.on_hover_text(label).clicked()
+    response.tip(label).clicked()
 }
 
 /// What a tile's tooltip says: its path, and its kind and size (or that it is missing).

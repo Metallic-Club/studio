@@ -7,6 +7,7 @@
 //! - **Replacing** shows each match struck out with its replacement after it; a line, a file or every file can be
 //!   replaced. What is replaced is typed text, kept in the project as typing is, until Save.
 
+use crate::theme::Tip as _;
 use std::ops::Range;
 
 use egui::text::{LayoutJob, TextFormat};
@@ -131,7 +132,7 @@ impl Panel for Search {
                     false,
                 );
                 replace_all = find_bar::text_button(ui, id.with("all"), "All", "Replace all in scripts", true)
-                    .on_hover_text("Replace every match in every script")
+                    .tip("Replace every match in every script")
                     .clicked();
             });
         }
@@ -310,7 +311,7 @@ fn file_row(ui: &mut Ui, id: Id, file: &FileMatches, open: bool, replace: bool) 
             &label,
             true,
         )
-        .on_hover_text("Replace every match in this file")
+        .tip("Replace every match in this file")
         .clicked()
         {
             return Some(Ask::ReplaceFile(file.member.clone()));
@@ -413,14 +414,14 @@ fn line_row(ui: &mut Ui, id: Id, file: &FileMatches, found: &LineMatch, replace:
             &label,
             true,
         )
-        .on_hover_text("Replace")
+        .tip("Replace")
         .clicked()
         {
             return Some(Ask::ReplaceOne(file.member.clone(), found.range.clone()));
         }
     }
     response
-        .on_hover_text(format!("{} line {}", file.name, found.line + 1))
+        .tip(format!("{} line {}", file.name, found.line + 1))
         .clicked()
         .then(|| Ask::Open(file.script, file.member.clone(), found.range.clone()))
 }

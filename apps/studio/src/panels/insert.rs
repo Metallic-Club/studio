@@ -8,6 +8,7 @@
 //! Something with a place in the world goes where the editor camera looks, or at the pivot of what it goes in (#412).
 //! Studio draws it over the editor ([`frame`]), so it shows whichever panels are open.
 
+use crate::theme::Tip as _;
 use egui::{Align2, CornerRadius, Id, Rect, Response, Role, ScrollArea, Sense, TextEdit, Ui, WidgetInfo, pos2, vec2};
 use metallic_engine::metallic_core::{ClassId, Registry};
 
@@ -321,7 +322,7 @@ fn view_toggle(ui: &mut Ui, grid: bool) -> Response {
             }
         }
     }
-    response.on_hover_text(label)
+    response.tip(label)
 }
 
 /// The list: each section's heading, then its classes, one under the other. Returns the class clicked.
@@ -426,7 +427,7 @@ fn row(ui: &mut Ui, registry: &Registry, choice: &ClassChoice, width: f32) -> Re
     }
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(choice.description)
+        .tip(choice.description)
 }
 
 #[cfg(test)]

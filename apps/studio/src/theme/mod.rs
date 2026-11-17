@@ -13,6 +13,9 @@ pub mod fonts;
 pub mod icons;
 pub mod menu;
 pub mod tokens;
+pub mod tooltip;
+
+pub use tooltip::Tip;
 
 use egui::class::HasClasses as _;
 use egui::epaint::{CornerRadius, Margin, Stroke};
@@ -451,7 +454,7 @@ pub fn checkbox_only(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Res
             );
         }
     }
-    response.on_hover_text(label)
+    response.tip(label)
 }
 
 /// The width of a panel's options menu (#477), so its section headers have a line to fill.

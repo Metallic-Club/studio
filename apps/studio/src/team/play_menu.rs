@@ -4,6 +4,7 @@
 //! Drawn in Studio's own style (#643), as the Team Create menu is: each mode a row with a radio mark, its name and
 //! what it does, and the number of clients a stepper.
 
+use crate::theme::Tip as _;
 use egui::{
     Align, Align2, Color32, CornerRadius, Frame, Layout, Popup, PopupCloseBehavior, Rect, RichText, Sense, Stroke, Ui,
     WidgetInfo, pos2, vec2,
@@ -46,7 +47,7 @@ pub fn arrow(ui: &mut Ui, team: &mut TeamCreate, enabled: bool) {
     let ink = if enabled { p.text } else { p.text.gamma_multiply(0.48) };
     let icon = Rect::from_center_size(rect.center(), vec2(text::SMALL, text::SMALL));
     icons::paint(ui.painter(), Icon::UiCollapse, icon, ink);
-    let response = response.on_hover_text(format!("How Play runs: {}", mode_name(team.play_mode)));
+    let response = response.tip(format!("How Play runs: {}", mode_name(team.play_mode)));
     Popup::menu(&response)
         .id(popup_id())
         // Studio's style, not egui's menu style, which strips buttons' fill and border.

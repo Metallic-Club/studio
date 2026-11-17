@@ -18,6 +18,7 @@ pub mod dialog;
 pub mod list;
 pub mod templates;
 
+use crate::theme::Tip as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -508,13 +509,13 @@ impl Projects {
                 if self.view == View::TeamCreate {
                     // Team Create's own actions: joining someone's project, and checking the hosts again now.
                     if button(ui, ButtonKind::Primary, "Join by address")
-                        .on_hover_text("Join a project someone hosts, by their address and port")
+                        .tip("Join a project someone hosts, by their address and port")
                         .clicked()
                     {
                         crate::team::page::open_join_dialog(ui.ctx());
                     }
                     if button(ui, ButtonKind::Secondary, "Check again")
-                        .on_hover_text("Ask each project's host whether it is hosted now")
+                        .tip("Ask each project's host whether it is hosted now")
                         .clicked()
                     {
                         team.prober
@@ -523,13 +524,13 @@ impl Projects {
                     return;
                 }
                 if button(ui, ButtonKind::Primary, "New project")
-                    .on_hover_text(tip("Make a new project from a template", ids::PROJECTS_NEW))
+                    .tip(tip("Make a new project from a template", ids::PROJECTS_NEW))
                     .clicked()
                 {
                     self.new_project(None);
                 }
                 if button(ui, ButtonKind::Secondary, "Add project")
-                    .on_hover_text(tip("Add a project file you already have", ids::PROJECTS_ADD))
+                    .tip(tip("Add a project file you already have", ids::PROJECTS_ADD))
                     .clicked()
                 {
                     open = self.add();
@@ -608,7 +609,7 @@ impl Projects {
                     ui.close();
                 }
             });
-            response.on_hover_text(entry.path.display().to_string());
+            response.tip(entry.path.display().to_string());
         });
     }
 
@@ -632,7 +633,7 @@ impl Projects {
             if response.clicked() {
                 actions.push(CardAction::NewFrom(index));
             }
-            response.on_hover_text(format!("New project from {}", template.name));
+            response.tip(format!("New project from {}", template.name));
         });
     }
 
@@ -861,7 +862,7 @@ fn missing_badge(ui: &mut Ui, rect: Rect, path: &Path) {
     );
     let response = ui.interact(badge, Id::unique(("metallic.projects.missing", path)), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, "File missing"));
-    response.on_hover_text(format!(
+    response.tip(format!(
         "There is no project at {} any more. Add it again from its new place, or remove it from the list.",
         path.display()
     ));

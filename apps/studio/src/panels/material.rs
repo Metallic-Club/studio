@@ -12,6 +12,7 @@
 //!
 //! Every change is written into the material's file at once and is one of its undo steps.
 
+use crate::theme::Tip as _;
 use egui::{ComboBox, Grid, RichText, Sense, Slider, Ui, vec2};
 use metallic_engine::metallic_core::Color3;
 use metallic_engine::metallic_project::AssetId;
@@ -50,7 +51,7 @@ pub(crate) fn sections(ui: &mut Ui, files: &Files, material: &mut Material) {
         color_row(ui, "Tint", "Colour", &mut material.color);
         ui.label(row_label("Glass"));
         ui.checkbox(&mut material.glass, "")
-            .on_hover_text("When the part is see-through, its reflections stay at full strength.")
+            .tip("When the part is see-through, its reflections stay at full strength.")
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, true, "Glass"));
         ui.end_row();
         number_row(
@@ -225,7 +226,7 @@ fn channel_row(ui: &mut Ui, label: &str, channel: &mut Option<Channel>) {
 fn texture_row(ui: &mut Ui, files: &Files, shown: &str, label: &str, slot: &mut Option<AssetId>) {
     let name = ui.label(row_label(shown));
     if shown == "Normal" {
-        name.on_hover_text(NORMAL_CONVENTION);
+        name.tip(NORMAL_CONVENTION);
     }
     let current = slot.map(|id| id.to_string()).unwrap_or_default();
     let width = ui.available_width().max(120.0);

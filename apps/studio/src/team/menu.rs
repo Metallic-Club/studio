@@ -5,6 +5,7 @@
 //! labels, the segmented control for Host and Join, bordered buttons and fields. egui's menu style, which strips the
 //! buttons' fill and border, is not applied.
 
+use crate::theme::Tip as _;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -88,7 +89,7 @@ pub fn button(ui: &mut Ui, team: &mut TeamCreate, facts: EditorFacts<'_>, side: 
     }
     let action = popup(ui, &response, team, facts);
     let tip = format!("Team Create: {}", team.status_line());
-    response.on_hover_text(tip);
+    response.tip(tip);
     action
 }
 
@@ -431,7 +432,7 @@ fn active(ui: &mut Ui, team: &mut TeamCreate) -> Option<TeamAction> {
     match team.session() {
         Session::Hosting(_) => {
             if wide_button(ui, ButtonKind::Secondary, "End session")
-                .on_hover_text("Saves the project, tells everyone, and stops hosting")
+                .tip("Saves the project, tells everyone, and stops hosting")
                 .clicked()
             {
                 action = Some(TeamAction::End);
@@ -503,7 +504,7 @@ fn address_row(ui: &mut Ui, address: &str) {
                         ui.ctx().copy_text(address.to_owned());
                         ui.ctx().data_mut(|data| data.insert_temp(copied_id, now));
                     }
-                    response.on_hover_text(if copied { "Copied" } else { "Copy the address" });
+                    response.tip(if copied { "Copied" } else { "Copy the address" });
                 });
             });
         });

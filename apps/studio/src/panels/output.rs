@@ -11,6 +11,7 @@
 //! The panel copies the lines logged since its last frame from the shared buffer into its own list, so it never holds
 //! the buffer's lock while it draws. Clear empties its list; the lines do not come back.
 
+use crate::theme::Tip as _;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -225,10 +226,7 @@ impl Panel for Output {
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if button(ui, ButtonKind::Quiet, "Clear")
-                    .on_hover_text("Empty the Output")
-                    .clicked()
-                {
+                if button(ui, ButtonKind::Quiet, "Clear").tip("Empty the Output").clicked() {
                     state.clear();
                 }
                 ui.add_space(space::S3);
@@ -414,7 +412,7 @@ fn line_ui<'a>(
         }
     }
     if line.message.contains('\n') {
-        response.on_hover_text(format!("{}\n{}", line.source, line.message));
+        response.tip(format!("{}\n{}", line.source, line.message));
     }
     clicked
 }

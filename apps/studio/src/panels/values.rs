@@ -22,6 +22,7 @@
 //! vector changes those alone on each, so they keep their own others. Every control carries the property's label for
 //! screen readers.
 
+use crate::theme::Tip as _;
 use egui::{
     Align2, Color32, ComboBox, CornerRadius, CursorIcon, FontId, Key, Response, Role, Sense, Stroke, TextEdit, Ui,
     WidgetInfo, pos2, vec2,
@@ -267,7 +268,7 @@ pub fn edit(
                 .inner
                 .response
                 .clone()
-                .on_hover_text("Hold Ctrl and turn the wheel to step through the choices.");
+                .tip("Hold Ctrl and turn the wheel to step through the choices.");
             // The wheel over it, with Ctrl held (#666), steps through its items (#469), down to the next.
             if let Some(steps) = wheel_steps(ui, &combo.inner.response) {
                 let last = desc.items.len().saturating_sub(1) as i64;
@@ -510,7 +511,7 @@ pub(crate) fn file_picker(
         info
     });
     if let Some(path) = &current_path {
-        combo.inner.response.clone().on_hover_text(path.as_str());
+        combo.inner.response.clone().tip(path.as_str());
     }
     // A file dragged from the Assets panel (#676) and let go on the picker, if it is one the picker takes.
     let response = &combo.inner.response;

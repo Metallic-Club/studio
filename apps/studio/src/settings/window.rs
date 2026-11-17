@@ -8,6 +8,7 @@
 //! Every setting is one [`Entry`] in [`ENTRIES`], so the pages and the search read the same list, and adding a setting
 //! is one line there plus its control.
 
+use crate::theme::Tip as _;
 use std::ops::RangeInclusive;
 
 use egui::emath::Numeric;
@@ -208,13 +209,13 @@ pub static ENTRIES: &[Entry] = &[
         control: |ui, s| {
             // Right to left: Reload, Browse, then the path filling the rest.
             if button(ui, ButtonKind::Secondary, "Reload")
-                .on_hover_text("Read the folder again")
+                .tip("Read the folder again")
                 .clicked()
             {
                 icons::custom::request_reload(ui.ctx());
             }
             if button(ui, ButtonKind::Secondary, "Browse\u{2026}")
-                .on_hover_text("Choose the folder")
+                .tip("Choose the folder")
                 .clicked()
             {
                 // Studio opens the system's folder dialog once the window is drawn (#508).
@@ -1260,7 +1261,7 @@ fn accent_swatches(ui: &mut Ui, accent: &mut Accent) {
         if response.clicked() {
             *accent = choice;
         }
-        let response = response.on_hover_text(choice.label());
+        let response = response.tip(choice.label());
         if ui.is_rect_visible(rect) {
             let centre = rect.center();
             let swatch = choice.on(colors.dark);
@@ -1328,7 +1329,7 @@ fn custom_accent(ui: &mut Ui, accent: &mut Accent) -> Response {
                 *accent = Accent::Custom(rgb);
             }
         });
-    response.on_hover_text("A colour of your own")
+    response.tip("A colour of your own")
 }
 
 /// Gives a drop-down `name` for screen readers (#464): the setting it changes, which its row shows beside it.

@@ -16,6 +16,7 @@
 //! Errors and warnings (#530) colour their line's number and draw a line beside it (#539), are underlined with a wave,
 //! and have a mark in the scroll bar, which goes to their line when clicked; each says what is wrong under the pointer.
 
+use crate::theme::Tip as _;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -326,7 +327,7 @@ pub fn show(
             let line = ((at.y - galley_pos.y) / row_height).floor().max(0.0) as usize;
             let messages = messages_on_line(text, &line_index, diagnostics, line);
             if !messages.is_empty() {
-                gutter_response.on_hover_text(messages.join("\n"));
+                gutter_response.tip(messages.join("\n"));
             }
         }
         // A swatch before each colour written (#545): a click opens the colour picker, which writes the colour back.
@@ -418,7 +419,7 @@ pub fn show(
             .map(|diagnostic| diagnostic.message.as_str())
             .collect();
         if !here.is_empty() {
-            response.clone().on_hover_text_at_pointer(here.join("\n"));
+            response.clone().tip_at_pointer(here.join("\n"));
         }
     }
     ViewOutput {
@@ -700,9 +701,11 @@ fn marks(ui: &mut Ui, id: Id, view: Rect, lines: usize, text: &str, diagnostics:
             reveal(ui.ctx(), id, character);
         }
         let messages = messages_on_line(text, &index, diagnostics, line);
-        response
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(format!("Line {}: {}", line + 1, messages.join("\n")));
+        response.on_hover_cursor(egui::CursorIcon::PointingHand).tip(format!(
+            "Line {}: {}",
+            line + 1,
+            messages.join("\n")
+        ));
     }
 }
 

@@ -416,6 +416,8 @@ pub mod radius {
     pub const ITEM: u8 = 8;
     /// The Assets browser's tiles and buttons (#698): squarer than other items, as a file browser's are.
     pub const TILE: u8 = 4;
+    /// Tooltips (#774): faintly rounded, where menus are [`PANEL`].
+    pub const TOOLTIP: u8 = 3;
     /// Text fields.
     pub const INPUT: u8 = 9;
     /// Panels, cards, the splash.

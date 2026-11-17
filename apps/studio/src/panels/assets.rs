@@ -17,6 +17,7 @@ mod inspector;
 mod list;
 mod tree;
 
+use crate::theme::Tip as _;
 use egui::{
     Align2, CornerRadius, Frame, Id, Label, Layout, Modal, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo,
 };
@@ -566,7 +567,7 @@ fn toolbar_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
         text::BODY,
         ink,
     );
-    response.on_hover_text(label)
+    response.tip(label)
 }
 
 /// Switches between the tiles and the list (#699): it shows the view it switches to.
