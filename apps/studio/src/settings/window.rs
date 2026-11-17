@@ -151,6 +151,16 @@ pub static ENTRIES: &[Entry] = &[
         },
     },
     Entry {
+        category: Category::General,
+        name: "Wheel zoom",
+        description: "Where the mouse wheel zooms the viewport's camera: toward the centre of the view, or toward the \
+                      pointer.",
+        control: |ui, s| {
+            let choices = crate::settings::ZoomTarget::ALL.map(|target| (target, target.label()));
+            segmented(ui, &mut s.viewport.zoom_to, &choices);
+        },
+    },
+    Entry {
         category: Category::Appearance,
         name: "Theme",
         description: "Dark, light, or whichever the system uses.",

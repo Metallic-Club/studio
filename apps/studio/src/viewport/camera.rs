@@ -280,9 +280,25 @@ impl EditorCamera {
         }
     }
 
+    /// Asks for `notches` of zoom along `way` (#775): toward what is under the pointer rather than straight ahead.
+    /// `ahead` is how far what is along it is, and whether it is a surface not to pass. Moving off the view's line
+    /// ends a focus, as flying does.
+    pub fn zoom_toward(&mut self, notches: f32, ahead: (f32, bool), way: Vec3) {
+        let way = way.normalize_or(self.forward());
+        if way.dot(self.forward()) < 0.9999 {
+            self.focus = None;
+        }
+        self.zoom_along(notches, ahead, way);
+    }
+
     /// Asks for `notches` of zoom (positive: in). `ahead` is how far what is in front is, and whether it is a surface
     /// not to pass; with a focus, the zoom goes toward it instead.
     pub fn zoom(&mut self, notches: f32, ahead: (f32, bool)) {
+        self.zoom_along(notches, ahead, self.forward());
+    }
+
+    /// Asks for `notches` of zoom along `way`, a unit vector.
+    fn zoom_along(&mut self, notches: f32, ahead: (f32, bool), way: Vec3) {
         let (reach, blocked) = match self.focus {
             Some(focus) => (focus.distance, true),
             None => ahead,
@@ -301,9 +317,8 @@ impl EditorCamera {
             // Closer, but not through it, counting what is on its way already.
             travel = travel.min((reach - ZOOM_STOP - self.zoom.0.max(0.0)).max(0.0));
         }
-        let way = self.forward();
         if self.zoom.0 != 0.0 && self.zoom.1.dot(way) < 0.9 {
-            // The view turned since: the old way is forgotten.
+            // The view turned (or the pointer moved) since: the old way is forgotten.
             self.zoom.0 = 0.0;
         }
         self.zoom = (self.zoom.0 + travel, way);
@@ -683,6 +698,16 @@ mod tests {
         // In open space every notch is as long.
         let mut open = EditorCamera::looking_at(Vec3::ZERO, Vec3::NEG_Z);
         open.zoom(2.0, (20.0, false));
+        // Toward the pointer (#775): along its ray, which ends a focus.
+        let mut pointed = EditorCamera::looking_at(Vec3::new(0.0, 5.0, 10.0), Vec3::ZERO);
+        let way = Vec3::new(1.0, -0.5, -1.0).normalize();
+        let start = pointed.position;
+        pointed.zoom_toward(2.0, (20.0, false), way);
+        for _ in 0..200 {
+            pointed.step(0.05);
+        }
+        let moved = pointed.position - start;
+        assert!(moved.length() > 0.5 && moved.normalize().dot(way) > 0.999, "{moved:?}");
         for _ in 0..30 {
             open.step(0.05);
         }

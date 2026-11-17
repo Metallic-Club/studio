@@ -182,8 +182,19 @@ impl ViewportState {
                     }
                 }
                 (ids::ZOOM, ActivationKind::Wheel(lines)) => {
-                    let ahead = reach_along(input.dm, input.parts, (self.camera.position, self.camera.forward()));
-                    self.camera.zoom(lines, ahead);
+                    let pointed = input.pointer.zip(view).and_then(|(at, view)| view.ray(at));
+                    match (speeds.zoom_to, pointed) {
+                        // Toward what is under the pointer (#775).
+                        (crate::settings::ZoomTarget::Pointer, Some(ray)) => {
+                            let ahead = reach_along(input.dm, input.parts, ray);
+                            self.camera.zoom_toward(lines, ahead, ray.1);
+                        }
+                        _ => {
+                            let ahead =
+                                reach_along(input.dm, input.parts, (self.camera.position, self.camera.forward()));
+                            self.camera.zoom(lines, ahead);
+                        }
+                    }
                 }
                 (ids::SPEED, ActivationKind::Wheel(lines)) => {
                     speeds.fly_speed = (speeds.fly_speed * 1.1f32.powf(lines)).clamp(FLY_SPEED.0, FLY_SPEED.1);
@@ -431,6 +442,53 @@ mod tests {
         nav(&mut viewport, &fired, &keymap, input(egui::Vec2::ZERO, false, selected));
         assert!((speeds.fly_speed - 44.0).abs() < 1e-3 && (speeds.secondary_speed - 3.3).abs() < 1e-3);
         assert_eq!(viewport.speed_note.map(|note| note.0), Some(SpeedChange::Secondary));
+    }
+
+    #[test]
+    fn the_wheel_zooms_toward_the_centre_or_the_pointer() {
+        let dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let parts = index::PartIndex::new();
+        let focused = Focus {
+            hovered: Some(Context::Viewport),
+            ..Focus::new(Context::Viewport)
+        };
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        // How far the camera moves to its right with the pointer near the view's right edge (#775).
+        let sideways = |zoom_to: crate::settings::ZoomTarget| {
+            let mut viewport = ViewportState::new(&dm);
+            viewport.rect = Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
+            let mut speeds = crate::settings::Viewport {
+                zoom_to,
+                ..crate::settings::Viewport::default()
+            };
+            let mut keymap = Keymap::studio(&Overrides::new());
+            let start = viewport.camera.position;
+            let right = viewport.camera.right();
+            let fired = keymap.process(std::slice::from_ref(&wheel), focused).activations;
+            for activations in [fired, Vec::new(), Vec::new(), Vec::new()] {
+                let input = NavInput {
+                    motion: egui::Vec2::ZERO,
+                    pointer: Some(egui::pos2(760.0, 300.0)),
+                    dt: 0.2,
+                    fast: false,
+                    dm: &dm,
+                    parts: &parts,
+                    selection: &[],
+                };
+                viewport.navigate(&keymap, &activations, input, &mut speeds);
+            }
+            let moved = viewport.camera.position - start;
+            assert!(moved.length() > 0.1, "it zoomed");
+            moved.dot(right)
+        };
+        assert!(sideways(crate::settings::ZoomTarget::Centre).abs() < 1e-3);
+        assert!(sideways(crate::settings::ZoomTarget::Pointer) > 0.1);
     }
 
     #[test]

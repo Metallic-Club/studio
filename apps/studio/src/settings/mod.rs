@@ -208,6 +208,44 @@ pub struct Viewport {
     pub light_lines_on_top: bool,
     /// How the viewport draws the parts (#478): shaded, unlit, lighting only, light density or wireframe.
     pub shading: ShadingView,
+    /// Where the wheel zooms the camera (#775): toward the centre of the view or toward the pointer.
+    pub zoom_to: ZoomTarget,
+}
+
+/// Where the viewport's wheel zooms (#775).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ZoomTarget {
+    /// Straight ahead, toward the centre of the view.
+    #[default]
+    Centre,
+    /// Toward what is under the pointer.
+    Pointer,
+}
+
+impl ZoomTarget {
+    /// Both, in the order the menus list them.
+    pub const ALL: [ZoomTarget; 2] = [ZoomTarget::Centre, ZoomTarget::Pointer];
+
+    /// Its name in the settings file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ZoomTarget::Centre => "centre",
+            ZoomTarget::Pointer => "pointer",
+        }
+    }
+
+    /// The target named `name` in the settings file.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|target| target.as_str() == name)
+    }
+
+    /// What the menus call it.
+    pub fn label(self) -> &'static str {
+        match self {
+            ZoomTarget::Centre => "Toward the centre",
+            ZoomTarget::Pointer => "Toward the pointer",
+        }
+    }
 }
 
 impl Default for Viewport {
@@ -219,6 +257,7 @@ impl Default for Viewport {
             show_light_icons: true,
             light_lines_on_top: true,
             shading: ShadingView::Shaded,
+            zoom_to: ZoomTarget::Centre,
         }
     }
 }
@@ -477,6 +516,12 @@ impl StudioSettings {
                 |v| v.as_str().and_then(ShadingView::parse),
                 &mut v.shading,
             );
+            read(
+                viewport,
+                "zoom_to",
+                |v| v.as_str().and_then(ZoomTarget::parse),
+                &mut v.zoom_to,
+            );
         }
         if let Some(appearance) = section("appearance") {
             let a = &mut settings.appearance;
@@ -571,6 +616,7 @@ impl StudioSettings {
             viewport.insert("light_icons".into(), Value::Boolean(v.show_light_icons));
             viewport.insert("light_lines_on_top".into(), Value::Boolean(v.light_lines_on_top));
             viewport.insert("shading".into(), Value::String(v.shading.as_str().into()));
+            viewport.insert("zoom_to".into(), Value::String(v.zoom_to.as_str().into()));
         });
         let a = &self.appearance;
         with_section(&mut document, "appearance", |appearance| {
@@ -1041,7 +1087,8 @@ insert_view = \"grid\"
     #[test]
     fn the_camera_speeds_round_trip_and_stay_in_range() {
         let document: Table = toml::from_str(
-            "[viewport]\nfly_speed = 12.5\nsecondary_speed = 0.01\nshow_axes = false\nshading = \"wireframe\"\n",
+            "[viewport]\nfly_speed = 12.5\nsecondary_speed = 0.01\nshow_axes = false\nshading = \"wireframe\"\n\
+             zoom_to = \"pointer\"\n",
         )
         .unwrap();
         let settings = StudioSettings::from_document(&document);
@@ -1054,6 +1101,7 @@ insert_view = \"grid\"
                 show_light_icons: true,
                 light_lines_on_top: true,
                 shading: ShadingView::Wireframe,
+                zoom_to: ZoomTarget::Pointer,
             }
         );
         let written = settings.to_document(&Table::new());
