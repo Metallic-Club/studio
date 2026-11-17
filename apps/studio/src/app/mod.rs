@@ -3349,6 +3349,17 @@ mod tests {
         harness.get_by_role_and_label(Role::ComboBox, "Shape");
         harness.get_by_role_and_label(Role::TextInput, "Material");
         harness.get_by_role_and_label(Role::Button, "Choose Material");
+        // A category's heading collapses it, and expands it again (#778).
+        harness.get_by_role_and_label(Role::Button, "TRANSFORM").click();
+        settle(&mut harness);
+        assert!(
+            harness.query_by_role_and_label(Role::TextInput, "Size").is_none(),
+            "collapsed"
+        );
+        harness.get_by_role_and_label(Role::TextInput, "Material");
+        harness.get_by_role_and_label(Role::Button, "TRANSFORM").click();
+        settle(&mut harness);
+        harness.get_by_role_and_label(Role::TextInput, "Size");
         // The colour's swatch (#415): a small square inside the row, left of the line, the value's text where the others'
         // is.
         let swatch = harness.get_by_role_and_label(Role::ColorWell, "Color").rect();
