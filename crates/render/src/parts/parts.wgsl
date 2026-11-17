@@ -246,7 +246,10 @@ fn surface_of(in: VertexOut) -> Surface {
         }
         if normal != NO_LAYER {
             // A tangent-space normal map on a frame found from the screen-space derivatives of the position and
-            // the coordinates (Schüler's cotangent frame), so meshes need no stored tangents.
+            // the coordinates (Schüler's cotangent frame), so meshes need no stored tangents. The maps follow the
+            // OpenGL convention (#773): red toward +U, green toward the picture's up, which is −V here (V runs down
+            // the picture). WGSL's `dpdy` runs down the screen where GLSL's `dFdy` runs up, so this frame is the
+            // GLSL one negated: `-t` is +U and `b` is −V.
             let m = sample_data(normal, at, dx, dy, nearest).xyz * 2.0 - 1.0;
             let bent = vec3<f32>(m.xy * row.surface.w, max(m.z, 1e-3));
             let p1 = cross(s.n, dpx);
@@ -254,7 +257,7 @@ fn surface_of(in: VertexOut) -> Surface {
             let t = p2 * dx.x + p1 * dy.x;
             let b = p2 * dx.y + p1 * dy.y;
             let scale = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-30));
-            s.n = normalize(t * scale * bent.x + b * scale * bent.y + s.n * bent.z);
+            s.n = normalize(-t * scale * bent.x + b * scale * bent.y + s.n * bent.z);
         }
     }
     return s;
