@@ -446,6 +446,15 @@ impl Project {
         Some(path)
     }
 
+    /// Draws the picture at `path` pixelated (nearest filtering) or smooth (#781), kept in `assets.json`. Saved by
+    /// [`Project::save`].
+    pub fn set_pixelated(&mut self, path: &str, on: bool) {
+        let mut assets = self.assets.clone();
+        if assets.set_pixelated(path, on) {
+            self.set_assets(assets);
+        }
+    }
+
     /// Replaces the asset index, recording `assets.json` as an edit when it changed.
     fn set_assets(&mut self, assets: AssetIndex) {
         if assets != self.assets {

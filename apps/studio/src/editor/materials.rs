@@ -41,6 +41,8 @@ pub struct MaterialEditor {
     /// The preview was drawn while its assets still loaded: it is drawn again on a later frame, which the inspector
     /// asks for.
     pub preview_loading: bool,
+    /// Pictures whose filtering changed (#781), until the renderers take them.
+    changed_pictures: Vec<AssetId>,
 }
 
 impl MaterialEditor {
@@ -54,10 +56,22 @@ impl MaterialEditor {
         std::mem::take(&mut self.changed)
     }
 
+    /// The pictures whose filtering changed since the last call (#781), for the viewport's renderer to read again.
+    pub fn take_changed_pictures(&mut self) -> Vec<AssetId> {
+        std::mem::take(&mut self.changed_pictures)
+    }
+
     /// Notes that the material `id`'s file changed (for the renderers).
     pub fn note_changed(&mut self, id: AssetId) {
         if !self.changed.contains(&id) {
             self.changed.push(id);
+        }
+    }
+
+    /// Notes that the picture `id`'s filtering changed (#781), for the renderers.
+    pub fn note_changed_picture(&mut self, id: AssetId) {
+        if !self.changed_pictures.contains(&id) {
+            self.changed_pictures.push(id);
         }
     }
 

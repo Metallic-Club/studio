@@ -63,6 +63,9 @@ pub(crate) fn show(ui: &mut Ui, editor: &mut EditorState, path: &str) {
             if let Some(id) = material {
                 material_rows(ui, editor, id);
             }
+            if matches!(entry.kind, EntryKind::File(AssetKind::Image)) {
+                picture_rows(ui, editor, &entry);
+            }
         });
     for act in acts {
         super::apply(ui, editor, act);
@@ -160,6 +163,29 @@ fn file_rows(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, acts: &mut Ve
             folder_color(ui, editor, entry, shades.fill(count - 1));
         }
     });
+}
+
+/// A picture's category (#781): its filtering, Smooth or Pixelated, which its preview, its thumbnails, a MeshPart's
+/// TextureId and the materials that follow their pictures use.
+fn picture_rows(ui: &mut Ui, editor: &mut EditorState, entry: &Entry) {
+    if category_heading(ui, "Picture", 0.0) {
+        let fill = current_colors(ui.ctx()).palette.rows().fill(0);
+        let pixelated = editor.project.assets().pixelated(&entry.path);
+        let tip = "How it is drawn between its pixels: smoothly, or pixelated for pixel art.";
+        let (chosen, _) = ui
+            .scope(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                plain_row(ui, "Filtering", tip, fill, true, Mark::None, |ui| {
+                    let width = ui.available_width();
+                    values::choice_field(ui, "Filtering", &["Smooth", "Pixelated"], usize::from(pixelated), width)
+                })
+            })
+            .inner;
+        if let Some(Some(index)) = chosen {
+            editor.set_pixelated(&entry.path, index == 1);
+        }
+    }
+    ui.add_space(space::S5);
 }
 
 /// A folder's colour (#741): its swatch, which opens Studio's colour picker, its hex (or that it is the usual one),

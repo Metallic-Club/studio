@@ -44,8 +44,10 @@ pub const MATERIALS_FOLDER: &str = "Assets/Materials";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Filter {
-    /// Smoothly, between the four nearest pixels and between mip levels.
+    /// As its pictures are (#781): pixelated (nearest) when the first picture it uses is, else smooth.
     #[default]
+    Picture,
+    /// Smoothly, between the four nearest pixels and between mip levels.
     Linear,
     /// The nearest pixel: crisp, for pixel art.
     Nearest,
@@ -264,7 +266,7 @@ impl Default for Material {
             tile_size: DEFAULT_TILE,
             uv_scale: [1.0; 2],
             uv_offset: [0.0; 2],
-            filter: Filter::Linear,
+            filter: Filter::Picture,
             wrap: Wrap::Repeat,
             textures: Textures::default(),
             packed: None,
@@ -414,6 +416,16 @@ impl Material {
         let mut ids: Vec<AssetId> = self.textures.ids().collect();
         ids.extend(self.packed.map(|packed| packed.texture));
         ids
+    }
+
+    /// Whether its textures are sampled nearest: as its filter says, or for [`Filter::Picture`] as its pictures are
+    /// (#781), `pixelated` saying which are: the first it uses, its colour first.
+    pub fn nearest(&self, pixelated: impl Fn(AssetId) -> bool) -> bool {
+        match self.filter {
+            Filter::Linear => false,
+            Filter::Nearest => true,
+            Filter::Picture => self.references().first().is_some_and(|&id| pixelated(id)),
+        }
     }
 }
 
@@ -578,5 +590,30 @@ mod tests {
         assert_eq!(builtin("Neon").unwrap().emission_strength, 1.0);
         assert_eq!(builtin("Plastic"), Some(Material::default()));
         assert_eq!(builtin("Cheese"), None);
+    }
+
+    /// #781: a material sampled as its pictures are follows its first picture's filtering; Smooth and Nearest say
+    /// so whatever the pictures are.
+    #[test]
+    fn a_material_s_filtering_follows_its_pictures_unless_it_chooses() {
+        let pixel: AssetId = "00000000000000000000000000000001".parse().unwrap();
+        let smooth: AssetId = "00000000000000000000000000000002".parse().unwrap();
+        let pixelated = |id: AssetId| id == pixel;
+        let mut material = Material::default();
+        assert_eq!(material.filter, Filter::Picture, "the default");
+        assert!(!material.nearest(pixelated), "no pictures");
+        material.textures.color = Some(pixel);
+        material.textures.normal = Some(smooth);
+        assert!(material.nearest(pixelated), "its colour's");
+        material.textures.color = Some(smooth);
+        assert!(!material.nearest(pixelated));
+        material.filter = Filter::Nearest;
+        assert!(material.nearest(pixelated));
+        material.textures.color = Some(pixel);
+        material.filter = Filter::Linear;
+        assert!(!material.nearest(pixelated));
+        // Written and read back by name.
+        let read = Material::from_bytes(Material::default().to_json().as_bytes()).unwrap();
+        assert_eq!(read.material.filter, Filter::Picture);
     }
 }

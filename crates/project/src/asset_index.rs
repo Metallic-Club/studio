@@ -207,11 +207,16 @@ struct Entry {
     fingerprint: Fingerprint,
     /// When it was first indexed, in seconds since 1970 (#710), if that is known.
     added: Option<u64>,
+    /// A picture drawn pixelated, with nearest filtering (#781).
+    pixelated: bool,
 }
 
-/// An indexed asset whose member is gone, which a new member of its fingerprint takes over: its path, its id and when
-/// it was added.
-type Gone<'a> = (&'a String, AssetId, Option<u64>);
+/// What `assets.json` says of a picture drawn pixelated (#781).
+const PIXELATED: &str = "pixelated";
+
+/// An indexed asset whose member is gone, which a new member of its fingerprint takes over: its path, its id, when
+/// it was added and whether it is pixelated.
+type Gone<'a> = (&'a String, AssetId, Option<u64>, bool);
 
 /// Now, in seconds since 1970; `None` on a clock set before then.
 pub(crate) fn now_seconds() -> Option<u64> {
@@ -269,6 +274,7 @@ impl AssetIndex {
                     id,
                     fingerprint,
                     added: entry.added,
+                    pixelated: entry.filter.as_deref() == Some(PIXELATED),
                 },
             );
         }
@@ -288,8 +294,13 @@ impl AssetIndex {
                 .added
                 .map(|added| format!(", \"added\": {added}"))
                 .unwrap_or_default();
+            let filter = if entry.pixelated {
+                format!(", \"filter\": \"{PIXELATED}\"")
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
-                "{separator}{path}: {{\"id\": \"{}\", \"size\": {size}, \"crc32\": {crc32}{added}}}",
+                "{separator}{path}: {{\"id\": \"{}\", \"size\": {size}, \"crc32\": {crc32}{added}{filter}}}",
                 entry.id
             ));
         }
@@ -326,6 +337,27 @@ impl AssetIndex {
         self.by_path.iter().map(|(path, entry)| (path.as_str(), entry.id))
     }
 
+    /// Whether the picture at `path` is drawn pixelated (#781): with nearest filtering where it is not smooth.
+    pub fn pixelated(&self, path: &str) -> bool {
+        self.by_path.get(path).is_some_and(|entry| entry.pixelated)
+    }
+
+    /// Whether the picture `id` is drawn pixelated (#781).
+    pub fn pixelated_id(&self, id: AssetId) -> bool {
+        self.path(id).is_some_and(|path| self.pixelated(path))
+    }
+
+    /// Draws the picture at `path` pixelated, or smooth (#781). Returns whether that changed anything.
+    pub fn set_pixelated(&mut self, path: &str, on: bool) -> bool {
+        match self.by_path.get_mut(path) {
+            Some(entry) if entry.pixelated != on => {
+                entry.pixelated = on;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// How many assets are indexed.
     pub fn len(&self) -> usize {
         self.by_path.len()
@@ -360,15 +392,12 @@ impl AssetIndex {
                 second: path.to_owned(),
             });
         }
-        let kept = self
-            .by_path
-            .get(path)
-            .filter(|entry| entry.id == id)
-            .and_then(|entry| entry.added);
+        let kept = self.by_path.get(path).filter(|entry| entry.id == id);
         let entry = Entry {
             id,
             fingerprint,
-            added: kept.or(added),
+            added: kept.and_then(|entry| entry.added).or(added),
+            pixelated: kept.is_some_and(|entry| entry.pixelated),
         };
         if let Some(old) = self.by_path.insert(path.to_owned(), entry) {
             self.by_id.remove(&old.id);
@@ -421,6 +450,7 @@ impl AssetIndex {
                             id: entry.id,
                             fingerprint,
                             added: entry.added,
+                            pixelated: entry.pixelated,
                         },
                     );
                 }
@@ -434,7 +464,7 @@ impl AssetIndex {
             if !members.contains_key(path) {
                 gone.entry(entry.fingerprint)
                     .or_default()
-                    .push_back((path, entry.id, entry.added));
+                    .push_back((path, entry.id, entry.added, entry.pixelated));
             }
         }
         let mut used: BTreeSet<AssetId> = self.by_id.keys().copied().collect();
@@ -442,14 +472,14 @@ impl AssetIndex {
             let moved = (fingerprint.size > 0)
                 .then(|| gone.get_mut(&fingerprint).and_then(VecDeque::pop_front))
                 .flatten();
-            let (id, added) = match moved {
-                Some((from, id, added)) => {
+            let (id, added, pixelated) = match moved {
+                Some((from, id, added, pixelated)) => {
                     report.moved.push(AssetMove {
                         id,
                         from: from.clone(),
                         to: path.clone(),
                     });
-                    (id, added)
+                    (id, added, pixelated)
                 }
                 None => {
                     let id = new_id()?;
@@ -457,14 +487,30 @@ impl AssetIndex {
                         return Err(AssetIndexError::IdInUse(id));
                     }
                     report.added.push(Asset { id, path: path.clone() });
-                    (id, now)
+                    (id, now, false)
                 }
             };
-            by_path.insert(path.clone(), Entry { id, fingerprint, added });
+            by_path.insert(
+                path.clone(),
+                Entry {
+                    id,
+                    fingerprint,
+                    added,
+                    pixelated,
+                },
+            );
         }
         for (fingerprint, paths) in gone {
-            for (path, id, added) in paths {
-                by_path.insert(path.clone(), Entry { id, fingerprint, added });
+            for (path, id, added, pixelated) in paths {
+                by_path.insert(
+                    path.clone(),
+                    Entry {
+                        id,
+                        fingerprint,
+                        added,
+                        pixelated,
+                    },
+                );
                 report.missing.push(Asset { id, path: path.clone() });
             }
         }
@@ -557,6 +603,9 @@ struct EntryIn {
     /// When it was first indexed (#710); none in an index from before.
     #[serde(default)]
     added: Option<u64>,
+    /// How a picture is filtered (#781): `"pixelated"`, or nothing for smooth.
+    #[serde(default)]
+    filter: Option<String>,
 }
 
 #[cfg(test)]

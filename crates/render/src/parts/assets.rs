@@ -40,6 +40,8 @@ struct Pending {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    /// Sampled nearest: a pixelated picture (#781).
+    nearest: bool,
 }
 
 /// The textures of the mesh assets, by key, and the bind group of each.
@@ -53,6 +55,8 @@ pub(crate) struct AssetTextures {
     groups: Vec<wgpu::BindGroup>,
     /// Each group's base-colour texture, to make the group again when the materials' arrays grow.
     views: Vec<wgpu::TextureView>,
+    /// Whether each group's texture is sampled nearest: the white one, and pixelated pictures (#781).
+    nearest_views: Vec<bool>,
     by_key: HashMap<Arc<str>, u32>,
     pending: Vec<Pending>,
     /// The materials' textures (#679), in every group.
@@ -130,6 +134,7 @@ impl AssetTextures {
             nearest,
             groups: vec![white_group],
             views: vec![white],
+            nearest_views: vec![true],
             by_key: HashMap::new(),
             pending: Vec::new(),
             materials,
@@ -153,7 +158,7 @@ impl AssetTextures {
                 .iter()
                 .enumerate()
                 .map(|(index, view)| {
-                    let sampler = if index == WHITE as usize {
+                    let sampler = if self.nearest_views.get(index).copied().unwrap_or(false) {
                         &self.nearest
                     } else {
                         &self.sampler
@@ -196,14 +201,16 @@ impl AssetTextures {
         self.revision
     }
 
-    /// Adds texture `key`, `width` × `height` sRGB RGBA pixels, made through `maker` (off the frame when it is large).
-    /// The caller checked the size against the device's limit.
+    /// Adds texture `key`, `width` × `height` sRGB RGBA pixels, made through `maker` (off the frame when it is large),
+    /// sampled `nearest` when it is a pixelated picture (#781). The caller checked the size against the device's
+    /// limit.
     pub(crate) fn add(
         &mut self,
         (device, queue, maker): (&wgpu::Device, &wgpu::Queue, &TextureMaker),
         key: &str,
         (width, height): (u32, u32),
         rgba: Vec<u8>,
+        nearest: bool,
     ) {
         let spec = TextureSpec::new(
             "metallic mesh asset texture",
@@ -219,6 +226,7 @@ impl AssetTextures {
             width,
             height,
             rgba,
+            nearest,
         });
         self.poll(device, queue, maker);
     }
@@ -248,16 +256,19 @@ impl AssetTextures {
             };
             write(queue, &texture, pending.width, pending.height, &pending.rgba);
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let group = group(device, &self.layout, &view, &self.sampler, &self.materials);
+            let sampler = if pending.nearest { &self.nearest } else { &self.sampler };
+            let group = group(device, &self.layout, &view, sampler, &self.materials);
             match self.by_key.get(&pending.key) {
                 Some(&index) => {
                     self.groups[index as usize] = group;
                     self.views[index as usize] = view;
+                    self.nearest_views[index as usize] = pending.nearest;
                 }
                 None => {
                     self.by_key.insert(pending.key, self.groups.len() as u32);
                     self.groups.push(group);
                     self.views.push(view);
+                    self.nearest_views.push(pending.nearest);
                 }
             }
             self.revision = self.revision.wrapping_add(1);

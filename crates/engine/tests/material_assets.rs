@@ -91,10 +91,10 @@ fn parts_share_a_material_asset_and_follow_its_file() {
     // Two parts, one material: one key, read once.
     assert_eq!(scene.scene().material_keys().len(), 5);
     let materials = renderer.parts().materials();
-    assert_eq!(materials.resolve(&id), material_params(&shiny));
+    assert_eq!(materials.resolve(&id), material_params(&shiny, false));
     assert_eq!(
         materials.resolve("Neon"),
-        material_params(&red_neon),
+        material_params(&red_neon, false),
         "the project's Neon"
     );
     assert_eq!(
@@ -120,7 +120,10 @@ fn parts_share_a_material_asset_and_follow_its_file() {
     assets.read_from(project.asset_reader());
     assets.reload_material(&id);
     assert!(assets.wait(scene.scene(), &mut renderer, Duration::from_secs(60)));
-    assert_eq!(renderer.parts().materials().resolve(&id), material_params(&rough));
+    assert_eq!(
+        renderer.parts().materials().resolve(&id),
+        material_params(&rough, false)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

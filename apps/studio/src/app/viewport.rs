@@ -60,12 +60,17 @@ impl ViewportRenderer {
         // preview shows it, whether or not the viewport is shown.
         if let Some(editor) = studio.editor_mut() {
             let changed = editor.materials.take_changed();
-            if !changed.is_empty()
+            // Pictures whose filtering changed (#781): their textures are read again.
+            let pictures = editor.materials.take_changed_pictures();
+            if !(changed.is_empty() && pictures.is_empty())
                 && let Some(assets) = self.scene.assets_mut()
             {
                 assets.read_from(editor.project.asset_reader());
                 for material in &changed {
                     assets.reload_material(&material.to_string());
+                }
+                for picture in &pictures {
+                    assets.reload_texture(&picture.to_string());
                 }
             }
             self.preview.frame(context, painter, editor, &changed);

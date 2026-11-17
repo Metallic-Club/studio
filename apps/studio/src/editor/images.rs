@@ -74,18 +74,44 @@ impl EditorState {
             return shown.clone();
         }
         let mut reader = self.project.asset_reader();
+        // A pixelated picture shows crisp (#781).
+        let options = if self.project.assets().pixelated_id(id) {
+            egui::TextureOptions::NEAREST
+        } else {
+            egui::TextureOptions::LINEAR
+        };
         let shown = reader.load_image(&id.to_string()).ok().map(|mut image| {
             let size = (image.width, image.height);
             image.fit(LARGEST);
             let picture =
                 egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
             Shown {
-                texture: ctx.load_texture(format!("metallic.image.{id}"), picture, egui::TextureOptions::LINEAR),
+                texture: ctx.load_texture(format!("metallic.image.{id}"), picture, options),
                 size,
             }
         });
         self.images.shown.insert(id, shown.clone());
         shown
+    }
+
+    /// Draws the picture at `path` pixelated (nearest filtering) or smooth (#781): kept in the project's asset index,
+    /// it shows in its thumbnails and preview at once, and the renderers read it and the materials that use it again.
+    pub fn set_pixelated(&mut self, path: &str, on: bool) {
+        let Some(id) = self.project.assets().id(path) else {
+            return;
+        };
+        if self.project.assets().pixelated(path) == on {
+            return;
+        }
+        self.project.set_pixelated(path, on);
+        self.thumbnails.remove(&id);
+        self.images.shown.remove(&id);
+        for material in self.materials_using(id) {
+            if let Some(material) = self.project.assets().id(&material) {
+                self.materials.note_changed(material);
+            }
+        }
+        self.materials.note_changed_picture(id);
     }
 
     /// The materials that use the picture `id`, by path, sorted.

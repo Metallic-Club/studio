@@ -85,6 +85,19 @@ fn a_picture_shows_on_its_tile_and_opens_in_a_preview_with_its_facts() {
     harness.get_by_label("Used by Assets/Materials/Brick.material");
     let picture = harness.get_by_role_and_label(Role::Image, "Assets/wide.png").rect();
     assert!((picture.width() / picture.height() - 4.0).abs() < 0.05, "{picture:?}");
+
+    // It zooms (#781): to its own size, then in a step, and back to fitting.
+    harness.get_by_role_and_label(Role::Button, "100 %").click();
+    settle(&mut harness);
+    harness.get_by_label("Zoom 100 %");
+    let actual = harness.get_by_role_and_label(Role::Image, "Assets/wide.png").rect();
+    assert!((actual.height() - 10.0).abs() < 0.5, "its own 10 pixels: {actual:?}");
+    harness.get_by_role_and_label(Role::Button, "Zoom in").click();
+    settle(&mut harness);
+    harness.get_by_label("Zoom 150 %");
+    harness.get_by_role_and_label(Role::Button, "Fit").click();
+    settle(&mut harness);
+    assert!(harness.query_by_label("Zoom 150 %").is_none());
 }
 
 #[test]

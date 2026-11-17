@@ -1579,9 +1579,15 @@ impl Renderer {
     /// Adds a texture asset under `key` (#189): `width` × `height` pixels of 8-bit sRGB RGBA, rows from the top. Every
     /// part whose `TextureId` is `key` multiplies its colour by it (opaque parts; see-through ones draw untextured). A
     /// large texture is made off the frame (#152) and drawn a few frames later; until then those parts draw with
-    /// their colour alone. Refuses a size of zero or above [`Renderer::max_texture_size`], and pixels that do not
-    /// match the size.
-    pub fn add_texture_asset(&mut self, key: &str, width: u32, height: u32, rgba: Vec<u8>) -> Result<(), RenderError> {
+    /// their colour alone. It is sampled `nearest` when it is a pixelated picture (#781), else smoothly. Refuses a size
+    /// of zero or above [`Renderer::max_texture_size`], and pixels that do not match the size.
+    pub fn add_texture_asset(
+        &mut self,
+        key: &str,
+        (width, height): (u32, u32),
+        rgba: Vec<u8>,
+        nearest: bool,
+    ) -> Result<(), RenderError> {
         let refuse = |reason: String| RenderError::Asset {
             key: key.to_owned(),
             reason,
@@ -1598,7 +1604,8 @@ impl Renderer {
                 rgba.len()
             )));
         }
-        self.parts.add_texture_asset(&self.maker, key, (width, height), rgba);
+        self.parts
+            .add_texture_asset(&self.maker, key, (width, height), rgba, nearest);
         Ok(())
     }
 
