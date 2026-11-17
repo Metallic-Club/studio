@@ -283,6 +283,41 @@ fn the_material_window_shows_a_grid() {
     harness.get_by_role_and_label(Role::Row, "Concrete");
 }
 
+/// #777: the window's list rows show the materials' balls, in place of their icon, once drawn.
+#[test]
+fn the_material_window_s_rows_show_balls() {
+    let mut harness = editing(settings_file("editor-material-rows", None), "Material Rows Game");
+    harness.set_size(egui::vec2(1280.0, 1400.0));
+    let ball = {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let dm = &editor.dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.find_first_child(workspace, "Baseplate", false).unwrap().unwrap();
+        editor.select(Some(part));
+        let path = "Assets/Materials/Wood.material";
+        let wood = editor.project.assets().id(path).unwrap();
+        let fingerprint = editor.project.fingerprint(path).unwrap();
+        let ball = egui::TextureId::User(43);
+        editor.pictures.done(wood, fingerprint, ball);
+        ball
+    };
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Choose Material").click();
+    settle(&mut harness);
+    harness.get_by_label("Search the materials").click();
+    settle(&mut harness);
+    harness.get_by_label("Search the materials").type_text("wood");
+    settle(&mut harness);
+    settle(&mut harness);
+    let row = harness.get_by_role_and_label(Role::Row, "Wood").rect();
+    let output = harness.output();
+    let drawn = output.shapes.iter().any(|clipped| match &clipped.shape {
+        egui::Shape::Mesh(mesh) => mesh.texture_id == ball && row.contains(mesh.vertices[0].pos),
+        _ => false,
+    });
+    assert!(drawn, "the ball is drawn on its row");
+}
+
 /// #760: what is typed in the Material field is completed from the project's materials: Up and Down and Enter, Tab,
 /// or a click.
 #[test]
