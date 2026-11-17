@@ -618,7 +618,7 @@ declare extern type Lighting extends Instance with
     TimeOfDay: string
     --- The direction from the scene towards the sun, a unit vector set by ClockTime and GeographicLatitude. It points below the horizon at night, when the moon, opposite it, lights the scene.
     read SunDirection: Vector3
-    --- Makes the whole picture brighter or darker, in stops from -3 to 3: each stop doubles or halves it. 0 leaves it as it is.
+    --- Makes the whole picture brighter or darker, in stops: each stop doubles or halves it. 0 leaves it as it is.
     ExposureCompensation: number
     --- The colour things fade to in the distance, and the sky becomes, when there is fog.
     FogColor: Color3

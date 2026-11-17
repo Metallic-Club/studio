@@ -51,6 +51,9 @@ pub const NIGHT_AMBIENT: f32 = 0.35;
 pub const GROUND_BOUNCE: Vec3 = Vec3::new(0.47, 0.36, 0.26);
 /// The sky overhead at night, linear.
 pub const NIGHT_ZENITH: Vec3 = Vec3::new(0.004, 0.006, 0.016);
+/// The most stops `ExposureCompensation` brightens or darkens by. The property has no range (#759); this only keeps
+/// the frame's scale, 2 to the power of it, a finite number however large a value is typed.
+pub const EXPOSURE_LIMIT: f32 = 64.0;
 /// The sky at the horizon at night, linear.
 pub const NIGHT_HORIZON: Vec3 = Vec3::new(0.014, 0.02, 0.04);
 
@@ -104,7 +107,7 @@ pub struct SceneLighting {
     pub environment_specular_scale: f32,
     /// `ShadowSoftness`: how soft the sun's shadow edges are, 0 to 1 ([`crate::shadow`]).
     pub shadow_softness: f32,
-    /// `ExposureCompensation`: the frame's exposure in stops, -3 to 3.
+    /// `ExposureCompensation`: the frame's exposure in stops, any number (#759) within [`EXPOSURE_LIMIT`].
     pub exposure_compensation: f32,
     /// `FogColor`: the colour things fade to with distance.
     pub fog_color: Color3,
@@ -260,7 +263,7 @@ impl SceneLighting {
                 finite_or(self.environment_specular_scale, 1.0).clamp(0.0, 1.0),
                 // 0.2, the default, is the filter as it was; 0 half as wide and 1 three times as wide.
                 0.5 + 2.5 * finite_or(self.shadow_softness, 0.2).clamp(0.0, 1.0),
-                2f32.powf(finite_or(self.exposure_compensation, 0.0).clamp(-3.0, 3.0)),
+                2f32.powf(finite_or(self.exposure_compensation, 0.0).clamp(-EXPOSURE_LIMIT, EXPOSURE_LIMIT)),
             ],
         }
     }
@@ -478,6 +481,17 @@ mod tests {
         assert_eq!(shifted.light_color.y, plain.light_color.y);
         assert!(shifted.color_shift_bottom.z > 1.0 && shifted.color_shift_bottom.x == 0.0);
         assert_eq!(shifted.environment, [0.0, 1.0, 3.0, 0.25], "clamped to their ranges");
+        // The exposure has no range (#759): only a bound that keeps the scale finite.
+        let exposure = |stops: f32| {
+            SceneLighting {
+                exposure_compensation: stops,
+                ..SceneLighting::default()
+            }
+            .resolve()
+            .environment[3]
+        };
+        assert_eq!((exposure(5.0), exposure(-6.0)), (32.0, 1.0 / 64.0));
+        assert!(exposure(1.0e9).is_finite() && exposure(-1.0e9) > 0.0);
         assert!(shifted.fog);
         assert_eq!(
             (shifted.fog_start, shifted.fog_end),
