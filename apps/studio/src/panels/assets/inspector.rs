@@ -121,7 +121,7 @@ fn ball(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, id: AssetId, heigh
     let pixels = (side * ui.ctx().pixels_per_point()).round() as u32;
     editor.materials.preview = Some((id, (pixels, pixels)));
     match editor.materials.preview_texture {
-        Some((shown, texture)) if shown == id => grid::paint_ball(ui.painter(), texture, area),
+        Some((shown, texture, uv)) if shown == id => grid::paint_ball(ui.painter(), texture, area, uv),
         _ => {
             let mut decodes = 0;
             grid::thumbnail(ui, editor, entry, area, &mut decodes);

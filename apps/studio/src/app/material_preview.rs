@@ -21,6 +21,8 @@ pub struct MaterialPreview {
     attached: bool,
     /// The texture registered with egui-wgpu, and the target's generation it shows.
     texture: Option<(egui::TextureId, u64)>,
+    /// The part of the texture the last drawing filled (#757).
+    uv: Option<egui::Rect>,
     /// The project whose assets the renderer reads.
     project: Option<std::path::PathBuf>,
     /// What it drew last: the material and the size. Drawn again only when either changes, the material is edited,
@@ -91,7 +93,7 @@ impl MaterialPreview {
         let wanted = (id, (width.max(1), height.max(1)));
         let stale = new_project || self.again || self.drawn != Some(wanted) || changed.contains(&id);
         if !stale && let Some((texture, _)) = self.texture {
-            editor.materials.preview_texture = Some((id, texture));
+            editor.materials.preview_texture = Some((id, texture, self.uv.unwrap_or(crate::panels::assets::WHOLE)));
             return;
         }
         if self.game.is_none() {
@@ -124,6 +126,8 @@ impl MaterialPreview {
         let Some(target) = self.scene.viewport() else {
             return;
         };
+        // The target keeps room beyond the size drawn, which fills its top-left part (#757).
+        self.uv = Some(drawn_part((width.max(1), height.max(1)), target.size()));
         let generation = target.generation();
         let device = context.device();
         let texture = match self.texture {
@@ -141,6 +145,33 @@ impl MaterialPreview {
                 texture
             }
         };
-        editor.materials.preview_texture = Some((id, texture));
+        editor.materials.preview_texture = Some((id, texture, self.uv.unwrap_or(crate::panels::assets::WHOLE)));
+    }
+}
+
+/// The part of a target `room` pixels across that a frame `drawn` pixels across fills, from its top-left corner, in
+/// texture coordinates.
+fn drawn_part(drawn: (u32, u32), room: (u32, u32)) -> egui::Rect {
+    let share = |drawn: u32, room: u32| (drawn as f32 / room.max(1) as f32).min(1.0);
+    egui::Rect::from_min_max(
+        egui::pos2(0.0, 0.0),
+        egui::pos2(share(drawn.0, room.0), share(drawn.1, room.1)),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_drawn_part_is_the_target_s_top_left() {
+        assert_eq!(
+            drawn_part((180, 180), (240, 360)),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(0.75, 0.5))
+        );
+        assert_eq!(
+            drawn_part((64, 64), (64, 64)),
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
+        );
     }
 }

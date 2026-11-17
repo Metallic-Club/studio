@@ -36,8 +36,8 @@ pub struct MaterialEditor {
     changed: Vec<AssetId>,
     /// The material whose preview is drawn next and its size in pixels, asked for by the inspector this frame.
     pub preview: Option<(AssetId, (u32, u32))>,
-    /// The preview's texture, once drawn, and the material it shows.
-    pub preview_texture: Option<(AssetId, egui::TextureId)>,
+    /// The preview's texture, once drawn, the material it shows, and the part of it the drawing fills (#757).
+    pub preview_texture: Option<(AssetId, egui::TextureId, egui::Rect)>,
     /// The preview was drawn while its assets still loaded: it is drawn again on a later frame, which the inspector
     /// asks for.
     pub preview_loading: bool,
