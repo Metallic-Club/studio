@@ -1,11 +1,12 @@
 //! The browser's left side: the project's folders and files as a tree (#676). The root is the project; a folder's
 //! caret opens it here, a click opens it on the right. The open folder is highlighted, and a folder takes tiles
-//! dropped on it.
+//! dropped on it. A material's row shows its ball and a picture's a small thumbnail of it, where the others have their
+//! icon (#756).
 
 use egui::Role;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, ScrollArea, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 
-use super::{Act, Keys, MenuLine, ROOT, context_menu, drop_target, dropped_on};
+use super::{Act, AssetKind, Keys, MenuLine, ROOT, context_menu, drop_target, dropped_on};
 use crate::editor::EditorState;
 use crate::editor::assets::{self as browser, Entry, EntryKind};
 use crate::theme::icons::{self, Icon};
@@ -108,8 +109,9 @@ fn sweep(ui: &Ui, caret_response: &egui::Response, caret: Rect, path: &str, expa
 }
 
 /// Draws the tree.
-pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Vec<Act>) {
+pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mut Vec<Act>) {
     let rows = rows(editor);
+    let mut decodes = 0;
     let shades = current_colors(ui.ctx()).palette.rows();
     ui.spacing_mut().item_spacing.y = 0.0;
     ScrollArea::vertical()
@@ -117,13 +119,22 @@ pub(super) fn show(ui: &mut Ui, editor: &EditorState, keys: &Keys, acts: &mut Ve
         .auto_shrink([false, false])
         .show_rows(ui, size::ROW, rows.len(), |ui, range| {
             for (index, row) in range.clone().zip(&rows[range]) {
-                row_ui(ui, editor, row, shades.fill(index), keys, acts);
+                row_ui(ui, editor, row, shades.fill(index), keys, &mut decodes, acts);
             }
         });
 }
 
-/// One row: the caret, the icon and the name; the open folder on a raised fill.
-fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &Keys, acts: &mut Vec<Act>) {
+/// One row: the caret, the icon (a material's ball, a picture's thumbnail) and the name; the open folder on a raised
+/// fill. `decodes` counts the pictures decoded this frame.
+fn row_ui(
+    ui: &mut Ui,
+    editor: &mut EditorState,
+    row: &Row,
+    stripe: Color32,
+    keys: &Keys,
+    decodes: &mut usize,
+    acts: &mut Vec<Act>,
+) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let entry = &row.entry;
@@ -202,14 +213,23 @@ fn row_ui(ui: &mut Ui, editor: &EditorState, row: &Row, stripe: Color32, keys: &
         } else {
             caret.right() + space::S1
         };
-        icons::paint_at(
-            ui.painter(),
-            pos2(x, rect.center().y),
-            Align2::LEFT_CENTER,
-            icon,
-            text::BODY,
-            ink,
+        // A material's ball and a picture's thumbnail stand for them (#756), in the icon's place.
+        let picture = Rect::from_min_size(
+            pos2(x, rect.center().y - text::BODY / 2.0),
+            vec2(text::BODY, text::BODY),
         );
+        let pictured = matches!(entry.kind, EntryKind::File(AssetKind::Material | AssetKind::Image))
+            && super::grid::thumbnail(ui, editor, entry, picture, decodes);
+        if !pictured {
+            icons::paint_at(
+                ui.painter(),
+                pos2(x, rect.center().y),
+                Align2::LEFT_CENTER,
+                icon,
+                text::BODY,
+                ink,
+            );
+        }
         let font = if open {
             fonts::named(fonts::STRONG, text::BODY)
         } else {
