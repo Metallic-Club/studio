@@ -253,14 +253,12 @@ static PROPS: &[PropMeta] = &[
              It points below the horizon at night, when the moon, opposite it, lights the scene.",
         ),
     PropMeta::number("ExposureCompensation", 0.0)
-        .range(-3.0, 3.0)
-        .widget(Widget::Slider)
         .visual()
         .group("Exposure")
         .order(0)
         .desc(
-            "Makes the whole picture brighter or darker, in stops from -3 to 3: each stop doubles or halves it. 0 \
-             leaves it as it is.",
+            "Makes the whole picture brighter or darker, in stops: each stop doubles or halves it. 0 leaves it as it \
+             is.",
         ),
     PropMeta::color3("FogColor", 0.75, 0.75, 0.75)
         .visual()

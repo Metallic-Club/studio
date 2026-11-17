@@ -1016,13 +1016,10 @@
           ],
           "read_only": false,
           "computed": false,
-          "range": [
-            -3.0,
-            3.0
-          ],
+          "range": null,
           "wraps": false,
           "group": "Exposure",
-          "description": "Makes the whole picture brighter or darker, in stops from -3 to 3: each stop doubles or halves it. 0 leaves it as it is.",
+          "description": "Makes the whole picture brighter or darker, in stops: each stop doubles or halves it. 0 leaves it as it is.",
           "aliases": [],
           "derived_from": []
         },
