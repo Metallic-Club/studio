@@ -114,7 +114,7 @@ fn the_tree_shows_a_picture_s_thumbnail() {
     let editor_state = editor(&mut harness);
     let oak = editor_state.project.assets().id("Assets/Trees/oak.png").unwrap();
     editor_state.thumbnails.clear();
-    settle(&mut harness);
+    until_thumbnail(&mut harness, oak);
     assert!(editor(&mut harness).thumbnails.contains_key(&oak));
 }
 

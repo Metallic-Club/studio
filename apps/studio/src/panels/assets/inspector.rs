@@ -123,8 +123,7 @@ fn ball(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, id: AssetId, heigh
     match editor.materials.preview_texture {
         Some((shown, texture, uv)) if shown == id => grid::paint_ball(ui.painter(), texture, area, uv),
         _ => {
-            let mut decodes = 0;
-            grid::thumbnail(ui, editor, entry, area, &mut decodes);
+            grid::thumbnail(ui, editor, entry, area);
             ui.ctx().request_repaint();
         }
     }
@@ -270,8 +269,7 @@ fn picture(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, height: f32) {
     let side = picture_side(ui, height);
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), side), Sense::hover());
     let area = Rect::from_center_size(row.center(), vec2(side, side));
-    let mut decodes = 0;
-    if !grid::thumbnail(ui, editor, entry, area, &mut decodes) {
+    if !grid::thumbnail(ui, editor, entry, area) {
         let colors = current_colors(ui.ctx());
         let (icon, ink) = grid::icon_of(editor, entry, &colors);
         icons::paint_at(

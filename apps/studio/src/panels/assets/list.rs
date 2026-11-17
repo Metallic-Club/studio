@@ -51,7 +51,6 @@ fn date_in(seconds: u64, zone: &jiff::tz::TimeZone) -> String {
 /// Draws the list.
 pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mut Vec<Act>) {
     // Pictures decoded this frame, as the tiles do (#681).
-    let mut decodes = 0;
     let entries = super::shown_entries(editor);
     let area = ui.available_rect_before_wrap();
     let ground = Ground::of(ui, editor, area, Role::List, acts);
@@ -69,7 +68,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
             ui.spacing_mut().item_spacing.y = 0.0;
             for index in range {
                 let stripe = shades.fill(index);
-                row(ui, editor, &entries[index], height, stripe, keys, acts, &mut decodes);
+                row(ui, editor, &entries[index], height, stripe, keys, acts);
             }
         });
     ground.drop(acts);
@@ -164,7 +163,6 @@ fn row(
     stripe: egui::Color32,
     keys: &Keys,
     acts: &mut Vec<Act>,
-    decodes: &mut usize,
 ) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
@@ -196,7 +194,7 @@ fn row(
             pos2(name_cell.left() + space::S2, rect.center().y - side / 2.0),
             vec2(side, side),
         );
-        if !grid::thumbnail(ui, editor, entry, picture, decodes) {
+        if !grid::thumbnail(ui, editor, entry, picture) {
             let (icon, ink) = grid::icon_of(editor, entry, &colors);
             let icon_size = (side * 0.75).max(text::SMALL);
             icons::paint_at(

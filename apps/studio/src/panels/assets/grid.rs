@@ -133,7 +133,6 @@ pub(super) fn zoom(ui: &Ui, editor: &mut EditorState, area: Rect) {
 /// Draws the tiles.
 pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mut Vec<Act>) {
     // Pictures decoded this frame: a few a frame, so a folder of large pictures does not stall one (#681).
-    let mut decodes = 0;
     let entries = super::shown_entries(editor);
     let area = ui.available_rect_before_wrap();
     let ground = Ground::of(ui, editor, area, Role::Grid, acts);
@@ -155,7 +154,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
                     ui.spacing_mut().item_spacing = vec2(GAP, 0.0);
                     let start = line * columns;
                     for entry in &entries[start..(start + columns).min(entries.len())] {
-                        tile(ui, editor, entry, measures, keys, acts, &mut decodes);
+                        tile(ui, editor, entry, measures, keys, acts);
                     }
                 });
                 ui.add_space(GAP);
@@ -166,15 +165,7 @@ pub(super) fn show(ui: &mut Ui, editor: &mut EditorState, keys: &Keys, acts: &mu
 }
 
 /// One tile: its icon on a fill when selected or under the pointer, its name under it (two lines at most).
-fn tile(
-    ui: &mut Ui,
-    editor: &mut EditorState,
-    entry: &Entry,
-    measures: Measures,
-    keys: &Keys,
-    acts: &mut Vec<Act>,
-    decodes: &mut usize,
-) {
+fn tile(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, measures: Measures, keys: &Keys, acts: &mut Vec<Act>) {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let selected = editor.browser.selected.contains(&entry.path);
@@ -212,7 +203,7 @@ fn tile(
         let centre = pos2(rect.center().x, rect.top() + space::S2 + icon_area / 2.0);
         let area = Rect::from_center_size(centre, vec2(icon_area, icon_area));
         // A picture, a material or a scene shows itself (#681); until its thumbnail is here, its kind's icon.
-        if !thumbnail(ui, editor, entry, area, decodes) {
+        if !thumbnail(ui, editor, entry, area) {
             icons::paint_at(ui.painter(), centre, Align2::CENTER_CENTER, icon, icon_size, ink);
         }
         let label = Rect::from_min_max(
@@ -515,12 +506,9 @@ pub(crate) fn paint_ball(painter: &egui::Painter, texture: egui::TextureId, area
     painter.add(mesh);
 }
 
-/// How many pictures a frame decodes for their tiles.
-const DECODES_A_FRAME: usize = 2;
-
 /// Draws `entry`'s thumbnail in `area` when it has one (#681): a picture at its aspect ratio, a material on a sphere,
 /// a scene from its camera. Asks for what is missing or old. Returns whether it drew one.
-pub(super) fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: Rect, decodes: &mut usize) -> bool {
+pub(super) fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: Rect) -> bool {
     use crate::editor::pictures::{Picture, Wanted};
     let EntryKind::File(kind) = entry.kind else {
         return false;
@@ -531,13 +519,6 @@ pub(super) fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: 
     let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     match kind {
         AssetKind::Image => {
-            if !editor.thumbnails.contains_key(&id) {
-                if *decodes >= DECODES_A_FRAME {
-                    ui.ctx().request_repaint();
-                    return false;
-                }
-                *decodes += 1;
-            }
             let Some(texture) = crate::panels::material::thumbnail(ui.ctx(), editor, id) else {
                 return false;
             };
