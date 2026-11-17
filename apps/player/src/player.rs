@@ -11,7 +11,7 @@ use metallic_engine::metallic_platform::{
     AppHandler, ButtonState, DeviceEvent, EventLoopContext, GamepadEvent, KeyCode, Platform, PlatformError,
     WindowEvent, WindowId,
 };
-use metallic_engine::metallic_project::{Project, ProjectError};
+use metallic_engine::metallic_project::{AssetReader, Project, ProjectError};
 use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderError};
 use metallic_engine::metallic_script::OutputSink;
 use metallic_engine::perf::{PerfSummary, StatsViewer, StatsViewers};
@@ -323,6 +323,12 @@ impl<O: OutputSink> Player<O> {
     /// overlay ([`SceneRenderer::set_overlay`]) and its settings.
     pub fn renderer(&self) -> &Rc<RefCell<SceneRenderer>> {
         &self.renderer
+    }
+
+    /// Has the renderer read the game's meshes and textures (materials' too) with `reader` (#772). A hosted game's
+    /// host hands over its project's, as [`Player::new`] does for a project it opens itself.
+    pub fn set_assets(&mut self, reader: AssetReader) {
+        self.renderer.borrow_mut().set_assets(reader);
     }
 
     /// Runs one frame of `real_dt` of wall time, for a host that owns both the window and the loop (the engine's

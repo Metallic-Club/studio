@@ -292,7 +292,9 @@ impl EditorState {
                     }
                     std::thread::sleep(Duration::from_millis(2));
                 };
-                net.client = Some(client_player(&welcome, connecting, graphics, Arc::clone(&log))?);
+                let mut client = client_player(&welcome, connecting, graphics, Arc::clone(&log))?;
+                client.set_assets(self.project.asset_reader());
+                net.client = Some(client);
             }
             PlayKind::Clients(count) => {
                 let launcher = launcher.ok_or("there is no way to start the clients")?;
@@ -339,7 +341,9 @@ impl EditorState {
             return Err("A game is running already.".to_owned());
         }
         self.output.update();
-        let player = client_player(welcome, connecting, graphics, log)?;
+        let mut player = client_player(welcome, connecting, graphics, log)?;
+        // The team's project is this Studio's: its meshes and textures (#772).
+        player.set_assets(self.project.asset_reader());
         let dm = player.engine().data_model();
         let explorer = ExplorerState::new(dm);
         self.play = Some(PlaySession {

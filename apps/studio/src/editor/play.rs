@@ -127,8 +127,10 @@ impl EditorState {
         let mut game = metallic_classes::new_game().map_err(|error| error.to_string())?;
         let loaded = load_scene(&mut game, &saved.text).map_err(|error| format!("the scene: {error}"))?;
         let sources = project_sources(&mut self.project).map_err(|error| format!("the scripts: {error}"))?;
-        let player =
+        let mut player =
             Player::hosted(game, sources, graphics, ScriptOutput::new(log)).map_err(|error| error.to_string())?;
+        // The project's meshes and materials' textures, as the editor's viewport has them (#772).
+        player.set_assets(self.project.asset_reader());
         log::info!("play: started {}", self.name());
         // The selection comes along by scene id, revealed in the game's Explorer.
         let selection = Selection::of(
