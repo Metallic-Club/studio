@@ -36,10 +36,15 @@ fn cells(rect: Rect, widths: &ColumnWidths) -> [Rect; 4] {
 
 /// When `seconds` (since 1970) was, in the local time: `2026-11-15 14:03`.
 pub(crate) fn date(seconds: u64) -> String {
+    date_in(seconds, &jiff::tz::TimeZone::system())
+}
+
+/// When `seconds` (since 1970) was, in the time zone `zone`.
+fn date_in(seconds: u64, zone: &jiff::tz::TimeZone) -> String {
     i64::try_from(seconds)
         .ok()
-        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
-        .map(|utc| utc.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .and_then(|seconds| jiff::Timestamp::from_second(seconds).ok())
+        .map(|at| at.to_zoned(zone.clone()).strftime("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default()
 }
 
@@ -264,6 +269,14 @@ fn row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_date_reads_in_the_time_zone() {
+        let utc = jiff::tz::TimeZone::UTC;
+        assert_eq!(date_in(0, &utc), "1970-01-01 00:00");
+        assert_eq!(date_in(1_794_787_260, &utc), "2026-11-16 00:01");
+        assert!(!date(0).is_empty(), "in the system's zone");
+    }
 
     #[test]
     fn rows_scale_within_limits() {
