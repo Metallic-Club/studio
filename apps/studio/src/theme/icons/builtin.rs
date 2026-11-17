@@ -106,10 +106,22 @@ pub fn manifest_json() -> String {
     manifest_json_keeping(None, &HashMap::new())
 }
 
+/// Files icons used by default before their default changed, each with its icon. An `icons.json` entry still on one
+/// was never the user's choice, so it is moved to the icon's current default ([`manifest_json_keeping`], #755).
+const FORMER_DEFAULTS: &[(Icon, &str)] = &[(Icon::UiApplyMaterial, "interface/paint-bucket.svg")];
+
+/// Whether `file` is a file `icon` used by default before (#755).
+fn was_default(icon: Icon, file: &str) -> bool {
+    FORMER_DEFAULTS
+        .iter()
+        .any(|(former, path)| *former == icon && *path == file)
+}
+
 /// `icons.json` as shipped, keeping what the user chose in `theirs` (an older `icons.json` of theirs, #403: each
 /// group's colours, each icon's file and colour) and pointing the icons in `files` at the files given there (an older
 /// folder's own changes, carried into the new layout, #322). It lists every icon and group Studio has now, so new
-/// ones appear in the user's file, and drops what Studio no longer has.
+/// ones appear in the user's file, and drops what Studio no longer has. An icon still on a file it used by default
+/// before gets its current default (#755).
 pub(crate) fn manifest_json_keeping(theirs: Option<&Manifest>, files: &HashMap<Icon, String>) -> String {
     let manifest = Manifest {
         format: FORMAT,
@@ -137,7 +149,10 @@ pub(crate) fn manifest_json_keeping(theirs: Option<&Manifest>, files: &HashMap<I
                 let file = files
                     .get(icon)
                     .cloned()
-                    .or_else(|| kept.map(|kept| kept.file.clone()))
+                    .or_else(|| {
+                        kept.map(|kept| kept.file.clone())
+                            .filter(|file| !was_default(*icon, file))
+                    })
                     .unwrap_or_else(|| icon.default_file());
                 let color = match kept {
                     Some(kept) => kept.color.clone(),
@@ -717,6 +732,37 @@ mod tests {
         assert!(new.icons.contains_key(Icon::ToolbarMove.id()));
         assert!(!new.icons.contains_key("explorer.gone_away"));
         assert!(!text.contains("A part."), "{text}");
+    }
+
+    #[test]
+    fn an_icon_still_on_its_former_default_gets_the_new_one() {
+        let theirs = |file: &str| -> Manifest {
+            serde_json::from_str(&format!(
+                r#"{{ "format": 3, "icons": {{ "ui.apply_material": {{ "file": "{file}" }} }} }}"#
+            ))
+            .unwrap()
+        };
+        let moved: Manifest = serde_json::from_str(&manifest_json_keeping(
+            Some(&theirs("interface/paint-bucket.svg")),
+            &HashMap::new(),
+        ))
+        .unwrap();
+        assert_eq!(
+            moved.icons["ui.apply_material"].file,
+            Icon::UiApplyMaterial.default_file(),
+            "the paint bucket was Studio's choice, not the user's"
+        );
+        // Another file is the user's own, and stays.
+        let kept: Manifest = serde_json::from_str(&manifest_json_keeping(
+            Some(&theirs("interface/palette.svg")),
+            &HashMap::new(),
+        ))
+        .unwrap();
+        assert_eq!(kept.icons["ui.apply_material"].file, "interface/palette.svg");
+        // A former default is never an icon's current one, nor another icon's former default by mistake.
+        for (icon, file) in FORMER_DEFAULTS {
+            assert_ne!(icon.default_file(), *file);
+        }
     }
 
     #[test]

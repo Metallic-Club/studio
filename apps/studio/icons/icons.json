@@ -337,6 +337,9 @@
     "ui.add": {
       "file": "interface/plus.svg"
     },
+    "ui.add_script": {
+      "file": "interface/mouse-pointer-click.svg"
+    },
     "ui.apply_material": {
       "file": "interface/mouse-pointer-click.svg"
     },
