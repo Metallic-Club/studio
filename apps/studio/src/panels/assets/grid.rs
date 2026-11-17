@@ -472,9 +472,14 @@ const BALL_INSET: f32 = 0.98;
 /// The sides of the ball's disc.
 const BALL_SIDES: usize = 64;
 
+/// The whole of a texture, in texture coordinates.
+pub(crate) const WHOLE: Rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+
 /// Paints the material picture `texture` filling `area` as its ball alone (#697): a disc of the picture inside the
-/// ball's outline ([`crate::app::thumbnails::ball_radius`]), its rim faded out over a pixel so it is smooth.
-pub(crate) fn paint_ball(painter: &egui::Painter, texture: egui::TextureId, area: Rect) {
+/// ball's outline ([`crate::app::thumbnails::ball_radius`]), its rim faded out over a pixel so it is smooth. The
+/// picture is the part `uv` of the texture ([`WHOLE`] for a thumbnail; the inspector's preview fills only a corner of
+/// its target, #757).
+pub(crate) fn paint_ball(painter: &egui::Painter, texture: egui::TextureId, area: Rect, uv: Rect) {
     use egui::epaint::{Mesh, Vertex};
     let share = crate::app::thumbnails::ball_radius() * BALL_INSET;
     let radius = share * area.width();
@@ -483,9 +488,10 @@ pub(crate) fn paint_ball(painter: &egui::Painter, texture: egui::TextureId, area
     let middle = pos2(0.5, 0.5);
     let vertex = |distance: f32, angle: f32, color: egui::Color32| {
         let towards = egui::Vec2::angled(angle);
+        let within = middle + (distance / area.width()) * towards;
         Vertex {
             pos: centre + distance * towards,
-            uv: middle + (distance / area.width()) * towards,
+            uv: uv.min + within.to_vec2() * uv.size(),
             color,
         }
     };
@@ -564,7 +570,7 @@ pub(super) fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: 
             };
             if kind == AssetKind::Material {
                 // The ball alone, no sky round it (#697).
-                paint_ball(ui.painter(), texture, area);
+                paint_ball(ui.painter(), texture, area, WHOLE);
             } else {
                 ui.painter().image(texture, area, full, egui::Color32::WHITE);
             }
@@ -597,7 +603,7 @@ mod tests {
         let ctx = egui::Context::default();
         let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(44.0, 44.0));
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            paint_ball(ui.painter(), egui::TextureId::User(7), area);
+            paint_ball(ui.painter(), egui::TextureId::User(7), area, WHOLE);
         });
         output.textures_delta.clear();
         let mesh = output
@@ -626,5 +632,29 @@ mod tests {
             mesh.vertices.iter().any(|vertex| vertex.color.a() == 0),
             "the rim fades out"
         );
+    }
+
+    #[test]
+    fn a_ball_from_part_of_a_texture_stays_inside_that_part() {
+        let ctx = egui::Context::default();
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0));
+        // The frame filled the top-left 60% by 40% of its target (#757).
+        let part = Rect::from_min_max(pos2(0.0, 0.0), pos2(0.6, 0.4));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_ball(ui.painter(), egui::TextureId::User(7), area, part);
+        });
+        output.textures_delta.clear();
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.clone()),
+                _ => None,
+            })
+            .expect("a mesh");
+        assert_eq!(mesh.vertices[0].uv, pos2(0.3, 0.2), "the centre is the part's");
+        for vertex in &mesh.vertices {
+            assert!(part.expand(1e-4).contains(vertex.uv), "{:?}", vertex.uv);
+        }
     }
 }
