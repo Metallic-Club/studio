@@ -47,7 +47,7 @@ pub mod stats;
 pub use config::{
     DEFAULT_FRAME_CAP, DEFAULT_WARMUP_FRAMES, GraphicsSettings, PLAYER_APP_ID, PlayerConfig, Preset, UnknownPreset,
 };
-pub use player::{FrameHook, Player, PlayerApp, PlayerError};
+pub use player::{FrameHook, Player, PlayerApp, PlayerError, open_game};
 pub use scene::{STRESS_SEED, Scene, UnknownScene};
 pub use stats::Report;
 

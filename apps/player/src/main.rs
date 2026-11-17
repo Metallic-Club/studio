@@ -11,6 +11,11 @@
 //! The graphics settings are read from `graphics.toml` in the user's config folder (made with the Auto preset the
 //! first time); `--preset` overrides its preset for one run. Compiled pipelines are kept in the user's cache folder
 //! (`pipelines/`, on Vulkan) so the next start compiles less.
+//!
+//! **A standalone game** (#783): started with no arguments and a `game.pak` beside it (an offline game Studio
+//! exported, the player renamed after the game), it runs that game in a window of its name. Its settings are the
+//! game's own, in a config folder of its name; the first time, they start from the `graphics.toml` the game ships
+//! beside its executable.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -131,7 +136,20 @@ fn main() -> ExitCode {
     }
 
     let mut config = args.config();
-    load_user_graphics(&mut config);
+    // An exported game: no arguments, its build beside the executable (#783).
+    let standalone = if args == Args::default() {
+        standalone_game()
+    } else {
+        None
+    };
+    match &standalone {
+        Some(game) => {
+            config.project = Some(game.pak.clone());
+            config.window.title = game.name.clone();
+            load_user_graphics(&mut config, &game.app_id, Some(&game.shipped_graphics));
+        }
+        None => load_user_graphics(&mut config, PLAYER_APP_ID, None),
+    }
     if let Some(address) = &args.connect {
         return connect(config, address, args.name.as_deref().unwrap_or("Player"));
     }
@@ -170,22 +188,81 @@ fn main() -> ExitCode {
     }
 }
 
-/// Loads the player's graphics settings into `config` from their file in the user's config folder: the Auto preset
-/// when there is none (the file is then made, so there is one to edit) or it is damaged (with a warning; the file is
-/// left as it is until the settings are next saved). `--preset` still overrides the file's preset for this run.
-fn load_user_graphics(config: &mut PlayerConfig) {
+/// An exported game beside the executable (#783): its build, its name, the app id its settings are kept under, and
+/// the graphics settings it ships with.
+struct StandaloneGame {
+    pak: PathBuf,
+    name: String,
+    app_id: String,
+    shipped_graphics: PathBuf,
+}
+
+/// The game whose `game.pak` is beside this executable, if there is one that opens.
+fn standalone_game() -> Option<StandaloneGame> {
+    let exe = std::env::current_exe().ok()?;
+    let folder = exe.parent()?;
+    let pak = folder.join(metallic_engine::metallic_project::PAK_FILE);
+    if !pak.is_file() {
+        return None;
+    }
+    let name = match metallic_engine::metallic_project::Pak::open(&pak) {
+        Ok(opened) => {
+            use metallic_engine::metallic_project::GameFiles as _;
+            opened.manifest().name.clone()
+        }
+        Err(error) => {
+            log::warn!("{}: {error}", pak.display());
+            return None;
+        }
+    };
+    Some(StandaloneGame {
+        app_id: game_app_id(&name),
+        name,
+        shipped_graphics: folder.join(metallic_engine::metallic_project::GAME_GRAPHICS_FILE),
+        pak,
+    })
+}
+
+/// The app id a game named `name` keeps its settings under: `games.metallic.` and its name's letters and digits.
+fn game_app_id(name: &str) -> String {
+    let application: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    let application = if application.is_empty() {
+        "Game".to_owned()
+    } else {
+        application
+    };
+    format!("games.metallic.{application}")
+}
+
+/// Loads the player's graphics settings into `config` from their file in the user's config folder, for `app`: the
+/// Auto preset when there is none (the file is then made, so there is one to edit), or for a standalone game the
+/// `shipped` settings it comes with (#783); or the Auto preset when it is damaged (with a warning; the file is left as
+/// it is until the settings are next saved). `--preset` still overrides the file's preset for this run.
+fn load_user_graphics(config: &mut PlayerConfig, app: &str, shipped: Option<&std::path::Path>) {
     // Compiled pipelines are kept beside the user's other caches (Vulkan only; nothing is written elsewhere).
-    config.pipeline_cache = AppId::parse(PLAYER_APP_ID)
-        .and_then(|app| pipeline_cache_dir(&app))
-        .ok();
-    let path = match AppId::parse(PLAYER_APP_ID).and_then(|app| graphics_settings_path(&app)) {
+    config.pipeline_cache = AppId::parse(app).and_then(|app| pipeline_cache_dir(&app)).ok();
+    let path = match AppId::parse(app).and_then(|app| graphics_settings_path(&app)) {
         Ok(path) => path,
         Err(error) => {
             log::warn!("graphics: no settings file ({error}); using the Auto preset");
             return;
         }
     };
-    let loaded = load_graphics_settings(&path);
+    let mut loaded = load_graphics_settings(&path);
+    if !loaded.from_file
+        && loaded.problem.is_none()
+        && let Some(shipped) = shipped
+    {
+        let from_game = load_graphics_settings(shipped);
+        if let Some(problem) = &from_game.problem {
+            log::warn!("graphics: {problem}");
+        } else if from_game.from_file {
+            loaded.settings = from_game.settings;
+        }
+    }
     if let Some(problem) = &loaded.problem {
         log::warn!("graphics: {problem}");
     } else if !loaded.from_file
@@ -303,6 +380,14 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Args, String> {
         Args::parse(args.iter().map(|arg| (*arg).into())).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn an_exported_game_keeps_its_settings_under_its_own_name() {
+        assert_eq!(game_app_id("Rover"), "games.metallic.Rover");
+        assert_eq!(game_app_id("Moon Rover 2!"), "games.metallic.MoonRover2");
+        assert_eq!(game_app_id("???"), "games.metallic.Game");
+        assert!(AppId::parse(&game_app_id("Été")).is_ok());
     }
 
     #[test]

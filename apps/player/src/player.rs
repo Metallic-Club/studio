@@ -11,7 +11,7 @@ use metallic_engine::metallic_platform::{
     AppHandler, ButtonState, DeviceEvent, EventLoopContext, GamepadEvent, KeyCode, Platform, PlatformError,
     WindowEvent, WindowId,
 };
-use metallic_engine::metallic_project::{AssetReader, Project, ProjectError};
+use metallic_engine::metallic_project::{AssetReader, GameFiles, Pak, Project, ProjectError};
 use metallic_engine::metallic_render::{ContextOptions, RenderContext, RenderError};
 use metallic_engine::metallic_script::OutputSink;
 use metallic_engine::perf::{PerfSummary, StatsViewer, StatsViewers};
@@ -52,10 +52,22 @@ pub enum PlayerError {
 }
 
 /// Loads `project`'s start scene into `dm`, logging what its manifest and scene skipped.
-fn load_project(project: &mut Project, dm: &mut DataModel) -> Result<(), ProjectError> {
+/// Opens the game at `path` (#783): a `.mtproj` project, or a game's build, its `game.pak` (any file ending in `.pak`).
+pub fn open_game(path: &std::path::Path) -> Result<Box<dyn GameFiles>, ProjectError> {
+    let pak = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pak"));
+    if pak {
+        return Ok(Box::new(Pak::open(path)?));
+    }
+    let project = Project::open(path)?;
     for warning in project.warnings() {
         log::warn!("{}: {warning}", project.path().display());
     }
+    Ok(Box::new(project))
+}
+
+fn load_project(project: &mut dyn GameFiles, dm: &mut DataModel) -> Result<(), ProjectError> {
     let loaded = project.load_start_scene(dm)?;
     for warning in &loaded.warnings {
         log::warn!(
@@ -127,9 +139,9 @@ impl Player<StdOutput> {
 impl<O: OutputSink> Player<O> {
     /// A player for `config` whose scripts print to `output` (Studio's Output panel, a test's collector).
     pub fn with_output(config: PlayerConfig, output: O) -> Result<Self, PlayerError> {
-        let mut project = config.project.as_deref().map(Project::open).transpose()?;
+        let mut project = config.project.as_deref().map(open_game).transpose()?;
         let sources = match project.as_mut() {
-            Some(project) => project_sources(project)?,
+            Some(project) => project_sources(project.as_mut())?,
             None => config.scene.sources(),
         };
         let engine_config = EngineConfig::new(RunContext::Local)
@@ -138,7 +150,7 @@ impl<O: OutputSink> Player<O> {
         let mut engine = Engine::with_output(engine_config, output)?;
         let stress = match project.as_mut() {
             Some(project) => {
-                load_project(project, engine.data_model_mut())?;
+                load_project(project.as_mut(), engine.data_model_mut())?;
                 None
             }
             None => config.scene.install(engine.data_model_mut())?,
