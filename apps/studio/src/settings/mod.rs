@@ -5,6 +5,7 @@
 //! Reading never fails: every field has a default, a value of the wrong kind takes it, and a value out of range is
 //! clamped. Keys Studio does not know are kept in the file, so a newer Studio's settings survive a downgrade.
 
+pub mod game;
 pub mod keybinds;
 pub mod store;
 pub mod window;

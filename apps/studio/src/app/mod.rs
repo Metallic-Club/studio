@@ -135,6 +135,8 @@ pub struct Studio {
     settings: SettingsStore,
     /// The Settings window, on every screen.
     settings_window: SettingsWindow,
+    /// The Game Settings window (#782), over the editor.
+    game_settings: crate::settings::game::GameSettingsWindow,
     /// Whether the editor's About window is open (Help, About Metallic Studio).
     about_open: bool,
     /// Every shortcut's command and bindings: the settings' overrides over the defaults.
@@ -214,6 +216,7 @@ impl Studio {
             }),
             settings: SettingsStore::in_memory(),
             settings_window: SettingsWindow::default(),
+            game_settings: crate::settings::game::GameSettingsWindow::default(),
             about_open: false,
             keymap: Keymap::studio(&Overrides::new()),
             display_refresh: None,
@@ -977,6 +980,7 @@ impl Studio {
             MenuAction::Toggle(id) => self.dock.toggle(id),
             MenuAction::ResetLayout => self.reset_layout(),
             MenuAction::Settings => self.toggle_settings(),
+            MenuAction::GameSettings => self.game_settings.toggle(),
             MenuAction::KeyboardShortcuts => {
                 self.settings_window.show_category(crate::settings::Category::Keybinds);
                 self.settings_window.set_open(true);
@@ -1606,6 +1610,7 @@ impl Studio {
             }
             match activation.command {
                 ids::SETTINGS_OPEN => self.toggle_settings(),
+                ids::GAME_SETTINGS if editing => self.game_settings.toggle(),
                 ids::PROJECT_CLOSE if editing => self.show_projects(),
                 ids::FILE_SAVE if editing => self.save(),
                 ids::VIEW_RESET_LAYOUT if editing => self.reset_layout(),
@@ -1711,6 +1716,10 @@ impl Studio {
     fn settings_ui(&mut self, ctx: &egui::Context, before: &StudioSettings) {
         self.settings_window
             .show(ctx, self.settings.settings_mut(), &mut self.keymap);
+        // The Game Settings window (#782), while a project is open.
+        if let Some(EditorScreen::Open(editor)) = &mut self.editor {
+            self.game_settings.show(ctx, editor);
+        }
         // The icon folder's Browse (#508): the system's folder dialog, starting in the folder there is.
         if crate::settings::window::take_icon_folder_request(ctx) {
             let current = PathBuf::from(&self.settings.settings().appearance.icon_folder);
@@ -9878,6 +9887,7 @@ skip_sign_in = true
 
     mod assets_browser;
     mod file_pickers;
+    mod game_settings;
     mod material_editor;
     mod team_create;
     mod team_play;

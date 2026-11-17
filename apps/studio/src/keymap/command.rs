@@ -152,6 +152,8 @@ impl Command {
 pub mod ids {
     /// Opens or closes the Settings window.
     pub const SETTINGS_OPEN: &str = "settings.open";
+    /// Opens or closes the Game Settings window (#782).
+    pub const GAME_SETTINGS: &str = "game.settings";
     /// Saves the open project.
     pub const FILE_SAVE: &str = "file.save";
     /// Closes the open project.
@@ -366,6 +368,16 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         contexts: &[Context::Editor],
         defaults: &["Primary+S"],
         ..Command::new(ids::FILE_SAVE, "Save", "Project", "Saves the project to its file.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Shift+Alt+S"],
+        ..Command::new(
+            ids::GAME_SETTINGS,
+            "Game Settings",
+            "Project",
+            "Opens or closes the Game Settings window: the open game's name, icon, version and graphics.",
+        )
     },
     script(
         ids::SCRIPT_FIND,

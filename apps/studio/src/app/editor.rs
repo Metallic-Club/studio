@@ -46,6 +46,8 @@ pub(crate) enum MenuAction {
     ResetLayout,
     /// File or Window, Settings, and the gear: open or close the Settings window.
     Settings,
+    /// File, Game Settings: open or close the Game Settings window (#782).
+    GameSettings,
     /// Help, Keyboard shortcuts: the Settings window on its Keybinds page.
     KeyboardShortcuts,
     /// Help, About Metallic Studio.
@@ -185,6 +187,7 @@ pub(crate) static MENUS: &[Menu] = &[
             item("Import\u{2026}", MenuAction::Import, None),
             Entry::Separator,
             item("Settings", MenuAction::Settings, Some(ids::SETTINGS_OPEN)),
+            item("Game Settings", MenuAction::GameSettings, Some(ids::GAME_SETTINGS)),
             Entry::Separator,
             item("Close project", MenuAction::Close, Some(ids::PROJECT_CLOSE)),
         ],

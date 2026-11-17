@@ -690,11 +690,11 @@ fn floating_place(
 }
 
 /// The width of a setting's control column.
-pub(super) const CONTROL_WIDTH: f32 = 260.0;
+pub(crate) const CONTROL_WIDTH: f32 = 260.0;
 /// The width of a drop-down in it.
 const COMBO_WIDTH: f32 = 200.0;
 /// The width of the category list.
-const CATEGORY_WIDTH: f32 = 168.0;
+pub(crate) const CATEGORY_WIDTH: f32 = 168.0;
 
 /// The Settings window's own state: whether it is open, the page shown, the search, and the Keybinds page's.
 #[derive(Debug, Default)]
@@ -1118,9 +1118,15 @@ pub(crate) fn section_label(ui: &mut Ui, label: &str) {
 }
 
 /// One setting: its name and description on the left, its control on the right, a divider under it.
-fn row(ui: &mut Ui, entry: &Entry, settings: &mut StudioSettings) {
+pub(crate) fn row(ui: &mut Ui, entry: &Entry, settings: &mut StudioSettings) {
+    setting_row(ui, entry.name, entry.description, |ui| (entry.control)(ui, settings));
+}
+
+/// A setting's row in the Settings window's style (and the Game Settings window's, #782): `name` and `description`
+/// on the left, what `control` draws in a column of its own on the right, a divider under it.
+pub(crate) fn setting_row(ui: &mut Ui, name: &str, description: &str, control: impl FnOnce(&mut Ui)) {
     let p = current_colors(ui.ctx()).palette;
-    ui.push_id(entry.name, |ui| {
+    ui.push_id(name, |ui| {
         ui.horizontal(|ui| {
             let words = (ui.available_width() - CONTROL_WIDTH - space::S6).max(160.0);
             // The name, and its description under it (#521, which undid #501's tooltips).
@@ -1128,11 +1134,11 @@ fn row(ui: &mut Ui, entry: &Entry, settings: &mut StudioSettings) {
                 ui.set_width(words);
                 ui.add_space(space::S3);
                 ui.label(
-                    RichText::new(entry.name)
+                    RichText::new(name)
                         .font(fonts::named(fonts::STRONG, text::BODY))
                         .color(p.text),
                 );
-                ui.add(Label::new(RichText::new(entry.description).size(text::SMALL).color(p.muted)).wrap());
+                ui.add(Label::new(RichText::new(description).size(text::SMALL).color(p.muted)).wrap());
                 ui.add_space(space::S3);
             });
             // A column of fixed width, so a row never asks for more than the window has: a resizable window grows
@@ -1142,7 +1148,7 @@ fn row(ui: &mut Ui, entry: &Entry, settings: &mut StudioSettings) {
                 Layout::right_to_left(Align::Center),
                 |ui| {
                     ui.set_width(CONTROL_WIDTH);
-                    (entry.control)(ui, settings);
+                    control(ui);
                 },
             );
         });
@@ -1228,7 +1234,7 @@ fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
 }
 
 /// One of a few choices side by side, as one control: the chosen one raised on a surface.
-fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, choices: &[(T, &str)]) {
+pub(crate) fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, choices: &[(T, &str)]) {
     let p = current_colors(ui.ctx()).palette;
     Frame::new()
         .fill(p.input)

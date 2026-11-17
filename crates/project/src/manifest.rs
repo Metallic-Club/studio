@@ -92,6 +92,12 @@ pub struct Manifest {
     pub start_scene: String,
     /// The engine version the project was last saved with (`major.minor`).
     pub engine: String,
+    /// Who made the game (#782); empty when nobody is named. An offline game's executable carries it.
+    pub author: String,
+    /// The game's own version (#782), such as `1.0.2`; empty when it has none. Its executable carries it.
+    pub version: String,
+    /// The asset id of the picture its executable's icon is made from (#782); empty for Metallic's own.
+    pub icon: String,
 }
 
 impl Manifest {
@@ -105,6 +111,9 @@ impl Manifest {
             mode: ProjectMode::Standalone,
             start_scene: DEFAULT_START_SCENE.to_owned(),
             engine: ENGINE_VERSION.to_owned(),
+            author: String::new(),
+            version: String::new(),
+            icon: String::new(),
         }
     }
 
@@ -147,6 +156,9 @@ impl Manifest {
             mode: mode(required_string(project, Field::Mode)?)?,
             start_scene: required_string(project, Field::StartScene)?.to_owned(),
             engine: required_string(project, Field::Engine)?.to_owned(),
+            author: optional_string(project, Field::Author)?.to_owned(),
+            version: optional_string(project, Field::Version)?.to_owned(),
+            icon: optional_string(project, Field::Icon)?.to_owned(),
         };
         Ok(LoadedManifest { manifest, warnings })
     }
@@ -176,6 +188,19 @@ impl Manifest {
             text.push_str(" = ");
             text.push_str(&value);
             text.push('\n');
+        }
+        // The game's own (#782), only when set, so a project without them reads and writes as before.
+        for (field, value) in [
+            (Field::Author, &self.author),
+            (Field::Version, &self.version),
+            (Field::Icon, &self.icon),
+        ] {
+            if !value.is_empty() {
+                text.push_str(field.key());
+                text.push_str(" = ");
+                text.push_str(&string(value));
+                text.push('\n');
+            }
         }
         text
     }
@@ -268,10 +293,13 @@ enum Field {
     Mode,
     StartScene,
     Engine,
+    Author,
+    Version,
+    Icon,
 }
 
 impl Field {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 10] = [
         Self::Name,
         Self::Description,
         Self::Tags,
@@ -279,6 +307,9 @@ impl Field {
         Self::Mode,
         Self::StartScene,
         Self::Engine,
+        Self::Author,
+        Self::Version,
+        Self::Icon,
     ];
 
     fn key(self) -> &'static str {
@@ -290,6 +321,9 @@ impl Field {
             Self::Mode => "mode",
             Self::StartScene => "start_scene",
             Self::Engine => "engine",
+            Self::Author => "author",
+            Self::Version => "version",
+            Self::Icon => "icon",
         }
     }
 }
@@ -427,6 +461,9 @@ engine = \"0.1\"
                 mode: ProjectMode::Platform,
                 start_scene: "Scenes/Track.scene".to_owned(),
                 engine: "0.1".to_owned(),
+                author: String::new(),
+                version: String::new(),
+                icon: String::new(),
             }
         );
     }
@@ -485,6 +522,20 @@ name = 'My Game'
     }
 
     #[test]
+    fn a_game_s_author_version_and_icon_are_kept_when_set() {
+        let mut manifest = Manifest::new("Rover");
+        assert!(!manifest.to_toml().contains("author"), "not written when unset");
+        manifest.author = "Ada".into();
+        manifest.version = "1.2.0".into();
+        manifest.icon = "00000000000000000000000000000001".into();
+        let text = manifest.to_toml();
+        assert!(text.ends_with("author = \"Ada\"\nversion = \"1.2.0\"\nicon = \"00000000000000000000000000000001\"\n"));
+        let read = Manifest::from_toml(&text).unwrap();
+        assert_eq!(read.manifest, manifest);
+        assert!(read.warnings.is_empty());
+    }
+
+    #[test]
     fn description_and_tags_are_optional() {
         let text = with("description", "");
         let text = text.replace("tags = []\n", "");
@@ -493,7 +544,7 @@ name = 'My Game'
 
     #[test]
     fn unknown_keys_warn_and_are_dropped() {
-        let text = format!("{NEW}icon = \"icon.png\"\n\n[future]\nanswer = 42\n");
+        let text = format!("{NEW}banner = \"banner.png\"\n\n[future]\nanswer = 42\n");
         let loaded = Manifest::from_toml(&text).unwrap();
         assert_eq!(loaded.manifest, Manifest::new("My Game"));
         let warnings: Vec<_> = loaded.warnings.iter().map(ToString::to_string).collect();
@@ -501,7 +552,7 @@ name = 'My Game'
             warnings,
             [
                 "metallic.toml: unknown key `future` ignored",
-                "metallic.toml: unknown key `project.icon` ignored",
+                "metallic.toml: unknown key `project.banner` ignored",
             ]
         );
         assert_eq!(loaded.manifest.to_toml(), NEW);
