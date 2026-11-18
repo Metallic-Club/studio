@@ -316,6 +316,27 @@ fn built_in_folders_keep_their_contents() {
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 }
 
+/// #809: tags are saved with their instance, in order, and loaded back; a service's too.
+#[test]
+fn tags_survive_save_and_load() {
+    let mut dm = game();
+    let workspace = service(&dm, "Workspace");
+    let part = new_in(&mut dm, "Part", workspace, "Lava");
+    dm.set_tag(part, "Hot", true).unwrap();
+    dm.set_tag(part, "Danger", true).unwrap();
+    dm.set_tag(workspace, "World", true).unwrap();
+    let text = save(&dm);
+    assert_eq!(named(&doc(&text), "Lava")["tags"], json!(["Hot", "Danger"]));
+
+    let (loaded, _) = load(&text);
+    let workspace = service(&loaded, "Workspace");
+    let part = loaded.find_first_child(workspace, "Lava", false).unwrap().unwrap();
+    let tags: Vec<&str> = loaded.tags(part).unwrap().iter().map(|t| &**t).collect();
+    assert_eq!(tags, ["Hot", "Danger"]);
+    assert!(loaded.has_tag(workspace, "World").unwrap());
+    assert_eq!(save(&loaded), text);
+}
+
 #[test]
 fn loading_replaces_the_saved_services() {
     let (dm, ..) = rich_game();

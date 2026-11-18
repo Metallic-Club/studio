@@ -33,16 +33,19 @@ impl DirtyBits {
     /// Any property, the name or an attribute changed. Every write sets it, on top of the kind bits above, so
     /// replication and Studio see changes that neither rendering nor physics care about.
     pub const PROPERTY: Self = Self(1 << 5);
+    /// A tag was added or removed (`CollectionService`, #809). [`DirtyBits::PROPERTY`] is set with it.
+    pub const TAGS: Self = Self(1 << 6);
     /// Every bit.
-    pub const ALL: Self = Self(0b11_1111);
+    pub const ALL: Self = Self(0b111_1111);
 
-    const NAMES: [(Self, &'static str); 6] = [
+    const NAMES: [(Self, &'static str); 7] = [
         (Self::TRANSFORM, "TRANSFORM"),
         (Self::VISUAL, "VISUAL"),
         (Self::PHYSICS, "PHYSICS"),
         (Self::STRUCTURE, "STRUCTURE"),
         (Self::CREATED, "CREATED"),
         (Self::PROPERTY, "PROPERTY"),
+        (Self::TAGS, "TAGS"),
     ];
 
     /// The bits a write to a property with `flags` sets.

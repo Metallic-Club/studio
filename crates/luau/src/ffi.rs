@@ -1161,6 +1161,13 @@ unsafe fn push_script(state: *mut lua_State, shared: Option<&Shared>, value: Scr
             ScriptValue::CFrame(cf) => push_payload(state, cf),
             ScriptValue::Color3(c) => push_payload(state, c),
             ScriptValue::Instance(id) => push_instance(state, shared, id),
+            ScriptValue::Signal(target, signal) => push_payload(
+                state,
+                SignalHandle {
+                    target,
+                    signal: SignalRef::Signal(signal),
+                },
+            ),
             ScriptValue::Enum(item) => match shared.and_then(|s| s.enums.find(&item)) {
                 Some(item) => push_enum(state, shared, item),
                 None => push_str(state, &item.to_string()),

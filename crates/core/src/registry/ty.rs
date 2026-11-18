@@ -58,6 +58,9 @@ pub enum Ty {
     Tuple(&'static [Ty]),
     /// A function, such as a callback (`(...any) -> ...any`).
     Function,
+    /// A signal whose listeners receive a value of the type (`ScriptSignal<T>`, an `RBXScriptSignal`), returned by
+    /// methods such as `CollectionService:GetInstanceAddedSignal` (#809).
+    Signal(&'static Ty),
 }
 
 impl Ty {
@@ -104,6 +107,7 @@ impl fmt::Display for Ty {
                 f.write_str(")")
             }
             Self::Function => f.write_str("(...any) -> ...any"),
+            Self::Signal(item) => write!(f, "ScriptSignal<{item}>"),
         }
     }
 }

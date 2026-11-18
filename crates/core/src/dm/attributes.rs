@@ -66,4 +66,36 @@ impl DataModel {
         self.notify(Notice::AttributeChanged { id, name: key });
         Ok(())
     }
+
+    /// The instance's tags (`GetTags`, #809), in the order they were added.
+    pub fn tags(&self, id: Id) -> Result<&[Arc<str>], DmError> {
+        Ok(self.view(id)?.body.tags())
+    }
+
+    /// Whether the instance has the tag `tag` (`HasTag`).
+    pub fn has_tag(&self, id: Id, tag: &str) -> Result<bool, DmError> {
+        Ok(self.tags(id)?.iter().any(|t| &**t == tag))
+    }
+
+    /// Gives the instance the tag `tag` (`AddTag`), or takes it away. Returns whether that changed anything: adding
+    /// a tag it has, or removing one it lacks, does nothing. A change marks [`DirtyBits::TAGS`].
+    pub fn set_tag(&mut self, id: Id, tag: &str, on: bool) -> Result<bool, DmError> {
+        let Some(slot) = self.slots.get_mut(id) else {
+            return Err(self.not_live(id));
+        };
+        let Some(body) = slot.body.as_mut() else {
+            return Err(self.not_live(id));
+        };
+        let at = body.tags().iter().position(|t| &**t == tag);
+        match (at, on) {
+            (Some(_), true) | (None, false) => return Ok(false),
+            (None, true) => body.tags_mut().push(Arc::from(tag)),
+            (Some(i), false) => {
+                body.tags_mut().remove(i);
+                body.drop_empty_extras();
+            }
+        }
+        self.changes.mark(slot, id, DirtyBits::TAGS | DirtyBits::PROPERTY);
+        Ok(true)
+    }
 }

@@ -82,6 +82,8 @@ pub struct Engine<O: OutputSink = StdOutput> {
     last: FrameStats,
     run_service: RunService,
     user_input_service: Id,
+    /// CollectionService's added and removed signals (#809), fired at the start of each frame.
+    tags: metallic_classes::services::collection_service::TagEvents,
     simulation: Box<dyn Simulation>,
     /// Whether frames measure their script and simulation wall time ([`FrameStats::script_cpu`]).
     cpu_timing: bool,
@@ -148,6 +150,7 @@ impl<O: OutputSink> Engine<O> {
             frames: 0,
             last: FrameStats::default(),
             run_service,
+            tags: metallic_classes::services::collection_service::TagEvents::new(),
             user_input_service,
             simulation: Box::new(NoSimulation),
             cpu_timing: config.mode == EngineMode::Windowed,
@@ -170,8 +173,13 @@ impl<O: OutputSink> Engine<O> {
             return Err(EngineError::AlreadyRunning);
         }
         self.write_flags(true)?;
+        // Before the scripts, so the tags their first lines add fire.
+        if let Err(error) = self.tags.start(&mut self.dm) {
+            log::warn!("CollectionService cannot watch the game: {error}");
+        }
         let sources = SharedSources(Rc::clone(&self.sources));
         if let Err(error) = self.host.start_game(&mut self.dm, self.context, sources) {
+            self.tags.stop(&mut self.dm);
             self.write_flags(false)?;
             return Err(error.into());
         }
@@ -186,6 +194,7 @@ impl<O: OutputSink> Engine<O> {
             return false;
         }
         self.host.stop_game(&mut self.dm);
+        self.tags.stop(&mut self.dm);
         self.state = RunState::Stopped;
         if let Err(error) = self.write_flags(false) {
             log::warn!("could not clear RunService's running flag: {error}");
@@ -266,6 +275,10 @@ impl<O: OutputSink> Engine<O> {
             // Off for headless engines unless asked for: reading the clock would be most of an empty frame's cost.
             let timing = self.cpu_timing;
             let scripts_start = timing.then(Instant::now);
+            {
+                profiling::scope!("CollectionService");
+                self.tags.step(&mut self.dm);
+            }
             if self.context != RunContext::Server {
                 profiling::scope!("RenderStepped");
                 resumed += self.phase(Phase::RenderStepped, rs.render_stepped, dt, now);
