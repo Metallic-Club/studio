@@ -78,7 +78,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `panel.game` | The Game tab. | Running the game | [`panels/gamepad-2.svg`](https://lucide.dev/icons/gamepad-2) | `panel.game.svg`, `panel.game.png` |
 | `asset.mesh` | A mesh in the Assets panel. | Explorer and Assets: parts, models, folders, cameras | [`assets/cuboid.svg`](https://lucide.dev/icons/cuboid) | `asset.mesh.svg`, `asset.mesh.png` |
 | `asset.image` | An image in the Assets panel. | Panels and Assets: content | [`assets/image.svg`](https://lucide.dev/icons/image) | `asset.image.svg`, `asset.image.png` |
-| `asset.audio` | A sound in the Assets panel. | Panels and Assets: content | [`assets/music.svg`](https://lucide.dev/icons/music) | `asset.audio.svg`, `asset.audio.png` |
+| `asset.audio` | A sound in the Assets panel. | Explorer and Assets: sounds | [`assets/volume-2.svg`](https://lucide.dev/icons/volume-2) | `asset.audio.svg`, `asset.audio.png` |
 | `asset.scene` | A scene in the Assets panel. | Explorer and Assets: parts, models, folders, cameras | [`assets/list-tree.svg`](https://lucide.dev/icons/list-tree) | `asset.scene.svg`, `asset.scene.png` |
 | `asset.script` | A Script file in the Assets panel (`.server.luau`, #677). | Explorer and Assets: server scripts and server storage | [`assets/scroll.svg`](https://lucide.dev/icons/scroll) | `asset.script.svg`, `asset.script.png` |
 | `asset.local_script` | A LocalScript file in the Assets panel (`.client.luau`, #677). | Explorer: local scripts | [`assets/scroll.svg`](https://lucide.dev/icons/scroll) | `asset.local_script.svg`, `asset.local_script.png` |

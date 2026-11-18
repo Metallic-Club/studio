@@ -313,7 +313,7 @@ icons! {
     /// An image in the Assets panel.
     AssetImage = "asset.image", Content, "image";
     /// A sound in the Assets panel.
-    AssetAudio = "asset.audio", Content, "music";
+    AssetAudio = "asset.audio", Sound, "volume-2";
     /// A scene in the Assets panel.
     AssetScene = "asset.scene", Object, "list-tree";
     /// A Script file in the Assets panel (`.server.luau`, #677).
