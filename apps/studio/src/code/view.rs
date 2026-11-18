@@ -785,7 +785,8 @@ fn whitespace(painter: &Painter, galley: &Galley, galley_pos: Pos2, ink: Color32
 }
 
 /// The keys the field takes as a code editor, before it sees them: Tab puts in the indent of `settings` (when that
-/// is spaces; a tab the field puts in itself), and Enter keeps the line's indentation. Returns whether `text` changed.
+/// is spaces; a tab the field puts in itself), or over a selection indents its lines, and Shift+Tab takes a step of
+/// indentation off them (#853); Enter keeps the line's indentation. Returns whether `text` changed.
 fn keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
     if !ui.memory(|memory| memory.has_focus(id)) {
         return false;
@@ -795,8 +796,19 @@ fn keys(ui: &Ui, id: Id, text: &mut String, settings: &CodeEditor) -> bool {
         return several_keys(ui, id, text, settings);
     }
     let mut changed = false;
-    if settings.insert_spaces && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Tab)) {
-        changed |= replace_selection(ui.ctx(), id, text, &settings.indent());
+    // Shift+Tab first: Tab's shortcut would take it too.
+    if ui.input_mut(|input| input.consume_key(Modifiers::SHIFT, Key::Tab)) {
+        changed |= indent_selection(ui.ctx(), id, text, settings, true);
+    }
+    let selected = TextEditState::load(ui.ctx(), id)
+        .and_then(|state| state.cursor.char_range())
+        .is_some_and(|range| range.primary != range.secondary);
+    if (selected || settings.insert_spaces) && ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Tab)) {
+        changed |= if selected {
+            indent_selection(ui.ctx(), id, text, settings, false)
+        } else {
+            replace_selection(ui.ctx(), id, text, &settings.indent())
+        };
     }
     if ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter)) {
         changed |= enter(ui.ctx(), id, text, settings);
@@ -1316,6 +1328,95 @@ fn enter(ctx: &egui::Context, id: Id, text: &mut String, settings: &CodeEditor) 
     replace_selection(ctx, id, text, &format!("\n{indent}"))
 }
 
+/// Tab over the selection of the field `id`, or Shift+Tab (`out`) (#853): the lines it covers get one step of
+/// indentation more, or one less, as one undo step, and stay selected. Returns whether `text` changed.
+fn indent_selection(ctx: &egui::Context, id: Id, text: &mut String, settings: &CodeEditor, out: bool) -> bool {
+    let Some(mut state) = TextEditState::load(ctx, id) else {
+        return false;
+    };
+    let Some(range) = state.cursor.char_range() else {
+        return false;
+    };
+    let (anchor, caret) = (range.secondary.index.0, range.primary.index.0);
+    let (indented, from, to) = indent_lines(text, anchor.min(caret), anchor.max(caret), &settings.indent(), out);
+    if indented == *text {
+        return false;
+    }
+    undo_point(&mut state, text);
+    *text = indented;
+    let (anchor, caret) = if anchor <= caret { (from, to) } else { (to, from) };
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::two(CCursor::new(anchor), CCursor::new(caret))));
+    undo_point(&mut state, text);
+    state.store(ctx, id);
+    ctx.data_mut(|data| {
+        data.insert_temp(id.with("follow"), true);
+        data.insert_temp(id.with("undo-step"), true);
+        data.remove::<EditKind>(id.with("undo-kind"));
+    });
+    true
+}
+
+/// `text` with the lines the selection `from..to` (characters) covers indented by `indent` more, or with `out` one
+/// step less (a tab, or up to `indent`'s width of spaces), and where the selection's ends are then (#853). A line the
+/// selection only reaches the start of is not its; nor, when indenting several, is an empty one. Where an end was at
+/// a line's start it stays there, so whole lines stay whole.
+pub fn indent_lines(text: &str, from: usize, to: usize, indent: &str, out: bool) -> (String, usize, usize) {
+    let line_of = |at: usize| text.chars().take(at).filter(|c| *c == '\n').count();
+    let (first, mut last) = (line_of(from), line_of(to));
+    if to > from && last > first && text.chars().nth(to - 1) == Some('\n') {
+        last -= 1;
+    }
+    let width = indent.chars().count();
+    let (from_line, to_line) = (line_of(from), line_of(to));
+    let mut result = String::with_capacity(text.len() + indent.len() * (last - first + 1));
+    let (mut new_from, mut new_to) = (from, to);
+    // Characters put in (or taken off, below zero) on the lines before the one at hand.
+    let mut moved: isize = 0;
+    let mut start = 0;
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            result.push('\n');
+        }
+        let covered = (first..=last).contains(&index);
+        let (added, removed) = if covered && !out && (!line.is_empty() || first == last) {
+            result.push_str(indent);
+            result.push_str(line);
+            (width, 0)
+        } else if covered && out {
+            let removed = if line.starts_with('\t') {
+                1
+            } else {
+                line.chars().take(width.max(1)).take_while(|c| *c == ' ').count()
+            };
+            result.push_str(&line[removed..]);
+            (0, removed)
+        } else {
+            result.push_str(line);
+            (0, 0)
+        };
+        let place = |at: usize| -> usize {
+            let column = at - start;
+            let here = if added > 0 && (column != 0 || from == to) {
+                added as isize
+            } else {
+                -(removed.min(column) as isize)
+            };
+            at.saturating_add_signed(moved + here)
+        };
+        if index == from_line {
+            new_from = place(from);
+        }
+        if index == to_line {
+            new_to = place(to);
+        }
+        moved += added as isize - removed as isize;
+        start += line.chars().count() + 1;
+    }
+    (result, new_from, new_to)
+}
+
 /// The cursor of the field `id`, as a character index.
 pub fn cursor(ctx: &egui::Context, id: Id) -> Option<usize> {
     TextEditState::load(ctx, id)?
@@ -1574,6 +1675,43 @@ mod tests {
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 1), ["one"]);
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 2), ["two"]);
         assert!(messages_on_line(text, &Lines::new(text), &diagnostics, 0).is_empty());
+    }
+
+    /// Tab (or Shift+Tab, `out`) in `code`, where `[` and `]` mark the selection (or `|` the cursor); the code after,
+    /// marked the same way.
+    fn tab(code: &str, out: bool) -> String {
+        let (from, to, text) = match code.find('|') {
+            Some(at) => (at, at, code.replacen('|', "", 1)),
+            None => {
+                let (open, close) = (code.find('[').unwrap(), code.rfind(']').unwrap());
+                let text = format!("{}{}{}", &code[..open], &code[open + 1..close], &code[close + 1..]);
+                (open, close - 1, text)
+            }
+        };
+        let (indented, from, to) = indent_lines(&text, from, to, "  ", out);
+        let mut shown = indented;
+        if from == to {
+            shown.insert(from, '|');
+        } else {
+            shown.insert(to, ']');
+            shown.insert(from, '[');
+        }
+        shown
+    }
+
+    /// #853: Tab over a selection indents the lines it covers, which stay selected, in place of typing over it;
+    /// Shift+Tab takes a step off them, or off the cursor's line.
+    #[test]
+    fn tab_indents_the_selected_lines() {
+        assert_eq!(tab("[a\nb]\nc", false), "[  a\n  b]\nc");
+        assert_eq!(tab("x = [1]", false), "  x = [1]", "a selection on one line too");
+        assert_eq!(tab("[a\nb\n]c", false), "[  a\n  b\n]c", "not the line it only reaches");
+        assert_eq!(tab("[a\n\nb]", false), "[  a\n\n  b]", "not an empty line");
+        assert_eq!(tab("  [a\n    b]", true), "[a\n  b]");
+        assert_eq!(tab("\t[a]", true), "[a]");
+        assert_eq!(tab(" [a\nb]", true), "[a\nb]", "what indentation there is");
+        assert_eq!(tab("  a|b", true), "a|b", "the cursor's line");
+        assert_eq!(tab("|    a", true), "|  a", "one step");
     }
 
     /// Typing `typed` in `code`, where `|` is the cursor or `[` and `]` mark the selection; the code after, with `|`
