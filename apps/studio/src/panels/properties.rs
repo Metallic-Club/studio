@@ -475,6 +475,110 @@ fn attribute_menu(response: &egui::Response, name: &str, taken: &[String]) -> Op
     action
 }
 
+/// What the Tags section asks for (#833).
+#[derive(Clone, Debug, PartialEq)]
+enum TagAction {
+    /// Give the instance this tag.
+    Add(String),
+    /// Take this tag away.
+    Remove(String),
+}
+
+/// A small icon button at the end of a row or a header, labelled `label` for screen readers (and tests).
+fn icon_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> egui::Response {
+    let p = current_colors(ui.ctx()).palette;
+    let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+    let label = label.to_owned();
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(radius::ITEM), p.surface_hover);
+    }
+    icons::paint_at(
+        ui.painter(),
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        text::BODY,
+        if response.hovered() { p.text } else { p.subtle },
+    );
+    response.tip(tip)
+}
+
+/// The Tags section (#833), after Attributes: its header, as every group's, with a + that opens a field to type a
+/// tag into (Enter or Add gives it), and each of the instance's `tags` on a row with a cross that takes it away.
+/// `CollectionService` finds instances by them.
+fn tags_section(ui: &mut Ui, tags: &[std::sync::Arc<str>]) -> Option<TagAction> {
+    let id = egui::Id::unique("metallic.properties.add_tag");
+    let p = current_colors(ui.ctx()).palette;
+    let mut action = None;
+    let mut expanded = true;
+    let plus = ui
+        .horizontal(|ui| {
+            expanded = category_heading(ui, "Tags", 22.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                icon_button(ui, Icon::UiAdd, "Add tag", "Add a tag")
+            })
+            .inner
+        })
+        .inner;
+    ui.add_space(space::S2);
+    let menu = id.with("menu");
+    let mut open = ui.data(|data| data.get_temp::<bool>(menu)).unwrap_or(false);
+    if plus.clicked() {
+        open = !open;
+    }
+    Popup::menu(&plus)
+        .id(menu)
+        .open_bool(&mut open)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            let mut name = ui.data(|data| data.get_temp::<String>(id)).unwrap_or_default();
+            ui.set_width(MENU_FIELD);
+            let field = ui.add(
+                TextEdit::singleline(&mut name)
+                    .id(id.with("name"))
+                    .hint_text("Tag")
+                    .desired_width(MENU_FIELD),
+            );
+            field.widget_info(|| WidgetInfo::labeled(Role::TextInput, true, "New tag"));
+            let tag = name.trim();
+            let taken = tags.iter().any(|t| &**t == tag);
+            if taken {
+                field_note(ui, "The instance has this tag already.");
+            }
+            let fine = !tag.is_empty() && !taken;
+            let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+            let add = ui.add_enabled(fine, Button::new("Add"));
+            add.widget_info(|| WidgetInfo::labeled(Role::Button, fine, "Add the tag"));
+            if fine && (add.clicked() || entered) {
+                action = Some(TagAction::Add(tag.to_owned()));
+                name.clear();
+                ui.close();
+            }
+            ui.data_mut(|data| data.insert_temp(id, name));
+        });
+    ui.data_mut(|data| data.insert_temp(menu, open));
+    if expanded {
+        if tags.is_empty() {
+            ui.label(RichText::new("No tags").size(text::SMALL).color(p.subtle));
+        }
+        for tag in tags {
+            ui.horizontal(|ui| {
+                ui.add_space(space::S4);
+                ui.label(RichText::new(&**tag).color(p.text));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let label = format!("Remove tag {tag}");
+                    if icon_button(ui, Icon::UiClose, &label, "Remove the tag").clicked() {
+                        action = Some(TagAction::Remove(tag.to_string()));
+                    }
+                });
+            });
+        }
+    }
+    action
+}
+
 /// The Attributes section's header (#617): its label, as every group's, and a + at the right that opens the form to
 /// add one: a name, a type from a drop-down, and Add. Returns the attribute to add when one is asked for.
 fn attributes_header(ui: &mut Ui, taken: &[String]) -> (bool, Option<AttributeAction>) {
@@ -745,6 +849,7 @@ impl Panel for Properties {
         ui.add_space(space::S4);
         let mut edits: Vec<RowEdit> = Vec::new();
         let mut attribute_action = None;
+        let mut tag_action = None;
         // The Parent row picks a new parent from the Explorer or the viewport (#599).
         let picking = scene.explorer.parent_pick.clone();
         let mut pick = false;
@@ -796,6 +901,12 @@ impl Panel for Properties {
                         attribute_action = drawn.action.or(attribute_action.take());
                     }
                     bottom = ui.cursor().top();
+                    ui.add_space(space::S5);
+                }
+                // Tags last (#833), when one instance is selected, as attributes are.
+                if ids.len() == 1 {
+                    let tags = dm.tags(id).map(<[_]>::to_vec).unwrap_or_default();
+                    tag_action = tags_section(ui, &tags);
                     ui.add_space(space::S5);
                 }
                 ui.data_mut(|data| data.insert_temp(open_id(), open));
@@ -856,6 +967,14 @@ impl Panel for Properties {
         }
         if let Some(action) = attribute_action {
             apply_attribute_action(&mut scene, id, action);
+        }
+        let tagged = match tag_action {
+            Some(TagAction::Add(tag)) => scene.set_tag(id, &tag, true),
+            Some(TagAction::Remove(tag)) => scene.set_tag(id, &tag, false),
+            None => Ok(()),
+        };
+        if let Err(error) = tagged {
+            log::warn!("properties: {error}");
         }
     }
 }

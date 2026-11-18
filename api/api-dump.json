@@ -3660,6 +3660,41 @@
       "defaults": [],
       "properties": [
         {
+          "name": "PivotOffset",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "HIDDEN",
+            "OVERRIDE"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Transform",
+          "description": "Where the light's pivot sits, relative to the light.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Locked",
+          "type": "Bool",
+          "default": false,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "General",
+          "description": "Whether clicking the light's icon in the viewport leaves it alone. It can still be selected in the Explorer.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
           "name": "Enabled",
           "type": "Bool",
           "default": true,
@@ -3670,8 +3705,72 @@
           "computed": false,
           "range": null,
           "wraps": false,
-          "group": "Light",
+          "group": "General",
           "description": "Whether the light shines. Turning it off keeps every other setting.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "CFrame",
+          "type": "CFrame",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "HIDDEN"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Transform",
+          "description": "Where the light is and which way it points (forward is -Z). Inside a part it is relative to the part, so the light moves with it; anywhere else it is in world space.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Position",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "wraps": false,
+          "group": "Transform",
+          "description": "Where the light is, in metres: inside a part, from the part's centre; anywhere else, in the world.",
+          "aliases": [],
+          "derived_from": [
+            "CFrame"
+          ]
+        },
+        {
+          "name": "Color",
+          "type": "Color3",
+          "default": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Lighting",
+          "description": "The colour of the light.",
           "aliases": [],
           "derived_from": []
         },
@@ -3689,28 +3788,8 @@
             null
           ],
           "wraps": false,
-          "group": "Light",
+          "group": "Lighting",
           "description": "How strong the light is. 1 is an ordinary lamp; 0 gives no light; there is no upper limit.",
-          "aliases": [],
-          "derived_from": []
-        },
-        {
-          "name": "Color",
-          "type": "Color3",
-          "default": [
-            1.0,
-            1.0,
-            1.0
-          ],
-          "flags": [
-            "VISUAL"
-          ],
-          "read_only": false,
-          "computed": false,
-          "range": null,
-          "wraps": false,
-          "group": "Light",
-          "description": "The colour of the light.",
           "aliases": [],
           "derived_from": []
         },
@@ -3728,7 +3807,7 @@
             1000.0
           ],
           "wraps": false,
-          "group": "Light",
+          "group": "Lighting",
           "description": "How far the light reaches, in metres. Past this distance it lights nothing.",
           "aliases": [],
           "derived_from": []
@@ -3744,28 +3823,8 @@
           "computed": false,
           "range": null,
           "wraps": false,
-          "group": "Shadows",
+          "group": "Lighting",
           "description": "Whether objects block this light and cast shadows. Shadows cost performance, so use them sparingly.",
-          "aliases": [],
-          "derived_from": []
-        },
-        {
-          "name": "CFrame",
-          "type": "CFrame",
-          "default": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "flags": [
-            "TRANSFORM"
-          ],
-          "read_only": false,
-          "computed": false,
-          "range": null,
-          "wraps": false,
-          "group": "Transform",
-          "description": "Where the light is and which way it points (forward is -Z). Inside a part it is relative to the part, so the light moves with it; anywhere else it is in world space.",
           "aliases": [],
           "derived_from": []
         }
@@ -4258,6 +4317,29 @@
       "defaults": [],
       "properties": [
         {
+          "name": "Orientation",
+          "type": "Vector3",
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "flags": [
+            "TRANSFORM",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": true,
+          "range": null,
+          "wraps": false,
+          "group": "Transform",
+          "description": "Which way the light points, as angles in degrees about X, Y and Z (applied Z, then X, then Y). Inside a part it is relative to the part.",
+          "aliases": [],
+          "derived_from": [
+            "CFrame"
+          ]
+        },
+        {
           "name": "Angle",
           "type": "Number",
           "default": 90.0,
@@ -4271,7 +4353,7 @@
             180.0
           ],
           "wraps": false,
-          "group": "Spotlight",
+          "group": "Lighting",
           "description": "How wide the cone is: the full angle from one edge to the other, in degrees, up to 180 (a half sphere).",
           "aliases": [],
           "derived_from": []
