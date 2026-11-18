@@ -8,6 +8,7 @@
 
 pub mod asset_index;
 pub mod assets;
+pub mod fbx;
 mod game_files;
 pub mod manifest;
 pub mod material;

@@ -62,7 +62,7 @@ impl Kind {
                 extensions: &["png", "jpg", "jpeg"],
             },
             Kind::Mesh => Widget::AssetId {
-                extensions: &["glb", "gltf"],
+                extensions: &["glb", "gltf", "fbx"],
             },
         }
     }

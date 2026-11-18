@@ -141,7 +141,7 @@ impl AssetKind {
         }
         let extension = path.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
         match extension.as_deref() {
-            Some("glb" | "gltf") => AssetKind::Mesh,
+            Some("glb" | "gltf" | "fbx") => AssetKind::Mesh,
             Some("png" | "jpg" | "jpeg" | "webp" | "ktx2") => AssetKind::Image,
             Some("ogg" | "mp3" | "wav" | "opus" | "flac" | "m4a") => AssetKind::Audio,
             Some("scene") => AssetKind::Scene,
@@ -961,6 +961,7 @@ mod tests {
     #[test]
     fn kinds_come_from_the_extension() {
         assert_eq!(AssetKind::of("Meshes/Rock.GLB"), AssetKind::Mesh);
+        assert_eq!(AssetKind::of("Meshes/Tree.fbx"), AssetKind::Mesh, "#832");
         assert_eq!(AssetKind::of("Textures/a.b/rock.jpeg"), AssetKind::Image);
         assert_eq!(AssetKind::of("Sounds/hit.ogg"), AssetKind::Audio);
         assert_eq!(AssetKind::of("Scenes/Main.scene"), AssetKind::Scene);

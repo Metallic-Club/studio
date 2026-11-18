@@ -147,18 +147,25 @@ fn linear_to_srgb(value: f32) -> u8 {
 pub struct DecodeError(String);
 
 impl DecodeError {
-    fn new(reason: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: impl Into<String>) -> Self {
         Self(reason.into())
     }
 }
 
-/// Decodes a glTF (`.gltf`, JSON) or GLB model into one mesh fitted to the unit cube (see the
+/// Decodes a glTF (`.gltf`, JSON), GLB or binary FBX (#832, [`crate::fbx`]) model into one mesh fitted to the unit cube (see the
 /// [module documentation](self)). `buffer` returns the bytes of a buffer the model names by a relative URI (a
 /// `.gltf` file's `.bin`), or why it cannot.
 pub fn decode_mesh(
     bytes: &[u8],
     mut buffer: impl FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<MeshAsset, DecodeError> {
+    // An FBX model (#832), told apart by its first bytes: its size is in its own units, made metres.
+    if bytes.starts_with(crate::fbx::FBX_MAGIC) || bytes.starts_with(b"; FBX") {
+        let (mut mesh, metres) = crate::fbx::decode(bytes)?;
+        fit_to_unit_cube(&mut mesh);
+        mesh.size = (Vec3::from(mesh.size) * metres).to_array();
+        return Ok(mesh);
+    }
     let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| DecodeError::new(format!("not a glTF model: {error}")))?;
     let mut buffers: Vec<Cow<'_, [u8]>> = Vec::new();
     for item in gltf.buffers() {

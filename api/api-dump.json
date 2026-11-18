@@ -4193,7 +4193,7 @@
           "range": null,
           "wraps": false,
           "group": "MeshPart",
-          "description": "The id of the project's mesh asset (a glTF or GLB model) the part is drawn as. Its bounds are stretched to the part's Size. Empty draws nothing.",
+          "description": "The id of the project's mesh asset (a glTF, GLB or binary FBX model) the part is drawn as. Its bounds are stretched to the part's Size. Empty draws nothing.",
           "aliases": [],
           "derived_from": []
         },
