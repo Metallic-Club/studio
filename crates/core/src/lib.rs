@@ -18,6 +18,7 @@ mod id;
 mod math;
 mod registry;
 mod script_value;
+mod tween_info;
 mod value;
 
 pub use glam;
@@ -37,4 +38,5 @@ pub use registry::{
     ResolvedSignal, Setter, SignalDesc, SignalId, Ty, Widget,
 };
 pub use script_value::{ScriptError, ScriptValue};
+pub use tween_info::TweenInfo;
 pub use value::{PropType, Value};

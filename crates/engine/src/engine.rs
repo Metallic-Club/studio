@@ -279,6 +279,12 @@ impl<O: OutputSink> Engine<O> {
                 profiling::scope!("CollectionService");
                 self.tags.step(&mut self.dm);
             }
+            // Before the frame's scripts, so they see this frame's values (#810). A game that never made a tween
+            // has no state, and skips it.
+            if self.dm.has_states() {
+                profiling::scope!("TweenService");
+                metallic_classes::services::tween_service::step(&mut self.dm, dt);
+            }
             if self.context != RunContext::Server {
                 profiling::scope!("RenderStepped");
                 resumed += self.phase(Phase::RenderStepped, rs.render_stepped, dt, now);

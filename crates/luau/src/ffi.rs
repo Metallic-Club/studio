@@ -131,6 +131,8 @@ pub(crate) mod tag {
     pub(crate) const SIGNAL: c_int = 69;
     /// [`ConnectionHandle`](super::ConnectionHandle): an `RBXScriptConnection`.
     pub(crate) const CONNECTION: c_int = 70;
+    /// [`TweenInfoData`](super::TweenInfoData): a `TweenInfo` (#810).
+    pub(crate) const TWEEN_INFO: c_int = 71;
 }
 
 /// A plain value stored in a tagged userdata. `Copy` rules out a destructor, which these userdata never run.
@@ -179,6 +181,47 @@ pub(crate) struct EnumRef {
 
 impl Payload for EnumRef {
     const TAG: c_int = tag::ENUM_ITEM;
+}
+
+/// A `TweenInfo` (#810): `metallic_core::TweenInfo` with its enum items as references, so it is plain data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TweenInfoData {
+    pub(crate) time: f64,
+    pub(crate) style: EnumRef,
+    pub(crate) direction: EnumRef,
+    pub(crate) repeat_count: i32,
+    pub(crate) reverses: bool,
+    pub(crate) delay_time: f64,
+}
+
+impl Payload for TweenInfoData {
+    const TAG: c_int = tag::TWEEN_INFO;
+}
+
+impl TweenInfoData {
+    /// The engine's value of it, with the items `shared` knows.
+    pub(crate) fn to_core(self, shared: &Shared) -> Option<metallic_core::TweenInfo> {
+        Some(metallic_core::TweenInfo {
+            time: self.time,
+            easing_style: shared.enums.item(self.style)?.clone(),
+            easing_direction: shared.enums.item(self.direction)?.clone(),
+            repeat_count: self.repeat_count,
+            reverses: self.reverses,
+            delay_time: self.delay_time,
+        })
+    }
+
+    /// The script's value of `info`; `None` when an item is of no enum `shared` knows.
+    fn from_core(info: &metallic_core::TweenInfo, shared: &Shared) -> Option<Self> {
+        Some(Self {
+            time: info.time,
+            style: shared.enums.find(&info.easing_style)?,
+            direction: shared.enums.find(&info.easing_direction)?,
+            repeat_count: info.repeat_count,
+            reverses: info.reverses,
+            delay_time: info.delay_time,
+        })
+    }
 }
 
 /// A signal of one instance (`part.Touched`, `part:GetPropertyChangedSignal("Name")`).
@@ -432,6 +475,8 @@ pub(crate) enum Push {
     Signal(SignalHandle),
     /// A connection object.
     Connection(ConnectionHandle),
+    /// A `TweenInfo`.
+    TweenInfo(TweenInfoData),
     /// A property value.
     Value(Value),
     /// A value from an engine method; a tuple pushes each of its values.
@@ -807,6 +852,7 @@ pub(crate) fn kind_name(kind: Kind) -> &'static str {
         Kind::Userdata(tag::ENUM_ITEM) => "EnumItem",
         Kind::Userdata(tag::SIGNAL) => "RBXScriptSignal",
         Kind::Userdata(tag::CONNECTION) => "RBXScriptConnection",
+        Kind::Userdata(tag::TWEEN_INFO) => "TweenInfo",
         Kind::Buffer => "buffer",
         Kind::Userdata(_) | Kind::Other => "userdata",
     }
@@ -1033,6 +1079,7 @@ pub(crate) unsafe fn push_value(state: *mut lua_State, shared: Option<&Shared>, 
             Push::Enum(item) => push_enum(state, shared, item),
             Push::Signal(signal) => push_payload(state, signal),
             Push::Connection(connection) => push_payload(state, connection),
+            Push::TweenInfo(info) => push_payload(state, info),
             Push::Value(value) => match value {
                 Value::Bool(b) => ffi::lua_pushboolean(state, c_int::from(b)),
                 Value::Int(i) => ffi::lua_pushnumber(state, i as f64),
@@ -1161,6 +1208,10 @@ unsafe fn push_script(state: *mut lua_State, shared: Option<&Shared>, value: Scr
             ScriptValue::CFrame(cf) => push_payload(state, cf),
             ScriptValue::Color3(c) => push_payload(state, c),
             ScriptValue::Instance(id) => push_instance(state, shared, id),
+            ScriptValue::TweenInfo(info) => match shared.and_then(|s| TweenInfoData::from_core(&info, s)) {
+                Some(info) => push_payload(state, info),
+                None => ffi::lua_pushnil(state),
+            },
             ScriptValue::Signal(target, signal) => push_payload(
                 state,
                 SignalHandle {

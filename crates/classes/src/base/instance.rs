@@ -134,7 +134,11 @@ fn attribute_value(value: Option<&ScriptValue>) -> Result<Option<Value>, ScriptE
         ScriptValue::Color3(c) => Value::Color3(*c),
         ScriptValue::Enum(item) => Value::Enum(item.clone()),
         ScriptValue::Instance(id) => Value::Ref(Some(*id)),
-        ScriptValue::List(_) | ScriptValue::Map(_) | ScriptValue::Tuple(_) | ScriptValue::Signal(..) => {
+        ScriptValue::List(_)
+        | ScriptValue::Map(_)
+        | ScriptValue::Tuple(_)
+        | ScriptValue::Signal(..)
+        | ScriptValue::TweenInfo(_) => {
             return Err(ScriptError::bad_argument(
                 2,
                 "an attribute value (boolean, number, string, vector, CFrame, Color3 or EnumItem)",

@@ -18,7 +18,7 @@ use std::ffi::c_int;
 use metallic_core::glam::{EulerRot, Mat3, Quat};
 use metallic_core::{CFrame, Color3, Vector2, Vector3};
 
-use crate::ffi::{Args, Call, EnumRef, Kind, Out, Push, Raise, Ret, lua_fn};
+use crate::ffi::{Args, Call, EnumRef, Kind, Out, Push, Raise, Ret, TweenInfoData, lua_fn};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Argument helpers. `first` is the stack index of the user's argument #1 (2 for methods, where 1 is `self`).
@@ -733,4 +733,90 @@ fn enum_item_to_string_body(call: &Call<'_>) -> Ret {
         .item(item)
         .map_or_else(|| "EnumItem".to_owned(), ToString::to_string);
     one(Push::Text(text))
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// TweenInfo (userdata, #810).
+// ---------------------------------------------------------------------------------------------------------------
+
+lua_fn!(pub(crate) tween_info_new => tween_info_new_body);
+lua_fn!(pub(crate) tween_info_index => tween_info_index_body);
+lua_fn!(pub(crate) tween_info_eq => tween_info_eq_body);
+lua_fn!(pub(crate) tween_info_to_string => tween_info_to_string_body);
+
+/// The item of the enum `enum_type` at `idx`, or `default` of it for nil or no value.
+fn enum_or(call: &Call<'_>, idx: c_int, enum_type: &'static str, default: &str) -> Result<EnumRef, Raise> {
+    let a = &call.args;
+    let enums = &call.shared()?.enums;
+    match a.kind(idx) {
+        Kind::None | Kind::Nil => enums
+            .find(&metallic_core::EnumItem::new(enum_type, default))
+            .ok_or_else(|| Raise(format!("there is no Enum.{enum_type}"))),
+        _ => a
+            .payload::<EnumRef>(idx)
+            .filter(|&item| enums.desc(item).is_some_and(|desc| desc.name == enum_type))
+            .ok_or_else(|| bad(a, idx, 1, "new", &format!("Enum.{enum_type}"))),
+    }
+}
+
+fn tween_info_new_body(call: &Call<'_>) -> Ret {
+    let a = &call.args;
+    let time = number_or(a, 1, 1, "new", 1.0)?;
+    let style = enum_or(call, 2, "EasingStyle", "Quad")?;
+    let direction = enum_or(call, 3, "EasingDirection", "Out")?;
+    let repeat_count = number_or(a, 4, 1, "new", 0.0)?;
+    let reverses = match a.kind(5) {
+        Kind::None | Kind::Nil => false,
+        _ => a.boolean(5).ok_or_else(|| bad(a, 5, 1, "new", "boolean"))?,
+    };
+    let delay_time = number_or(a, 6, 1, "new", 0.0)?;
+    one(Push::TweenInfo(TweenInfoData {
+        time: time.max(0.0),
+        style,
+        direction,
+        repeat_count: repeat_count.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32,
+        reverses,
+        delay_time: delay_time.max(0.0),
+    }))
+}
+
+fn tween_info(a: &Args<'_>, idx: c_int, f: &str) -> Result<TweenInfoData, Raise> {
+    a.payload::<TweenInfoData>(idx)
+        .ok_or_else(|| bad(a, idx, 1, f, "TweenInfo"))
+}
+
+fn tween_info_index_body(call: &Call<'_>) -> Ret {
+    let a = &call.args;
+    let info = tween_info(a, 1, "index")?;
+    let key = key(a)?;
+    match key {
+        "Time" => one(Push::Number(info.time)),
+        "EasingStyle" => one(Push::Enum(info.style)),
+        "EasingDirection" => one(Push::Enum(info.direction)),
+        "RepeatCount" => one(Push::Number(f64::from(info.repeat_count))),
+        "Reverses" => one(Push::Bool(info.reverses)),
+        "DelayTime" => one(Push::Number(info.delay_time)),
+        _ => Err(not_member(key, "TweenInfo")),
+    }
+}
+
+fn tween_info_eq_body(call: &Call<'_>) -> Ret {
+    let a = call.args.payload::<TweenInfoData>(1);
+    let b = call.args.payload::<TweenInfoData>(2);
+    one(Push::Bool(a.is_some() && a == b))
+}
+
+fn tween_info_to_string_body(call: &Call<'_>) -> Ret {
+    let info = tween_info(&call.args, 1, "tostring")?;
+    let enums = &call.shared()?.enums;
+    let name = |item: EnumRef| enums.item(item).map(|i| i.name().to_owned()).unwrap_or_default();
+    one(Push::Text(format!(
+        "Time:{} DelayTime:{} RepeatCount:{} Reverses:{} EasingDirection:{} EasingStyle:{}",
+        info.time,
+        info.delay_time,
+        info.repeat_count,
+        if info.reverses { "True" } else { "False" },
+        name(info.direction),
+        name(info.style),
+    )))
 }

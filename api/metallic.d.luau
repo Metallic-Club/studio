@@ -203,6 +203,27 @@ declare extern type Color3 with
     function ToHSV(self): (number, number, number)
 end
 
+--- How a tween plays (#810): for how long, along which curve, how often and after what delay.
+declare extern type TweenInfo with
+    read Time: number
+    read EasingStyle: EnumEasingStyle
+    read EasingDirection: EnumEasingDirection
+    read RepeatCount: number
+    read Reverses: boolean
+    read DelayTime: number
+end
+
+declare TweenInfo: {
+    new: (
+        time: number?,
+        easingStyle: EnumEasingStyle?,
+        easingDirection: EnumEasingDirection?,
+        repeatCount: number?,
+        reverses: boolean?,
+        delayTime: number?
+    ) -> TweenInfo,
+}
+
 declare Color3: {
     new: (r: number?, g: number?, b: number?) -> Color3,
     fromRGB: (r: number?, g: number?, b: number?) -> Color3,
@@ -418,6 +439,44 @@ declare extern type EnumKeyCode_INTERNAL extends Enum with
     function GetEnumItems(self): { EnumKeyCode }
 end
 
+--- The curve a tween follows from its start to its goal.
+declare extern type EnumEasingStyle extends EnumItem with end
+declare extern type EnumEasingStyle_INTERNAL extends Enum with
+    read Linear: EnumEasingStyle
+    read Sine: EnumEasingStyle
+    read Back: EnumEasingStyle
+    read Quad: EnumEasingStyle
+    read Quart: EnumEasingStyle
+    read Quint: EnumEasingStyle
+    read Bounce: EnumEasingStyle
+    read Elastic: EnumEasingStyle
+    read Exponential: EnumEasingStyle
+    read Circular: EnumEasingStyle
+    read Cubic: EnumEasingStyle
+    function GetEnumItems(self): { EnumEasingStyle }
+end
+
+--- Which end of a tween's curve is eased: the start (In), the end (Out) or both (InOut).
+declare extern type EnumEasingDirection extends EnumItem with end
+declare extern type EnumEasingDirection_INTERNAL extends Enum with
+    read In: EnumEasingDirection
+    read Out: EnumEasingDirection
+    read InOut: EnumEasingDirection
+    function GetEnumItems(self): { EnumEasingDirection }
+end
+
+--- Where a tween is: not yet played, waiting its delay, playing, paused, finished or cancelled.
+declare extern type EnumPlaybackState extends EnumItem with end
+declare extern type EnumPlaybackState_INTERNAL extends Enum with
+    read Begin: EnumPlaybackState
+    read Delayed: EnumPlaybackState
+    read Playing: EnumPlaybackState
+    read Paused: EnumPlaybackState
+    read Completed: EnumPlaybackState
+    read Cancelled: EnumPlaybackState
+    function GetEnumItems(self): { EnumPlaybackState }
+end
+
 --- A graphics preset: how much a frame may cost, never what the game looks like. Auto measures the machine and holds the frame time with dynamic resolution.
 declare extern type EnumGraphicsPreset extends EnumItem with end
 declare extern type EnumGraphicsPreset_INTERNAL extends Enum with
@@ -473,6 +532,9 @@ declare Enum: {
     UserInputType: EnumUserInputType_INTERNAL,
     UserInputState: EnumUserInputState_INTERNAL,
     KeyCode: EnumKeyCode_INTERNAL,
+    EasingStyle: EnumEasingStyle_INTERNAL,
+    EasingDirection: EnumEasingDirection_INTERNAL,
+    PlaybackState: EnumPlaybackState_INTERNAL,
     GraphicsPreset: EnumGraphicsPreset_INTERNAL,
     AntiAliasingMode: EnumAntiAliasingMode_INTERNAL,
     MouseBehavior: EnumMouseBehavior_INTERNAL,
@@ -616,6 +678,7 @@ declare extern type DataModel extends Instance with
     function GetService(self, className: "RunService"): RunService
     function GetService(self, className: "UserInputService"): UserInputService
     function GetService(self, className: "UserGameSettings"): UserGameSettings
+    function GetService(self, className: "TweenService"): TweenService
     function GetService(self, className: "CollectionService"): CollectionService
     function GetService(self, className: string): Instance
 end
@@ -770,6 +833,30 @@ declare extern type SurfaceAppearance extends Instance with
     Color: Color3
     --- What the colour map's alpha does. Overlay shows the part's Color where the map is see-through; Transparency makes the mesh see-through there; TintMask tints only where the map is opaque.
     AlphaMode: EnumAlphaMode
+end
+
+--- Moves an instance's properties to goals over time. Made by TweenService:Create; started with Play.
+declare extern type Tween extends Instance with
+    --- The instance whose properties the tween moves.
+    read Instance: Instance?
+    --- Where the tween is: Begin, Delayed, Playing, Paused, Completed or Cancelled.
+    read PlaybackState: EnumPlaybackState
+    --- Fires when the tween reaches its end (Completed) or is cancelled (Cancelled).
+    Completed: ScriptSignal<EnumPlaybackState>
+    --- Starts the tween from the properties' values now, or goes on from where Pause stopped it. A playing tween of the same properties is cancelled.
+    function Play(self): ()
+    --- Stops the tween where it is; Play goes on from there.
+    function Pause(self): ()
+    --- Stops the tween where it is and fires Completed with Cancelled; Play starts it over.
+    function Cancel(self): ()
+end
+
+--- Makes tweens: properties of an instance moved smoothly to goals over time, along an easing curve.
+declare extern type TweenService extends Instance with
+    --- Makes a tween that moves the instance's properties to the values in propertyTable (property names to goals), as tweenInfo says. Call Play on it to start it.
+    function Create(self, instance: Instance, tweenInfo: TweenInfo, propertyTable: {[string]: any}): Tween
+    --- Returns where an eased tween is, from 0 to 1 (Back and Elastic go past), when it is alpha of the way.
+    function GetValue(self, alpha: number, easingStyle: EnumEasingStyle, easingDirection: EnumEasingDirection): number
 end
 
 --- The player's graphics settings: the preset, the quality level it draws at and the values in effect. Scripts can read them, to adapt a game to the player's machine, but never change them: they are the player's. Get it with game:GetService("UserGameSettings").

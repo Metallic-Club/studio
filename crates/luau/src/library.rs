@@ -271,6 +271,23 @@ fn install_types(lua: &Lua, shared: &mut Shared, globals: &Table) -> mlua::Resul
             Vec::new(),
         )?,
     )?;
+
+    // #810.
+    let tween_info_meta = metatable(
+        lua,
+        "TweenInfo",
+        &[
+            ("__index", types::tween_info_index),
+            ("__eq", types::tween_info_eq),
+            ("__tostring", types::tween_info_to_string),
+        ],
+    )?;
+    tween_info_meta.set_readonly(true);
+    ffi::set_metatable(lua, tag::TWEEN_INFO, &tween_info_meta)?;
+    globals.raw_set(
+        "TweenInfo",
+        library(lua, &[("new", types::tween_info_new)], Vec::new())?,
+    )?;
     Ok(())
 }
 

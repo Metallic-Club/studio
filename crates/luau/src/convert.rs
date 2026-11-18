@@ -31,6 +31,10 @@ fn read_nested(args: &Args<'_>, idx: c_int, shared: &Shared, depth: u32) -> Resu
         Kind::Userdata(tag::VECTOR2) => ScriptValue::Vector2(args.payload::<Vector2>(idx).unwrap_or_default()),
         Kind::Userdata(tag::CFRAME) => ScriptValue::CFrame(args.payload::<CFrame>(idx).unwrap_or_default()),
         Kind::Userdata(tag::COLOR3) => ScriptValue::Color3(args.payload::<Color3>(idx).unwrap_or_default()),
+        Kind::Userdata(tag::TWEEN_INFO) => args
+            .payload::<crate::ffi::TweenInfoData>(idx)
+            .and_then(|info| info.to_core(shared))
+            .map_or(ScriptValue::Nil, |info| ScriptValue::TweenInfo(Box::new(info))),
         Kind::Userdata(tag::ENUM_ITEM) => args
             .payload::<EnumRef>(idx)
             .and_then(|item| shared.enums.item(item))
