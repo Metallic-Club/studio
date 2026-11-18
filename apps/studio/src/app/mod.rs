@@ -8817,7 +8817,7 @@ mod tests {
     #[test]
     fn explorer_rows_touch_and_alternate_shades() {
         let mut harness = editing(settings_file("explorer-stripes", None), "Explorer Stripes Game");
-        harness.set_size(egui::vec2(1280.0, 800.0));
+        harness.set_size(egui::vec2(1280.0, 1200.0));
         settle(&mut harness);
         // The tree's rows, top to bottom: no gap between them (#274).
         let mut items: Vec<egui::Rect> = harness

@@ -130,7 +130,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("RunService", Some("Instance"))
         "The engine's frame loop, seen from scripts: events that fire every frame, and whether the game runs in \
          Studio, on a client or on the server. Get it with game:GetService(\"RunService\").",
     )
-    .service(5)
+    .service(9)
     .hidden_in_explorer()
     .props(PROPS)
     .methods(&[

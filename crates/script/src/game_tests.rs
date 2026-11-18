@@ -144,6 +144,54 @@ fn start_game_runs_enabled_scripts_in_tree_order_for_the_context() {
     }
 }
 
+/// #808: as Roblox's, `ReplicatedFirst`, `StarterGui` and `StarterPlayerScripts` run their `LocalScript`s on clients
+/// and nothing else; `StarterCharacterScripts` waits for characters.
+#[test]
+fn client_containers_run_local_scripts_on_clients() {
+    for (context, expected) in [
+        (RunContext::Local, &["F", "W", "G", "P"][..]),
+        (RunContext::Server, &["W"][..]),
+        (RunContext::Client, &["F", "G", "P"][..]),
+    ] {
+        let mut w = World::new();
+        let first = w.service("ReplicatedFirst");
+        let gui = w.service("StarterGui");
+        let player = w.service("StarterPlayer");
+        let named = |w: &World, name: &str| {
+            w.dm.children(player)
+                .unwrap()
+                .find(|&c| w.dm.name(c) == Ok(name))
+                .unwrap()
+        };
+        let player_scripts = named(&w, "StarterPlayerScripts");
+        let character_scripts = named(&w, "StarterCharacterScripts");
+        let server = w.service("ServerScriptService");
+        w.add("LocalScript", first, "F", Some(&recorder("F")));
+        w.add("Script", first, "FirstServer", Some(&recorder("FirstServer")));
+        w.add("Script", server, "W", Some(&recorder("W")));
+        w.add("LocalScript", gui, "G", Some(&recorder("G")));
+        let folder = w.add("Folder", player_scripts, "Folder", None);
+        w.add("LocalScript", folder, "P", Some(&recorder("P")));
+        w.add(
+            "Script",
+            player_scripts,
+            "PlayerServer",
+            Some(&recorder("PlayerServer")),
+        );
+        w.add("LocalScript", character_scripts, "C", Some(&recorder("C")));
+        w.add("LocalScript", player, "Loose", Some(&recorder("Loose")));
+        let late = w.create("LocalScript", "Late", Some(&recorder("Late")));
+        w.start(context);
+        assert_eq!(w.labels(), expected, "{context:?}");
+        // One added later starts too.
+        if context == RunContext::Client {
+            w.dm.set_parent(late, Some(first)).expect("parent");
+            w.frame();
+            assert_eq!(w.labels().last().map(String::as_str), Some("Late"));
+        }
+    }
+}
+
 #[test]
 fn a_game_starts_once_and_stops_cleanly() {
     let mut w = World::new();

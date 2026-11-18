@@ -282,7 +282,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("UserInputService", Some("Instance"
          and how the mouse cursor behaves. Input arrives at the start of each frame. Get it with \
          game:GetService(\"UserInputService\").",
     )
-    .service(6)
+    .service(10)
     .hidden_in_explorer()
     .props(PROPS)
     .methods(&[

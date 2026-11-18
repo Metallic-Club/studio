@@ -207,7 +207,7 @@ pub static CLASS: ClassDesc = ClassDesc::new("UserGameSettings", Some("Instance"
          Scripts can read them, to adapt a game to the player's machine, but never change them: they are the \
          player's. Get it with game:GetService(\"UserGameSettings\").",
     )
-    .service(7)
+    .service(11)
     .hidden_in_explorer()
     .props(PROPS);
 

@@ -20,6 +20,11 @@ pub(crate) struct Game {
     source: PropId,
     /// The services that run scripts, in tree order.
     services: Vec<Id>,
+    /// The containers that run only `LocalScript`s (`ReplicatedFirst`, `StarterPlayerScripts`), in tree order; none
+    /// on the server.
+    client_only: Vec<Id>,
+    /// `LocalScript`, the only class the client-only containers run.
+    local: Option<ClassId>,
     /// The game's change consumer: instances created or moved since the last dispatch (`CREATED | STRUCTURE`; a
     /// move sets `STRUCTURE` on the whole moved subtree, so scripts deep inside a moved model are reported too).
     /// Parts cost a dirty-list entry and one class test each, instead of a signal event.
@@ -29,17 +34,52 @@ pub(crate) struct Game {
 }
 
 impl Game {
-    /// Whether `id` is inside one of the services that run scripts.
+    /// Whether the script `id` runs where it is: inside one of the services that run scripts, or a `LocalScript`
+    /// inside a client-only container.
     fn in_service(&self, dm: &DataModel, id: Id) -> bool {
         let mut current = dm.parent(id).ok().flatten();
         while let Some(ancestor) = current {
             if self.services.contains(&ancestor) {
                 return true;
             }
+            if self.client_only.contains(&ancestor) {
+                return self.local.is_some_and(|local| dm.is_a(id, local).unwrap_or(false));
+            }
             current = dm.parent(ancestor).ok().flatten();
         }
         false
     }
+}
+
+/// The containers that run scripts, in tree order, each with whether it runs only `LocalScript`s: the services
+/// flagged `runs_scripts`, and on clients those (or their built-in children) flagged `runs_local_scripts`.
+fn containers(dm: &DataModel, client: bool) -> Vec<(Id, bool)> {
+    let registry = dm.registry();
+    let info = |id: Id| dm.class_of(id).ok().and_then(|c| registry.class(c));
+    let mut found = Vec::new();
+    let Some(root) = dm.root() else {
+        return found;
+    };
+    for service in dm.children(root).into_iter().flatten() {
+        let Some(class) = info(service) else {
+            continue;
+        };
+        if class.runs_scripts() {
+            found.push((service, false));
+        } else if client && class.runs_local_scripts() {
+            found.push((service, true));
+        }
+        if client && !class.builtin_children().is_empty() {
+            found.extend(
+                dm.children(service)
+                    .into_iter()
+                    .flatten()
+                    .filter(|&child| dm.is_fixed(child) && info(child).is_some_and(|c| c.runs_local_scripts()))
+                    .map(|child| (child, true)),
+            );
+        }
+    }
+    found
 }
 
 impl<O: OutputSink> ScriptHost<O> {
@@ -76,25 +116,20 @@ impl<O: OutputSink> ScriptHost<O> {
         let source = registry
             .prop_id(container, "Source")
             .ok_or(HostError::MissingClass("SourceContainer"))?;
-        let services: Vec<Id> = match dm.root() {
-            Some(root) => dm
-                .children(root)?
-                .filter(|&s| {
-                    dm.class_of(s)
-                        .ok()
-                        .and_then(|c| registry.class(c))
-                        .is_some_and(|info| info.runs_scripts())
-                })
-                .collect(),
-            None => Vec::new(),
-        };
+        let found = containers(dm, context != RunContext::Server);
+        let services: Vec<Id> = found.iter().filter(|c| !c.1).map(|c| c.0).collect();
+        let client_only: Vec<Id> = found.iter().filter(|c| c.1).map(|c| c.0).collect();
+        let local = registry.class_id("LocalScript");
         // Registered before any script runs, so what the first scripts create or move is seen. Only instances that
         // change from now on are queued; the ones already there are found below.
         let consumer = dm.register_consumer(DirtyBits::STRUCTURE)?;
         self.loader = Some(Box::new(loader));
         let mut scripts = Vec::new();
-        for &service in &services {
-            scripts.extend(dm.descendants(service)?.filter(|&d| dm.is_a(d, class).unwrap_or(false)));
+        for &(container, client) in &found {
+            scripts.extend(dm.descendants(container)?.filter(|&d| {
+                dm.is_a(d, class).unwrap_or(false)
+                    && (!client || local.is_some_and(|local| dm.is_a(d, local).unwrap_or(false)))
+            }));
         }
         self.game = Some(Game {
             context,
@@ -102,6 +137,8 @@ impl<O: OutputSink> ScriptHost<O> {
             enabled,
             source,
             services,
+            client_only,
+            local,
             consumer,
             scripts: HashMap::new(),
         });

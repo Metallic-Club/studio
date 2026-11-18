@@ -68,6 +68,9 @@ struct ClassCache {
     archivable: Option<PropId>,
     /// Whether it is a service.
     service: bool,
+    /// Whether a service is made with an instance of it ([`ClassInfo::builtin_children`]), which like a service
+    /// never moves or dies.
+    builtin: bool,
     /// The id of each [`BuiltinSignal`] the class declares, indexed by the enum.
     builtins: [Option<SignalId>; BuiltinSignal::COUNT],
     /// Its `Name` and `Parent` properties, whose changed signals a rename and a move fire.
@@ -147,6 +150,10 @@ impl DataModel {
                     .any(|&a| registry.class(a).is_some_and(|c| c.desc().behavior.is_some())),
                 archivable: info.prop_id("Archivable"),
                 service: info.service_order().is_some(),
+                builtin: registry
+                    .classes()
+                    .iter()
+                    .any(|owner| owner.service_order().is_some() && owner.builtin_children().contains(&info.name())),
                 builtins: BuiltinSignal::ALL.map(|b| info.signal_id(b.name())),
                 name_prop: info.prop_id("Name"),
                 parent_prop: info.prop_id("Parent"),
@@ -256,22 +263,52 @@ impl DataModel {
         if self.service(class).is_some() {
             return Err(DmError::DuplicateService { class: name });
         }
+        let builtins = info.builtin_children();
         let id = self.spawn(class)?;
         if let Some(entry) = self.services.get_mut(class.index()) {
             *entry = Some(id);
         }
         self.run_hooks(id, class, |b, dm| b.on_created(dm, id));
         if self.slots.contains(id) {
-            self.attach(id, root);
-            self.mark(id, DirtyBits::STRUCTURE);
-            self.run_hooks(id, class, |b, dm| b.on_parent_changed(dm, id, None, Some(root)));
-            self.notify(Notice::ParentChanged {
-                id,
-                old: None,
-                new: Some(root),
-            });
+            self.adopt(id, class, root);
+        }
+        for &child_name in builtins {
+            let child_class = self.registry.class_id(child_name).ok_or(DmError::UnknownBuiltin {
+                service: name,
+                class: child_name,
+            })?;
+            let child = self.create_internal(child_class)?;
+            if self.slots.contains(child) && self.slots.contains(id) {
+                self.adopt(child, child_class, id);
+            }
         }
         Ok(id)
+    }
+
+    /// Puts `id`, made with no parent, under `parent`, past the checks a move makes: for services and their
+    /// built-in children, which nothing else may move.
+    fn adopt(&mut self, id: Id, class: ClassId, parent: Id) {
+        self.attach(id, parent);
+        self.mark(id, DirtyBits::STRUCTURE);
+        self.run_hooks(id, class, |b, dm| b.on_parent_changed(dm, id, None, Some(parent)));
+        self.notify(Notice::ParentChanged {
+            id,
+            old: None,
+            new: Some(parent),
+        });
+    }
+
+    /// Whether `id` is fixed in place: the root, a service, or a service's built-in child, none of which move, are
+    /// copied or die. `false` for an id that names no instance.
+    pub fn is_fixed(&self, id: Id) -> bool {
+        let Ok(class) = self.class_of(id) else {
+            return false;
+        };
+        self.root == Some(id)
+            || self
+                .classes
+                .get(class.index())
+                .is_some_and(|cache| cache.service || cache.builtin)
     }
 
     /// Creates an instance of `class` with every property at its default and no parent (`Instance.new`).
@@ -358,6 +395,11 @@ impl DataModel {
 
     fn is_service_class(&self, class: ClassId) -> bool {
         self.classes.get(class.index()).is_some_and(|c| c.service)
+    }
+
+    /// Whether services are made with an instance of `class`.
+    fn is_builtin_class(&self, class: ClassId) -> bool {
+        self.classes.get(class.index()).is_some_and(|c| c.builtin)
     }
 
     /// Records `bits` on the live instance `id` for every interested consumer.

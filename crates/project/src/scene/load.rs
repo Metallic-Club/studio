@@ -47,7 +47,8 @@ struct InstanceIn {
 /// Where a loaded instance goes.
 #[derive(Clone, Copy)]
 enum Place {
-    /// It is this saved service of the game.
+    /// It is this saved service of the game, or one of a saved service's built-in children (#808), which is kept
+    /// as a service is.
     Service(Id),
     /// It is new, under the entry with this index.
     Under(usize),
@@ -120,14 +121,22 @@ fn load_json(dm: &mut DataModel, mut doc: Json) -> Result<LoadedScene, SceneErro
     Ok(LoadedScene { ids, format, warnings })
 }
 
-/// Every saved service of the game, in service order, or an error naming one the game lacks.
+/// Every saved service of the game, in service order, each followed by its built-in children (#808), or an error
+/// naming one the game lacks.
 fn saved_services(dm: &DataModel, registry: &Registry) -> Result<Vec<Id>, SceneError> {
-    registry
+    let mut saved = Vec::new();
+    for info in registry
         .services()
         .iter()
         .filter_map(|&class| registry.class(class).filter(|info| info.persisted()))
-        .map(|info| dm.service(info.id()).ok_or(SceneError::MissingService(info.name())))
-        .collect()
+    {
+        let service = dm.service(info.id()).ok_or(SceneError::MissingService(info.name()))?;
+        saved.push(service);
+        if !info.builtin_children().is_empty() {
+            saved.extend(dm.children(service)?.filter(|&child| dm.is_fixed(child)));
+        }
+    }
+    Ok(saved)
 }
 
 /// Stage 1: checks the file against the registry and the game, without changing anything.
@@ -148,7 +157,7 @@ fn read(
         if index.contains_key(&id) {
             return Err(SceneError::DuplicateId(id));
         }
-        let place = place(dm, registry, &instance, &index, &mut services_seen, warnings);
+        let place = place(dm, registry, &instance, &index, &entries, &mut services_seen, warnings);
         let Some((class, place)) = place else {
             index.insert(id, None);
             continue;
@@ -245,6 +254,7 @@ fn place(
     registry: &Registry,
     instance: &InstanceIn,
     index: &HashMap<u64, Option<usize>>,
+    entries: &[Entry],
     services_seen: &mut HashSet<ClassId>,
     warnings: &mut Vec<SceneWarning>,
 ) -> Option<(ClassId, Place)> {
@@ -276,6 +286,15 @@ fn place(
     let place = match parent {
         None if is_service && info.persisted() && services_seen.insert(class) => dm.service(class).map(Place::Service),
         Some(parent) if !is_service && info.creatable() => Some(Place::Under(parent)),
+        // A service's built-in child (#808) is the one the game has.
+        Some(parent) => match entries.get(parent).map(|entry| entry.place) {
+            Some(Place::Service(service)) if services_seen.insert(class) => dm
+                .children(service)
+                .ok()
+                .and_then(|mut children| children.find(|&c| dm.is_fixed(c) && dm.class_of(c) == Ok(class)))
+                .map(Place::Service),
+            _ => None,
+        },
         _ => None,
     };
     if place.is_none() {

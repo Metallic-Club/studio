@@ -1208,16 +1208,24 @@ impl SceneSync {
         }
         for record in records.iter().filter(|r| r.parent.is_some()) {
             let class = ClassId::new(record.class);
-            let local = match self.local(record.id).filter(|&l| dm.contains(l)) {
-                Some(local) if dm.class_of(local).ok() == Some(class) => local,
-                _ => match dm.create(class) {
-                    Ok(local) => {
-                        self.bind(local, record.id);
-                        local
-                    }
+            let found = self
+                .local(record.id)
+                .filter(|&l| dm.contains(l) && dm.class_of(l).ok() == Some(class));
+            // A service's built-in child (#808) is the one every peer's game was made with, as a service is.
+            let builtin = || {
+                let parent = self.local(record.parent?)?;
+                dm.children(parent)
+                    .ok()?
+                    .find(|&c| dm.is_fixed(c) && dm.class_of(c).ok() == Some(class))
+            };
+            let local = match found.or_else(builtin) {
+                Some(local) => local,
+                None => match dm.create(class) {
+                    Ok(local) => local,
                     Err(_) => continue,
                 },
             };
+            self.bind(local, record.id);
             wanted.insert(local);
             made.push((record, local));
         }

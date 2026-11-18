@@ -571,9 +571,12 @@ declare extern type DataModel extends Instance with
     --- Returns the service with the given class name, such as game:GetService("Lighting"). It always returns the same instance for a service.
     function GetService(self, className: "Workspace"): Workspace
     function GetService(self, className: "Lighting"): Lighting
+    function GetService(self, className: "ReplicatedFirst"): ReplicatedFirst
     function GetService(self, className: "ReplicatedStorage"): ReplicatedStorage
     function GetService(self, className: "ServerScriptService"): ServerScriptService
     function GetService(self, className: "ServerStorage"): ServerStorage
+    function GetService(self, className: "StarterGui"): StarterGui
+    function GetService(self, className: "StarterPlayer"): StarterPlayer
     function GetService(self, className: "RunService"): RunService
     function GetService(self, className: "UserInputService"): UserInputService
     function GetService(self, className: "UserGameSettings"): UserGameSettings
@@ -650,6 +653,10 @@ declare extern type Lighting extends Instance with
     function GetMoonDirection(self): Vector3
 end
 
+--- What each player's client gets before the rest of the game, such as a loading screen. LocalScripts here run on the client first; Scripts here do not run.
+declare extern type ReplicatedFirst extends Instance with
+end
+
 --- Storage for things both the server and players need, such as shared modules and assets. Nothing here is drawn or run.
 declare extern type ReplicatedStorage extends Instance with
 end
@@ -694,6 +701,22 @@ end
 declare extern type SourceContainer extends Instance with
     --- The project-relative path of the script's source file, such as "Scripts/Door.luau", chosen with a file picker. The file's extension selects the language. Empty means the script has no source and does nothing.
     Source: string
+end
+
+--- Scripts here go into each player's character when it spawns. (There are no characters yet, so nothing here runs.)
+declare extern type StarterCharacterScripts extends Instance with
+end
+
+--- The user interface each player starts with. LocalScripts here run on each player's client. (Nothing here is drawn yet.)
+declare extern type StarterGui extends Instance with
+end
+
+--- What each player starts with. Its StarterPlayerScripts run on each player's client; its StarterCharacterScripts go into each player's character.
+declare extern type StarterPlayer extends Instance with
+end
+
+--- LocalScripts here run on each player's client when the game starts.
+declare extern type StarterPlayerScripts extends Instance with
 end
 
 --- Gives the MeshPart it is in a look of its own: colour, normal, roughness and metalness maps on the mesh's texture coordinates, in place of the part's Material and TextureId.
