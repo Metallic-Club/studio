@@ -182,3 +182,100 @@ fn textured_materials_match_the_reference_on_both_paths() {
     let diff = scenes::compare(&pixels, &render(&fallback, true), THRESHOLD);
     assert!(diff.over <= MAX_OVER, "the fallback draws another image ({diff:?})");
 }
+
+/// How bright the middle of a flat, matte block's top is, seen from above under a low sun toward `toward`, with a
+/// normal map of one colour tilting it by `tilt` (the map's red and green, from -1 to 1).
+fn brightness_with(context: &RenderContext, toward: Vec3, tilt: [f32; 2]) -> f32 {
+    collect_wgpu_messages();
+    let mut game = Game::new();
+    let block = game.part(
+        Look::new("Block", "Plastic", [200, 200, 200]),
+        Vec3::new(20.0, 1.0, 20.0),
+        CFrame::new(Vec3::new(0.0, -0.5, 0.0)),
+    );
+    game.dm
+        .set_by_name(block, "Material", Value::String(TEXTURED.into()))
+        .expect("the material");
+    game.set_camera(CFrame::look_at(Vec3::new(0.0, 10.0, 1.0), Vec3::ZERO, Vec3::Y), 40.0);
+    let target = OffscreenTarget::new(context, SIZE, SIZE, FORMAT).expect("a target");
+    let mut renderer = Renderer::new(
+        context,
+        RendererSettings {
+            passes: PASSES,
+            gpu_timing: false,
+            ..RendererSettings::new(FORMAT, SIZE, SIZE)
+        },
+    )
+    .expect("a renderer");
+    renderer.wait_for_pipelines();
+    renderer.set_lighting(metallic_render::SceneLighting {
+        sun_direction: (toward + Vec3::Y).normalize(),
+        ..renderer.lighting()
+    });
+    let normal = Vec3::new(tilt[0], tilt[1], 1.0).normalize();
+    let byte = |v: f32| ((v * 0.5 + 0.5) * 255.0).round() as u8;
+    let map = picture(|_, _| [byte(normal.x), byte(normal.y), byte(normal.z), 255]);
+    let side = MATERIAL_TEXTURE_SIZE;
+    let parts = renderer.parts_mut();
+    parts.materials_mut().set_material(
+        TEXTURED,
+        MaterialParams {
+            roughness: 1.0,
+            tile_size: 4.0,
+            ..MaterialParams::PLASTIC
+        },
+    );
+    parts.add_material_textures(
+        TEXTURED,
+        &MaterialTextureSet {
+            color: None,
+            normal: material_image(side, side, &map),
+            orm: None,
+            emission: None,
+        },
+    );
+    let mut scene = GpuScene::new(
+        context,
+        &mut game.dm,
+        Some(game.workspace),
+        &RenderComponents::builtin(),
+    )
+    .expect("a scene");
+    let mut reader = CameraReader::new();
+    for _ in 0..2 {
+        let camera = reader.read(&game.dm, game.workspace);
+        if let Some(camera) = camera {
+            scene.set_camera_position(&game.dm, camera.position);
+        }
+        scene.sync(&mut game.dm);
+        renderer.render_scene(target.view(), &mut scene, camera.as_ref());
+    }
+    let pixels = read_back_rgba8(context, target.texture());
+    assert_no_wgpu_errors();
+    let middle = SIZE / 4..SIZE * 3 / 4;
+    let mut sum = 0.0;
+    let mut count = 0.0;
+    for y in middle.clone() {
+        for x in middle.clone() {
+            let [r, g, b, _] = pixels[(y * SIZE + x) as usize];
+            sum += f32::from(r) + f32::from(g) + f32::from(b);
+            count += 3.0;
+        }
+    }
+    sum / count
+}
+
+/// #773: normal maps follow the OpenGL convention: red tilts the surface toward +U and green toward the picture's
+/// up (−V, as glTF's maps do). A block's top is mapped with U along +X and V along +Z, so a sun toward +X lights a
+/// red tilt and a sun toward −Z a green one.
+#[test]
+fn normal_maps_follow_the_opengl_convention() {
+    let Some(context) = gpu() else { return };
+    let tilt = 0.7;
+    let east = |red: f32| brightness_with(&context, Vec3::X, [red, 0.0]);
+    let (toward, away) = (east(tilt), east(-tilt));
+    assert!(toward > away + 2.0, "red toward the sun: {toward} against {away}");
+    let north = |green: f32| brightness_with(&context, Vec3::NEG_Z, [0.0, green]);
+    let (toward, away) = (north(tilt), north(-tilt));
+    assert!(toward > away + 2.0, "green toward the sun: {toward} against {away}");
+}

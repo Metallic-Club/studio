@@ -127,6 +127,14 @@ the picture, no sky.
 - **The inspector's ball (#757)** is painted from the part of the preview's target the frame fills: the target keeps
   room beyond the size drawn, as the viewport's does.
 
+### 9. Normal maps (2026-11-17, #773)
+
+Normal maps follow the **OpenGL convention**: red tilts the surface toward +U and green toward the picture's up,
+as glTF's and Roblox's maps do. A DirectX map needs its green channel inverted. The renderer builds the tangent
+frame from screen-space derivatives (Schüler's cotangent frame); WGSL's `dpdy` runs down the screen where GLSL's
+`dFdy` runs up, so the frame is the GLSL one negated, which had left red inverted against either convention until
+#773. A GPU test lights a tilted map from each side to hold the convention.
+
 ## Consequences
 
 - Scenes from before #678 hold `Material` enum items; they migrate to the project's material of that name, created

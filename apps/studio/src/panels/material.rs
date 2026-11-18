@@ -22,6 +22,10 @@ use crate::editor::EditorState;
 use crate::theme::current_colors;
 use crate::theme::tokens::{size, space, text};
 
+/// Which normal maps the renderer reads (#773), said beside the Normal map.
+pub(crate) const NORMAL_CONVENTION: &str = "Normal maps use the OpenGL convention: green points up the picture, as \
+                                            in glTF and Roblox. For a DirectX map, invert its green channel.";
+
 /// The width of the labels' column.
 const LABELS: f32 = 84.0;
 
@@ -219,7 +223,10 @@ fn channel_row(ui: &mut Ui, label: &str, channel: &mut Option<Channel>) {
 /// A texture map: `shown`, then a picture field (#762, [`values::picture_field`]) labelled `label` for screen
 /// readers; emptied, it clears the slot.
 fn texture_row(ui: &mut Ui, files: &Files, shown: &str, label: &str, slot: &mut Option<AssetId>) {
-    ui.label(row_label(shown));
+    let name = ui.label(row_label(shown));
+    if shown == "Normal" {
+        name.on_hover_text(NORMAL_CONVENTION);
+    }
     let current = slot.map(|id| id.to_string()).unwrap_or_default();
     let width = ui.available_width().max(120.0);
     if let Some(chosen) = values::picture_field(ui, files, label, &current, width) {
