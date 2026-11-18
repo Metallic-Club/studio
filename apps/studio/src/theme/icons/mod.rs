@@ -34,6 +34,8 @@ pub enum Group {
     Event,
     /// Explorer: lighting and lights.
     Light,
+    /// Explorer: StarterPlayer's built-in folders, StarterCharacterScripts and StarterPlayerScripts (#827).
+    StarterFolder,
     /// Explorer and Assets: the game's objects: parts, models, folders, cameras, meshes and scenes.
     Object,
     /// Explorer: values (Int, String, ...).
@@ -57,7 +59,7 @@ pub enum Group {
 
 impl Group {
     /// Every group, in the order the docs list them.
-    pub const ALL: [Group; 17] = [
+    pub const ALL: [Group; 18] = [
         Group::Workspace,
         Group::Storage,
         Group::SettingsService,
@@ -66,6 +68,7 @@ impl Group {
         Group::ModuleScript,
         Group::Event,
         Group::Light,
+        Group::StarterFolder,
         Group::Object,
         Group::Value,
         Group::Other,
@@ -88,6 +91,7 @@ impl Group {
             Group::ModuleScript => "module_script",
             Group::Event => "event",
             Group::Light => "light",
+            Group::StarterFolder => "starter_folder",
             Group::Object => "object",
             Group::Value => "value",
             Group::Other => "other",
@@ -118,7 +122,7 @@ impl Group {
             Group::LocalScript | Group::Scene => Hue::Blue,
             Group::ModuleScript | Group::Log => Hue::Purple,
             Group::Event | Group::Content => Hue::Pink,
-            Group::Light => Hue::Yellow,
+            Group::Light | Group::StarterFolder => Hue::Yellow,
             Group::Storage => Hue::Orange,
             Group::SettingsService => Hue::Cyan,
             Group::Object => Hue::White,
@@ -152,6 +156,7 @@ impl Group {
             Group::ModuleScript => "Explorer: module scripts",
             Group::Event => "Explorer: bindable events and functions",
             Group::Light => "Explorer: lighting and lights",
+            Group::StarterFolder => "Explorer: StarterPlayer's folders",
             Group::Object => "Explorer and Assets: parts, models, folders, cameras",
             Group::Value => "Explorer: values",
             Group::Other => "Explorer and Assets: other",
@@ -232,7 +237,7 @@ icons! {
     /// What players start with (`StarterPlayer`).
     ExplorerStarterPlayer = "explorer.starter_player", Storage, "user";
     /// `StarterPlayer`'s folders of player and character scripts.
-    ExplorerStarterScripts = "explorer.starter_scripts", LocalScript, "folder";
+    ExplorerStarterScripts = "explorer.starter_scripts", StarterFolder, "folder";
     /// The sound service.
     ExplorerSoundService = "explorer.sound_service", Storage, "music";
     /// A sound.

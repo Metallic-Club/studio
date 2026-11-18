@@ -62,6 +62,11 @@
       "light": "#1d6f7a",
       "for": "Explorer: input and settings services"
     },
+    "starter_folder": {
+      "dark": "#dcc25a",
+      "light": "#806512",
+      "for": "Explorer: StarterPlayer's folders"
+    },
     "storage": {
       "dark": "#e0995a",
       "light": "#a65619",
@@ -242,7 +247,7 @@
     },
     "explorer.starter_scripts": {
       "file": "explorer/folder.svg",
-      "color": "local_script"
+      "color": "starter_folder"
     },
     "explorer.string_value": {
       "file": "explorer/type.svg",

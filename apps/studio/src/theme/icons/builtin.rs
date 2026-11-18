@@ -117,6 +117,15 @@ fn was_default(icon: Icon, file: &str) -> bool {
         .any(|(former, path)| *former == icon && *path == file)
 }
 
+/// Colour groups icons were drawn in by default before their default changed, each with its icon. An `icons.json`
+/// entry still on one was never the user's choice, so it moves to the icon's current group (#827).
+const FORMER_GROUPS: &[(Icon, &str)] = &[(Icon::ExplorerStarterScripts, "local_script")];
+
+/// Whether `group` is a colour group `icon` was drawn in by default before (#827).
+fn was_default_group(icon: Icon, group: &str) -> bool {
+    FORMER_GROUPS.iter().any(|(former, id)| *former == icon && *id == group)
+}
+
 /// `icons.json` as shipped, keeping what the user chose in `theirs` (an older `icons.json` of theirs, #403: each
 /// group's colours, each icon's file and colour) and pointing the icons in `files` at the files given there (an older
 /// folder's own changes, carried into the new layout, #322). It lists every icon and group Studio has now, so new
@@ -155,8 +164,15 @@ pub(crate) fn manifest_json_keeping(theirs: Option<&Manifest>, files: &HashMap<I
                     })
                     .unwrap_or_else(|| icon.default_file());
                 let color = match kept {
-                    Some(kept) => kept.color.clone(),
-                    None => icon.group().is_coloured().then(|| icon.group().id().to_owned()),
+                    Some(kept)
+                        if !kept
+                            .color
+                            .as_deref()
+                            .is_some_and(|group| was_default_group(*icon, group)) =>
+                    {
+                        kept.color.clone()
+                    }
+                    _ => icon.group().is_coloured().then(|| icon.group().id().to_owned()),
                 };
                 (icon.id().to_owned(), Entry { file, color })
             })
@@ -762,6 +778,28 @@ mod tests {
         // A former default is never an icon's current one, nor another icon's former default by mistake.
         for (icon, file) in FORMER_DEFAULTS {
             assert_ne!(icon.default_file(), *file);
+        }
+    }
+
+    /// #827: an icon still in the colour group it was drawn in by default before moves to its current one; a group
+    /// the user chose stays.
+    #[test]
+    fn an_icon_still_in_its_former_group_gets_the_new_one() {
+        let theirs = |group: &str| -> Manifest {
+            serde_json::from_str(&format!(
+                r#"{{ "format": 3, "icons": {{ "explorer.starter_scripts": {{ "file": "explorer/folder.svg", "color": "{group}" }} }} }}"#
+            ))
+            .unwrap()
+        };
+        let color = |group: &str| {
+            let manifest: Manifest =
+                serde_json::from_str(&manifest_json_keeping(Some(&theirs(group)), &HashMap::new())).unwrap();
+            manifest.icons["explorer.starter_scripts"].color.clone()
+        };
+        assert_eq!(color("local_script").as_deref(), Some(Group::StarterFolder.id()));
+        assert_eq!(color("value").as_deref(), Some("value"));
+        for (icon, group) in FORMER_GROUPS {
+            assert_ne!(icon.group().id(), *group);
         }
     }
 

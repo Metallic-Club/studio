@@ -58,11 +58,11 @@
   }, {
     "id": 12,
     "parent": 11,
-    "class": "StarterPlayerScripts"
+    "class": "StarterCharacterScripts"
   }, {
     "id": 13,
     "parent": 11,
-    "class": "StarterCharacterScripts"
+    "class": "StarterPlayerScripts"
   }, {
     "id": 14,
     "class": "SoundService"
