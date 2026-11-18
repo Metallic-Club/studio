@@ -81,6 +81,7 @@ pub fn class_icon(registry: &Registry, class: ClassId) -> Icon {
             "DataModel" => Icon::ExplorerGame,
             "Camera" => Icon::ExplorerCamera,
             "MeshPart" => Icon::ExplorerMeshPart,
+            "SurfaceAppearance" => Icon::ExplorerSurfaceAppearance,
             "BasePart" => Icon::ExplorerPart,
             "Model" => Icon::ExplorerModel,
             "SpotLight" => Icon::ExplorerSpotLight,

@@ -613,6 +613,13 @@ impl AssetReader {
     /// game's material of that name, else the built-in one; #678, ADR 0012). Returns the material and what was
     /// skipped in its file.
     pub fn load_material(&mut self, id: &str) -> Result<crate::material::LoadedMaterial, AssetError> {
+        // A SurfaceAppearance's (#807): the key says the whole material.
+        if let Some(material) = crate::material::Material::from_surface_key(id) {
+            return Ok(crate::material::LoadedMaterial {
+                material,
+                warnings: Vec::new(),
+            });
+        }
         let key = if id.parse::<AssetId>().is_ok() {
             id.to_owned()
         } else if let Some(found) = self.material_named(id) {

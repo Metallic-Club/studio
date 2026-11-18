@@ -221,6 +221,10 @@ pub struct Material {
 
 /// The default roughness: plastic's.
 const DEFAULT_ROUGHNESS: f32 = 0.6;
+
+/// What starts a SurfaceAppearance's material key (#807): the same as `metallic_render`'s `SURFACE_KEY_PREFIX`, which
+/// writes the keys this crate reads ([`Material::from_surface_key`]).
+pub const SURFACE_KEY_PREFIX: &str = "surface:";
 /// The default tile size, in metres.
 const DEFAULT_TILE: f32 = 4.0;
 
@@ -416,6 +420,39 @@ impl Material {
         let mut ids: Vec<AssetId> = self.textures.ids().collect();
         ids.extend(self.packed.map(|packed| packed.texture));
         ids
+    }
+
+    /// The material a SurfaceAppearance's key says (#807, `metallic_render`'s `SURFACE_KEY_PREFIX`): its maps as
+    /// textures (on the mesh's own coordinates), its tint as the colour, the roughness and metalness its maps give
+    /// (or the usual ones without them). `None` when `key` is not such a key.
+    pub fn from_surface_key(key: &str) -> Option<Self> {
+        let fields = key.strip_prefix(SURFACE_KEY_PREFIX)?;
+        let mut material = Material::default();
+        for field in fields.split(';') {
+            let (name, value) = field.split_once('=')?;
+            let id = || value.parse::<AssetId>().ok();
+            match name {
+                "color" => material.textures.color = id(),
+                "normal" => material.textures.normal = id(),
+                "roughness" => material.textures.roughness = id(),
+                "metalness" => material.textures.metallic = id(),
+                "tint" => {
+                    let channels: Vec<f32> = value.split(',').filter_map(|c| c.trim().parse().ok()).collect();
+                    if let [r, g, b] = channels[..] {
+                        material.color = [r, g, b];
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A map gives the whole value: the constant it multiplies is 1.
+        if material.textures.roughness.is_some() {
+            material.roughness = 1.0;
+        }
+        if material.textures.metallic.is_some() {
+            material.metallic = 1.0;
+        }
+        Some(material)
     }
 
     /// Whether its textures are sampled nearest: as its filter says, or for [`Filter::Picture`] as its pictures are
@@ -615,5 +652,26 @@ mod tests {
         // Written and read back by name.
         let read = Material::from_bytes(Material::default().to_json().as_bytes()).unwrap();
         assert_eq!(read.material.filter, Filter::Picture);
+    }
+
+    /// #807: a SurfaceAppearance's key gives its maps, its tint and the values its maps set; another key gives none.
+    #[test]
+    fn a_surface_appearance_s_key_is_its_material() {
+        let key = "surface:color=0000000000000000000000000000000a;normal=;roughness=0000000000000000000000000000000b;\
+                   metalness=;tint=1,0.5,0.25;alpha=Overlay";
+        let material = Material::from_surface_key(key).unwrap();
+        assert_eq!(material.textures.color, "0000000000000000000000000000000a".parse().ok());
+        assert_eq!(material.textures.normal, None);
+        assert_eq!(
+            material.textures.roughness,
+            "0000000000000000000000000000000b".parse().ok()
+        );
+        assert_eq!(material.color, [1.0, 0.5, 0.25]);
+        assert_eq!(
+            (material.roughness, material.metallic),
+            (1.0, 0.0),
+            "the map's roughness, no metal"
+        );
+        assert_eq!(Material::from_surface_key("Metal"), None);
     }
 }

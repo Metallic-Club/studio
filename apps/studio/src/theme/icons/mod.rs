@@ -237,6 +237,8 @@ icons! {
     ExplorerPart = "explorer.part", Object, "box";
     /// A mesh part.
     ExplorerMeshPart = "explorer.mesh_part", Object, "cuboid";
+    /// A surface appearance: a mesh part's own maps.
+    ExplorerSurfaceAppearance = "explorer.surface_appearance", Object, "palette";
     /// A model.
     ExplorerModel = "explorer.model", Object, "shapes";
     /// A spotlight.

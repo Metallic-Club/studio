@@ -299,7 +299,7 @@ mod tests {
                 .iter()
                 .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 36);
+        assert_eq!(input().classes.len(), 37);
         let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
         components.sort_unstable();
         assert_eq!(
@@ -314,9 +314,9 @@ mod tests {
         );
         assert_eq!(
             input().enums.concat().len(),
-            7,
-            "PartShape, KeyCode, UserInputType, UserInputState, MouseBehavior, GraphicsPreset and AntiAliasingMode \
-             (materials are assets, #678)"
+            8,
+            "PartShape, KeyCode, UserInputType, UserInputState, MouseBehavior, GraphicsPreset, AntiAliasingMode and \
+             AlphaMode (materials are assets, #678)"
         );
     }
 }

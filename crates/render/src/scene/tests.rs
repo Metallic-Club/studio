@@ -972,3 +972,38 @@ fn mesh_parts_get_a_kind_per_mesh_and_texture() {
     assert_eq!(scene.mesh_asset_revision(), revision);
     assert_eq!(scene.draw_list(first).len(), 2);
 }
+
+/// #807: a MeshPart with a SurfaceAppearance draws with the material its key says, made again when the appearance
+/// changes, and with its own Material again once the appearance goes.
+#[test]
+fn a_surface_appearance_gives_its_mesh_part_a_material() {
+    let mut game = Game::new();
+    let dm = &mut game.dm;
+    let part = dm.create(dm.registry().class_id("MeshPart").unwrap()).unwrap();
+    dm.set_by_name(part, "MeshId", Value::String("0000000000000000000000000000000c".into()))
+        .unwrap();
+    dm.set_by_name(part, "Material", Value::String("Metal".into())).unwrap();
+    dm.set_parent(part, Some(game.workspace)).unwrap();
+    let surface = dm.create(dm.registry().class_id("SurfaceAppearance").unwrap()).unwrap();
+    dm.set_parent(surface, Some(part)).unwrap();
+    let mut scene = game.scene();
+    frame(&mut scene, &mut game.dm);
+    let key = |scene: &InstanceScene, at: &GpuInstance| {
+        let row = (at.mesh_material & 0xffff) as usize;
+        scene.material_keys()[row - 1].to_string()
+    };
+    let first = key(&scene, &instance(&scene, part));
+    assert!(first.starts_with(super::SURFACE_KEY_PREFIX), "{first}");
+    assert!(first.contains("tint=1,1,1"), "{first}");
+
+    game.dm
+        .set_by_name(surface, "Color", Value::Color3(Color3::new(1.0, 0.0, 0.0)))
+        .unwrap();
+    frame(&mut scene, &mut game.dm);
+    let tinted = key(&scene, &instance(&scene, part));
+    assert!(tinted.contains("tint=1,0,0"), "{tinted}");
+
+    game.dm.set_parent(surface, None).unwrap();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(key(&scene, &instance(&scene, part)), "Metal");
+}

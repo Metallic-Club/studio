@@ -13,6 +13,7 @@ use super::lights::{LightChange, LightSet, SceneLight};
 use super::lists::{DrawLists, NOT_LISTED, entry, entry_slot, list_of};
 use super::materials::MaterialKeys;
 use super::slots::RegionSlots;
+use super::surface::SurfaceProps;
 use super::{
     DEMOTE_REST, MAX_SHADOW_CHANGES, MAX_UPLOAD_GAP, ORIGIN_GRID, PROMOTE_MOVES_ANCHORED, PROMOTE_MOVES_UNANCHORED,
     PROMOTE_WINDOW, REST_CHECKS_PER_FRAME, Region, SHADOW_FLAGS, SlotRef, SyncStats, UploadRange, is_see_through,
@@ -89,6 +90,11 @@ pub struct InstanceScene {
     asset_kinds: AssetKinds,
     /// The material keys and their rows (see [`super::materials`]).
     material_keys: MaterialKeys,
+    /// The SurfaceAppearance class and its properties (#807), if the registry has them.
+    surface: Option<SurfaceProps>,
+    /// Each SurfaceAppearance seen and the instance it is in: when it changes, appears or goes, that one is packed
+    /// again (#807).
+    surfaces: std::collections::HashMap<Id, Id>,
 }
 
 /// The static region's shadow-caster changes since they were last taken: bounding spheres, origin-relative.
@@ -150,6 +156,8 @@ impl InstanceScene {
             has_lights: false,
             asset_kinds: AssetKinds::default(),
             material_keys: MaterialKeys::default(),
+            surface: SurfaceProps::of(dm.registry()),
+            surfaces: std::collections::HashMap::new(),
         })
     }
 
@@ -211,7 +219,14 @@ impl InstanceScene {
 
         dm.drain_removed(self.consumer, &mut self.removed);
         let removed = std::mem::take(&mut self.removed);
+        let mut bare = Vec::new();
         for &id in &removed {
+            // A SurfaceAppearance gone: its part draws with its own material again (#807).
+            if !self.surfaces.is_empty()
+                && let Some(part) = self.surfaces.remove(&id)
+            {
+                bare.push(part);
+            }
             if let Some(slot) = self.lookup(id) {
                 self.release(id, slot);
                 stats.removed += 1;
@@ -221,10 +236,21 @@ impl InstanceScene {
         }
         self.removed = removed;
         self.removed.clear();
+        for part in bare {
+            if dm.contains(part) {
+                self.apply(dm, part, DirtyBits::VISUAL, &mut stats);
+            }
+        }
 
         dm.drain_changes(self.consumer, &mut self.changes);
         let changes = std::mem::take(&mut self.changes);
         for &(id, bits) in &changes {
+            // A SurfaceAppearance's change is new, moved or visual: a move of parts never pays for the test.
+            if bits.intersects(DirtyBits::VISUAL | DirtyBits::STRUCTURE | DirtyBits::CREATED)
+                && self.surface_changed(dm, id, &mut stats)
+            {
+                continue;
+            }
             self.apply(dm, id, bits, &mut stats);
         }
         self.changes = changes;
@@ -573,6 +599,31 @@ impl InstanceScene {
         self.classes.get(dm.class_of(id).ok()?).copied()
     }
 
+    /// When `id` is a SurfaceAppearance (#807): packs again the part it is in now and the one it was in, and returns
+    /// `true`.
+    fn surface_changed(&mut self, dm: &DataModel, id: Id, stats: &mut SyncStats) -> bool {
+        let Some(surface) = self.surface else {
+            return false;
+        };
+        if !dm.class_of(id).is_ok_and(|class| class == surface.class) {
+            return false;
+        }
+        let now = dm.parent(id).ok().flatten();
+        let before = match now {
+            Some(part) => self.surfaces.insert(id, part),
+            None => self.surfaces.remove(&id),
+        };
+        for part in [now, before.filter(|&before| Some(before) != now)]
+            .into_iter()
+            .flatten()
+        {
+            if dm.contains(part) {
+                self.apply(dm, part, DirtyBits::VISUAL, stats);
+            }
+        }
+        true
+    }
+
     fn apply(&mut self, dm: &DataModel, id: Id, bits: DirtyBits, stats: &mut SyncStats) {
         let Some(binding) = self.binding(dm, id) else {
             // Only instances that are not drawn get here, so drawn ones never pay for lights or the watch list.
@@ -787,7 +838,21 @@ impl InstanceScene {
     /// the change record names a transform property (`CFrame`, `Position`, `Orientation`, `Size`: the `TRANSFORM`
     /// dirty bit), which moves the bounding sphere for the culling grid.
     fn write(&mut self, dm: &DataModel, id: Id, slot: SlotRef, binding: &ClassBinding, transform: bool) {
-        let mut instance = pack(dm, id, binding, &mut self.material_keys, self.origin);
+        // A MeshPart with a SurfaceAppearance draws with the material made from it (#807); with none in the game,
+        // nothing is looked up.
+        let surface = if self.surfaces.is_empty() {
+            None
+        } else {
+            self.surface.and_then(|surface| surface.key_of(dm, id))
+        };
+        let mut instance = pack(
+            dm,
+            id,
+            binding,
+            &mut self.material_keys,
+            self.origin,
+            surface.as_deref(),
+        );
         if let Some(asset) = binding.asset {
             self.asset_kind(dm, id, asset, &mut instance);
         }
@@ -847,8 +912,16 @@ impl InstanceScene {
     }
 }
 
-/// The packed instance of `id`, read from the data model. Properties that cannot be read draw with defaults.
-fn pack(dm: &DataModel, id: Id, binding: &ClassBinding, materials: &mut MaterialKeys, origin: Vec3) -> GpuInstance {
+/// The packed instance of `id`, read from the data model. Properties that cannot be read draw with defaults. A
+/// `surface` key (a SurfaceAppearance's, #807) is its material in place of its `Material`.
+fn pack(
+    dm: &DataModel,
+    id: Id,
+    binding: &ClassBinding,
+    materials: &mut MaterialKeys,
+    origin: Vec3,
+    surface: Option<&str>,
+) -> GpuInstance {
     let props = &binding.props;
     let cframe = dm.cframe(id, props.cframe).unwrap_or(CFrame::IDENTITY);
     let size = props.size.and_then(|p| dm.vector3(id, p).ok()).unwrap_or(Vec3::ONE);
@@ -858,10 +931,13 @@ fn pack(dm: &DataModel, id: Id, binding: &ClassBinding, materials: &mut Material
         .transparency
         .and_then(|p| dm.number(id, p).ok())
         .map_or(0.0, |t| t.clamp(0.0, 1.0) as f32);
-    let material = props
-        .material
-        .and_then(|p| dm.string(id, p).ok())
-        .map_or(0, |key| materials.row(key));
+    let material = match surface {
+        Some(key) => materials.row(key),
+        None => props
+            .material
+            .and_then(|p| dm.string(id, p).ok())
+            .map_or(0, |key| materials.row(key)),
+    };
     let cast_shadow = props.cast_shadow.is_none_or(|p| dm.bool(id, p).unwrap_or(true));
     let mut flags = GpuInstance::LIVE | transparency_flags(transparency);
     if cast_shadow {
