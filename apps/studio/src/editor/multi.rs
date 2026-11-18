@@ -324,6 +324,7 @@ impl EditorState {
             history: History::new(Selection::new()),
             selection: Selection::new(),
             explorer,
+            parts: Default::default(),
             net: Some(net),
         });
         Ok(port)
@@ -356,6 +357,7 @@ impl EditorState {
             history: History::new(Selection::new()),
             selection: Selection::new(),
             explorer,
+            parts: Default::default(),
             net: Some(Net {
                 kind: PlayKind::Joined,
                 server: None,

@@ -4547,6 +4547,42 @@ mod tests {
         assert!(selected_names(&harness).is_empty());
     }
 
+    /// #834, #835: while a game runs, the Viewport (its Server view) selects the running game's parts and its tools
+    /// work there, and the Game tab's menu has the Viewport's View and Shading sections.
+    #[test]
+    fn while_playing_the_viewport_selects_and_moves_the_game_s_parts() {
+        let mut harness = editing(settings_file("editor-play-viewport", None), "Play Pick Game");
+        harness.set_size(egui::vec2(1280.0, 900.0));
+        settle(&mut harness);
+        let spawn = on_screen(&harness, "SpawnLocation");
+        harness.key_press(Key::F5);
+        settle(&mut harness);
+        // The Game tab's menu (#834).
+        harness.get_by_role_and_label(Role::Button, "Game options").click();
+        settle(&mut harness);
+        harness.get_by_label("Shading");
+        harness.get_by_label("Axis gizmo");
+        harness.key_press(Key::Escape);
+        settle(&mut harness);
+        // The Viewport, in front: a click selects the game's SpawnLocation, not the editor's.
+        harness.get_by_role_and_label(Role::Tab, "Server").click();
+        settle(&mut harness);
+        left_click(&mut harness, egui::Rect::from_center_size(spawn, egui::Vec2::ZERO));
+        {
+            let editor = harness.state_mut().studio.editor_mut().unwrap();
+            assert!(editor.selection.is_empty(), "the editor's selection is untouched");
+            let scene = editor.scene();
+            assert!(scene.playing);
+            let picked = scene.selection.active().expect("a click in the Server view selects");
+            assert_eq!(scene.dm.name(picked).unwrap(), "SpawnLocation");
+        }
+        // The Move tool works there too: 2 picks it.
+        harness.key_press(Key::Num2);
+        settle(&mut harness);
+        let gizmo = &harness.state().studio.editor().unwrap().viewport.gizmo;
+        assert_eq!(gizmo.tool, Some(crate::viewport::tools::Tool::Move));
+    }
+
     #[test]
     fn shift_and_f1_to_f4_show_and_hide_the_stats_viewers() {
         let mut harness = editing(settings_file("editor-stats-keys", None), "Stats Keys Game");

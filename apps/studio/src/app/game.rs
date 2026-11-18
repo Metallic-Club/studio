@@ -31,6 +31,8 @@ impl GameRenderer {
     pub fn frame(&mut self, context: &RenderContext, painter: &mut egui_wgpu::Renderer, studio: &mut Studio) -> bool {
         // The stats viewers the viewport shows (#479) show over the game too (#492).
         let stats = studio.editor().map(|editor| editor.viewport.stats).unwrap_or_default();
+        // And its shading (#834): the Viewport's menu and the Game tab's set the one choice.
+        let shading = studio.settings().viewport.shading;
         let session = studio.editor_mut().and_then(|editor| editor.play.as_mut());
         let Some(session) = session else {
             if let Some((id, ..)) = self.texture.take() {
@@ -68,6 +70,9 @@ impl GameRenderer {
             let mut renderer = player.renderer().borrow_mut();
             if renderer.stats_viewers() != stats {
                 renderer.set_stats_viewers(stats);
+            }
+            if renderer.shading_view() != shading {
+                renderer.set_shading_view(shading);
             }
         }
         player.render_viewport();

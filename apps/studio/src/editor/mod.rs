@@ -151,6 +151,14 @@ impl EditorState {
         self.parts.update(&mut self.dm);
     }
 
+    /// The part index of the scene the Viewport shows (#835): the running game's while one runs, else the editor's.
+    pub fn shown_parts_mut(&mut self) -> &mut crate::viewport::index::PartIndex {
+        match self.play.as_mut() {
+            Some(session) => &mut session.parts,
+            None => &mut self.parts,
+        }
+    }
+
     /// The project's file.
     pub fn path(&self) -> &Path {
         self.project.path()

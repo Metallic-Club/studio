@@ -140,6 +140,10 @@ impl ViewportRenderer {
                 if let Some((width, height)) = wanted {
                     scene.resize_viewport(width, height);
                 }
+                // Shaded as the Viewport is (#834).
+                if scene.shading_view() != shading {
+                    scene.set_shading_view(shading);
+                }
                 scene.set_camera(Some(viewport.camera.camera()));
                 scene.render_viewport(session.player.engine_mut().data_model_mut(), FrameStats::default());
                 session.number
