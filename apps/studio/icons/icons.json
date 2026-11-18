@@ -62,6 +62,11 @@
       "light": "#1d6f7a",
       "for": "Explorer: input and settings services"
     },
+    "sound": {
+      "dark": "#e86b6b",
+      "light": "#b02e2e",
+      "for": "Explorer and Assets: sounds"
+    },
     "starter_folder": {
       "dark": "#dcc25a",
       "light": "#806512",
@@ -227,11 +232,11 @@
     },
     "explorer.sound": {
       "file": "explorer/volume-2.svg",
-      "color": "object"
+      "color": "sound"
     },
     "explorer.sound_service": {
       "file": "explorer/music.svg",
-      "color": "storage"
+      "color": "sound"
     },
     "explorer.spot_light": {
       "file": "explorer/spotlight.svg",
