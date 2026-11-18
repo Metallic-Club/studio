@@ -66,6 +66,9 @@ pub(crate) fn show(ui: &mut Ui, editor: &mut EditorState, path: &str) {
             if matches!(entry.kind, EntryKind::File(AssetKind::Image)) {
                 picture_rows(ui, editor, &entry);
             }
+            if matches!(entry.kind, EntryKind::File(AssetKind::Mesh)) {
+                mesh_rows(ui, editor, &entry);
+            }
         });
     for act in acts {
         super::apply(ui, editor, act);
@@ -163,6 +166,55 @@ fn file_rows(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, acts: &mut Ve
             folder_color(ui, editor, entry, shades.fill(count - 1));
         }
     });
+}
+
+/// A mesh's category (#806): how many triangles and vertices its model has, and its size, read once.
+fn mesh_rows(ui: &mut Ui, editor: &mut EditorState, entry: &Entry) {
+    let Some(id) = editor.project.assets().id(&entry.path) else {
+        return;
+    };
+    let facts = *editor.mesh_facts.entry(id).or_insert_with(|| {
+        let mesh = editor.project.asset_reader().load_mesh(&id.to_string()).ok()?;
+        Some(crate::editor::assets::MeshFacts {
+            triangles: mesh.indices.len() / 3,
+            vertices: mesh.positions.len(),
+            size: mesh.size,
+        })
+    });
+    if category_heading(ui, "Mesh", 0.0) {
+        let shades = current_colors(ui.ctx()).palette.rows();
+        let rows: Vec<(&str, String)> = match facts {
+            Some(facts) => {
+                let [x, y, z] = facts
+                    .size
+                    .map(|side| crate::panels::properties::number(f64::from(side)));
+                vec![
+                    ("Triangles", facts.triangles.to_string()),
+                    ("Vertices", facts.vertices.to_string()),
+                    ("Size", format!("{x} \u{00d7} {y} \u{00d7} {z}")),
+                ]
+            }
+            None => vec![("Status", "Could not be read as a model".to_owned())],
+        };
+        let count = rows.len();
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (index, (label, value)) in rows.iter().enumerate() {
+                plain_row(
+                    ui,
+                    label,
+                    "",
+                    shades.fill(index),
+                    index + 1 == count,
+                    Mark::None,
+                    |ui| {
+                        plain_value(ui, label, value);
+                    },
+                );
+            }
+        });
+    }
+    ui.add_space(space::S5);
 }
 
 /// A picture's category (#781): its filtering, Smooth or Pixelated, which its preview, its thumbnails, a MeshPart's

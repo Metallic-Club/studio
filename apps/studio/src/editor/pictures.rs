@@ -15,6 +15,8 @@ pub enum Picture {
     Material,
     /// A scene, from its camera.
     Scene,
+    /// A mesh's model (#806), whole.
+    Mesh,
 }
 
 /// A thumbnail asked for: the asset, what it is, the member it is drawn from and that member's content.

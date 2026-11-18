@@ -209,8 +209,10 @@ fn row_ui(ui: &mut Ui, editor: &mut EditorState, row: &Row, stripe: Color32, key
             pos2(x, rect.center().y - text::BODY / 2.0),
             vec2(text::BODY, text::BODY),
         );
-        let pictured = matches!(entry.kind, EntryKind::File(AssetKind::Material | AssetKind::Image))
-            && super::grid::thumbnail(ui, editor, entry, picture);
+        let pictured = matches!(
+            entry.kind,
+            EntryKind::File(AssetKind::Material | AssetKind::Image | AssetKind::Mesh)
+        ) && super::grid::thumbnail(ui, editor, entry, picture);
         if !pictured {
             icons::paint_at(
                 ui.painter(),

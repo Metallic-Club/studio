@@ -192,3 +192,36 @@ fn screenshot_of_the_thumbnails() {
     }
     write_png(&out.join("681-thumbnails.png"), offscreen.read());
 }
+
+/// #806: a mesh's tile asks for a picture of its model, and its properties show what the model holds.
+#[test]
+fn a_mesh_has_a_thumbnail_and_properties() {
+    let mut harness = editing(settings_file("thumbnails-mesh", None), "Mesh Game");
+    harness.set_size(egui::vec2(1400.0, 1600.0));
+    let editor_state = editor(&mut harness);
+    if !editor_state.project.contains("Assets/cube.glb") {
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/project/tests/fixtures/textured_cube.glb");
+        editor_state
+            .project
+            .create_member("Assets/cube.glb", std::fs::read(model).unwrap())
+            .unwrap();
+    }
+    let id = editor_state.project.assets().id("Assets/cube.glb").unwrap();
+    editor_state.browser.open_folder("Assets");
+    editor_state.browser.query = "cube".into();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Tab, "Assets").click();
+    settle(&mut harness);
+    let editor_state = editor(&mut harness);
+    let asked: Vec<_> = std::iter::from_fn(|| editor_state.pictures.take_next())
+        .map(|wanted| (wanted.id, wanted.picture))
+        .collect();
+    assert!(asked.contains(&(id, Picture::Mesh)), "{asked:?}");
+
+    harness.get_by_role_and_label(Role::GridCell, "cube").click();
+    settle(&mut harness);
+    harness.get_by_label("MESH");
+    harness.get_by_label_contains("Triangles: ");
+    harness.get_by_label_contains("Vertices: ");
+}

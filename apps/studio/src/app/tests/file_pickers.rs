@@ -40,18 +40,26 @@ fn a_mesh_part_s_ids_and_a_script_s_source_are_picked_from_the_project_s_files()
     };
     settle(&mut harness);
 
-    // The mesh's picker offers the model alone; choosing it stores its id.
-    let mesh = harness.get_by_role_and_label(Role::ComboBox, "MeshId");
-    mesh.click();
+    // The mesh's window (#806) offers the model alone; choosing it stores its id.
+    harness.get_by_role_and_label(Role::Button, "Choose MeshId").click();
     settle(&mut harness);
-    assert!(
+    harness.get_by_label("Search the meshes");
+    assert!(harness.query_by_role_and_label(Role::Row, "bark").is_none());
+    harness.get_by_role_and_label(Role::Row, "None");
+    let time = harness.ctx.input(|input| input.time) + 1.0;
+    harness.input_mut().time = Some(time);
+    harness.get_by_role_and_label(Role::Row, "rock").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Select").click();
+    settle(&mut harness);
+    assert_eq!(
         harness
-            .query_by_role_and_label(Role::Button, "Assets/bark.png")
-            .is_none()
+            .get_by_role_and_label(Role::TextInput, "MeshId")
+            .value()
+            .as_deref(),
+        Some("rock"),
+        "the mesh's name"
     );
-    harness.get_by_role_and_label(Role::Button, "None");
-    harness.get_by_role_and_label(Role::Button, "Assets/rock.glb").click();
-    settle(&mut harness);
     let editor = harness.state_mut().studio.editor_mut().unwrap();
     assert_eq!(
         editor.dm.get_by_name(part, "MeshId"),
@@ -131,7 +139,7 @@ fn a_file_dragged_from_the_assets_panel_onto_a_picker_is_chosen() {
     harness.get_by_role_and_label(Role::Tab, "Assets").click();
     settle(&mut harness);
     let from = harness.get_by_role_and_label(Role::GridCell, "rock").rect().center();
-    let to = harness.get_by_role_and_label(Role::ComboBox, "MeshId").rect().center();
+    let to = harness.get_by_role_and_label(Role::TextInput, "MeshId").rect().center();
     drag(&mut harness, from, to);
     let editor = harness.state_mut().studio.editor_mut().unwrap();
     assert_eq!(
