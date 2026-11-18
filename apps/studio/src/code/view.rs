@@ -1335,6 +1335,12 @@ fn enter(ctx: &egui::Context, id: Id, text: &mut String, settings: &CodeEditor) 
     };
     let at = range.primary.index.0;
     if at == range.secondary.index.0
+        && let Some((with, cursor)) = pair_enter(text, at, &settings.indent())
+    {
+        edit_chars(ctx, id, &mut state, text, at..at, &with, at + cursor);
+        return true;
+    }
+    if at == range.secondary.index.0
         && let Some(enter) = super::blocks::enter(text, byte_of(text, at), &settings.indent())
     {
         let from = text[..enter.replace.start].chars().count();
@@ -1438,6 +1444,20 @@ pub fn indent_lines(text: &str, from: usize, to: usize, indent: &str, out: bool)
         start += line.chars().count() + 1;
     }
     (result, new_from, new_to)
+}
+
+/// Enter at the character `at` of `text` between a pair (#856: `{}`, `[]`, `()` or `""`): what goes in, a line for the
+/// cursor a `step` further in than this one and the closer on the line after at this one's indentation, and where
+/// the cursor goes in it (characters). `None` elsewhere.
+fn pair_enter(text: &str, at: usize, step: &str) -> Option<(String, usize)> {
+    let before = text[..byte_of(text, at)].chars().next_back()?;
+    let after = text[byte_of(text, at)..].chars().next()?;
+    if !matches!((before, after), ('{', '}') | ('[', ']') | ('(', ')') | ('"', '"')) {
+        return None;
+    }
+    let indent = indentation(text, at);
+    let with = format!("\n{indent}{step}\n{indent}");
+    Some((with, 1 + indent.chars().count() + step.chars().count()))
 }
 
 /// The cursor of the field `id`, as a character index.
@@ -1813,6 +1833,28 @@ mod tests {
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 1), ["one"]);
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 2), ["two"]);
         assert!(messages_on_line(text, &Lines::new(text), &diagnostics, 0).is_empty());
+    }
+
+    /// #856: Enter between a pair opens a line between them, indented a step, the closer on the line after.
+    #[test]
+    fn enter_between_a_pair_opens_a_line_between() {
+        let enter = |code: &str| {
+            let at = code.find('|').unwrap();
+            let text = code.replacen('|', "", 1);
+            pair_enter(&text, at, "  ").map(|(with, cursor)| {
+                let mut out = text.clone();
+                out.insert_str(at, &with);
+                out.insert(at + cursor, '|');
+                out
+            })
+        };
+        assert_eq!(enter("local t = {|}").as_deref(), Some("local t = {\n  |\n}"));
+        assert_eq!(enter("  f(|)").as_deref(), Some("  f(\n    |\n  )"));
+        assert_eq!(enter("x = [|]").as_deref(), Some("x = [\n  |\n]"));
+        assert_eq!(enter("s = \"|\"").as_deref(), Some("s = \"\n  |\n\""));
+        assert_eq!(enter("f(|x)"), None);
+        assert_eq!(enter("{|]"), None);
+        assert_eq!(enter("|"), None);
     }
 
     /// #855: undo goes past the states that only had the cursor elsewhere, to the last edit, and redo comes back to
