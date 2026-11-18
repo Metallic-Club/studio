@@ -9973,6 +9973,7 @@ skip_sign_in = true
     mod file_pickers;
     mod game_settings;
     mod grouping;
+    mod light_properties;
     mod material_editor;
     mod team_create;
     mod team_play;

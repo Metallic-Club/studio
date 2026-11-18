@@ -18,7 +18,7 @@
 //! the part's centre. Anywhere else (in a `Model`, a `Folder` or the `Workspace`) its `CFrame` is in world space.
 //! [`world_cframe`] resolves the two cases; the renderer (M3) reads lights through it.
 
-use metallic_core::{CFrame, ClassDesc, DataModel, DmError, Id, PropMeta, Value, Widget};
+use metallic_core::{CFrame, ClassDesc, DataModel, DmError, Id, PropFlags, PropMeta, ScriptError, Value, Widget};
 
 use crate::base::world_object::is_a_named;
 
@@ -29,14 +29,89 @@ pub const CATEGORY: &str = "Lights";
 pub const EMITTER_REQUIRES: &[&str] = &["Transform"];
 
 /// The Properties panel group of the members every light shares.
-pub const GROUP: &str = "Light";
+pub const GROUP: &str = "Lighting";
 
+/// The light's `CFrame` and its id.
+fn cframe_of(dm: &DataModel, id: Id) -> Option<(CFrame, metallic_core::PropId)> {
+    let prop = dm.prop_id(id, "CFrame").ok()?;
+    Some((dm.cframe(id, prop).ok()?, prop))
+}
+
+/// Where a light is (`Position`): its `CFrame`'s position.
+fn position_get(dm: &DataModel, id: Id) -> Value {
+    Value::Vector3(cframe_of(dm, id).map(|(cframe, _)| cframe.position()).unwrap_or_default())
+}
+
+fn position_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError> {
+    let Value::Vector3(position) = value else {
+        return Err(ScriptError::runtime("Position takes a Vector3"));
+    };
+    let (current, prop) = cframe_of(dm, id).ok_or_else(|| ScriptError::runtime("the light has no CFrame"))?;
+    dm.set(id, prop, Value::CFrame(CFrame::from_parts(position, current.rotation())))?;
+    Ok(())
+}
+
+/// Which way a light points (`Orientation`, shown as Rotation): its `CFrame`'s rotation as angles in degrees.
+pub(crate) fn orientation_get(dm: &DataModel, id: Id) -> Value {
+    Value::Vector3(
+        cframe_of(dm, id)
+            .map(|(cframe, _)| cframe.to_orientation_deg())
+            .unwrap_or_default(),
+    )
+}
+
+pub(crate) fn orientation_set(dm: &mut DataModel, id: Id, value: Value) -> Result<(), ScriptError> {
+    let Value::Vector3(angles) = value else {
+        return Err(ScriptError::runtime("Orientation takes a Vector3"));
+    };
+    let (current, prop) = cframe_of(dm, id).ok_or_else(|| ScriptError::runtime("the light has no CFrame"))?;
+    let rotation = CFrame::from_orientation_deg(angles.x, angles.y, angles.z).rotation();
+    dm.set(id, prop, Value::CFrame(CFrame::from_parts(current.position(), rotation)))?;
+    Ok(())
+}
+
+// In the order of the Properties panel's groups (#833): General, Transform, Lighting. A group comes where the class's
+// properties first name it.
 static PROPS: &[PropMeta] = &[
+    // Not in the Properties panel (#833): a light has no shape to pivot about. Scripts and the pivot still use it.
+    PropMeta::cframe("PivotOffset")
+        .override_inherited()
+        .flags(PropFlags::HIDDEN)
+        .group("Transform")
+        .order(10)
+        .desc("Where the light's pivot sits, relative to the light."),
+    PropMeta::boolean("Locked", false)
+        .group("General")
+        .order(1)
+        .desc("Whether clicking the light's icon in the viewport leaves it alone. It can still be selected in the Explorer."),
     PropMeta::boolean("Enabled", true)
+        .visual()
+        .group("General")
+        .order(2)
+        .desc("Whether the light shines. Turning it off keeps every other setting."),
+    PropMeta::cframe("CFrame")
+        .transform()
+        // Position (and a spotlight's Rotation) are its rows in the Properties panel (#833); scripts still see it.
+        .flags(PropFlags::HIDDEN)
+        .group("Transform")
+        .order(0)
+        .desc(
+            "Where the light is and which way it points (forward is -Z). Inside a part it is relative to the part, \
+             so the light moves with it; anywhere else it is in world space.",
+        ),
+    PropMeta::vector3("Position", 0.0, 0.0, 0.0)
+        .computed(position_get, Some(position_set))
+        .derived_from(&["CFrame"])
+        .transform()
+        .flags(PropFlags::NO_SAVE)
+        .group("Transform")
+        .order(1)
+        .desc("Where the light is, in metres: inside a part, from the part's centre; anywhere else, in the world."),
+    PropMeta::color3("Color", 1.0, 1.0, 1.0)
         .visual()
         .group(GROUP)
         .order(0)
-        .desc("Whether the light shines. Turning it off keeps every other setting."),
+        .desc("The colour of the light."),
     PropMeta::number("Brightness", 1.0)
         // No upper limit (#406): as bright as a scene needs.
         .range(0.0, f64::INFINITY)
@@ -45,30 +120,17 @@ static PROPS: &[PropMeta] = &[
         .group(GROUP)
         .order(1)
         .desc("How strong the light is. 1 is an ordinary lamp; 0 gives no light; there is no upper limit."),
-    PropMeta::color3("Color", 1.0, 1.0, 1.0)
-        .visual()
-        .group(GROUP)
-        .order(2)
-        .desc("The colour of the light."),
     PropMeta::number("Range", 16.0)
         .range(0.0, 1000.0)
         .visual()
         .group(GROUP)
-        .order(3)
+        .order(2)
         .desc("How far the light reaches, in metres. Past this distance it lights nothing."),
     PropMeta::boolean("Shadows", false)
         .visual()
-        .group("Shadows")
-        .order(0)
+        .group(GROUP)
+        .order(4)
         .desc("Whether objects block this light and cast shadows. Shadows cost performance, so use them sparingly."),
-    PropMeta::cframe("CFrame")
-        .transform()
-        .group("Transform")
-        .order(0)
-        .desc(
-            "Where the light is and which way it points (forward is -Z). Inside a part it is relative to the part, \
-             so the light moves with it; anywhere else it is in world space.",
-        ),
 ];
 
 /// The base of every light.

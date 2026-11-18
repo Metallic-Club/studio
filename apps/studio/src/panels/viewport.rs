@@ -325,7 +325,7 @@ impl Panel for Viewport {
                 log::warn!("materials: {error}");
             }
             let under = |at: egui::Pos2| {
-                light_icons::icon_at(&lights, at)
+                light_icons::icon_at(&editor.dm, &lights, at)
                     .or_else(|| view.ray(at).and_then(|ray| pick::pick(&editor.dm, &editor.parts, ray)))
             };
             let hovered = response.hover_pos().filter(|_| !on_gizmo).and_then(under);
@@ -352,7 +352,7 @@ impl Panel for Viewport {
             } else if response.clicked() && (modifiers.alt || !on_gizmo) {
                 let adding = modifiers.command || modifiers.shift;
                 let at = response.interact_pointer_pos();
-                if let Some(light) = at.and_then(|at| light_icons::icon_at(&lights, at)) {
+                if let Some(light) = at.and_then(|at| light_icons::icon_at(&editor.dm, &lights, at)) {
                     // A light's icon (#506).
                     editor.viewport.pick_cycle.reset();
                     if adding {

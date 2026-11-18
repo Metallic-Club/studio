@@ -168,11 +168,13 @@ fn circle(lines: &mut Vec<[Vec3; 2]>, centre: Vec3, a: Vec3, b: Vec3) {
     lines.extend((0..CIRCLE_STEPS).map(|step| [point(step), point(step + 1)]));
 }
 
-/// The light whose icon is under `at`, the nearest where icons overlap.
-pub fn icon_at(icons: &[LightIcon], at: Pos2) -> Option<Id> {
+/// The light whose icon is under `at`, the nearest where icons overlap. A `Locked` light (#833) is not clicked: what
+/// is behind its icon is.
+pub fn icon_at(dm: &DataModel, icons: &[LightIcon], at: Pos2) -> Option<Id> {
     icons
         .iter()
         .rev()
+        .filter(|icon| dm.get_by_name(icon.id, "Locked") != Ok(Value::Bool(true)))
         .find(|icon| icon.rect.contains(at))
         .map(|icon| icon.id)
 }
@@ -234,8 +236,11 @@ mod tests {
         assert_ne!(icons[0].icon, icons[1].icon, "each its class's icon");
         // Both straight ahead, one behind the other: a click there picks the nearer.
         let centre = icons[1].rect.center();
-        assert_eq!(icon_at(&icons, centre), Some(near));
-        assert_eq!(icon_at(&icons, centre + vec2(SIZE, SIZE)), None);
+        assert_eq!(icon_at(&dm, &icons, centre), Some(near));
+        assert_eq!(icon_at(&dm, &icons, centre + vec2(SIZE, SIZE)), None);
+        // A locked light is clicked through (#833).
+        dm.set_by_name(near, "Locked", Value::Bool(true)).unwrap();
+        assert_eq!(icon_at(&dm, &icons, centre), Some(far));
         // Behind the camera: no icon.
         let camera = EditorCamera::looking_at(Vec3::new(0.0, 5.0, -40.0), Vec3::new(0.0, 5.0, -80.0));
         let behind = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
