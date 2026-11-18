@@ -44,6 +44,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `explorer.camera` | A camera. | Explorer and Assets: parts, models, folders, cameras | [`explorer/camera.svg`](https://lucide.dev/icons/camera) | `explorer.camera.svg`, `explorer.camera.png` |
 | `explorer.part` | A part. | Explorer and Assets: parts, models, folders, cameras | [`explorer/box.svg`](https://lucide.dev/icons/box) | `explorer.part.svg`, `explorer.part.png` |
 | `explorer.mesh_part` | A mesh part. | Explorer and Assets: parts, models, folders, cameras | [`explorer/cuboid.svg`](https://lucide.dev/icons/cuboid) | `explorer.mesh_part.svg`, `explorer.mesh_part.png` |
+| `explorer.surface_appearance` | A surface appearance: a mesh part's own maps. | Explorer and Assets: parts, models, folders, cameras | [`explorer/palette.svg`](https://lucide.dev/icons/palette) | `explorer.surface_appearance.svg`, `explorer.surface_appearance.png` |
 | `explorer.model` | A model. | Explorer and Assets: parts, models, folders, cameras | [`explorer/shapes.svg`](https://lucide.dev/icons/shapes) | `explorer.model.svg`, `explorer.model.png` |
 | `explorer.spot_light` | A spotlight. | Explorer: lighting and lights | [`explorer/spotlight.svg`](https://lucide.dev/icons/spotlight) | `explorer.spot_light.svg`, `explorer.spot_light.png` |
 | `explorer.light` | Any other light. | Explorer: lighting and lights | [`explorer/lightbulb.svg`](https://lucide.dev/icons/lightbulb) | `explorer.light.svg`, `explorer.light.png` |

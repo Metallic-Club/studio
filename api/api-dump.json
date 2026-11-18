@@ -1425,6 +1425,128 @@
       "callbacks": []
     },
     {
+      "name": "SurfaceAppearance",
+      "parent": "Instance",
+      "description": "Gives the MeshPart it is in a look of its own: colour, normal, roughness and metalness maps on the mesh's texture coordinates, in place of the part's Material and TextureId.",
+      "category": "Parts",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "ColorMap",
+          "type": "String",
+          "default": "",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "The picture the mesh is coloured with, on its own texture coordinates, multiplied by Color.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "NormalMap",
+          "type": "String",
+          "default": "",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "A tangent-space normal map (the OpenGL convention: green up), which bends the light across the mesh.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "RoughnessMap",
+          "type": "String",
+          "default": "",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "How rough the surface is, from black (smooth, mirror-like) to white (rough), in the picture's red.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "MetalnessMap",
+          "type": "String",
+          "default": "",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "How metallic the surface is, from black (not at all) to white (metal), in the picture's red.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Color",
+          "type": "Color3",
+          "default": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "Tints the colour map: white leaves it as it is.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "AlphaMode",
+          "type": {
+            "Enum": "AlphaMode"
+          },
+          "default": "Overlay",
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Appearance",
+          "description": "What the colour map's alpha does. Overlay shows the part's Color where the map is see-through; Transparency makes the mesh see-through there; TintMask tints only where the map is opaque.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [],
+      "signals": [],
+      "callbacks": []
+    },
+    {
       "name": "UserGameSettings",
       "parent": "Instance",
       "description": "The player's graphics settings: the preset, the quality level it draws at and the values in effect. Scripts can read them, to adapt a game to the player's machine, but never change them: they are the player's. Get it with game:GetService(\"UserGameSettings\").",
@@ -3979,6 +4101,24 @@
         {
           "name": "Wedge",
           "value": 3
+        }
+      ]
+    },
+    {
+      "name": "AlphaMode",
+      "description": "What a SurfaceAppearance's colour map's alpha does.",
+      "items": [
+        {
+          "name": "Overlay",
+          "value": 0
+        },
+        {
+          "name": "Transparency",
+          "value": 1
+        },
+        {
+          "name": "TintMask",
+          "value": 2
         }
       ]
     }

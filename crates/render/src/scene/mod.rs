@@ -73,6 +73,7 @@ mod lights;
 mod lists;
 mod materials;
 mod slots;
+mod surface;
 mod sync;
 #[cfg(test)]
 mod tests;
@@ -87,6 +88,7 @@ pub use instance::{GpuInstance, MeshKind, affine_rows, pack_color};
 pub use lights::{LightKind, SPOT_TILE_HALF_DEGREES, SceneLight};
 pub(crate) use lists::TRANSPARENT_LIST;
 pub use lists::{DYNAMIC_ENTRY, entry, entry_slot};
+pub use surface::SURFACE_KEY_PREFIX;
 pub use sync::InstanceScene;
 
 /// Frames in which a static instance's transform must change, within [`PROMOTE_WINDOW`], to move it to the

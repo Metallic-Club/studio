@@ -459,6 +459,15 @@ declare extern type EnumPartShape_INTERNAL extends Enum with
     function GetEnumItems(self): { EnumPartShape }
 end
 
+--- What a SurfaceAppearance's colour map's alpha does.
+declare extern type EnumAlphaMode extends EnumItem with end
+declare extern type EnumAlphaMode_INTERNAL extends Enum with
+    read Overlay: EnumAlphaMode
+    read Transparency: EnumAlphaMode
+    read TintMask: EnumAlphaMode
+    function GetEnumItems(self): { EnumAlphaMode }
+end
+
 --- Every engine enum, such as `Enum.Material`.
 declare Enum: {
     UserInputType: EnumUserInputType_INTERNAL,
@@ -468,6 +477,7 @@ declare Enum: {
     AntiAliasingMode: EnumAntiAliasingMode_INTERNAL,
     MouseBehavior: EnumMouseBehavior_INTERNAL,
     PartShape: EnumPartShape_INTERNAL,
+    AlphaMode: EnumAlphaMode_INTERNAL,
 }
 
 ---------------------------------------------------------------------------------------------------------------------
@@ -684,6 +694,22 @@ end
 declare extern type SourceContainer extends Instance with
     --- The project-relative path of the script's source file, such as "Scripts/Door.luau", chosen with a file picker. The file's extension selects the language. Empty means the script has no source and does nothing.
     Source: string
+end
+
+--- Gives the MeshPart it is in a look of its own: colour, normal, roughness and metalness maps on the mesh's texture coordinates, in place of the part's Material and TextureId.
+declare extern type SurfaceAppearance extends Instance with
+    --- The picture the mesh is coloured with, on its own texture coordinates, multiplied by Color.
+    ColorMap: string
+    --- A tangent-space normal map (the OpenGL convention: green up), which bends the light across the mesh.
+    NormalMap: string
+    --- How rough the surface is, from black (smooth, mirror-like) to white (rough), in the picture's red.
+    RoughnessMap: string
+    --- How metallic the surface is, from black (not at all) to white (metal), in the picture's red.
+    MetalnessMap: string
+    --- Tints the colour map: white leaves it as it is.
+    Color: Color3
+    --- What the colour map's alpha does. Overlay shows the part's Color where the map is see-through; Transparency makes the mesh see-through there; TintMask tints only where the map is opaque.
+    AlphaMode: EnumAlphaMode
 end
 
 --- The player's graphics settings: the preset, the quality level it draws at and the values in effect. Scripts can read them, to adapt a game to the player's machine, but never change them: they are the player's. Get it with game:GetService("UserGameSettings").
@@ -951,6 +977,7 @@ declare Instance: {
     new: ((className: "BindableEvent", parent: Instance?) -> BindableEvent)
         & ((className: "BindableFunction", parent: Instance?) -> BindableFunction)
         & ((className: "Folder", parent: Instance?) -> Folder)
+        & ((className: "SurfaceAppearance", parent: Instance?) -> SurfaceAppearance)
         & ((className: "BoolValue", parent: Instance?) -> BoolValue)
         & ((className: "Camera", parent: Instance?) -> Camera)
         & ((className: "IntValue", parent: Instance?) -> IntValue)
