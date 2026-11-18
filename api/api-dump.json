@@ -1669,6 +1669,386 @@
       "callbacks": []
     },
     {
+      "name": "Sound",
+      "parent": "Instance",
+      "description": "Plays a sound file: set SoundId and call Play, or set Playing. Volume, PlaybackSpeed and Looped change how it plays.",
+      "category": "Sounds",
+      "creatable": true,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "SoundId",
+          "type": "String",
+          "default": "",
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "The id of the project's sound asset (WAV, Ogg Vorbis, FLAC or MP3) it plays.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Volume",
+          "type": "Number",
+          "default": 0.5,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            10.0
+          ],
+          "wraps": false,
+          "group": "Sound",
+          "description": "How loud it plays: 0 is silent, 1 as recorded; up to 10.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "PlaybackSpeed",
+          "type": "Number",
+          "default": 1.0,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": [
+            0.0,
+            20.0
+          ],
+          "wraps": false,
+          "group": "Sound",
+          "description": "How fast it plays: 2 is twice as fast and an octave higher, 0.5 half as fast and an octave lower.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Looped",
+          "type": "Bool",
+          "default": false,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Whether it starts over at the end instead of stopping.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "Playing",
+          "type": "Bool",
+          "default": false,
+          "flags": [],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Whether it is playing. Setting it plays or pauses it; true when the game starts plays it then.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "TimePosition",
+          "type": "Number",
+          "default": 0.0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Where it is, in seconds from the start. Setting it moves there.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "TimeLength",
+          "type": "Number",
+          "default": 0.0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "How long the sound file plays, in seconds; 0 until it is loaded.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "IsPlaying",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Whether it is being heard now.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "IsPaused",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Whether it was paused partway, by Pause or by setting Playing to false.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "IsLoaded",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Whether its sound file was loaded, so it can play at once.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "PlayCount",
+          "type": "Int",
+          "default": 0,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Engine bookkeeping: how many times Play was called, so a playing sound starts over.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "PlayLocal",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY",
+            "HIDDEN"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Sound",
+          "description": "Engine bookkeeping: SoundService:PlayLocalSound played it, so it plays wherever it is.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "Play",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Plays the sound from TimePosition, or from the start again when it is playing already.",
+          "invokes_callback": null
+        },
+        {
+          "name": "Stop",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Stops the sound and goes back to the start.",
+          "invokes_callback": null
+        },
+        {
+          "name": "Pause",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Stops the sound where it is; Resume or Play goes on from there.",
+          "invokes_callback": null
+        },
+        {
+          "name": "Resume",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Goes on playing from where Pause stopped it.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [
+        {
+          "name": "Played",
+          "params": [
+            {
+              "name": "soundId",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires when Play is called."
+        },
+        {
+          "name": "Stopped",
+          "params": [
+            {
+              "name": "soundId",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires when Stop is called."
+        },
+        {
+          "name": "Paused",
+          "params": [
+            {
+              "name": "soundId",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires when Pause is called."
+        },
+        {
+          "name": "Resumed",
+          "params": [
+            {
+              "name": "soundId",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires when Resume is called."
+        },
+        {
+          "name": "Ended",
+          "params": [
+            {
+              "name": "soundId",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires when the sound plays to its end (never while Looped)."
+        },
+        {
+          "name": "Loaded",
+          "params": [
+            {
+              "name": "soundId",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "description": "Fires when its sound file was loaded."
+        },
+        {
+          "name": "DidLoop",
+          "params": [
+            {
+              "name": "soundId",
+              "type": "String",
+              "optional": false
+            },
+            {
+              "name": "numOfTimesLooped",
+              "type": "Number",
+              "optional": false
+            }
+          ],
+          "description": "Fires each time a Looped sound starts over, with how many times it has."
+        }
+      ],
+      "callbacks": []
+    },
+    {
+      "name": "SoundService",
+      "parent": "Instance",
+      "description": "Holds sounds that are not part of the world, such as music and interface sounds, and plays sounds for this player alone.",
+      "category": "",
+      "creatable": false,
+      "service_order": 8,
+      "persisted": true,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [
+        {
+          "name": "PlayLocalSound",
+          "params": [
+            {
+              "name": "sound",
+              "type": {
+                "Class": "Sound"
+              },
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Plays the sound for this player alone, wherever it is (even with no parent).",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [],
+      "callbacks": []
+    },
+    {
       "name": "SourceContainer",
       "parent": "Instance",
       "description": "The base of every script: an instance that points at a source file in the project. The file's extension selects the language, so a game can mix languages.",

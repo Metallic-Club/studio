@@ -14,6 +14,7 @@ pub mod material;
 pub mod pak;
 pub mod project;
 pub mod scene;
+pub mod sound;
 
 pub use asset_index::{
     Asset, AssetId, AssetIndex, AssetIndexError, AssetMove, EDITOR_DATA, Fingerprint, GAME_GRAPHICS_FILE, INDEX_FILE,

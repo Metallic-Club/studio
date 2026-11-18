@@ -165,9 +165,14 @@ impl<O: OutputSink> Player<O> {
             renderer.set_perf_window(usize::try_from(frames).unwrap_or(usize::MAX).min(1 << 20));
         }
         renderer.set_overlay(config.overlay);
-        // The project's meshes and textures, loaded off the main thread for its mesh parts (#189).
+        // The project's meshes and textures, loaded off the main thread for its mesh parts (#189), and its sounds
+        // (#811), heard unless this is a benchmark.
         if let Some(project) = project.as_ref() {
             renderer.set_assets(project.asset_reader());
+            engine.set_sound_assets(project.asset_reader());
+        }
+        if config.max_frames.is_none() {
+            open_audio(&mut engine);
         }
         let graphics = config.effective_graphics();
         // A benchmark keeps its own pacing (no cap); otherwise the settings' cap, 0 for none, replaces the default.
@@ -273,6 +278,7 @@ impl<O: OutputSink> Player<O> {
         renderer.write_user_settings(engine.data_model_mut());
         let renderer = Rc::new(RefCell::new(renderer));
         engine.set_render_hook(Box::new(Rc::clone(&renderer)))?;
+        open_audio(&mut engine);
         engine.start()?;
         Ok(Self {
             engine,
@@ -340,6 +346,7 @@ impl<O: OutputSink> Player<O> {
     /// Has the renderer read the game's meshes and textures (materials' too) with `reader` (#772). A hosted game's
     /// host hands over its project's, as [`Player::new`] does for a project it opens itself.
     pub fn set_assets(&mut self, reader: AssetReader) {
+        self.engine.set_sound_assets(reader.reopen());
         self.renderer.borrow_mut().set_assets(reader);
     }
 
@@ -580,6 +587,14 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
 
     fn exiting(&mut self) {
         self.app.exiting();
+    }
+}
+
+/// Plays the game's sounds on the system's default device (#811); a machine with none (or Linux, for now) plays them
+/// unheard, which is only logged.
+fn open_audio<O: OutputSink>(engine: &mut Engine<O>) {
+    if let Err(error) = engine.open_audio() {
+        log::info!("sounds play unheard: {error}");
     }
 }
 

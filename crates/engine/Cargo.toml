@@ -12,7 +12,9 @@ publish.workspace = true
 workspace = true
 
 [features]
-default = ["render", "physics", "luau"]
+default = ["render", "physics", "luau", "audio"]
+# Sound output on the system's device (#811). Without it (a dedicated server) sounds play unheard.
+audio = ["metallic_platform/audio"]
 # A window, the platform event loop and the render hook. Off on a dedicated server, which then builds no winit (#92).
 render = ["dep:metallic_render", "metallic_platform/window"]
 physics = ["dep:metallic_physics"]

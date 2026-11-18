@@ -233,6 +233,10 @@ icons! {
     ExplorerStarterPlayer = "explorer.starter_player", Storage, "user";
     /// `StarterPlayer`'s folders of player and character scripts.
     ExplorerStarterScripts = "explorer.starter_scripts", LocalScript, "folder";
+    /// The sound service.
+    ExplorerSoundService = "explorer.sound_service", Storage, "music";
+    /// A sound.
+    ExplorerSound = "explorer.sound", Object, "volume-2";
     /// The server script service.
     ExplorerScriptService = "explorer.script_service", ServerScript, "scroll";
     /// Server storage.

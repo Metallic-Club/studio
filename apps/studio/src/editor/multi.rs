@@ -294,6 +294,7 @@ impl EditorState {
                 };
                 let mut client = client_player(&welcome, connecting, graphics, Arc::clone(&log))?;
                 client.set_assets(self.project.asset_reader());
+                crate::editor::play::hear(&mut client);
                 net.client = Some(client);
             }
             PlayKind::Clients(count) => {
@@ -344,6 +345,7 @@ impl EditorState {
         let mut player = client_player(welcome, connecting, graphics, log)?;
         // The team's project is this Studio's: its meshes and textures (#772).
         player.set_assets(self.project.asset_reader());
+        crate::editor::play::hear(&mut player);
         let dm = player.engine().data_model();
         let explorer = ExplorerState::new(dm);
         self.play = Some(PlaySession {

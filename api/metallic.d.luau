@@ -675,6 +675,7 @@ declare extern type DataModel extends Instance with
     function GetService(self, className: "ServerStorage"): ServerStorage
     function GetService(self, className: "StarterGui"): StarterGui
     function GetService(self, className: "StarterPlayer"): StarterPlayer
+    function GetService(self, className: "SoundService"): SoundService
     function GetService(self, className: "RunService"): RunService
     function GetService(self, className: "UserInputService"): UserInputService
     function GetService(self, className: "UserGameSettings"): UserGameSettings
@@ -795,6 +796,62 @@ end
 
 --- Storage only the server can see, such as maps and items to copy into the world later. Nothing here is drawn or run.
 declare extern type ServerStorage extends Instance with
+end
+
+--- Plays a sound file: set SoundId and call Play, or set Playing. Volume, PlaybackSpeed and Looped change how it plays.
+declare extern type Sound extends Instance with
+    --- The id of the project's sound asset (WAV, Ogg Vorbis, FLAC or MP3) it plays.
+    SoundId: string
+    --- How loud it plays: 0 is silent, 1 as recorded; up to 10.
+    Volume: number
+    --- How fast it plays: 2 is twice as fast and an octave higher, 0.5 half as fast and an octave lower.
+    PlaybackSpeed: number
+    --- Whether it starts over at the end instead of stopping.
+    Looped: boolean
+    --- Whether it is playing. Setting it plays or pauses it; true when the game starts plays it then.
+    Playing: boolean
+    --- Where it is, in seconds from the start. Setting it moves there.
+    TimePosition: number
+    --- How long the sound file plays, in seconds; 0 until it is loaded.
+    read TimeLength: number
+    --- Whether it is being heard now.
+    read IsPlaying: boolean
+    --- Whether it was paused partway, by Pause or by setting Playing to false.
+    read IsPaused: boolean
+    --- Whether its sound file was loaded, so it can play at once.
+    read IsLoaded: boolean
+    --- Engine bookkeeping: how many times Play was called, so a playing sound starts over.
+    read PlayCount: number
+    --- Engine bookkeeping: SoundService:PlayLocalSound played it, so it plays wherever it is.
+    read PlayLocal: boolean
+    --- Fires when Play is called.
+    Played: ScriptSignal<string>
+    --- Fires when Stop is called.
+    Stopped: ScriptSignal<string>
+    --- Fires when Pause is called.
+    Paused: ScriptSignal<string>
+    --- Fires when Resume is called.
+    Resumed: ScriptSignal<string>
+    --- Fires when the sound plays to its end (never while Looped).
+    Ended: ScriptSignal<string>
+    --- Fires when its sound file was loaded.
+    Loaded: ScriptSignal<string>
+    --- Fires each time a Looped sound starts over, with how many times it has.
+    DidLoop: ScriptSignal<string, number>
+    --- Plays the sound from TimePosition, or from the start again when it is playing already.
+    function Play(self): ()
+    --- Stops the sound and goes back to the start.
+    function Stop(self): ()
+    --- Stops the sound where it is; Resume or Play goes on from there.
+    function Pause(self): ()
+    --- Goes on playing from where Pause stopped it.
+    function Resume(self): ()
+end
+
+--- Holds sounds that are not part of the world, such as music and interface sounds, and plays sounds for this player alone.
+declare extern type SoundService extends Instance with
+    --- Plays the sound for this player alone, wherever it is (even with no parent).
+    function PlayLocalSound(self, sound: Sound): ()
 end
 
 --- The base of every script: an instance that points at a source file in the project. The file's extension selects the language, so a game can mix languages.
@@ -1124,6 +1181,7 @@ declare Instance: {
     new: ((className: "BindableEvent", parent: Instance?) -> BindableEvent)
         & ((className: "BindableFunction", parent: Instance?) -> BindableFunction)
         & ((className: "Folder", parent: Instance?) -> Folder)
+        & ((className: "Sound", parent: Instance?) -> Sound)
         & ((className: "SurfaceAppearance", parent: Instance?) -> SurfaceAppearance)
         & ((className: "BoolValue", parent: Instance?) -> BoolValue)
         & ((className: "Camera", parent: Instance?) -> Camera)

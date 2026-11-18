@@ -63,5 +63,8 @@
     "id": 13,
     "parent": 11,
     "class": "StarterCharacterScripts"
+  }, {
+    "id": 14,
+    "class": "SoundService"
   }]
 }

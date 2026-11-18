@@ -78,6 +78,8 @@ pub fn class_icon(registry: &Registry, class: ClassId) -> Icon {
             "StarterGui" => Icon::ExplorerStarterGui,
             "StarterPlayer" => Icon::ExplorerStarterPlayer,
             "StarterPlayerScripts" | "StarterCharacterScripts" => Icon::ExplorerStarterScripts,
+            "SoundService" => Icon::ExplorerSoundService,
+            "Sound" => Icon::ExplorerSound,
             "ServerScriptService" => Icon::ExplorerScriptService,
             "ModuleScript" => Icon::ExplorerModuleScript,
             "ServerStorage" => Icon::ExplorerServerStorage,

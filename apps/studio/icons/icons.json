@@ -220,6 +220,14 @@
       "file": "explorer/sliders-horizontal.svg",
       "color": "settings_service"
     },
+    "explorer.sound": {
+      "file": "explorer/volume-2.svg",
+      "color": "object"
+    },
+    "explorer.sound_service": {
+      "file": "explorer/music.svg",
+      "color": "storage"
+    },
     "explorer.spot_light": {
       "file": "explorer/spotlight.svg",
       "color": "light"

@@ -16,6 +16,9 @@ default = ["window"]
 # Windows, the event loop, input and gamepads (winit, gilrs, raw-window-handle). A dedicated server builds without
 # it: it needs user paths, not windows. `metallic_engine`'s `render` feature turns it on (#92).
 window = ["dep:winit", "dep:gilrs", "dep:raw-window-handle"]
+# Sound output (#811): the mixer, and the device it plays on (cpal) where there is one. `metallic_engine`'s `audio`
+# feature turns it on.
+audio = ["dep:cpal"]
 
 [dependencies]
 raw-window-handle = { workspace = true, optional = true }
@@ -44,6 +47,11 @@ windows-sys = { workspace = true, features = ["Win32_System_Registry", "Win32_UI
 
 [target.'cfg(target_os = "ios")'.dependencies]
 winit = { workspace = true, optional = true }
+
+# Sound output (#811) everywhere but Linux, where cpal links ALSA (libasound2-dev); Linux plays nothing until that is
+# decided, as with gamepads.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+cpal = { workspace = true, optional = true }
 
 [[example]]
 name = "window"
