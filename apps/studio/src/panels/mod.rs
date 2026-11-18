@@ -14,6 +14,7 @@ pub mod output;
 pub mod properties;
 pub mod script;
 pub mod search;
+pub mod sound;
 pub mod values;
 pub mod viewport;
 
@@ -39,6 +40,8 @@ pub static PANELS: &[&dyn Panel] = &[
     &script::ScriptEditor,
     // A tab per picture, opened from the Assets panel (#681).
     &image::ImagePreview,
+    // A tab per sound, opened from the Assets panel (#831).
+    &sound::SoundPreview,
     // Text across every script (#555), on the left.
     &search::Search,
 ];

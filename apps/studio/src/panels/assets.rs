@@ -675,6 +675,7 @@ fn apply(ui: &Ui, editor: &mut EditorState, act: Act) {
                 Ok(())
             }
             browser::EntryKind::File(AssetKind::Image) => editor.open_image(&entry.path),
+            browser::EntryKind::File(AssetKind::Audio) => editor.open_sound(&entry.path),
             _ => Ok(()),
         },
         Act::Click { path, .. } if path.is_empty() => {
