@@ -311,6 +311,8 @@ icons! {
     ToolbarStep = "toolbar.step", Run, "skip-forward";
     /// Stop.
     ToolbarStop = "toolbar.stop", Run, "square";
+    /// Export the game as a program of its own (#804), beside Play.
+    ToolbarExport = "toolbar.export", Run, "package";
     /// The gear that opens Settings.
     ToolbarSettings = "toolbar.settings", Studio, "settings";
     /// The top bar's Team Create button (ADR 0011), and Team Create projects on the projects page.

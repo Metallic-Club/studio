@@ -260,6 +260,10 @@
       "file": "toolbar/folder-x.svg",
       "color": "studio"
     },
+    "toolbar.export": {
+      "file": "toolbar/package.svg",
+      "color": "run"
+    },
     "toolbar.local_space": {
       "file": "toolbar/axis-3d.svg",
       "color": "scene"

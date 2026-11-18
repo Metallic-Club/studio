@@ -337,6 +337,7 @@ pub(crate) fn opening_overlay(ui: &mut Ui, name: &str, step: usize) {
 /// Settings window is open, `settings_open`) and the profile button, which edits `profile` (#602). The project's name
 /// is the window's title ([`super::Studio::window_title`]). Returns what was asked for, of the menus and of Team
 /// Create's.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn top_bar(
     ui: &mut Ui,
     editor: &EditorState,
@@ -345,6 +346,7 @@ pub(crate) fn top_bar(
     settings_open: bool,
     profile: &mut crate::settings::Profile,
     team: &mut crate::team::TeamCreate,
+    exporting: Option<&crate::export::Progress>,
 ) -> (Option<MenuAction>, Option<crate::team::menu::TeamAction>) {
     let mut team_action = None;
     let p = current_colors(ui.ctx()).palette;
@@ -468,6 +470,21 @@ pub(crate) fn top_bar(
                         action = Some(kind);
                     }
                 }
+                // Left of Play, Export (#804): the button, or while an export runs how far it is.
+                ui.add_space(space::S3);
+                match exporting {
+                    Some(progress) => export_progress(ui, progress),
+                    None => {
+                        let enabled = play.allows(MenuAction::Export);
+                        if play_button(ui, Icon::ToolbarExport, "Export", enabled, Control::Plain)
+                            .tip("Export the game as a program of its own")
+                            .disabled_tip("Stop the game to export it")
+                            .clicked()
+                        {
+                            action = Some(MenuAction::Export);
+                        }
+                    }
+                }
             });
         },
     );
@@ -504,6 +521,34 @@ fn play_button(ui: &mut Ui, glyph: Icon, label: &str, enabled: bool, look: Contr
         }
     }
     response
+}
+
+/// An export under way (#804): a small bar filling as it goes, its percentage, and the step in its tooltip.
+pub(crate) fn export_progress(ui: &mut Ui, progress: &crate::export::Progress) {
+    let colors = current_colors(ui.ctx());
+    let p = colors.palette;
+    let percent = (progress.done.clamp(0.0, 1.0) * 100.0).round();
+    let shown = format!("Exporting {percent:.0}%");
+    let (rect, response) = ui.allocate_exact_size(vec2(132.0, TITLE_HEIGHT - 8.0), Sense::hover());
+    let label = format!("{shown}: {}", progress.step);
+    response.widget_info(|| WidgetInfo::labeled(Role::ProgressIndicator, true, &label));
+    if ui.is_rect_visible(rect) {
+        let corner = CornerRadius::same(radius::ITEM);
+        ui.painter().rect_filled(rect, corner, p.surface);
+        let mut filled = rect;
+        filled.set_width(rect.width() * progress.done.clamp(0.0, 1.0));
+        ui.painter()
+            .rect_filled(filled, corner, colors.accent.gamma_multiply(0.35));
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            &shown,
+            egui::FontId::proportional(text::SMALL),
+            p.text,
+        );
+    }
+    response.tip(progress.step.clone());
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
 }
 
 /// The gear that opens Settings; raised while Settings is open.

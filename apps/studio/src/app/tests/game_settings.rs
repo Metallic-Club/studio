@@ -67,3 +67,25 @@ fn game_settings_edit_the_game_s_manifest_and_graphics() {
             .is_none()
     );
 }
+
+/// #804: an Export button at the top right, left of Play; while an export runs, how far it is in its place.
+#[test]
+fn export_sits_beside_play_and_shows_its_progress() {
+    let mut harness = editing(settings_file("export-button", None), "Export Button Game");
+    harness.set_size(egui::vec2(1400.0, 1000.0));
+    settle(&mut harness);
+    let export = harness.get_by_role_and_label(Role::Button, "Export").rect();
+    let play = harness.get_by_role_and_label(Role::Button, "Play").rect();
+    assert!(export.right() <= play.left() && (export.center().y - play.center().y).abs() < 2.0);
+
+    let progress = crate::export::Progress {
+        done: 0.45,
+        step: "Packing the game".to_owned(),
+    };
+    let mut shown = egui_kittest::Harness::new_ui(|ui| {
+        crate::theme::fonts::install(ui.ctx());
+        crate::app::editor::export_progress(ui, &progress);
+    });
+    shown.run();
+    shown.get_by_role_and_label(Role::ProgressIndicator, "Exporting 45%: Packing the game");
+}

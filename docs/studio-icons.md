@@ -81,6 +81,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `toolbar.pause` | Pause. | Running the game | [`toolbar/pause.svg`](https://lucide.dev/icons/pause) | `toolbar.pause.svg`, `toolbar.pause.png` |
 | `toolbar.step` | Step one frame. | Running the game | [`toolbar/skip-forward.svg`](https://lucide.dev/icons/skip-forward) | `toolbar.step.svg`, `toolbar.step.png` |
 | `toolbar.stop` | Stop. | Running the game | [`toolbar/square.svg`](https://lucide.dev/icons/square) | `toolbar.stop.svg`, `toolbar.stop.png` |
+| `toolbar.export` | Export the game as a program of its own (#804), beside Play. | Running the game | [`toolbar/package.svg`](https://lucide.dev/icons/package) | `toolbar.export.svg`, `toolbar.export.png` |
 | `toolbar.settings` | The gear that opens Settings. | Studio | [`toolbar/settings.svg`](https://lucide.dev/icons/settings) | `toolbar.settings.svg`, `toolbar.settings.png` |
 | `toolbar.team_create` | The top bar's Team Create button (ADR 0011), and Team Create projects on the projects page. | Studio | [`toolbar/users.svg`](https://lucide.dev/icons/users) | `toolbar.team_create.svg`, `toolbar.team_create.png` |
 | `toolbar.save` | The toolbar's Save tool. | Studio | [`toolbar/save.svg`](https://lucide.dev/icons/save) | `toolbar.save.svg`, `toolbar.save.png` |

@@ -154,11 +154,21 @@ impl Pak {
     /// Written like a save: a complete file beside `path` (`game.pak.tmp`), flushed to disk, then renamed over it, so a
     /// failed pack leaves what was at `path` as it was.
     pub fn pack(project: &mut Project, path: impl AsRef<Path>) -> Result<(), ProjectError> {
+        Self::pack_with_progress(project, path, |_, _| {})
+    }
+
+    /// [`Pak::pack`], telling `progress` how many members are written of how many after each one (#804: Studio's
+    /// export shows it).
+    pub fn pack_with_progress(
+        project: &mut Project,
+        path: impl AsRef<Path>,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<(), ProjectError> {
         let path = path.as_ref();
         let mut temp = path.as_os_str().to_owned();
         temp.push(TEMP_SUFFIX);
         let temp = PathBuf::from(temp);
-        let result = write_pak(project, &temp, path).and_then(|()| {
+        let result = write_pak(project, &temp, path, &mut progress).and_then(|()| {
             fs::rename(&temp, path).map_err(|source| ProjectError::Save {
                 path: path.to_path_buf(),
                 source,
@@ -527,8 +537,14 @@ impl<'a> Fields<'a> {
     }
 }
 
-/// Writes the pak of `project` to `temp` and flushes it to disk; errors name `pak`, the file it is for.
-fn write_pak(project: &mut Project, temp: &Path, pak: &Path) -> Result<(), ProjectError> {
+/// Writes the pak of `project` to `temp` and flushes it to disk, telling `progress` how many members are written of how
+/// many; errors name `pak`, the file it is for.
+fn write_pak(
+    project: &mut Project,
+    temp: &Path,
+    pak: &Path,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<(), ProjectError> {
     let save = |source: io::Error| ProjectError::Save {
         path: pak.to_path_buf(),
         source,
@@ -547,7 +563,8 @@ fn write_pak(project: &mut Project, temp: &Path, pak: &Path) -> Result<(), Proje
     out.write_all(&[0; HEADER_LEN as usize]).map_err(save)?;
     let mut at = HEADER_LEN;
     let mut index = Vec::new();
-    for member in &members {
+    for (written, member) in members.iter().enumerate() {
+        progress(written, members.len());
         let bytes = project.read(member)?;
         let path_len = u16::try_from(member.len())
             .map_err(|_| too_large(format!("the member path `{member}` is longer than 65535 bytes")))?;

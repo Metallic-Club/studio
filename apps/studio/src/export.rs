@@ -23,10 +23,22 @@ fn player_file() -> String {
     format!("metallic_player{}", std::env::consts::EXE_SUFFIX)
 }
 
+/// How far an export is (#804): its share done, from 0 to 1, and the step under way.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Progress {
+    /// The share done, from 0 to 1.
+    pub done: f32,
+    /// The step under way, such as "Packing the game".
+    pub step: String,
+}
+
 /// An export in progress.
 #[derive(Debug)]
 pub struct Export {
     done: Receiver<Result<PathBuf, String>>,
+    steps: Receiver<Progress>,
+    /// How far it is, as last heard.
+    pub progress: Progress,
     /// The game's name, for what Studio says meanwhile.
     pub name: String,
 }
@@ -36,17 +48,35 @@ impl Export {
     /// on a thread of its own.
     pub fn start(project: PathBuf, folder: PathBuf, studio: PathBuf, name: String) -> Result<Self, String> {
         let (send, done) = mpsc::channel();
+        let (tell, steps) = mpsc::channel();
         std::thread::Builder::new()
             .name("export".into())
             .spawn(move || {
-                let _ = send.send(export(&project, &folder, &studio));
+                let mut report = |done: f32, step: &str| {
+                    let _ = tell.send(Progress {
+                        done,
+                        step: step.to_owned(),
+                    });
+                };
+                let _ = send.send(export(&project, &folder, &studio, &mut report));
             })
             .map_err(|error| format!("Could not start the export: {error}."))?;
-        Ok(Self { done, name })
+        Ok(Self {
+            done,
+            steps,
+            progress: Progress {
+                done: 0.0,
+                step: "Starting".to_owned(),
+            },
+            name,
+        })
     }
 
-    /// The executable written, or what went wrong, once the export is done.
-    pub fn poll(&self) -> Option<Result<PathBuf, String>> {
+    /// The executable written, or what went wrong, once the export is done; meanwhile it takes in how far it is.
+    pub fn poll(&mut self) -> Option<Result<PathBuf, String>> {
+        while let Ok(progress) = self.steps.try_recv() {
+            self.progress = progress;
+        }
         match self.done.try_recv() {
             Ok(result) => Some(result),
             Err(TryRecvError::Empty) => None,
@@ -55,19 +85,34 @@ impl Export {
     }
 }
 
-/// Exports the game saved at `project` into `folder`; returns the executable written.
-pub fn export(project: &Path, folder: &Path, studio: &Path) -> Result<PathBuf, String> {
+/// Exports the game saved at `project` into `folder`, telling `report` how far it is (a share from 0 to 1 and the
+/// step); returns the executable written.
+pub fn export(
+    project: &Path,
+    folder: &Path,
+    studio: &Path,
+    report: &mut dyn FnMut(f32, &str),
+) -> Result<PathBuf, String> {
+    report(0.0, "Opening the project");
     let mut project = Project::open(project).map_err(|error| format!("Could not open the project: {error}."))?;
     let manifest = project.manifest().clone();
     if manifest.mode != ProjectMode::Standalone {
         return Err("Only offline games export as a program: choose Offline in Game Settings.".to_owned());
     }
-    let player = find_player(studio)?;
+    report(0.05, "Finding the player");
+    let player = find_player(studio, report)?;
+    report(0.35, "Copying the player");
     std::fs::create_dir_all(folder).map_err(|error| format!("Could not make {}: {error}.", folder.display()))?;
     let exe = folder.join(format!("{}{}", file_name(&manifest.name), std::env::consts::EXE_SUFFIX));
     std::fs::copy(&player, &exe)
         .map_err(|error| format!("Could not copy the player to {}: {error}.", exe.display()))?;
-    Pak::pack(&mut project, folder.join(PAK_FILE)).map_err(|error| format!("Could not pack the game: {error}."))?;
+    report(0.4, "Packing the game");
+    Pak::pack_with_progress(&mut project, folder.join(PAK_FILE), |written, total| {
+        let share = written as f32 / total.max(1) as f32;
+        report(0.4 + 0.5 * share, "Packing the game");
+    })
+    .map_err(|error| format!("Could not pack the game: {error}."))?;
+    report(0.9, "Writing the settings");
     let graphics = project
         .read_text(GAME_GRAPHICS_FILE)
         .ok()
@@ -77,11 +122,13 @@ pub fn export(project: &Path, folder: &Path, studio: &Path) -> Result<PathBuf, S
         .map_err(|error| format!("Could not write the graphics settings: {error}."))?;
     let bytes = std::fs::read(&exe).map_err(|error| format!("Could not read {}: {error}.", exe.display()))?;
     if bytes.starts_with(b"MZ") {
+        report(0.95, "Setting the icon and version");
         let icon = icon_picture(&mut project, &manifest);
         let branded = brand(&bytes, &manifest, icon.as_ref())?;
         std::fs::write(&exe, branded).map_err(|error| format!("Could not write {}: {error}.", exe.display()))?;
     }
     log::info!("export: {} written to {}", manifest.name, folder.display());
+    report(1.0, "Done");
     Ok(exe)
 }
 
@@ -95,8 +142,9 @@ pub fn file_name(name: &str) -> String {
     if kept.is_empty() { "Game".to_owned() } else { kept }
 }
 
-/// The player executable beside `studio`; built first when Studio runs from the source tree and it is not there.
-fn find_player(studio: &Path) -> Result<PathBuf, String> {
+/// The player executable beside `studio`; built first when Studio runs from the source tree and it is not there,
+/// which `report` hears of.
+fn find_player(studio: &Path, report: &mut dyn FnMut(f32, &str)) -> Result<PathBuf, String> {
     let beside = studio.with_file_name(player_file());
     if beside.is_file() {
         return Ok(beside);
@@ -109,6 +157,7 @@ fn find_player(studio: &Path) -> Result<PathBuf, String> {
         ));
     };
     log::info!("export: building the player in {}", workspace.display());
+    report(0.1, "Building the player");
     let mut cargo = std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cargo.current_dir(&workspace).args(["build", "-p", "metallic_player"]);
     if release {
@@ -384,7 +433,15 @@ mod tests {
         project.save().unwrap();
 
         let out = dir.join("Build");
-        let exe = export(&dir.join("Rover.mtproj"), &out, &studio).unwrap();
+        let mut heard: Vec<(f32, String)> = Vec::new();
+        let exe = export(&dir.join("Rover.mtproj"), &out, &studio, &mut |done, step| {
+            heard.push((done, step.to_owned()));
+        })
+        .unwrap();
+        // How far it was, step by step (#804): never back, packing among the steps, done at the end.
+        assert!(heard.windows(2).all(|pair| pair[0].0 <= pair[1].0), "{heard:?}");
+        assert!(heard.iter().any(|(_, step)| step == "Packing the game"));
+        assert_eq!(heard.last().map(|(done, _)| *done), Some(1.0));
         assert_eq!(
             exe,
             out.join(format!("Moon Rover 2{}", std::env::consts::EXE_SUFFIX)),
@@ -413,12 +470,12 @@ mod tests {
         manifest.mode = ProjectMode::Platform;
         project.set_manifest(manifest).unwrap();
         project.save().unwrap();
-        let error = export(&dir.join("Online.mtproj"), &dir.join("Out"), &studio).unwrap_err();
+        let error = export(&dir.join("Online.mtproj"), &dir.join("Out"), &studio, &mut |_, _| {}).unwrap_err();
         assert!(error.contains("Offline"), "{error}");
 
         let mut project = Project::create(dir.join("Offline.mtproj"), &template(), "Offline").unwrap();
         project.save().unwrap();
-        let error = export(&dir.join("Offline.mtproj"), &dir.join("Out"), &studio).unwrap_err();
+        let error = export(&dir.join("Offline.mtproj"), &dir.join("Out"), &studio, &mut |_, _| {}).unwrap_err();
         assert!(error.contains("cargo build --release -p metallic_player"), "{error}");
     }
 
