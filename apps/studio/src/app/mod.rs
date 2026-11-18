@@ -137,6 +137,8 @@ pub struct Studio {
     settings_window: SettingsWindow,
     /// The Game Settings window (#782), over the editor.
     game_settings: crate::settings::game::GameSettingsWindow,
+    /// An offline game being exported (#783), until it is done.
+    export: Option<crate::export::Export>,
     /// Whether the editor's About window is open (Help, About Metallic Studio).
     about_open: bool,
     /// Every shortcut's command and bindings: the settings' overrides over the defaults.
@@ -217,6 +219,7 @@ impl Studio {
             settings: SettingsStore::in_memory(),
             settings_window: SettingsWindow::default(),
             game_settings: crate::settings::game::GameSettingsWindow::default(),
+            export: None,
             about_open: false,
             keymap: Keymap::studio(&Overrides::new()),
             display_refresh: None,
@@ -770,6 +773,7 @@ impl Studio {
             }
             self.settings_ui(&ctx, &before);
         }
+        self.poll_export(&ctx);
     }
 
     /// The Editor screen: the progress overlay while the project opens, then the top bar and the dock.
@@ -981,6 +985,7 @@ impl Studio {
             MenuAction::ResetLayout => self.reset_layout(),
             MenuAction::Settings => self.toggle_settings(),
             MenuAction::GameSettings => self.game_settings.toggle(),
+            MenuAction::Export => self.export_game(),
             MenuAction::KeyboardShortcuts => {
                 self.settings_window.show_category(crate::settings::Category::Keybinds);
                 self.settings_window.set_open(true);
@@ -1401,6 +1406,69 @@ impl Studio {
     }
 
     /// Saves the open project, telling the user if it failed.
+    /// File > Export Game (#783): saves the project, asks for a folder, and exports the offline game into a folder
+    /// of its name there, on a thread of its own ([`crate::export`]).
+    fn export_game(&mut self) {
+        if let Some(export) = &self.export {
+            self.notices.push(Notice {
+                title: "An export is running",
+                body: format!("{} is still being exported.", export.name),
+            });
+            return;
+        }
+        self.save();
+        let Some(editor) = self.editor() else {
+            return;
+        };
+        let manifest = editor.project.manifest().clone();
+        let project = editor.project.path().to_path_buf();
+        if manifest.mode != metallic_engine::metallic_project::ProjectMode::Standalone {
+            self.notices.push(Notice {
+                title: "Online games do not export yet",
+                body: "Only offline games export as a program of their own: choose Offline in Game Settings."
+                    .to_owned(),
+            });
+            return;
+        }
+        let Some(picked) = self.projects.pick_folder(None) else {
+            return;
+        };
+        let folder = picked.join(crate::export::file_name(&manifest.name));
+        let studio = std::env::current_exe().unwrap_or_default();
+        match crate::export::Export::start(project, folder, studio, manifest.name.clone()) {
+            Ok(export) => {
+                log::info!("export: exporting {}", manifest.name);
+                self.export = Some(export);
+            }
+            Err(error) => self.notices.push(Notice {
+                title: "The game was not exported",
+                body: error,
+            }),
+        }
+    }
+
+    /// Says how an export went, once it is done (#783); asks for frames meanwhile.
+    fn poll_export(&mut self, ctx: &egui::Context) {
+        let Some(export) = &self.export else {
+            return;
+        };
+        let Some(result) = export.poll() else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            return;
+        };
+        self.export = None;
+        self.notices.push(match result {
+            Ok(exe) => Notice {
+                title: "The game was exported",
+                body: format!("{} is ready to run.", exe.display()),
+            },
+            Err(error) => Notice {
+                title: "The game was not exported",
+                body: error,
+            },
+        });
+    }
+
     fn save(&mut self) {
         // A participant's copy is not the project: the host saves it (ADR 0011).
         if self.open_project.as_deref().is_some_and(|path| self.team.is_copy(path)) {

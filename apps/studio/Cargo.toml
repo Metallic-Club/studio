@@ -31,6 +31,7 @@ skrifa.workspace = true
 # The custom icon folder's SVGs and PNGs (src/theme/icons/custom.rs).
 resvg.workspace = true
 png.workspace = true
+editpe.workspace = true
 egui_tiles.workspace = true
 # The saved dock layout (`layout.json`).
 serde.workspace = true

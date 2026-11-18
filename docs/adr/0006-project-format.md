@@ -102,6 +102,12 @@ file. Online (platform) games have neither yet.
 `.mtproj` is the source; `game.pak` is the build.
 
 - **Standalone:** the `.mtproj` is packed into one binary file (`game.pak`, read-only, built by `xtask` or Studio) and shipped next to the player executable.
+  Studio's **File > Export Game** (2026-11-17, #783) writes the build into a folder of the game's name: the Metallic
+  Player renamed after the game (on Windows with the game's icon, version and author in its resources, and marked a
+  windowed program), `game.pak`, and `graphics.toml`. Studio takes the player from beside its own executable, building
+  it first when it runs from the source tree. The player, started with no arguments and a `game.pak` beside it, runs
+  that game in a window of its name, its settings kept under the game's own name and seeded from the shipped
+  `graphics.toml`.
 - **Platform:** the project is uploaded to the platform and the player streams it. Designed in M10, but the pak format is shared.
 
 #### `game.pak` (#191)

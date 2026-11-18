@@ -48,6 +48,8 @@ pub(crate) enum MenuAction {
     Settings,
     /// File, Game Settings: open or close the Game Settings window (#782).
     GameSettings,
+    /// File, Export Game: an offline game as a program of its own (#783).
+    Export,
     /// Help, Keyboard shortcuts: the Settings window on its Keybinds page.
     KeyboardShortcuts,
     /// Help, About Metallic Studio.
@@ -126,7 +128,7 @@ impl MenuState {
     /// without one (ADR 0010 §3); Undo and Redo with a step to undo or redo. Everything else always.
     pub(crate) fn allows(self, action: MenuAction) -> bool {
         match action {
-            MenuAction::Play | MenuAction::Save => !self.playing,
+            MenuAction::Play | MenuAction::Save | MenuAction::Export => !self.playing,
             MenuAction::Pause | MenuAction::Stop => self.playing,
             MenuAction::Step => self.paused,
             MenuAction::Undo => self.can_undo,
@@ -185,6 +187,7 @@ pub(crate) static MENUS: &[Menu] = &[
             Entry::Planned("Save as"),
             Entry::Separator,
             item("Import\u{2026}", MenuAction::Import, None),
+            item("Export Game\u{2026}", MenuAction::Export, None),
             Entry::Separator,
             item("Settings", MenuAction::Settings, Some(ids::SETTINGS_OPEN)),
             item("Game Settings", MenuAction::GameSettings, Some(ids::GAME_SETTINGS)),

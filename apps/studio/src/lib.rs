@@ -29,6 +29,7 @@ pub mod code;
 pub mod dock;
 pub mod editor;
 pub mod emblem;
+pub mod export;
 pub mod folders;
 pub mod keymap;
 pub mod logging;

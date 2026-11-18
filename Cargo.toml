@@ -85,6 +85,8 @@ bytemuck = { version = "1.25", features = ["derive"] }
 # Decodes PNG textures (`metallic_project`'s asset decoding, #189), and reads and writes the renderer's reference images
 # in its image tests. Pure Rust.
 png = "0.18"
+# The icon and version of an exported game's executable (#783), set in its Windows resources; no image codecs.
+editpe = { version = "0.2.4", default-features = false, features = ["std"] }
 # Decodes glTF and GLB models (`metallic_project`'s asset decoding, #189). Without `import`: no `image` crate, no
 # reading of files by path; the project resolves a model's buffers itself. `utils` reads accessors. Pure Rust.
 gltf = { version = "1.4", default-features = false, features = ["utils"] }
