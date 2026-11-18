@@ -86,18 +86,35 @@ fn a_picture_shows_on_its_tile_and_opens_in_a_preview_with_its_facts() {
     let picture = harness.get_by_role_and_label(Role::Image, "Assets/wide.png").rect();
     assert!((picture.width() / picture.height() - 4.0).abs() < 0.05, "{picture:?}");
 
-    // It zooms (#781): to its own size, then in a step, and back to fitting.
-    harness.get_by_role_and_label(Role::Button, "100 %").click();
-    settle(&mut harness);
+    // It zooms toward the pointer (#799): Ctrl and the wheel over its right end grow it, that end staying put; a
+    // double-click fits it again. Its facts are an overlay, with the zoom.
     harness.get_by_label("Zoom 100 %");
-    let actual = harness.get_by_role_and_label(Role::Image, "Assets/wide.png").rect();
-    assert!((actual.height() - 10.0).abs() < 0.5, "its own 10 pixels: {actual:?}");
-    harness.get_by_role_and_label(Role::Button, "Zoom in").click();
+    let at = picture.right_center() - egui::vec2(2.0, 0.0);
+    harness.event(egui::Event::PointerMoved(at));
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 3.0),
+        modifiers: egui::Modifiers::COMMAND,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+    });
     settle(&mut harness);
-    harness.get_by_label("Zoom 150 %");
-    harness.get_by_role_and_label(Role::Button, "Fit").click();
+    let zoomed = harness.get_by_role_and_label(Role::Image, "Assets/wide.png").rect();
+    assert!(zoomed.width() > picture.width() * 1.2, "{zoomed:?}");
+    assert!(
+        zoomed.contains(at) && (zoomed.right() - picture.right()) > 1.0,
+        "about the pointer: {zoomed:?}"
+    );
+    assert!(harness.query_by_label("Zoom 100 %").is_none());
+    let time = harness.ctx.input(|input| input.time) + 1.0;
+    harness.input_mut().time = Some(time);
+    harness.get_by_role_and_label(Role::Image, "Assets/wide.png").click();
+    harness.step();
+    harness.input_mut().time = Some(time + 0.05);
+    harness.get_by_role_and_label(Role::Image, "Assets/wide.png").click();
     settle(&mut harness);
-    assert!(harness.query_by_label("Zoom 150 %").is_none());
+    harness.input_mut().time = None;
+    harness.get_by_label("Zoom 100 %");
 }
 
 #[test]
