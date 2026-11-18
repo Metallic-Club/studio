@@ -553,16 +553,10 @@ fn is_current_camera(dm: &DataModel, id: Id) -> bool {
     matches!(dm.get_by_name(workspace, "CurrentCamera"), Ok(Value::Ref(Some(camera))) if camera == id)
 }
 
-/// Whether `id` can be moved, copied or deleted: anything but the root and the services.
+/// Whether `id` can be moved, copied or deleted: anything but the root, the services and their built-in children
+/// (`StarterPlayerScripts`, #808).
 pub fn is_movable(dm: &DataModel, id: Id) -> bool {
-    let Ok(class) = dm.class_of(id) else {
-        return false;
-    };
-    dm.root() != Some(id)
-        && dm
-            .registry()
-            .class(class)
-            .is_some_and(|info| info.service_order().is_none())
+    dm.contains(id) && !dm.is_fixed(id)
 }
 
 impl Scene<'_> {

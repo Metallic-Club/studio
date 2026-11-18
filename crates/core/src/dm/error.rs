@@ -74,6 +74,21 @@ pub enum DmError {
         /// The root's class name.
         class: &'static str,
     },
+    /// The instance is a service's built-in child (Roblox's `StarterPlayerScripts`), which like the service cannot
+    /// be moved, cloned or destroyed.
+    #[error("{class} is built into its service; it cannot be moved, cloned or destroyed")]
+    IsBuiltin {
+        /// Its class name.
+        class: &'static str,
+    },
+    /// A service names a built-in child class the registry lacks.
+    #[error("{service} is made with a {class}, which is not a class")]
+    UnknownBuiltin {
+        /// The service's class name.
+        service: &'static str,
+        /// The missing class.
+        class: &'static str,
+    },
     /// `create_root` was called twice.
     #[error("the game already has a root")]
     RootExists,

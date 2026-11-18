@@ -8,5 +8,5 @@ pub static CLASS: ClassDesc = ClassDesc::new("ReplicatedStorage", Some("Instance
         "Storage for things both the server and players need, such as shared modules and assets. Nothing here is \
          drawn or run.",
     )
-    .service(2)
+    .service(3)
     .persisted();
