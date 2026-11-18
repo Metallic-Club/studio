@@ -718,7 +718,7 @@ mod tests {
     fn strings_that_name_services_classes_and_children() {
         let dm = game();
         let services = labels(&dm, "game:GetService(\"Rep|").unwrap();
-        assert_eq!(services, ["ReplicatedStorage"]);
+        assert_eq!(services, ["ReplicatedFirst", "ReplicatedStorage"]);
         let classes = labels(&dm, "Instance.new(\"Poi|").unwrap();
         assert_eq!(classes, ["PointLight"]);
         let children = labels(&dm, "workspace:FindFirstChild(\"Spa|").unwrap();

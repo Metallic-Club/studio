@@ -611,7 +611,8 @@ fn classes_in(dm: &DataModel) -> Vec<&'static str> {
         let Some(info) = dm.class_of(id).ok().and_then(|class| dm.registry().class(class)) else {
             continue;
         };
-        if Some(id) != root && info.service_order().is_none() {
+        // Not the services or their built-in folders (#808).
+        if Some(id) != root && !dm.is_fixed(id) {
             found.insert(info.name());
         }
     }

@@ -225,6 +225,14 @@ icons! {
     ExplorerLighting = "explorer.lighting", Light, "sun";
     /// Replicated storage.
     ExplorerReplicatedStorage = "explorer.replicated_storage", Storage, "package";
+    /// What reaches clients first (`ReplicatedFirst`).
+    ExplorerReplicatedFirst = "explorer.replicated_first", Storage, "zap";
+    /// The user interface players start with (`StarterGui`).
+    ExplorerStarterGui = "explorer.starter_gui", Storage, "layout-grid";
+    /// What players start with (`StarterPlayer`).
+    ExplorerStarterPlayer = "explorer.starter_player", Storage, "user";
+    /// `StarterPlayer`'s folders of player and character scripts.
+    ExplorerStarterScripts = "explorer.starter_scripts", LocalScript, "folder";
     /// The server script service.
     ExplorerScriptService = "explorer.script_service", ServerScript, "scroll";
     /// Server storage.

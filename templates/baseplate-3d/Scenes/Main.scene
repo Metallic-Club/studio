@@ -39,12 +39,29 @@
     "class": "Lighting"
   }, {
     "id": 6,
-    "class": "ReplicatedStorage"
+    "class": "ReplicatedFirst"
   }, {
     "id": 7,
-    "class": "ServerScriptService"
+    "class": "ReplicatedStorage"
   }, {
     "id": 8,
+    "class": "ServerScriptService"
+  }, {
+    "id": 9,
     "class": "ServerStorage"
+  }, {
+    "id": 10,
+    "class": "StarterGui"
+  }, {
+    "id": 11,
+    "class": "StarterPlayer"
+  }, {
+    "id": 12,
+    "parent": 11,
+    "class": "StarterPlayerScripts"
+  }, {
+    "id": 13,
+    "parent": 11,
+    "class": "StarterCharacterScripts"
   }]
 }

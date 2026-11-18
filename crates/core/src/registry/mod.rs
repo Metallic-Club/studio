@@ -261,6 +261,16 @@ impl ClassInfo {
         self.desc.runs_scripts
     }
 
+    /// Whether only `LocalScript`s run under it, on clients (`ReplicatedFirst`, `StarterPlayerScripts`).
+    pub fn runs_local_scripts(&self) -> bool {
+        self.desc.runs_local_scripts
+    }
+
+    /// The classes the service is made with an instance of each of, under it, which never move or die.
+    pub fn builtin_children(&self) -> &'static [&'static str] {
+        self.desc.builtin_children
+    }
+
     /// Whether Studio's Explorer leaves it out.
     pub fn hidden_in_explorer(&self) -> bool {
         self.desc.hidden_in_explorer

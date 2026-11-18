@@ -261,7 +261,7 @@ impl DataModel {
         self.notify(Notice::ParentChanged { id, old, new });
     }
 
-    /// Refuses the root and services, which never move, clone or die.
+    /// Refuses the root, services and their built-in children, which never move, clone or die.
     pub(super) fn check_movable(&self, id: Id, class: ClassId) -> Result<(), DmError> {
         if self.root == Some(id) {
             return Err(DmError::IsRoot {
@@ -270,6 +270,11 @@ impl DataModel {
         }
         if self.is_service_class(class) {
             return Err(DmError::IsService {
+                class: self.class_label(class),
+            });
+        }
+        if self.is_builtin_class(class) {
+            return Err(DmError::IsBuiltin {
                 class: self.class_label(class),
             });
         }
@@ -447,8 +452,9 @@ impl DataModel {
         }
     }
 
-    /// Destroys every child of the instance (`ClearAllChildren`), last child first. Services under the root are
-    /// kept. A destroyed instance that can still be read has no children, so this does nothing.
+    /// Destroys every child of the instance (`ClearAllChildren`), last child first. Services under the root, and
+    /// their built-in children, are kept. A destroyed instance that can still be read has no children, so this does
+    /// nothing.
     pub fn destroy_children(&mut self, id: Id) -> Result<(), DmError> {
         if self.view(id)?.body.child_list().len == 0 {
             return Ok(());
@@ -457,7 +463,7 @@ impl DataModel {
         while let Some(child) = current {
             let prev = self.slots.prev_sibling(child);
             match self.destroy(child) {
-                Ok(()) | Err(DmError::IsService { .. }) => {}
+                Ok(()) | Err(DmError::IsService { .. } | DmError::IsBuiltin { .. }) => {}
                 Err(other) => return Err(other),
             }
             current = match prev {

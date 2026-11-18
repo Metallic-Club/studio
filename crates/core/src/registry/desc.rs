@@ -363,6 +363,13 @@ pub struct ClassDesc {
     pub persisted: bool,
     /// Scripts under the service run.
     pub runs_scripts: bool,
+    /// Under the service, only `LocalScript`s run, and only on clients (Roblox's `ReplicatedFirst` and
+    /// `StarterPlayerScripts`). Set on a service or on one of its built-in children.
+    pub runs_local_scripts: bool,
+    /// The classes the service is made with one instance each of, as its children, which like it never move or die
+    /// (Roblox's `StarterPlayer` and its `StarterPlayerScripts`). They are not creatable; scenes keep their contents
+    /// as a service's.
+    pub builtin_children: &'static [&'static str],
     /// Studio's Explorer does not list it.
     pub hidden_in_explorer: bool,
     /// Components it has, by name, on top of the inherited ones.
@@ -399,6 +406,8 @@ impl ClassDesc {
             service_order: None,
             persisted: false,
             runs_scripts: false,
+            runs_local_scripts: false,
+            builtin_children: &[],
             hidden_in_explorer: false,
             components: &[],
             props: &[],
@@ -445,6 +454,18 @@ impl ClassDesc {
     /// Runs scripts placed under the service.
     pub const fn runs_scripts(mut self) -> Self {
         self.runs_scripts = true;
+        self
+    }
+
+    /// Runs the `LocalScript`s placed under it on clients, and nothing else.
+    pub const fn runs_local_scripts(mut self) -> Self {
+        self.runs_local_scripts = true;
+        self
+    }
+
+    /// Makes the service with one instance of each of `classes` under it, which never move or die.
+    pub const fn builtin_children(mut self, classes: &'static [&'static str]) -> Self {
+        self.builtin_children = classes;
         self
     }
 

@@ -8,5 +8,5 @@ pub static CLASS: ClassDesc = ClassDesc::new("ServerStorage", Some("Instance"))
         "Storage only the server can see, such as maps and items to copy into the world later. Nothing here is \
          drawn or run.",
     )
-    .service(4)
+    .service(5)
     .persisted();

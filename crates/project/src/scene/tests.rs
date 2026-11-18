@@ -133,9 +133,14 @@ fn a_new_game_saves_its_services_and_camera() {
             "Workspace",
             "Camera",
             "Lighting",
+            "ReplicatedFirst",
             "ReplicatedStorage",
             "ServerScriptService",
-            "ServerStorage"
+            "ServerStorage",
+            "StarterGui",
+            "StarterPlayer",
+            "StarterPlayerScripts",
+            "StarterCharacterScripts"
         ]
     );
     let workspace = entry(&doc, 1);
@@ -274,6 +279,41 @@ fn values_are_written_by_their_declared_type() {
     let model = named(&doc, "House");
     assert_eq!(model["properties"]["PrimaryPart"], part["id"]);
     assert_eq!(named(&doc, "Count")["properties"]["Value"], -42);
+}
+
+/// #808: what is inside `StarterPlayer`'s built-in folders is saved and loaded with them, and a scene from before
+/// them (or one that leaves them out) keeps the game's own, empty.
+#[test]
+fn built_in_folders_keep_their_contents() {
+    let mut dm = game();
+    let player = service(&dm, "StarterPlayer");
+    let folders: Vec<Id> = dm.children(player).unwrap().collect();
+    new_in(&mut dm, "LocalScript", folders[0], "Camera");
+    new_in(&mut dm, "Folder", folders[1], "Health");
+    let text = save(&dm);
+
+    let mut target = game();
+    let kept: Vec<Id> = target.children(service(&target, "StarterPlayer")).unwrap().collect();
+    new_in(&mut target, "Folder", kept[0], "Leftover");
+    load_scene(&mut target, &text).unwrap();
+    let after: Vec<Id> = target.children(service(&target, "StarterPlayer")).unwrap().collect();
+    assert_eq!(after, kept, "the same two folders");
+    let names = |dm: &DataModel, id: Id| -> Vec<String> {
+        dm.children(id)
+            .unwrap()
+            .map(|c| dm.name(c).unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(names(&target, kept[0]), ["Camera"]);
+    assert_eq!(names(&target, kept[1]), ["Health"]);
+    assert_eq!(save(&target), text);
+
+    // An older scene has neither the service nor its folders.
+    let (old, loaded) = load(&format!(r#"{{"format": {SCENE_FORMAT}, "instances": []}}"#));
+    let folders: Vec<Id> = old.children(service(&old, "StarterPlayer")).unwrap().collect();
+    assert_eq!(folders.len(), 2);
+    assert!(folders.iter().all(|&f| old.child_count(f) == Ok(0)));
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 }
 
 #[test]
