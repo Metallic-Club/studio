@@ -139,8 +139,8 @@ fn a_new_game_saves_its_services_and_camera() {
             "ServerStorage",
             "StarterGui",
             "StarterPlayer",
-            "StarterPlayerScripts",
             "StarterCharacterScripts",
+            "StarterPlayerScripts",
             "SoundService"
         ]
     );

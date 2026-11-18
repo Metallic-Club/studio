@@ -18,7 +18,8 @@ pub static CLASS: ClassDesc = ClassDesc::new("StarterPlayer", Some("Instance"))
     )
     .service(7)
     .persisted()
-    .builtin_children(&["StarterPlayerScripts", "StarterCharacterScripts"]);
+    // Roblox lists StarterCharacterScripts first (#827).
+    .builtin_children(&["StarterCharacterScripts", "StarterPlayerScripts"]);
 
 #[cfg(test)]
 mod tests {
@@ -33,9 +34,9 @@ mod tests {
         let service = dm.service(class).unwrap();
         let folders: Vec<Id> = dm.children(service).unwrap().collect();
         let names: Vec<&str> = folders.iter().map(|&f| dm.class_name(f).unwrap()).collect();
-        assert_eq!(names, ["StarterPlayerScripts", "StarterCharacterScripts"]);
-        assert_eq!(dm.name(folders[0]), Ok("StarterPlayerScripts"));
-        let scripts = folders[0];
+        assert_eq!(names, ["StarterCharacterScripts", "StarterPlayerScripts"]);
+        assert_eq!(dm.name(folders[1]), Ok("StarterPlayerScripts"));
+        let scripts = folders[1];
         assert!(dm.is_fixed(scripts));
         assert!(matches!(dm.destroy(scripts), Err(DmError::IsBuiltin { .. })));
         assert!(matches!(dm.set_parent(scripts, None), Err(DmError::IsBuiltin { .. })));
