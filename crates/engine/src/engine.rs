@@ -84,6 +84,8 @@ pub struct Engine<O: OutputSink = StdOutput> {
     user_input_service: Id,
     /// CollectionService's added and removed signals (#809), fired at the start of each frame.
     tags: metallic_classes::services::collection_service::TagEvents,
+    /// The game's sounds and the mixer they play through (#811).
+    sounds: crate::sounds::Sounds,
     simulation: Box<dyn Simulation>,
     /// Whether frames measure their script and simulation wall time ([`FrameStats::script_cpu`]).
     cpu_timing: bool,
@@ -151,6 +153,7 @@ impl<O: OutputSink> Engine<O> {
             last: FrameStats::default(),
             run_service,
             tags: metallic_classes::services::collection_service::TagEvents::new(),
+            sounds: crate::sounds::Sounds::new(),
             user_input_service,
             simulation: Box::new(NoSimulation),
             cpu_timing: config.mode == EngineMode::Windowed,
@@ -195,6 +198,7 @@ impl<O: OutputSink> Engine<O> {
         }
         self.host.stop_game(&mut self.dm);
         self.tags.stop(&mut self.dm);
+        self.sounds.stop();
         self.state = RunState::Stopped;
         if let Err(error) = self.write_flags(false) {
             log::warn!("could not clear RunService's running flag: {error}");
@@ -258,6 +262,7 @@ impl<O: OutputSink> Engine<O> {
     fn run_frame(&mut self, advance: Option<Advance>) -> FrameStats {
         profiling::scope!("Engine::frame");
         self.frames += 1;
+        let advancing = advance.is_some();
         {
             profiling::scope!("input");
             #[cfg(feature = "render")]
@@ -284,6 +289,11 @@ impl<O: OutputSink> Engine<O> {
             if self.dm.has_states() {
                 profiling::scope!("TweenService");
                 metallic_classes::services::tween_service::step(&mut self.dm, dt);
+            }
+            // A game that never made a sound has no state, and skips it (#811).
+            if self.dm.has_states() {
+                profiling::scope!("Sounds");
+                self.sounds.step(&mut self.dm, true);
             }
             if self.context != RunContext::Server {
                 profiling::scope!("RenderStepped");
@@ -321,6 +331,10 @@ impl<O: OutputSink> Engine<O> {
             stats.dropped_steps = advance.dropped;
             stats.ran = true;
             stats.resumed = resumed;
+        }
+        if !advancing && self.dm.has_states() {
+            // Paused or stopped: the mixer holds every voice where it is.
+            self.sounds.step(&mut self.dm, false);
         }
         stats.game_time = self.clock.game_time().as_secs_f64();
         stats.alpha = self.clock.alpha();
@@ -366,6 +380,23 @@ impl<O: OutputSink> Engine<O> {
     /// Whether frames measure their script and simulation time.
     pub fn cpu_timing(&self) -> bool {
         self.cpu_timing
+    }
+
+    /// The game's sounds (#811): their mixer, and what could not be loaded.
+    pub fn sounds(&self) -> &crate::sounds::Sounds {
+        &self.sounds
+    }
+
+    /// Reads the game's sound files with `reader` (a project's or a pak's, on a worker thread): its `Sound`s play
+    /// once their file is here (#811).
+    pub fn set_sound_assets(&mut self, reader: metallic_project::AssetReader) {
+        self.sounds.set_reader(reader);
+    }
+
+    /// Plays the game's sounds on the system's default device (#811). Without it they play unheard. Fails where
+    /// there is no device (and on Linux for now).
+    pub fn open_audio(&mut self) -> Result<(), metallic_platform::audio::AudioError> {
+        self.sounds.open_output()
     }
 
     /// The game.

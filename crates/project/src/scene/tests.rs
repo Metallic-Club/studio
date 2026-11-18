@@ -140,7 +140,8 @@ fn a_new_game_saves_its_services_and_camera() {
             "StarterGui",
             "StarterPlayer",
             "StarterPlayerScripts",
-            "StarterCharacterScripts"
+            "StarterCharacterScripts",
+            "SoundService"
         ]
     );
     let workspace = entry(&doc, 1);

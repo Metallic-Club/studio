@@ -40,7 +40,16 @@ const FREQUENT: [&str; 8] = [
 
 /// The registry's categories, in the order their sections come; any other follows by name, then the classes with
 /// none.
-const ORDER: [&str; 7] = ["Parts", "Containers", "Lights", "Scripts", "Events", "Values", "World"];
+const ORDER: [&str; 8] = [
+    "Parts",
+    "Containers",
+    "Lights",
+    "Sounds",
+    "Scripts",
+    "Events",
+    "Values",
+    "World",
+];
 
 /// The section of classes with no category.
 const OTHER: &str = "Other";

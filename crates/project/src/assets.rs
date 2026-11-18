@@ -539,6 +539,14 @@ pub enum AssetError {
         /// The name.
         name: String,
     },
+    /// The member is not a sound this engine plays (#811).
+    #[error("`{member}` is not a sound this engine plays: {source}")]
+    Sound {
+        /// The member.
+        member: String,
+        /// Why.
+        source: crate::sound::SoundError,
+    },
 }
 
 /// Reads a game's assets by id on any thread: a project's, from its file and the edits not saved when the reader was
@@ -583,6 +591,31 @@ impl AssetReader {
             index,
             store: Store::Pak(file),
         }
+    }
+
+    /// Another reader of the same assets, with its own file handle: for a second worker (the engine's sounds,
+    /// #811, beside the renderer's meshes).
+    pub fn reopen(&self) -> Self {
+        let store = match &self.store {
+            Store::Project { path, edits, .. } => Store::Project {
+                path: path.clone(),
+                edits: edits.clone(),
+                archive: None,
+            },
+            Store::Pak(file) => Store::Pak(file.reopen()),
+        };
+        Self {
+            index: self.index.clone(),
+            store,
+        }
+    }
+
+    /// Reads and decodes the sound asset `id` names ([`decode_sound`](crate::sound::decode_sound)), by its file's
+    /// extension.
+    pub fn load_sound(&mut self, id: &str) -> Result<crate::sound::SoundAsset, AssetError> {
+        let (member, bytes) = self.read(id)?;
+        let extension = member.rsplit_once('.').map_or("", |(_, extension)| extension);
+        crate::sound::decode_sound(&bytes, extension).map_err(|source| AssetError::Sound { member, source })
     }
 
     /// The file the assets are read from: the project's or the pak's.

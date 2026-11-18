@@ -58,6 +58,9 @@ winit = { version = "0.30.13", default-features = false, features = [
 raw-window-handle = "0.6.2"
 # Desktop gamepads for `metallic_platform` (Windows, Linux, macOS only).
 gilrs = "0.11.2"
+# Sound output for `metallic_platform`'s `audio` feature (#811): WASAPI, Core Audio and AAudio. Not on Linux, where it
+# links ALSA (alsa-sys, libasound2-dev) that every Linux build and CI runner would then need.
+cpal = "0.18"
 # Parses and writes `metallic.toml`, the project manifest (`metallic_project`, ADR 0006). Pure Rust, no proc-macros.
 toml = "1.2"
 # Reads and writes `.mtproj` project archives (`metallic_project`, ADR 0006): deflate and stored members only, pure
@@ -93,6 +96,12 @@ gltf = { version = "1.4", default-features = false, features = ["utils"] }
 # Decodes JPEG textures (`metallic_project`'s asset decoding, #189). Pure Rust; its SIMD paths are chosen at run time
 # on x86 and are plain NEON on ARM.
 zune-jpeg = "0.5"
+# Decode sound assets (`metallic_project`, #811): WAV, Ogg Vorbis, FLAC and MP3. All pure Rust and permissively
+# licensed (Symphonia, which does all four, is MPL-2.0).
+hound = "3.5"
+lewton = "0.10"
+claxon = "0.4"
+nanomp3 = "0.2"
 # Studio's interface (ADR 0009): egui 0.37, built for wgpu 30, drawn by `egui-wgpu` on the engine's device and fed
 # by `egui-winit` from Studio's own winit loop (not eframe, which owns the device and the loop). Desktop only: these
 # are Studio's alone, and the Android and iOS checks exclude it. `default_fonts` is off: Studio bundles its own OFL

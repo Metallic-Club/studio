@@ -42,8 +42,10 @@
 // (`file_types`), which are unsafe. Each block says why it is sound.
 #![cfg_attr(target_os = "windows", allow(unsafe_code))]
 
+// The mixer always (a game's sounds play on without a device); the device only with `audio` (#811).
 #[cfg(feature = "window")]
 mod app;
+pub mod audio;
 mod error;
 #[cfg(feature = "window")]
 mod event;

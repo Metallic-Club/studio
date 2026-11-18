@@ -352,7 +352,7 @@ impl PakFile {
     }
 
     /// Another reader of the same pak, with its own file handle (opened on first use).
-    fn reopen(&self) -> Self {
+    pub(crate) fn reopen(&self) -> Self {
         Self {
             path: self.path.clone(),
             entries: Arc::clone(&self.entries),

@@ -246,12 +246,13 @@ mod tests {
     /// it. This lists every saved string property of the built-in classes, so adding one means deciding.
     #[test]
     fn every_saved_string_property_is_known_to_be_a_path_or_not() {
-        // `Lighting.TimeOfDay`, `MeshPart.MeshId` and `TextureId` and `SurfaceAppearance`'s maps (asset ids, #807),
-        // `BasePart.Material` (an asset id or a material name, #678), `StringValue.Value`.
+        // `Lighting.TimeOfDay`; asset ids: `MeshPart.MeshId` and `TextureId`, `SurfaceAppearance`'s maps (#807) and
+        // `Sound.SoundId` (#811); `BasePart.Material` (an asset id or a material name, #678); `StringValue.Value`.
         const NOT_PATHS: &[&str] = &[
             "TimeOfDay",
             "MeshId",
             "TextureId",
+            "SoundId",
             "ColorMap",
             "NormalMap",
             "RoughnessMap",

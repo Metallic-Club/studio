@@ -131,6 +131,7 @@ impl EditorState {
             Player::hosted(game, sources, graphics, ScriptOutput::new(log)).map_err(|error| error.to_string())?;
         // The project's meshes and materials' textures, as the editor's viewport has them (#772).
         player.set_assets(self.project.asset_reader());
+        crate::editor::play::hear(&mut player);
         log::info!("play: started {}", self.name());
         // The selection comes along by scene id, revealed in the game's Explorer.
         let selection = Selection::of(
@@ -276,5 +277,16 @@ impl PlaySession {
             None => &mut self.player,
         };
         (&mut self.view, player)
+    }
+}
+
+/// Plays a play session's sounds on the system's default device (#811). Studio's own tests play none aloud, and a
+/// machine with no device plays them unheard, which is only logged.
+pub(crate) fn hear(player: &mut Player<ScriptOutput>) {
+    if cfg!(test) {
+        return;
+    }
+    if let Err(error) = player.engine_mut().open_audio() {
+        log::info!("play: sounds play unheard: {error}");
     }
 }

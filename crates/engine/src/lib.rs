@@ -149,6 +149,7 @@ pub mod perf;
 mod project;
 #[cfg(feature = "render")]
 mod scene_renderer;
+mod sounds;
 pub mod stress;
 #[cfg(feature = "render")]
 mod user_input;

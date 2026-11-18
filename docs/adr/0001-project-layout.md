@@ -65,7 +65,7 @@ studio/                         Metallic-Club/studio (the one repo)
 4. **`render` gets a window handle (`raw-window-handle`) and decoded assets from `engine`.** It does not depend on `platform` or `project`.
 5. **`#[cfg(target_os = ...)]` only appears in `metallic_platform`** (and in app packaging). Everything else is platform-free.
 6. **A language backend depends only on `metallic_script` and `metallic_core`.** A new language is a new crate next to `luau/`; nothing else changes.
-7. **`metallic_engine` features:** `render`, `physics`, `luau` (all on by default). A dedicated server is `--no-default-features --features physics,luau`.
+7. **`metallic_engine` features:** `render`, `physics`, `luau`, `audio` (all on by default; `audio`, #811, plays sounds on the device). A dedicated server is `--no-default-features --features physics,luau`.
 8. **Studio builds for desktop targets only.** Player and Launcher build everywhere.
    `xtask` is host tooling that never ships; it may read `metallic_core`, `metallic_classes` and `metallic_script`
    (the API dump, #48).
