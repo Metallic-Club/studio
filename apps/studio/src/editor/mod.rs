@@ -16,6 +16,7 @@ pub mod picture_loader;
 pub mod pictures;
 pub mod play;
 pub mod selection;
+pub mod sounds;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -54,6 +55,8 @@ pub struct EditorState {
     pub pictures: pictures::Pictures,
     /// The pictures open in the image preview (#681).
     pub images: images::ImagePreviews,
+    /// The sound previews (#831): what each shows and what plays.
+    pub sounds: sounds::SoundPreviews,
     /// Small pictures of the project's images, by asset id, for the material editor's slots (#680); `None` for one that
     /// could not be read.
     pub thumbnails: std::collections::HashMap<metallic_engine::metallic_project::AssetId, Option<egui::TextureHandle>>,
@@ -127,6 +130,7 @@ impl EditorState {
             folder_colors,
             pictures: pictures::Pictures::default(),
             images: images::ImagePreviews::default(),
+            sounds: sounds::SoundPreviews::default(),
             thumbnails: std::collections::HashMap::new(),
             picture_loader: picture_loader::PictureLoader::default(),
             mesh_facts: std::collections::HashMap::new(),

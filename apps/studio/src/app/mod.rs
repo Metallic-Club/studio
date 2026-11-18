@@ -882,10 +882,21 @@ impl Studio {
         for image in cx.editor.images.take_opening() {
             self.dock.open_instance(&crate::editor::images::pane(image));
         }
+        // And the sound tabs (#831).
+        for sound in cx.editor.sounds.take_opening() {
+            self.dock.open_instance(&crate::editor::sounds::pane(sound));
+        }
 
         for pane in self.dock.instance_panes() {
             if let Some(image) = crate::editor::images::image_of(&pane) {
                 if cx.editor.project.assets().path(image).is_none() {
+                    self.dock.close(&pane);
+                }
+                continue;
+            }
+            if let Some(sound) = crate::editor::sounds::sound_of(&pane) {
+                if cx.editor.project.assets().path(sound).is_none() {
+                    cx.editor.sounds.forget(sound);
                     self.dock.close(&pane);
                 }
                 continue;
@@ -10011,6 +10022,7 @@ skip_sign_in = true
     mod grouping;
     mod light_properties;
     mod material_editor;
+    mod sound_preview;
     mod team_create;
     mod team_play;
     mod team_play_port;

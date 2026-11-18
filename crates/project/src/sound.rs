@@ -13,6 +13,8 @@ pub const SOUND_EXTENSIONS: &[&str] = &["wav", "ogg", "mp3", "flac"];
 pub struct SoundAsset {
     /// Frames (a left and a right sample) a second.
     pub rate: u32,
+    /// How many channels the file has (1 mono, 2 stereo, ...): the samples are stereo whatever it is (#831).
+    pub channels: usize,
     /// The samples, two per frame.
     pub samples: Vec<f32>,
 }
@@ -55,6 +57,7 @@ pub fn decode_sound(bytes: &[u8], extension: &str) -> Result<SoundAsset, SoundEr
     }
     Ok(SoundAsset {
         rate,
+        channels,
         samples: stereo(&samples, channels),
     })
 }
