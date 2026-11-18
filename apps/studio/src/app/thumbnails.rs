@@ -57,6 +57,25 @@ pub fn spin(turn: Quat, drag: egui::Vec2) -> Quat {
     (across * turn).normalize()
 }
 
+/// A game holding a MeshPart of the mesh `id`, whose bounds are `size`: at its own proportions, as large as the ball
+/// ([`BALL_RADIUS`] round its centre), at the origin.
+fn mesh_game(id: AssetId, size: [f32; 3]) -> Option<DataModel> {
+    let mut dm = metallic_engine::metallic_classes::new_game().ok()?;
+    let workspace = dm.service(dm.registry().class_id("Workspace")?)?;
+    let part = dm.create(dm.registry().class_id("MeshPart")?).ok()?;
+    dm.set_by_name(part, "MeshId", Value::String(id.to_string().into()))
+        .ok()?;
+    dm.set_by_name(part, "Size", Value::Vector3(fitted(size))).ok()?;
+    dm.set_parent(part, Some(workspace)).ok()?;
+    Some(dm)
+}
+
+/// A mesh's `size` scaled so its bounds' corners are [`BALL_RADIUS`] from its centre, as the ball's outline is.
+fn fitted(size: [f32; 3]) -> Vec3 {
+    let size = Vec3::from(size).max(Vec3::splat(1e-3));
+    size * (2.0 * BALL_RADIUS / size.length())
+}
+
 /// The thumbnails' renderer and the textures it made.
 #[derive(Default)]
 pub struct Thumbnails {
@@ -142,6 +161,7 @@ impl Thumbnails {
         let drawn = match wanted.picture {
             Picture::Material => self.draw_material(wanted.id),
             Picture::Scene => self.draw_scene(editor, &wanted.path),
+            Picture::Mesh => self.draw_mesh(editor, wanted.id),
         };
         if !drawn {
             return;
@@ -167,6 +187,20 @@ impl Thumbnails {
         let _ = dm.set_by_name(*ball, "Material", Value::String(id.to_string().into()));
         self.scene.set_camera(Some(ball_camera()));
         self.scene.render_viewport(dm, FrameStats::default());
+        true
+    }
+
+    /// A mesh's model (#806): a MeshPart of it at its own proportions, as large as the ball, seen from the ball's
+    /// camera.
+    fn draw_mesh(&mut self, editor: &mut EditorState, id: AssetId) -> bool {
+        let Ok(mesh) = editor.project.asset_reader().load_mesh(&id.to_string()) else {
+            return false;
+        };
+        let Some(mut dm) = mesh_game(id, mesh.size) else {
+            return false;
+        };
+        self.scene.set_camera(Some(ball_camera()));
+        self.scene.render_viewport(&mut dm, FrameStats::default());
         true
     }
 

@@ -47,6 +47,8 @@ pub(crate) enum Kind {
     Material,
     /// A picture (#762): its value is the file's asset id.
     Picture,
+    /// A mesh, a glTF model (#806): its value is the file's asset id.
+    Mesh,
 }
 
 impl Kind {
@@ -59,6 +61,9 @@ impl Kind {
             Kind::Picture => Widget::AssetId {
                 extensions: &["png", "jpg", "jpeg"],
             },
+            Kind::Mesh => Widget::AssetId {
+                extensions: &["glb", "gltf"],
+            },
         }
     }
 
@@ -66,7 +71,7 @@ impl Kind {
     fn name(self, path: &str) -> &str {
         match self {
             Kind::Material => material_name(path),
-            Kind::Picture => {
+            Kind::Picture | Kind::Mesh => {
                 let file = path.rsplit_once('/').map_or(path, |(_, file)| file);
                 file.rsplit_once('.').map_or(file, |(stem, _)| stem)
             }
@@ -85,6 +90,7 @@ impl Kind {
         match self {
             Kind::Material => "Choose a material",
             Kind::Picture => "Choose a picture",
+            Kind::Mesh => "Choose a mesh",
         }
     }
 
@@ -93,6 +99,7 @@ impl Kind {
         match self {
             Kind::Material => "Search the materials",
             Kind::Picture => "Search the pictures",
+            Kind::Mesh => "Search the meshes",
         }
     }
 
@@ -101,6 +108,7 @@ impl Kind {
         match self {
             Kind::Material => Icon::AssetMaterial,
             Kind::Picture => Icon::AssetImage,
+            Kind::Mesh => Icon::AssetMesh,
         }
     }
 }
@@ -177,7 +185,7 @@ fn value_of(kind: Kind, choices: &[Choice], typed: &str) -> Option<String> {
     let mut named = choices.iter().filter(|choice| kind.name(&choice.path) == typed);
     match kind {
         Kind::Material => (named.next().is_some() || BUILTIN_NAMES.contains(&typed)).then(|| typed.to_owned()),
-        Kind::Picture => match (named.next(), named.next()) {
+        Kind::Picture | Kind::Mesh => match (named.next(), named.next()) {
             (Some(only), None) => Some(only.id.clone()),
             _ => None,
         },

@@ -1086,3 +1086,14 @@ mod tests {
         assert!(browser.selected.is_empty());
     }
 }
+
+/// What a mesh's model holds (#806), as its properties show it: its triangles, its vertices, and its bounds' size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshFacts {
+    /// Its triangles.
+    pub triangles: usize,
+    /// Its vertices.
+    pub vertices: usize,
+    /// Its bounds' size, in its own units.
+    pub size: [f32; 3],
+}

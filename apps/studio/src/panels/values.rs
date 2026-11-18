@@ -227,6 +227,11 @@ pub fn edit(
             asset_field::asset_field(ui, files, asset_field::Kind::Material, label, &s, width, mixed.whole)
                 .map(|s| Edit::Whole(Value::String(s.into())))
         }
+        // A mesh (#806): as a material, with its thumbnail in the window.
+        Value::String(s) if is_mesh(meta.widget) => {
+            asset_field::asset_field(ui, files, asset_field::Kind::Mesh, label, &s, width, mixed.whole)
+                .map(|s| Edit::Whole(Value::String(s.into())))
+        }
         // A project file's path or asset id (#55): picked from the project's files.
         Value::String(s) if meta.widget.file_extensions().is_some() => {
             file_picker(ui, files, meta.widget, label, &s, width, mixed.whole)
@@ -388,13 +393,16 @@ pub(crate) fn want_picture(ctx: &egui::Context, path: &str) {
 fn thumbnail_of(ctx: &egui::Context, editor: &mut crate::editor::EditorState, path: &str) -> Option<Thumbnail> {
     use crate::editor::pictures::{Picture, Wanted};
     let id = editor.project.assets().id(path)?;
-    if path.ends_with(".material") {
+    let lower = path.to_ascii_lowercase();
+    let mesh = lower.ends_with(".glb") || lower.ends_with(".gltf");
+    if path.ends_with(".material") || mesh {
         let fingerprint = editor.project.fingerprint(path).ok()?;
         let drawn = editor.pictures.get(id, fingerprint);
         if drawn.is_none_or(|(_, fresh)| !fresh) {
             editor.pictures.want(Wanted {
                 id,
-                picture: Picture::Material,
+                // A mesh's model (#806), drawn whole.
+                picture: if mesh { Picture::Mesh } else { Picture::Material },
                 path: path.to_owned(),
                 fingerprint,
             });
@@ -402,7 +410,7 @@ fn thumbnail_of(ctx: &egui::Context, editor: &mut crate::editor::EditorState, pa
         }
         return drawn.map(|(texture, _)| Thumbnail {
             texture,
-            ball: true,
+            ball: !mesh,
             size: [1, 1],
         });
     }
@@ -441,6 +449,11 @@ pub(crate) fn open_picture_window(ctx: &egui::Context, label: &str) {
 /// Whether a property with `widget` takes a material (#739).
 fn is_material(widget: metallic_engine::metallic_core::Widget) -> bool {
     matches!(widget, metallic_engine::metallic_core::Widget::AssetId { extensions } if extensions.contains(&"material"))
+}
+
+/// Whether a property with `widget` takes a mesh (#806), a glTF model.
+fn is_mesh(widget: metallic_engine::metallic_core::Widget) -> bool {
+    matches!(widget, metallic_engine::metallic_core::Widget::AssetId { extensions } if extensions.contains(&"glb"))
 }
 
 /// What a file picker shows for nothing chosen.

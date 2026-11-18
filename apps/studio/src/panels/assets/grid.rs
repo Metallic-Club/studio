@@ -529,7 +529,7 @@ pub(super) fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: 
             ui.painter().image(texture.id(), shown, full, egui::Color32::WHITE);
             true
         }
-        AssetKind::Material | AssetKind::Scene => {
+        AssetKind::Material | AssetKind::Scene | AssetKind::Mesh => {
             let Ok(fingerprint) = editor.project.fingerprint(&entry.path) else {
                 return false;
             };
@@ -537,10 +537,11 @@ pub(super) fn thumbnail(ui: &Ui, editor: &mut EditorState, entry: &Entry, area: 
             if drawn.is_none_or(|(_, fresh)| !fresh) {
                 editor.pictures.want(Wanted {
                     id,
-                    picture: if kind == AssetKind::Material {
-                        Picture::Material
-                    } else {
-                        Picture::Scene
+                    picture: match kind {
+                        AssetKind::Material => Picture::Material,
+                        // Its model, drawn whole (#806).
+                        AssetKind::Mesh => Picture::Mesh,
+                        _ => Picture::Scene,
                     },
                     path: entry.path.clone(),
                     fingerprint,

@@ -59,6 +59,8 @@ pub struct EditorState {
     pub thumbnails: std::collections::HashMap<metallic_engine::metallic_project::AssetId, Option<egui::TextureHandle>>,
     /// Decodes the thumbnails above off the UI thread (#771).
     pub picture_loader: picture_loader::PictureLoader,
+    /// What each mesh's model holds (#806), read the first time its properties show; `None` for one that could not be.
+    pub mesh_facts: std::collections::HashMap<metallic_engine::metallic_project::AssetId, Option<assets::MeshFacts>>,
     /// The mesh and texture loader the viewport's renderer is fed from, until the renderer takes it.
     pub mesh_assets: Option<MeshAssets>,
     /// What is selected (#347).
@@ -127,6 +129,7 @@ impl EditorState {
             images: images::ImagePreviews::default(),
             thumbnails: std::collections::HashMap::new(),
             picture_loader: picture_loader::PictureLoader::default(),
+            mesh_facts: std::collections::HashMap::new(),
             mesh_assets: Some(mesh_assets),
             selection: Selection::new(),
             history: History::new(Selection::new()),
