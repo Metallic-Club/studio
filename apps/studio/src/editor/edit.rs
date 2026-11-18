@@ -66,6 +66,18 @@ impl Scene<'_> {
         Ok(())
     }
 
+    /// Gives `id` the tag `tag`, or takes it away (#833), as part of the action under way.
+    pub fn set_tag(&mut self, id: Id, tag: &str, on: bool) -> Result<(), DmError> {
+        if self.dm.set_tag(id, tag, on)? {
+            self.history.note(Change::Tag {
+                id,
+                tag: tag.to_owned(),
+                added: on,
+            });
+        }
+        Ok(())
+    }
+
     /// Moves `id` under `parent`, before its child `before` (`None`: last), or out of the tree with no `parent`: a
     /// delete, which undo takes back to the same instance. As part of the action under way.
     pub fn move_to(&mut self, id: Id, parent: Option<Id>, before: Option<Id>) -> Result<(), DmError> {

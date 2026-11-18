@@ -85,6 +85,15 @@ pub enum Change {
         /// Its value after.
         new: Option<Value>,
     },
+    /// `id` gained the tag `tag` (`added`), or lost it (#833).
+    Tag {
+        /// The instance.
+        id: Id,
+        /// The tag.
+        tag: String,
+        /// Whether it was added; removed otherwise.
+        added: bool,
+    },
     /// `id`'s icon colour in the Explorer (#603) went from `old` to `new`; `None` is its class's own. Studio's, not the
     /// game's: [`Applied::icon_colors`] says what to set.
     IconColor {
@@ -113,6 +122,7 @@ impl Change {
             Change::Prop { id, .. }
             | Change::Attribute { id, .. }
             | Change::Parent { id, .. }
+            | Change::Tag { id, .. }
             | Change::IconColor { id, .. } => *id,
         }
     }
@@ -124,6 +134,7 @@ impl Change {
             Change::Attribute { old, new, .. } => old == new,
             Change::Parent { old, new, .. } => old == new,
             Change::IconColor { old, new, .. } => old == new,
+            Change::Tag { .. } => false,
         }
     }
 
@@ -135,6 +146,7 @@ impl Change {
                 dm.set_attribute(*id, name, if back { old } else { new }.clone())
             }
             Change::Parent { id, old, new } => if back { old } else { new }.restore(dm, *id),
+            Change::Tag { id, tag, added } => dm.set_tag(*id, tag, *added != back).map(|_| ()),
             // Not the data model's: the scene sets it from [`Applied::icon_colors`].
             Change::IconColor { .. } => Ok(()),
         }
@@ -163,7 +175,7 @@ impl Step {
             && self.changes.iter().all(|change| match change {
                 Change::Prop { .. } => true,
                 Change::Attribute { old, new, .. } => old.is_some() && new.is_some(),
-                Change::Parent { .. } | Change::IconColor { .. } => false,
+                Change::Parent { .. } | Change::IconColor { .. } | Change::Tag { .. } => false,
             })
     }
 

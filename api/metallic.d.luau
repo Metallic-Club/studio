@@ -1076,18 +1076,24 @@ end
 
 --- The base of every light: whether it is on, how bright, what colour, how far it reaches and shadows.
 declare extern type Light extends WorldObject with
+    --- Where the light's pivot sits, relative to the light.
+    PivotOffset: CFrame
+    --- Whether clicking the light's icon in the viewport leaves it alone. It can still be selected in the Explorer.
+    Locked: boolean
     --- Whether the light shines. Turning it off keeps every other setting.
     Enabled: boolean
-    --- How strong the light is. 1 is an ordinary lamp; 0 gives no light; there is no upper limit.
-    Brightness: number
+    --- Where the light is and which way it points (forward is -Z). Inside a part it is relative to the part, so the light moves with it; anywhere else it is in world space.
+    CFrame: CFrame
+    --- Where the light is, in metres: inside a part, from the part's centre; anywhere else, in the world.
+    Position: Vector3
     --- The colour of the light.
     Color: Color3
+    --- How strong the light is. 1 is an ordinary lamp; 0 gives no light; there is no upper limit.
+    Brightness: number
     --- How far the light reaches, in metres. Past this distance it lights nothing.
     Range: number
     --- Whether objects block this light and cast shadows. Shadows cost performance, so use them sparingly.
     Shadows: boolean
-    --- Where the light is and which way it points (forward is -Z). Inside a part it is relative to the part, so the light moves with it; anywhere else it is in world space.
-    CFrame: CFrame
 end
 
 --- A group of world objects that belong together, such as a car or a house, moved and copied as one.
@@ -1166,6 +1172,8 @@ end
 
 --- A cone of light shining forward from the light, like a torch or a stage light.
 declare extern type SpotLight extends Light with
+    --- Which way the light points, as angles in degrees about X, Y and Z (applied Z, then X, then Y). Inside a part it is relative to the part.
+    Orientation: Vector3
     --- How wide the cone is: the full angle from one edge to the other, in degrees, up to 180 (a half sphere).
     Angle: number
 end
