@@ -86,6 +86,17 @@ engine = "0.1"         # engine version the project was last saved with
 | Studio settings: keybinds, theme, layout, editor behaviour | the user's config folder, per user, never in the project |
 | Player settings: graphics, sensitivity | the user's config folder, per game (#5) |
 
+#### A game's own settings (2026-11-17, #782)
+
+Studio's **Game Settings** window (Shift+Alt+S) edits what a game is, by how it ships. `[project]` gains three
+optional keys, written only when set so older files read and write unchanged: `author`, `version` (the game's own,
+such as `1.0.2`) and `icon` (the asset id of the picture an offline game's executable icon is made from).
+
+The graphics an offline game starts with live in `graphics.toml` at the project's root, in the renderer's settings
+format: a reserved member like `metallic.toml` and `assets.json`, never an asset, packed with the game and shipped
+beside its executable. Until games draw a settings screen of their own (through an API to come), players change that
+file. Online (platform) games have neither yet.
+
 ### Export
 
 `.mtproj` is the source; `game.pak` is the build.

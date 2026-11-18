@@ -16,8 +16,8 @@ pub mod project;
 pub mod scene;
 
 pub use asset_index::{
-    Asset, AssetId, AssetIndex, AssetIndexError, AssetMove, EDITOR_DATA, Fingerprint, INDEX_FILE, IndexReport,
-    ParseAssetIdError, is_editor_data,
+    Asset, AssetId, AssetIndex, AssetIndexError, AssetMove, EDITOR_DATA, Fingerprint, GAME_GRAPHICS_FILE, INDEX_FILE,
+    IndexReport, ParseAssetIdError, is_editor_data,
 };
 pub use assets::{AssetError, AssetReader, DecodeError, ImageAsset, MeshAsset, decode_image, decode_mesh};
 pub use game_files::GameFiles;

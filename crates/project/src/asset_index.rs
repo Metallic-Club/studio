@@ -71,10 +71,15 @@ pub fn is_editor_data(member: &str) -> bool {
     member.starts_with(EDITOR_DATA)
 }
 
-/// Whether `member` is an asset that gets an id: every member but `metallic.toml`, `assets.json` and the editor's own
-/// data under [`EDITOR_DATA`].
+/// The game's graphics settings (#782): what an offline game's player starts with, set in Studio's Game Settings.
+/// In the renderer's own settings format (`GraphicsSettings::to_text` in `metallic_render`); a member of the project
+/// and of its pak, never an asset.
+pub const GAME_GRAPHICS_FILE: &str = "graphics.toml";
+
+/// Whether `member` is an asset that gets an id: every member but `metallic.toml`, `assets.json`, the game's
+/// [`GAME_GRAPHICS_FILE`] and the editor's own data under [`EDITOR_DATA`].
 pub fn is_asset(member: &str) -> bool {
-    member != MANIFEST_FILE && member != INDEX_FILE && !is_editor_data(member)
+    member != MANIFEST_FILE && member != INDEX_FILE && member != GAME_GRAPHICS_FILE && !is_editor_data(member)
 }
 
 /// A stable id for an asset, unique across projects and never reused. Written as 32 lowercase hex digits.
