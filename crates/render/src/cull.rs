@@ -53,6 +53,9 @@ pub struct CullSettings {
     /// Instances whose bounding sphere projects smaller than this many pixels across (at the target's height)
     /// are not drawn. 0 turns screen-size culling off.
     pub min_screen_size: f32,
+    /// Instances wholly hidden behind large opaque blocks are not drawn ([`crate::occlusion`], #836). The graphics
+    /// presets turn it on; the default leaves it off, so the culls measured against it stay as they were.
+    pub occlusion: bool,
 }
 
 impl CullSettings {
@@ -61,6 +64,7 @@ impl CullSettings {
         enabled: false,
         max_distance: f32::INFINITY,
         min_screen_size: 0.0,
+        occlusion: false,
     };
 }
 
@@ -71,6 +75,7 @@ impl Default for CullSettings {
             enabled: true,
             max_distance: f32::INFINITY,
             min_screen_size: 1.0,
+            occlusion: false,
         }
     }
 }
@@ -184,6 +189,12 @@ pub struct CullView {
     /// A shadow view also keeps the partly see-through casters (#122), into its see-through list; a camera's view
     /// ignores it (it keeps every instance).
     pub see_through: bool,
+    /// A camera's view culls what large opaque blocks hide ([`CullSettings::occlusion`], #836).
+    pub occlusion: bool,
+    /// The view's clip matrix (scene positions to clip space) and its aspect: what occluders are drawn with.
+    pub clip: Mat4,
+    /// The view's width over its height.
+    pub aspect: f32,
 }
 
 impl CullView {
@@ -213,6 +224,9 @@ impl CullView {
             min_screen_size: settings.min_screen_size.max(0.0),
             lod: LodView::for_camera(size_scale, &LodSettings::default()),
             see_through: false,
+            occlusion: settings.occlusion,
+            clip,
+            aspect,
         }
     }
 
@@ -236,6 +250,9 @@ impl CullView {
             min_screen_size: 0.0,
             lod: LodView::OFF,
             see_through: false,
+            occlusion: false,
+            clip: Mat4::IDENTITY,
+            aspect: 1.0,
         }
     }
 
@@ -303,6 +320,8 @@ pub struct CullStats {
     pub outside_frustum: u32,
     /// Instances culled for distance or screen size.
     pub too_far_or_small: u32,
+    /// Instances hidden behind large opaque blocks (#836), counted one by one or by their whole grid cell.
+    pub occluded: u32,
     /// Grid cells with instances in them.
     pub cells: u32,
     /// Of those, cells wholly outside the view, skipped without testing their instances.

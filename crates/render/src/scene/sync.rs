@@ -369,9 +369,11 @@ impl InstanceScene {
         let start = std::time::Instant::now();
         self.apply_moves();
         let capacities = self.lists.opaque.iter().map(|list| list.entries.len());
+        // The packed instances, for the occluders' boxes (#836), by region.
+        let instances = [&self.regions[0].instances[..], &self.regions[1].instances[..]];
         let mut stats = self
             .grid
-            .cull(view, capacities, self.lists.transparent.entries.len(), out);
+            .cull(view, capacities, self.lists.transparent.entries.len(), out, instances);
         stats.cpu_time = start.elapsed();
         out.stats = stats;
         stats
