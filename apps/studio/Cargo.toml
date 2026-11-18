@@ -24,7 +24,7 @@ toml.workspace = true
 thiserror.workspace = true
 rfd.workspace = true
 # The Output's time of day (#502).
-chrono.workspace = true
+jiff.workspace = true
 regex.workspace = true
 # A font file of the user's is checked before it is loaded (#529).
 skrifa.workspace = true

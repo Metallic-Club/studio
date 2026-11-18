@@ -309,9 +309,14 @@ fn line_colour(line: &LogLine, colors: &crate::theme::Colors) -> Color32 {
 
 /// When `line` was logged, as the local time of day: `14:03:27.512`.
 pub fn time_of_day(line: &LogLine) -> String {
-    chrono::DateTime::<chrono::Local>::from(line.time)
-        .format("%H:%M:%S%.3f")
-        .to_string()
+    time_in(line.time, &jiff::tz::TimeZone::system())
+}
+
+/// `time` as the time of day in the time zone `zone`, to the millisecond.
+fn time_in(time: std::time::SystemTime, zone: &jiff::tz::TimeZone) -> String {
+    jiff::Timestamp::try_from(time)
+        .map(|at| at.to_zoned(zone.clone()).strftime("%H:%M:%S%.3f").to_string())
+        .unwrap_or_default()
 }
 
 /// The text of `line` as it shows (#502): its time and its source when `shown` says, then what it says (its first
@@ -417,6 +422,12 @@ fn line_ui<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_time_of_day_reads_to_the_millisecond() {
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_millis(3_723_512);
+        assert_eq!(time_in(at, &jiff::tz::TimeZone::UTC), "01:02:03.512");
+    }
 
     fn state() -> OutputState {
         let buffer = Arc::new(LogBuffer::new());
