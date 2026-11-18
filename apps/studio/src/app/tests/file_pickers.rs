@@ -414,3 +414,48 @@ fn the_material_field_completes_what_is_typed() {
     settle(&mut harness);
     assert_eq!(material(&mut harness), Value::String(planks.as_str().into()));
 }
+
+/// #849: a MeshPart given a mesh takes the mesh's own size, so the model (and its texture) keep their shape.
+#[test]
+fn a_mesh_part_takes_its_new_mesh_s_size() {
+    let mut harness = editing(settings_file("editor-mesh-size", None), "Mesh Size Game");
+    harness.set_size(egui::vec2(1280.0, 1400.0));
+    let (part, expected) = {
+        let editor = harness.state_mut().studio.editor_mut().unwrap();
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/project/tests/fixtures/textured_cube.glb");
+        let bytes = std::fs::read(model).unwrap();
+        let expected = metallic_engine::metallic_project::decode_mesh(&bytes, |_| Err(String::new()))
+            .unwrap()
+            .size;
+        if !editor.project.contains("Assets/cube.glb") {
+            editor.project.create_member("Assets/cube.glb", bytes).unwrap();
+        }
+        let dm = &mut editor.dm;
+        let workspace = dm.service(dm.registry().class_id("Workspace").unwrap()).unwrap();
+        let part = dm.create(dm.registry().class_id("MeshPart").unwrap()).unwrap();
+        dm.set_parent(part, Some(workspace)).unwrap();
+        editor.select(Some(part));
+        (part, expected)
+    };
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Choose MeshId").click();
+    settle(&mut harness);
+    let time = harness.ctx.input(|input| input.time) + 1.0;
+    harness.input_mut().time = Some(time);
+    harness.get_by_role_and_label(Role::Row, "cube").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Select").click();
+    settle(&mut harness);
+    let editor = harness.state_mut().studio.editor_mut().unwrap();
+    let Ok(Value::Vector3(size)) = editor.dm.get_by_name(part, "Size") else {
+        panic!("a size");
+    };
+    assert!(
+        (size - metallic_engine::metallic_core::Vector3::from(expected)).length() < 1e-4,
+        "{size:?} {expected:?}"
+    );
+    // One undo step puts the mesh and the size back.
+    editor.scene().undo(std::time::Instant::now());
+    assert_eq!(editor.dm.get_by_name(part, "MeshId"), Ok(Value::String("".into())));
+}
