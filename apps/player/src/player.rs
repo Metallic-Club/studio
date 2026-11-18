@@ -590,6 +590,14 @@ impl<O: OutputSink> AppHandler for PlayerApp<O> {
     }
 }
 
+// #830: the Player is heard. A build that leaves out metallic_engine's `audio` feature fails here (Linux has no output
+// yet).
+#[cfg(feature = "full")]
+const _: () = assert!(
+    metallic_engine::metallic_platform::audio::AudioOutput::SUPPORTED || cfg!(target_os = "linux"),
+    "metallic_player must turn on metallic_engine's `audio` feature"
+);
+
 /// Plays the game's sounds on the system's default device (#811); a machine with none (or Linux, for now) plays them
 /// unheard, which is only logged.
 fn open_audio<O: OutputSink>(engine: &mut Engine<O>) {

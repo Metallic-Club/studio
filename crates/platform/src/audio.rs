@@ -102,6 +102,8 @@ struct State {
     next: u64,
     /// While set, every voice stands still and the output is silent.
     paused: bool,
+    /// Frames rendered so far: whether a device is pulling sound at all (#830).
+    rendered: u64,
 }
 
 /// The voices and what plays them (see the [module documentation](self)). Clones share the voices.
@@ -181,6 +183,11 @@ impl Mixer {
         })
     }
 
+    /// How many frames were rendered so far, by a device or by hand.
+    pub fn rendered_frames(&self) -> u64 {
+        self.lock().rendered
+    }
+
     /// How many voices are playing or finished but not stopped yet.
     pub fn voice_count(&self) -> usize {
         self.lock().voices.len()
@@ -195,6 +202,7 @@ impl Mixer {
             return;
         }
         let mut state = self.lock();
+        state.rendered += (out.len() / channels) as u64;
         if state.paused {
             return;
         }
@@ -283,6 +291,9 @@ impl std::fmt::Debug for AudioOutput {
 }
 
 impl AudioOutput {
+    /// Whether this build plays sound on a device at all: the `audio` feature, on a platform with output (#830).
+    pub const SUPPORTED: bool = cfg!(all(feature = "audio", not(target_os = "linux")));
+
     /// The device's frames a second.
     pub fn rate(&self) -> u32 {
         self.rate
@@ -409,6 +420,26 @@ mod tests {
         mixer.render(&mut out, 1, 4);
         assert!((out[0] - 0.3).abs() < 1e-6);
         assert!((mixer.status(voice).unwrap().seconds - 1.0).abs() < 1e-9);
+    }
+
+    /// #830: the default device pulls frames from the mixer. Run by hand on a machine with sound:
+    /// `cargo test -p metallic_platform --features audio --lib -- --ignored the_device_pulls`.
+    #[test]
+    #[ignore = "opens the system's sound device"]
+    fn the_device_pulls_frames_from_the_mixer() {
+        let mixer = Mixer::new();
+        // Silent: a test makes no noise.
+        let quiet = VoiceSettings {
+            volume: 0.0,
+            ..VoiceSettings::default()
+        };
+        mixer.play(clip(48_000, &[(1.0, 1.0); 48_000]), quiet, 0.0);
+        let output = AudioOutput::open(&mixer).expect("a sound device");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while mixer.rendered_frames() < u64::from(output.rate()) / 10 {
+            assert!(std::time::Instant::now() < until, "the device never asked for sound");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]
