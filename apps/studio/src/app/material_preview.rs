@@ -3,7 +3,7 @@
 //! thumbnails' camera ([`super::thumbnails::ball_camera`]), so the inspector cuts it to the ball alone, and only when
 //! something changed: another material or size, an edit of the material, or assets that were still loading.
 
-use metallic_engine::metallic_core::glam::Vec3;
+use metallic_engine::metallic_core::glam::{Quat, Vec3};
 use metallic_engine::metallic_core::{DataModel, EnumItem, Id, Value};
 use metallic_engine::metallic_project::AssetId;
 use metallic_engine::metallic_render::{RenderContext, wgpu};
@@ -28,6 +28,8 @@ pub struct MaterialPreview {
     /// What it drew last: the material and the size. Drawn again only when either changes, the material is edited,
     /// or `again` says its assets were still loading.
     drawn: Option<(AssetId, (u32, u32))>,
+    /// How the ball was turned when it was last drawn (#805).
+    drawn_turn: Quat,
     /// The last drawing was made while assets still loaded.
     again: bool,
     /// Why it could not start; it does not try again.
@@ -91,7 +93,9 @@ impl MaterialPreview {
             }
         }
         let wanted = (id, (width.max(1), height.max(1)));
-        let stale = new_project || self.again || self.drawn != Some(wanted) || changed.contains(&id);
+        let turn = editor.materials.preview_turn;
+        let stale =
+            new_project || self.again || self.drawn != Some(wanted) || changed.contains(&id) || turn != self.drawn_turn;
         if !stale && let Some((texture, _)) = self.texture {
             editor.materials.preview_texture = Some((id, texture, self.uv.unwrap_or(crate::panels::assets::WHOLE)));
             return;
@@ -107,6 +111,13 @@ impl MaterialPreview {
         if !matches!(dm.get_by_name(*ball, "Material"), Ok(Value::String(ref now)) if **now == *key) {
             let _ = dm.set_by_name(*ball, "Material", Value::String(key.into()));
         }
+        // Turned as it was dragged (#805).
+        let _ = dm.set_by_name(
+            *ball,
+            "CFrame",
+            Value::CFrame(metallic_engine::metallic_core::CFrame::from_parts(Vec3::ZERO, turn)),
+        );
+        self.drawn_turn = turn;
         if !self.attached {
             match self.scene.attach_viewport(context, width.max(1), height.max(1)) {
                 Ok(()) => self.attached = true,

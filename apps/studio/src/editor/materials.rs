@@ -41,6 +41,8 @@ pub struct MaterialEditor {
     /// The preview was drawn while its assets still loaded: it is drawn again on a later frame, which the inspector
     /// asks for.
     pub preview_loading: bool,
+    /// How the preview's ball is turned (#805), by drags across it; kept while Studio runs.
+    pub preview_turn: metallic_engine::metallic_core::glam::Quat,
     /// Pictures whose filtering changed (#781), until the renderers take them.
     changed_pictures: Vec<AssetId>,
 }

@@ -337,3 +337,41 @@ fn screenshot_of_the_material_editor() {
     }
     write_png(&out.join("680-material-editor.png"), offscreen.read());
 }
+
+/// #805: a drag across the material's ball in the Properties panel spins it, as if the pointer turned it.
+#[test]
+fn the_ball_spins_when_dragged() {
+    let mut harness = materials("material-editor-spin", "Wood");
+    harness.get_by_role_and_label(Role::GridCell, "Wood").click();
+    settle(&mut harness);
+    let ball = harness.get_by_role_and_label(Role::Image, "Material preview").rect();
+    assert_eq!(
+        editor(&mut harness).materials.preview_turn,
+        metallic_engine::metallic_core::glam::Quat::IDENTITY
+    );
+    let from = ball.center();
+    let to = from + egui::vec2(-30.0, 30.0);
+    harness.event(egui::Event::PointerMoved(from));
+    harness.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.step();
+    harness.event(egui::Event::PointerMoved(to));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    settle(&mut harness);
+    let turn = editor(&mut harness).materials.preview_turn;
+    assert_eq!(
+        turn,
+        crate::app::thumbnails::spin(metallic_engine::metallic_core::glam::Quat::IDENTITY, to - from),
+        "turned by the drag"
+    );
+}
