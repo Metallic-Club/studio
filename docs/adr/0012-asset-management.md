@@ -145,6 +145,15 @@ colour), and a material's Texture Maps, Surface (numbers typed and dragged, colo
 Packed Map and Mapping. Undo in the Assets or the Properties panel takes back a material's edits while one shows.
 Every category's heading collapses it (#778).
 
+### 11. A picture's filtering (2026-11-17, #781)
+
+A picture is **Smooth** or **Pixelated**, set in its properties and kept in `assets.json` beside its id
+(`"filter": "pixelated"`, absent for smooth, so older indexes read as before and the format stays 1). It moves and
+changes with its file. Its uses follow it: the picture window and its thumbnails, a MeshPart's `TextureId` (sampled
+nearest), and a material whose Filtering is **From the pictures** (`"filter": "picture"`, the new default), which is
+pixelated when the first picture it uses is. A material can still choose Smooth (`"linear"`) or Nearest. The picture
+window zooms (Ctrl and the wheel, or its buttons).
+
 ## Consequences
 
 - Scenes from before #678 hold `Material` enum items; they migrate to the project's material of that name, created

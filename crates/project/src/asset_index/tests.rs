@@ -339,3 +339,36 @@ fn added_times_are_written_and_read_back() {
     assert_eq!(read.id("Assets/a.png"), Some(id(5)));
     assert_eq!(read.added("Assets/a.png"), None);
 }
+
+/// #781: a picture drawn pixelated says so in `assets.json`, which reads back; it keeps the setting when it changes in
+/// place or moves, and an index written before reads as smooth.
+#[test]
+fn a_picture_s_filtering_is_kept() {
+    let mut index = indexed(&[("Assets/a.png", b"aaa"), ("Assets/b.png", b"bbb")]);
+    assert!(!index.pixelated("Assets/a.png"));
+    assert!(index.set_pixelated("Assets/a.png", true));
+    assert!(!index.set_pixelated("Assets/a.png", true), "no change");
+    assert!(!index.set_pixelated("Assets/nothing.png", true));
+    let json = index.to_json();
+    assert_eq!(json.matches("\"filter\": \"pixelated\"").count(), 1, "{json}");
+    let read = AssetIndex::from_bytes(json.as_bytes()).unwrap();
+    assert_eq!(read, index);
+    let a = read.id("Assets/a.png").unwrap();
+    assert!(read.pixelated_id(a) && !read.pixelated("Assets/b.png"));
+    // Changed in place, then moved: still pixelated.
+    index
+        .update(
+            &members(&[("Assets/a.png", b"new"), ("Assets/b.png", b"bbb")]),
+            counter(50),
+        )
+        .unwrap();
+    assert!(index.pixelated("Assets/a.png"));
+    index
+        .update(
+            &members(&[("Assets/Moved/a.png", b"new"), ("Assets/b.png", b"bbb")]),
+            counter(60),
+        )
+        .unwrap();
+    assert_eq!(index.id("Assets/Moved/a.png"), Some(a));
+    assert!(index.pixelated("Assets/Moved/a.png"));
+}

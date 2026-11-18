@@ -660,6 +660,11 @@ impl AssetReader {
         .map_err(|source| AssetError::Decode { member, source })
     }
 
+    /// Whether the picture `id` is drawn pixelated, with nearest filtering (#781).
+    pub fn is_pixelated(&self, id: AssetId) -> bool {
+        self.index.pixelated_id(id)
+    }
+
     /// Reads and decodes the image asset `id` names ([`decode_image`]).
     pub fn load_image(&mut self, id: &str) -> Result<ImageAsset, AssetError> {
         let (member, bytes) = self.read(id)?;

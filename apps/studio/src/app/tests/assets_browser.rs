@@ -1228,6 +1228,27 @@ fn the_properties_panel_shows_the_one_asset_selected() {
     assert!(harness.query_by_label("Asset properties").is_none());
 }
 
+/// #781: a picture's properties set its filtering, kept in the project's asset index.
+#[test]
+fn a_picture_is_set_pixelated_in_its_properties() {
+    let mut harness = browsing("assets-pixelated");
+    harness.set_size(egui::vec2(1280.0, 1600.0));
+    settle(&mut harness);
+    editor(&mut harness).browser.open_folder("Assets/Trees");
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::GridCell, "oak").click();
+    settle(&mut harness);
+    harness.get_by_label("PICTURE");
+    harness.get_by_role_and_label(Role::ComboBox, "Filtering").click();
+    settle(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Pixelated").click();
+    settle(&mut harness);
+    let editor_state = editor(&mut harness);
+    assert!(editor_state.project.assets().pixelated("Assets/Trees/oak.png"));
+    let index = editor_state.project.read_text("assets.json").unwrap();
+    assert!(index.contains("\"filter\": \"pixelated\""), "{index}");
+}
+
 /// Right-clicks the empty space behind the tiles, at its bottom right, where no tile is (the inspector, #740, can make
 /// the area narrow enough for a tile to sit in its middle).
 fn ground_menu(harness: &mut Harness<'_, Test>) {

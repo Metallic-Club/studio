@@ -1086,8 +1086,16 @@ impl PartRenderer {
     }
 
     /// Adds the texture asset `key` (see [`crate::Renderer::add_texture_asset`]).
-    pub(crate) fn add_texture_asset(&mut self, maker: &TextureMaker, key: &str, size: (u32, u32), rgba: Vec<u8>) {
-        self.textures.add((&self.device, &self.queue, maker), key, size, rgba);
+    pub(crate) fn add_texture_asset(
+        &mut self,
+        maker: &TextureMaker,
+        key: &str,
+        size: (u32, u32),
+        rgba: Vec<u8>,
+        nearest: bool,
+    ) {
+        self.textures
+            .add((&self.device, &self.queue, maker), key, size, rgba, nearest);
     }
 
     /// Gives the material `key` its textures (#679): puts them in layers and its rows sample them from the next

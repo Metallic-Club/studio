@@ -84,8 +84,13 @@ impl PictureLoader {
     }
 
     /// Takes the thumbnails decoded since the last call, a few at most, into `cache` as textures: `None` for a
-    /// picture that could not be read.
-    pub fn receive(&mut self, ctx: &egui::Context, cache: &mut HashMap<AssetId, Option<egui::TextureHandle>>) {
+    /// picture that could not be read. Those `pixelated` says are sampled nearest (#781), so they show crisp.
+    pub fn receive(
+        &mut self,
+        ctx: &egui::Context,
+        cache: &mut HashMap<AssetId, Option<egui::TextureHandle>>,
+        pixelated: impl Fn(AssetId) -> bool,
+    ) {
         let Some(done) = &self.done else {
             return;
         };
@@ -95,7 +100,12 @@ impl PictureLoader {
                     self.asked.remove(&id);
                     let texture = small.map(|small| {
                         let image = egui::ColorImage::from_rgba_unmultiplied(small.size, &small.rgba);
-                        ctx.load_texture(format!("metallic.thumbnail.{id}"), image, egui::TextureOptions::LINEAR)
+                        let options = if pixelated(id) {
+                            egui::TextureOptions::NEAREST
+                        } else {
+                            egui::TextureOptions::LINEAR
+                        };
+                        ctx.load_texture(format!("metallic.thumbnail.{id}"), image, options)
                     });
                     cache.insert(id, texture);
                 }
@@ -200,7 +210,7 @@ mod tests {
         assert!(loader.is_pending(dot) && loader.is_pending(broken));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while cache.len() < 2 && std::time::Instant::now() < deadline {
-            loader.receive(&ctx, &mut cache);
+            loader.receive(&ctx, &mut cache, |_| false);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let texture = cache.get(&dot).cloned().flatten().expect("decoded");

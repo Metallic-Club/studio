@@ -20,7 +20,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use metallic_project::material::{Channel, Filter, Material, Wrap};
+use metallic_project::material::{Channel, Material, Wrap};
 use metallic_project::{AssetError, AssetId, AssetReader, ImageAsset, MeshAsset};
 use metallic_render::parts::{MeshData, MeshVertex};
 use metallic_render::{
@@ -40,7 +40,8 @@ enum Job {
 /// What the worker loaded.
 enum Loaded {
     Mesh(Arc<str>, Result<MeshData, AssetError>),
-    Texture(Arc<str>, Result<ImageAsset, AssetError>),
+    /// A picture, and whether it is sampled nearest (a pixelated picture, #781).
+    Texture(Arc<str>, Result<ImageAsset, AssetError>, bool),
     /// A material's parameters and textures, with what was skipped or could not be read.
     Material(
         Arc<str>,
@@ -49,8 +50,9 @@ enum Loaded {
 }
 
 /// The renderer's parameters for `material`: its colours in linear light, emission times its strength, and how its
-/// textures are mapped.
-pub fn material_params(material: &Material) -> MaterialParams {
+/// textures are mapped; `nearest` says whether they are sampled nearest ([`Material::nearest`], which follows its
+/// pictures' filtering, #781).
+pub fn material_params(material: &Material, nearest: bool) -> MaterialParams {
     let linear = |c: [f32; 3]| {
         let v = metallic_core::Color3::new(c[0], c[1], c[2]).to_linear();
         [v.x, v.y, v.z]
@@ -66,7 +68,7 @@ pub fn material_params(material: &Material) -> MaterialParams {
         tile_size: material.tile_size,
         uv_scale: material.uv_scale,
         uv_offset: material.uv_offset,
-        nearest: material.filter == Filter::Nearest,
+        nearest,
         wrap: match material.wrap {
             Wrap::Repeat => MaterialWrap::Repeat,
             Wrap::Mirror => MaterialWrap::Mirror,
@@ -286,6 +288,14 @@ impl MeshAssets {
         self.seen_materials = None;
     }
 
+    /// Reads the texture `key` names again at the next [`MeshAssets::update`]: for a picture whose filtering changed
+    /// (#781; [`MeshAssets::read_from`] first, for the newer index).
+    pub fn reload_texture(&mut self, key: &str) {
+        self.textures.remove(key);
+        self.failed.remove(key);
+        self.seen = None;
+    }
+
     /// Asks for every material of `scene` not asked for yet.
     fn request_materials(&mut self, scene: &InstanceScene) {
         for key in scene.material_keys() {
@@ -334,13 +344,13 @@ impl MeshAssets {
                 (key, added.map_err(|error| format!("mesh: {error}")))
             }
             Loaded::Mesh(key, Err(error)) => (Arc::clone(&key), Err(format!("mesh {key}: {error}"))),
-            Loaded::Texture(key, Ok(image)) => {
+            Loaded::Texture(key, Ok(image), nearest) => {
                 let added = renderer
-                    .add_texture_asset(&key, image.width, image.height, image.rgba)
+                    .add_texture_asset(&key, (image.width, image.height), image.rgba, nearest)
                     .map_err(|error| error.to_string());
                 (key, added.map_err(|error| format!("texture: {error}")))
             }
-            Loaded::Texture(key, Err(error)) => (Arc::clone(&key), Err(format!("texture {key}: {error}"))),
+            Loaded::Texture(key, Err(error), _) => (Arc::clone(&key), Err(format!("texture {key}: {error}"))),
             Loaded::Material(key, Ok((params, textures, skipped))) => {
                 let parts = renderer.parts_mut();
                 parts.materials_mut().set_material(&key, params);
@@ -406,13 +416,15 @@ fn load(reader: &mut AssetReader, job: Job) -> Option<Loaded> {
                 image.fit(max);
                 image
             });
-            Loaded::Texture(key, image)
+            let nearest = key.parse().is_ok_and(|id| reader.is_pixelated(id));
+            Loaded::Texture(key, image, nearest)
         }
         Job::Material(key) => {
             let material = reader.load_material(&key).map(|loaded| {
                 let mut warnings = loaded.warnings;
                 let textures = material_textures(reader, &loaded.material, &mut warnings);
-                (material_params(&loaded.material), textures, warnings)
+                let nearest = loaded.material.nearest(|id| reader.is_pixelated(id));
+                (material_params(&loaded.material, nearest), textures, warnings)
             });
             Loaded::Material(key, material)
         }
@@ -445,7 +457,7 @@ mod tests {
     #[test]
     fn the_renderer_s_built_in_materials_are_the_project_s() {
         for name in BUILTIN_NAMES {
-            let from_project = material_params(&builtin(name).expect("built in"));
+            let from_project = material_params(&builtin(name).expect("built in"), false);
             assert_eq!(MaterialParams::builtin(name), Some(from_project), "{name}");
         }
     }
@@ -458,7 +470,7 @@ mod tests {
             emission_strength: 2.0,
             ..Material::default()
         };
-        let params = material_params(&material);
+        let params = material_params(&material, false);
         assert!((params.tint[0] - 0.214).abs() < 0.01, "{:?}", params.tint);
         assert_eq!((params.tint[1], params.tint[2]), (1.0, 0.0));
         assert_eq!((params.emission, params.emissive), ([1.0, 0.0, 0.0], 2.0));

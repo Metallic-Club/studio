@@ -109,8 +109,9 @@ pub(crate) fn categories(ui: &mut Ui, dm: &DataModel, files: &Files, material: &
     );
     packed_category(ui, dm, files, material);
     let filter = match material.filter {
-        Filter::Linear => 0,
-        Filter::Nearest => 1,
+        Filter::Picture => 0,
+        Filter::Linear => 1,
+        Filter::Nearest => 2,
     };
     let wrap = match material.wrap {
         Wrap::Repeat => 0,
@@ -131,10 +132,14 @@ pub(crate) fn categories(ui: &mut Ui, dm: &DataModel, files: &Files, material: &
             Field::Pair(PropMeta::vector2("Offset", 0.0, 0.0), &mut material.uv_offset),
             Field::Choice(
                 "Filtering",
-                &["Smooth", "Nearest"],
+                &["From the pictures", "Smooth", "Nearest"],
                 filter,
                 Box::new(|index| {
-                    material.filter = if index == 1 { Filter::Nearest } else { Filter::Linear };
+                    material.filter = match index {
+                        1 => Filter::Linear,
+                        2 => Filter::Nearest,
+                        _ => Filter::Picture,
+                    };
                 }),
             ),
             Field::Choice(
@@ -293,7 +298,10 @@ fn field_row(ui: &mut Ui, dm: &DataModel, files: &Files, field: Field<'_>, fill:
 /// A small picture of the project's image `id`, once it is decoded (off the UI thread, #771, then kept); `None`
 /// meanwhile, and for one that cannot be read. Asking draws nothing: only what is on screen should ask.
 pub(crate) fn thumbnail(ctx: &egui::Context, editor: &mut EditorState, id: AssetId) -> Option<egui::TextureHandle> {
-    editor.picture_loader.receive(ctx, &mut editor.thumbnails);
+    let assets = editor.project.assets();
+    editor
+        .picture_loader
+        .receive(ctx, &mut editor.thumbnails, |id| assets.pixelated_id(id));
     if let Some(known) = editor.thumbnails.get(&id) {
         return known.clone();
     }
