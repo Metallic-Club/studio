@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use egui::emath::GuiRounding;
 use egui::{Align2, FontId, Painter, Rect, Sense, Stroke, Ui};
+use metallic_engine::metallic_core::glam::Vec3;
 use metallic_engine::metallic_core::{DataModel, Id};
 use metallic_engine::metallic_render::ShadingView;
 use metallic_engine::perf::StatsViewer;
@@ -44,9 +45,73 @@ const SPEED_NOTE: Duration = Duration::from_millis(900);
 #[derive(Clone, Copy, Debug)]
 pub struct Viewport;
 
+/// Up to how many outlined boxes are hidden where parts stand in front of them (#837): past this a selection is
+/// outlined over everything, as testing every edge would cost more than a frame.
+pub(crate) const OCCLUDED_UP_TO: usize = 256;
+
+/// How long a piece of a box's edge is on screen, at most, when parts can hide it (#837), in points.
+const EDGE_PIECE: f32 = 6.0;
+
+/// The most pieces one edge is cut into (#837).
+const MAX_EDGE_PIECES: usize = 48;
+
+/// Adds the pieces of the box edge from `a` to `b` (on screen `sa` to `sb`) that can be seen (#837): the edge cut into
+/// short pieces, each tested from the camera at its middle, pushed a little out of `bounds` so the box's own part
+/// hides only the edges behind it. Seen pieces in a row are one segment.
+fn seen_edge(
+    lines: &mut Lines,
+    view: &View,
+    dm: &DataModel,
+    parts: &PartIndex,
+    edge: ([Vec3; 2], [egui::Pos2; 2], &pick::Bounds),
+    stroke: Stroke,
+) {
+    let ([a, b], [sa, sb], bounds) = edge;
+    let pieces = ((sa.distance(sb) / EDGE_PIECE).ceil() as usize).clamp(1, MAX_EDGE_PIECES);
+    // The whole game, which is no part's: every part may hide the edge, this box's own included.
+    let Some(nobody) = dm.root() else {
+        return;
+    };
+    let lift = 0.01 + 0.002 * (bounds.center - view.pos).length();
+    let mut run: Option<usize> = None;
+    let flush = |lines: &mut Lines, from: usize, to: usize| {
+        let at = |step: usize| a.lerp(b, step as f32 / pieces as f32);
+        if let Some(line) = view.segment(at(from), at(to)) {
+            lines.segment(line, stroke);
+        }
+    };
+    for piece in 0..pieces {
+        let middle = a.lerp(b, (piece as f32 + 0.5) / pieces as f32);
+        let out = (middle - bounds.center).normalize_or_zero() * lift;
+        let seen = !pick::blocked(dm, parts, view.pos, middle + out, nobody);
+        match (seen, run) {
+            (true, None) => run = Some(piece),
+            (false, Some(from)) => {
+                flush(lines, from, piece);
+                run = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = run {
+        flush(lines, from, pieces);
+    }
+}
+
 /// Adds `id`'s outline box (a part's own, a model's round its parts), or a light's reach (#523), with `stroke` to `lines`. A
-/// light's reach is drawn over everything when `on_top`, else hidden where parts are in front of it (#572).
-fn outline(lines: &mut Lines, view: &View, dm: &DataModel, parts: &PartIndex, id: Id, stroke: Stroke, on_top: bool) {
+/// light's reach is drawn over everything when `on_top`, else hidden where parts are in front of it (#572). The box is
+/// hidden where parts stand in front of it (#837) when `occluded`; over everything otherwise.
+#[allow(clippy::too_many_arguments)]
+fn outline(
+    lines: &mut Lines,
+    view: &View,
+    dm: &DataModel,
+    parts: &PartIndex,
+    id: Id,
+    stroke: Stroke,
+    on_top: bool,
+    occluded: bool,
+) {
     // A light's reach (#523): it has no box of its own.
     for line in light_icons::range_lines(dm, id) {
         let pieces = if on_top {
@@ -77,7 +142,12 @@ fn outline(lines: &mut Lines, view: &View, dm: &DataModel, parts: &PartIndex, id
                 return;
             }
             for (a, b) in EDGES {
-                lines.segment([screen[a], screen[b]], stroke);
+                if occluded {
+                    let edge = ([corners[a], corners[b]], [screen[a], screen[b]], &bounds);
+                    seen_edge(lines, view, dm, parts, edge, stroke);
+                } else {
+                    lines.segment([screen[a], screen[b]], stroke);
+                }
             }
         }
         // Partly behind it: each edge cut at the near plane.
@@ -417,10 +487,21 @@ impl Panel for Viewport {
                     hovered.filter(|&id| (gizmo.tool.is_some() || picking) && !scene.selection.contains(id))
                 {
                     let faint = Stroke::new(1.0, accent.gamma_multiply(0.5));
-                    outline(&mut lines, &view, dm, &parts, id, faint, on_top);
+                    outline(&mut lines, &view, dm, &parts, id, faint, on_top, true);
                 }
+                // Hidden behind parts in front of it (#837), up to a selection that would cost more than a frame.
+                let occluded = scene.selection.len() <= OCCLUDED_UP_TO;
                 for &id in scene.selection.ids() {
-                    outline(&mut lines, &view, dm, &parts, id, Stroke::new(OUTLINE, accent), on_top);
+                    outline(
+                        &mut lines,
+                        &view,
+                        dm,
+                        &parts,
+                        id,
+                        Stroke::new(OUTLINE, accent),
+                        on_top,
+                        occluded,
+                    );
                 }
                 if !lines.is_empty() {
                     painter.add(lines.into_shape());
@@ -506,6 +587,7 @@ pub(crate) fn game_overlay(
             id,
             Stroke::new(OUTLINE, colors.accent),
             settings.light_lines_on_top,
+            selection.len() <= OCCLUDED_UP_TO,
         );
     }
     if !lines.is_empty() {
@@ -542,4 +624,69 @@ pub(crate) fn game_view(dm: &DataModel, rect: Rect) -> Option<View> {
         fov,
         rect,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Pos2, Rect, Shape, vec2};
+    use metallic_engine::metallic_core::glam::Vec3;
+    use metallic_engine::metallic_core::{CFrame, DataModel, Id, Value};
+
+    use super::*;
+    use crate::viewport::camera::EditorCamera;
+
+    /// How many vertices the lines of `id`'s outline take, hidden behind parts or not.
+    fn outlined(dm: &DataModel, parts: &PartIndex, view: &View, id: Id, occluded: bool) -> usize {
+        let mut lines = Lines::new(view.rect, 1.0);
+        outline(
+            &mut lines,
+            view,
+            dm,
+            parts,
+            id,
+            Stroke::new(2.0, egui::Color32::WHITE),
+            false,
+            occluded,
+        );
+        match lines.into_shape() {
+            Shape::Mesh(mesh) => mesh.vertices.len(),
+            _ => 0,
+        }
+    }
+
+    /// #837: a selected part behind a wall shows no outline, and one alone shows its front edges, not those behind it.
+    #[test]
+    fn the_selection_box_is_hidden_behind_parts() {
+        let mut dm = metallic_engine::metallic_classes::new_game().unwrap();
+        let world = pick::workspace(&dm).unwrap();
+        let make = |dm: &mut DataModel, at: Vec3, size: Vec3| {
+            let id = dm.create(dm.registry().class_id("Part").unwrap()).unwrap();
+            dm.set_by_name(id, "CFrame", Value::CFrame(CFrame::new(at))).unwrap();
+            dm.set_by_name(id, "Size", Value::Vector3(size)).unwrap();
+            dm.set_parent(id, Some(world)).unwrap();
+            id
+        };
+        let boxed = make(&mut dm, Vec3::new(0.0, 20.0, 0.0), Vec3::splat(4.0));
+        // From above and to the side, so three faces show and three are behind.
+        let camera = EditorCamera::looking_at(Vec3::new(12.0, 30.0, 16.0), Vec3::new(0.0, 20.0, 0.0));
+        let view = View::new(&camera, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)));
+        let mut parts = PartIndex::new();
+        parts.update(&mut dm);
+        let everything = outlined(&dm, &parts, &view, boxed, false);
+        let seen = outlined(&dm, &parts, &view, boxed, true);
+        assert!(seen > 0 && seen < everything, "{seen} of {everything}");
+
+        // A wall between the camera and the box hides all of it.
+        let between = Vec3::new(6.0, 25.0, 8.0);
+        let wall = make(&mut dm, between, Vec3::new(30.0, 30.0, 1.0));
+        let facing = CFrame::look_at(between, view.pos, Vec3::Y);
+        dm.set_by_name(wall, "CFrame", Value::CFrame(facing)).unwrap();
+        parts.update(&mut dm);
+        assert_eq!(outlined(&dm, &parts, &view, boxed, true), 0);
+        assert_eq!(
+            outlined(&dm, &parts, &view, boxed, false),
+            everything,
+            "over everything, all of it"
+        );
+    }
 }
