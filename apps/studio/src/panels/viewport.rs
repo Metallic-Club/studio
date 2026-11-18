@@ -228,6 +228,17 @@ impl Panel for Viewport {
                 }
             });
         });
+        // Where the wheel zooms (#775), as Settings has it too.
+        crate::theme::section(ui, "metallic.viewport.menu.zoom", "Zoom", |ui| {
+            indented(ui, |ui| {
+                for target in crate::settings::ZoomTarget::ALL {
+                    let chosen = cx.settings.viewport.zoom_to == target;
+                    if crate::theme::radio(ui, chosen, true, target.label()).clicked() {
+                        cx.settings.viewport.zoom_to = target;
+                    }
+                }
+            });
+        });
         debug_section(ui, cx);
     }
 
