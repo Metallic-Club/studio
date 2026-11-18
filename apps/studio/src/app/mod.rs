@@ -1643,10 +1643,11 @@ impl Studio {
                 ids::TEST_STOP if editing => self.menu_action(MenuAction::Stop),
                 ids::EDIT_SELECT_ALL if editing => self.menu_action(MenuAction::SelectAll),
                 ids::EDIT_INSERT if editing => self.open_insert(),
-                // With the Assets panel focused on a material, its own edits (#742); else the scene's.
+                // With the Assets or the Properties panel focused while a material shows, its own edits (#742, #779); else the
+                // scene's.
                 id @ (ids::EDIT_UNDO | ids::EDIT_REDO) if editing => {
                     let redo = id == ids::EDIT_REDO;
-                    let material = (context == Context::Assets)
+                    let material = matches!(context, Context::Assets | Context::Properties)
                         .then(|| self.editor().and_then(|editor| editor.inspected_material()))
                         .flatten();
                     let undone = match (material, self.editor_mut()) {

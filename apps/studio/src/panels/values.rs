@@ -890,7 +890,7 @@ pub fn swatch(ui: &mut Ui, rect: egui::Rect, color: Color3, label: &str, editabl
 
 /// A one-line text field `width` wide showing `current` (empty, with "Mixed" in grey, when `mixed`). What is typed is
 /// kept while the field has the focus and returned when it loses it (Enter, a click elsewhere); Escape drops it.
-fn text_field(ui: &mut Ui, label: &str, current: &str, width: f32, mixed: bool) -> Option<String> {
+pub(crate) fn text_field(ui: &mut Ui, label: &str, current: &str, width: f32, mixed: bool) -> Option<String> {
     let id = ui.make_persistent_id(("metallic.properties.text", label));
     let shown = if mixed { "" } else { current };
     let mut typed = ui
@@ -914,6 +914,34 @@ fn text_field(ui: &mut Ui, label: &str, current: &str, width: f32, mixed: bool) 
     ui.data_mut(|data| data.remove::<String>(id));
     let cancelled = ui.input(|input| input.key_pressed(Key::Escape));
     (response.lost_focus() && !cancelled && typed != shown).then_some(typed)
+}
+
+/// A drop-down of `items` labelled `label`, `width` wide, in the Properties panel's style (an enum's, #418), showing
+/// the `current`th (#779: a material's filtering, wrapping and channels). Returns the index chosen.
+pub(crate) fn choice_field(ui: &mut Ui, label: &str, items: &[&str], current: usize, width: f32) -> Option<usize> {
+    let mut chosen = None;
+    let shown = items.get(current).copied().unwrap_or_default();
+    let combo = ui.scope(|ui| {
+        plain(ui);
+        ComboBox::from_id_salt(("metallic.properties.choice", label))
+            .selected_text(shown)
+            .width(width)
+            .show_ui(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (index, &name) in items.iter().enumerate() {
+                    if choice_row(ui, name, index == current, index).clicked() && index != current {
+                        chosen = Some(index);
+                    }
+                }
+            })
+    });
+    let enabled = combo.inner.response.enabled();
+    combo.inner.response.widget_info(|| {
+        let mut info = WidgetInfo::labeled(Role::ComboBox, enabled, label);
+        info.current_text_value = Some(shown.to_owned());
+        info
+    });
+    chosen
 }
 
 /// The swatch's fill for `color`, as the read-only panel draws it.

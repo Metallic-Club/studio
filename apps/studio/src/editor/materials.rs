@@ -141,10 +141,10 @@ impl EditorState {
         true
     }
 
-    /// The material the Assets browser's inspector shows (#742), if it shows one.
+    /// The material the Properties panel shows (#742, #779), if it shows one.
     pub fn inspected_material(&self) -> Option<AssetId> {
         use crate::panels::assets::AssetKind;
-        let path = self.browser.inspected()?;
+        let path = self.properties_asset.as_deref()?;
         if AssetKind::of(path) != AssetKind::Material {
             return None;
         }

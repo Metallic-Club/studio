@@ -683,6 +683,18 @@ impl Panel for Properties {
     }
 
     fn ui(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
+        // A file or folder selected in the Assets browser after the instances shows in their place (#779).
+        cx.editor.properties_asset = shown_asset(ui.ctx(), cx.editor);
+        if let Some(path) = cx.editor.properties_asset.clone() {
+            ui.interact(
+                ui.max_rect(),
+                egui::Id::unique("metallic.properties.asset"),
+                Sense::hover(),
+            )
+            .widget_info(|| WidgetInfo::labeled(Role::Group, true, "Asset properties"));
+            super::assets::asset_properties(ui, cx.editor, &path);
+            return;
+        }
         // What changed in the editor's scene since the rows were last worked out (#597).
         let revision = cx.editor.parts.revision();
         // The running game's values while one runs, live (ADR 0010 §5).
@@ -846,6 +858,38 @@ impl Panel for Properties {
             apply_attribute_action(&mut scene, id, action);
         }
     }
+}
+
+/// What the Properties panel last saw selected (#779): the Assets browser's one file or folder and how many times one
+/// was picked there, the instances, and whether the file or folder was chosen after them.
+#[derive(Clone, Debug, Default)]
+struct Seen {
+    asset: Option<String>,
+    picks: u64,
+    instances: Vec<Id>,
+    asset_last: bool,
+}
+
+/// The file or folder the panel shows in place of the selected instances (#779): the Assets browser's one selected,
+/// when it was selected after the instances were.
+fn shown_asset(ctx: &egui::Context, editor: &crate::editor::EditorState) -> Option<String> {
+    let id = egui::Id::unique("metallic.properties.seen");
+    let mut seen: Seen = ctx.data(|data| data.get_temp(id)).unwrap_or_default();
+    let asset = editor.browser.single().map(str::to_owned);
+    let instances = editor.selection.ids().to_vec();
+    // Picked in the browser (clicked, even when it was selected already), or selected there some other way.
+    if asset != seen.asset || editor.browser.picks != seen.picks {
+        seen.asset_last = asset.is_some();
+    }
+    seen.picks = editor.browser.picks;
+    if instances != seen.instances && !instances.is_empty() {
+        seen.asset_last = false;
+    }
+    seen.asset = asset.clone();
+    seen.instances = instances;
+    let shown = asset.filter(|_| seen.asset_last);
+    ctx.data_mut(|data| data.insert_temp(id, seen));
+    shown
 }
 
 /// Which categories are collapsed (#778), by name, kept while Studio runs.
@@ -1170,6 +1214,93 @@ fn row_ui(
     out.edit = typed.or(picked);
     out.pick = pick_clicked;
     out
+}
+
+/// A row in the Properties panel's look for a value that is not an instance's property (#779: an asset's): `name` in
+/// the left column, with `tip` in its tooltip when there is one, and what `value` draws in the right, filling its
+/// cell; `fill` is its stripe and `last` draws the line under it. A colour's row gives its `swatch` (the colour and its
+/// label), drawn at the right of the name column as an instance's colour's is. Returns what `value` returned and what
+/// the colour picker chose; nothing while the row is off screen.
+pub(crate) fn plain_row<R>(
+    ui: &mut Ui,
+    name: &str,
+    tip: &str,
+    fill: Color32,
+    last: bool,
+    swatch: Option<(Color3, &str)>,
+    value: impl FnOnce(&mut Ui) -> R,
+) -> (Option<R>, Option<Edit>) {
+    let p = current_colors(ui.ctx()).palette;
+    let line = Stroke::new(size::BORDER, p.rows().line);
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, size::ROW), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return (None, None);
+    }
+    let split = split_x(rect.left(), width, name_share(ui.ctx()));
+    let (band_painter, band) = super::row_band(ui, rect);
+    band_painter.rect_filled(band, CornerRadius::ZERO, fill);
+    let half = size::BORDER / 2.0;
+    band_painter.hline(band.x_range(), rect.top() + half, line);
+    if last {
+        band_painter.hline(band.x_range(), rect.bottom() - half, line);
+    }
+    ui.painter().vline(split - half, rect.y_range(), line);
+    let cell = |left: f32, right: f32| {
+        Rect::from_min_max(
+            pos2(left + space::S3, rect.top()),
+            pos2(right - space::S3, rect.bottom()),
+        )
+    };
+    let (mut name_cell, value_cell) = (cell(rect.left() + INDENT, split), cell(split, rect.right()));
+    let mut picked = None;
+    if let Some((color, label)) = swatch {
+        let side = size::ROW - 2.0 * values::SWATCH_PAD;
+        let square = Rect::from_min_size(
+            pos2(
+                split - size::BORDER - values::SWATCH_PAD - side,
+                rect.top() + values::SWATCH_PAD,
+            ),
+            vec2(side, side),
+        );
+        name_cell.max.x = name_cell.max.x.min(square.left() - space::S2);
+        picked = values::swatch(ui, square, color, label, true);
+    }
+    let in_cell = |cell: Rect| {
+        UiBuilder::new()
+            .max_rect(cell)
+            .layout(Layout::left_to_right(Align::Center))
+    };
+    ui.scope_builder(in_cell(name_cell), |ui| {
+        ui.set_clip_rect(name_cell.intersect(ui.clip_rect()));
+        let shown = ui.add(
+            Label::new(RichText::new(name).size(text::BODY).color(p.muted))
+                .truncate()
+                .selectable(false),
+        );
+        if !tip.is_empty() {
+            shown.tip(tip);
+        }
+    });
+    let out = ui
+        .scope_builder(in_cell(value_cell), |ui| {
+            ui.set_clip_rect(value_cell.intersect(ui.clip_rect()));
+            value(ui)
+        })
+        .inner;
+    (Some(out), picked)
+}
+
+/// A read-only value's text in a row's value cell, selectable (#779).
+pub(crate) fn plain_value(ui: &mut Ui, label: &str, value: &str) {
+    let p = current_colors(ui.ctx()).palette;
+    let shown = ui.add(
+        Label::new(RichText::new(value).size(text::BODY).color(p.text))
+            .truncate()
+            .selectable(true),
+    );
+    let line = format!("{label}: {value}");
+    shown.widget_info(|| WidgetInfo::labeled(Role::Label, true, &line));
 }
 
 /// Whether `row` is an instance's Parent (#599), which a click on its value picks anew.
