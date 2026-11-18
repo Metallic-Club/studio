@@ -6707,6 +6707,9 @@ mod tests {
         let studio = &harness.state().studio;
         assert!(studio.is_playing());
         assert!(studio.dock().is_open(panels::ids::GAME));
+        // The game's renderer reads the project's assets: its materials' and meshes' textures (#772).
+        let play = studio.editor().unwrap().play.as_ref().expect("playing");
+        assert!(play.player.renderer().borrow().assets().is_some());
         harness.get_by_role_and_label(Role::Tab, "Game");
         let mut lines = Vec::new();
         log.read_since(0, &mut lines);
