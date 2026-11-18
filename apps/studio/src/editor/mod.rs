@@ -12,6 +12,7 @@ pub mod images;
 pub mod materials;
 pub mod multi;
 pub mod open;
+pub mod picture_loader;
 pub mod pictures;
 pub mod play;
 pub mod selection;
@@ -56,6 +57,8 @@ pub struct EditorState {
     /// Small pictures of the project's images, by asset id, for the material editor's slots (#680); `None` for one that
     /// could not be read.
     pub thumbnails: std::collections::HashMap<metallic_engine::metallic_project::AssetId, Option<egui::TextureHandle>>,
+    /// Decodes the thumbnails above off the UI thread (#771).
+    pub picture_loader: picture_loader::PictureLoader,
     /// The mesh and texture loader the viewport's renderer is fed from, until the renderer takes it.
     pub mesh_assets: Option<MeshAssets>,
     /// What is selected (#347).
@@ -121,6 +124,7 @@ impl EditorState {
             pictures: pictures::Pictures::default(),
             images: images::ImagePreviews::default(),
             thumbnails: std::collections::HashMap::new(),
+            picture_loader: picture_loader::PictureLoader::default(),
             mesh_assets: Some(mesh_assets),
             selection: Selection::new(),
             history: History::new(Selection::new()),

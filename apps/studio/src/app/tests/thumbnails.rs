@@ -68,8 +68,8 @@ fn a_picture_shows_on_its_tile_and_opens_in_a_preview_with_its_facts() {
     settle(&mut harness);
     harness.get_by_role_and_label(Role::Tab, "Assets").click();
     settle(&mut harness);
-    settle(&mut harness);
-    // Decoded for its tile, a quarter as tall as it is wide.
+    // Decoded for its tile (off the UI thread, #771), a quarter as tall as it is wide.
+    until_thumbnail(&mut harness, id);
     let thumbnail = editor(&mut harness)
         .thumbnails
         .get(&id)

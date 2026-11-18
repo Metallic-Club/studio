@@ -228,22 +228,13 @@ fn texture_row(ui: &mut Ui, files: &Files, shown: &str, label: &str, slot: &mut 
     ui.end_row();
 }
 
-/// A small picture of the project's image `id` (decoded once, then kept), or `None` when it cannot be read.
+/// A small picture of the project's image `id`, once it is decoded (off the UI thread, #771, then kept); `None`
+/// meanwhile, and for one that cannot be read. Asking draws nothing: only what is on screen should ask.
 pub(crate) fn thumbnail(ctx: &egui::Context, editor: &mut EditorState, id: AssetId) -> Option<egui::TextureHandle> {
+    editor.picture_loader.receive(ctx, &mut editor.thumbnails);
     if let Some(known) = editor.thumbnails.get(&id) {
         return known.clone();
     }
-    let mut reader = editor.project.asset_reader();
-    let made = reader.load_image(&id.to_string()).ok().map(|mut image| {
-        image.fit(64);
-        let picture =
-            egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
-        ctx.load_texture(
-            format!("metallic.thumbnail.{id}"),
-            picture,
-            egui::TextureOptions::LINEAR,
-        )
-    });
-    editor.thumbnails.insert(id, made.clone());
-    made
+    editor.picture_loader.want(ctx, &editor.project, id);
+    None
 }

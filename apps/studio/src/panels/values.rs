@@ -344,9 +344,8 @@ impl Files {
         let wanted = ctx
             .data(|data| data.get_temp::<Vec<String>>(wanted_pictures()))
             .unwrap_or_default();
-        let mut decodes = 0;
         for path in wanted {
-            if let Some(thumbnail) = thumbnail_of(ctx, editor, &path, &mut decodes) {
+            if let Some(thumbnail) = thumbnail_of(ctx, editor, &path) {
                 files.pictures.insert(path, thumbnail);
             }
         }
@@ -383,17 +382,9 @@ pub(crate) fn want_picture(ctx: &egui::Context, path: &str) {
     });
 }
 
-/// How many pictures a frame decodes for the fields.
-const DECODES_A_FRAME: usize = 2;
-
 /// The thumbnail of the file at `path` in `editor`'s project, if it is drawn: a material's ball, which is asked for
-/// when it is missing or old, or a picture, decoded here (at most [`DECODES_A_FRAME`] a frame).
-fn thumbnail_of(
-    ctx: &egui::Context,
-    editor: &mut crate::editor::EditorState,
-    path: &str,
-    decodes: &mut usize,
-) -> Option<Thumbnail> {
+/// when it is missing or old, or a picture, decoded off the UI thread (#771).
+fn thumbnail_of(ctx: &egui::Context, editor: &mut crate::editor::EditorState, path: &str) -> Option<Thumbnail> {
     use crate::editor::pictures::{Picture, Wanted};
     let id = editor.project.assets().id(path)?;
     if path.ends_with(".material") {
@@ -413,13 +404,6 @@ fn thumbnail_of(
             ball: true,
             size: [1, 1],
         });
-    }
-    if !editor.thumbnails.contains_key(&id) {
-        if *decodes >= DECODES_A_FRAME {
-            ctx.request_repaint();
-            return None;
-        }
-        *decodes += 1;
     }
     crate::panels::material::thumbnail(ctx, editor, id).map(|texture| Thumbnail {
         texture: texture.id(),

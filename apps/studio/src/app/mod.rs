@@ -1943,6 +1943,23 @@ mod tests {
         harness.step();
     }
 
+    /// Runs frames until the thumbnail of the picture `id` is decoded, off the UI thread (#771), or ten seconds pass.
+    fn until_thumbnail(harness: &mut Harness<'_, Test>, id: metallic_engine::metallic_project::AssetId) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let decoded = |harness: &Harness<'_, Test>| {
+            harness
+                .state()
+                .studio
+                .editor()
+                .is_some_and(|editor| editor.thumbnails.contains_key(&id))
+        };
+        while !decoded(harness) && std::time::Instant::now() < deadline {
+            harness.step();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        settle(harness);
+    }
+
     /// Runs the steps out and moves the clock `by` past the splash's first frame.
     fn finish_steps(harness: &mut Harness<'_, Test>, by: Duration) {
         harness.step();
