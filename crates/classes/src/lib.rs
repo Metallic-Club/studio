@@ -210,7 +210,8 @@ mod tests {
                 "StarterPlayer",
                 "RunService",
                 "UserInputService",
-                "UserGameSettings"
+                "UserGameSettings",
+                "CollectionService"
             ]
         );
     }
@@ -302,7 +303,7 @@ mod tests {
                 .iter()
                 .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 42);
+        assert_eq!(input().classes.len(), 44);
         let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
         components.sort_unstable();
         assert_eq!(

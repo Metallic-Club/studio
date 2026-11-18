@@ -42,6 +42,9 @@ struct InstanceIn {
     properties: Map<String, Json>,
     #[serde(default)]
     attributes: Map<String, Json>,
+    /// Its `CollectionService` tags (#809).
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 /// Where a loaded instance goes.
@@ -64,6 +67,7 @@ struct Entry {
     /// References, to entry indices.
     refs: Vec<(PropId, usize)>,
     attributes: Vec<(String, Value)>,
+    tags: Vec<String>,
 }
 
 /// A reference waiting for the whole scene to be read.
@@ -172,6 +176,7 @@ fn read(
             values: Vec::new(),
             refs: Vec::new(),
             attributes: Vec::new(),
+            tags: instance.tags.clone(),
         };
 
         for (key, json) in &instance.properties {
@@ -416,6 +421,13 @@ fn commit(
                 dm.set_attribute(service, name, Some(value.clone()))?;
             }
         }
+        let tags: Vec<Arc<str>> = dm.tags(service)?.to_vec();
+        for tag in tags {
+            dm.set_tag(service, &tag, false)?;
+        }
+        for tag in entry.map(|e| e.tags.as_slice()).unwrap_or_default() {
+            dm.set_tag(service, tag, true)?;
+        }
     }
 
     for (entry, &id) in entries.iter().zip(targets) {
@@ -446,6 +458,9 @@ fn fill(dm: &mut DataModel, id: Id, entry: &Entry, targets: &[Id]) -> Result<(),
     }
     for (name, value) in &entry.attributes {
         dm.set_attribute(id, name, Some(value.clone()))?;
+    }
+    for tag in &entry.tags {
+        dm.set_tag(id, tag, true)?;
     }
     set_refs(dm, id, entry, targets)
 }

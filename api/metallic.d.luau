@@ -548,6 +548,14 @@ declare extern type Instance extends Object with
     function SetAttribute(self, name: string, value: any): ()
     --- Returns every attribute of the instance as a table of names to values.
     function GetAttributes(self): {[string]: any}
+    --- Gives the instance a tag, which CollectionService finds it by. Tags are saved with the instance; adding one it has does nothing.
+    function AddTag(self, tag: string): ()
+    --- Takes a tag away from the instance. Removing one it lacks does nothing.
+    function RemoveTag(self, tag: string): ()
+    --- Returns whether the instance has the tag.
+    function HasTag(self, tag: string): boolean
+    --- Returns the instance's tags, in the order they were added.
+    function GetTags(self): {string}
 end
 
 --- A signal that scripts fire themselves: one script calls Fire, and every function connected to Event runs with the same arguments. It works between scripts on the same side (server or client).
@@ -566,6 +574,34 @@ declare extern type BindableFunction extends Instance with
     function Invoke(self, ...: any): any
 end
 
+--- Finds instances by the tags they were given with AddTag, and says when tagged instances come and go.
+declare extern type CollectionService extends Instance with
+    --- Gives the instance the tag. Adding one it has does nothing.
+    function AddTag(self, instance: Instance, tag: string): ()
+    --- Takes the tag away from the instance. Removing one it lacks does nothing.
+    function RemoveTag(self, instance: Instance, tag: string): ()
+    --- Returns whether the instance has the tag.
+    function HasTag(self, instance: Instance, tag: string): boolean
+    --- Returns the instance's tags, in the order they were added.
+    function GetTags(self, instance: Instance): {string}
+    --- Returns every instance in the game with the tag, in tree order.
+    function GetTagged(self, tag: string): {Instance}
+    --- Returns every tag an instance in the game has, each once.
+    function GetAllTags(self): {string}
+    --- Returns a signal that fires with each instance that gains the tag while in the game, or comes into the game with it.
+    function GetInstanceAddedSignal(self, tag: string): ScriptSignal<Instance>
+    --- Returns a signal that fires with each instance that loses the tag, or leaves the game with it.
+    function GetInstanceRemovedSignal(self, tag: string): ScriptSignal<Instance>
+end
+
+--- The signals of one CollectionService tag, named after it.
+declare extern type CollectionTag extends Instance with
+    --- Fires with an instance that gained the tag, or came into the game with it.
+    InstanceAdded: ScriptSignal<Instance>
+    --- Fires with an instance that lost the tag, or left the game with it.
+    InstanceRemoved: ScriptSignal<Instance>
+end
+
 --- The whole game (`game` in scripts). Its children are the services, such as Workspace and Lighting.
 declare extern type DataModel extends Instance with
     --- Returns the service with the given class name, such as game:GetService("Lighting"). It always returns the same instance for a service.
@@ -580,6 +616,7 @@ declare extern type DataModel extends Instance with
     function GetService(self, className: "RunService"): RunService
     function GetService(self, className: "UserInputService"): UserInputService
     function GetService(self, className: "UserGameSettings"): UserGameSettings
+    function GetService(self, className: "CollectionService"): CollectionService
     function GetService(self, className: string): Instance
 end
 
