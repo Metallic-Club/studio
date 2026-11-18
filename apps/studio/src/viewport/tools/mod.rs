@@ -574,14 +574,26 @@ fn trail(painter: &Painter, view: &View, from: Vec3, to: Vec3) {
 
 /// Text on a dark plate beside `at`, readable on any background.
 fn label(painter: &Painter, at: Pos2, text: &str, rgb: [u8; 3]) {
-    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::monospace(13.0), colour(rgb, 255));
+    label_parts(painter, at, &[(text, rgb)]);
+}
+
+/// Text in `parts`, each in its own colour (#801: each axis's measurement in that axis's), on a dark plate beside
+/// `at`, two spaces between the parts.
+fn label_parts(painter: &Painter, at: Pos2, parts: &[(&str, [u8; 3])]) {
+    let mut job = egui::text::LayoutJob::default();
+    for (index, (text, rgb)) in parts.iter().enumerate() {
+        let gap = if index == 0 { "" } else { "  " };
+        let format = egui::TextFormat::simple(egui::FontId::monospace(13.0), colour(*rgb, 255));
+        job.append(&format!("{gap}{text}"), 0.0, format);
+    }
+    let galley = painter.layout_job(job);
     let rect = egui::Align2::LEFT_BOTTOM.anchor_size(at + egui::vec2(12.0, -10.0), galley.size());
     painter.rect_filled(
         rect.expand2(egui::vec2(5.0, 2.0)),
         4.0,
         Color32::from_rgba_unmultiplied(15, 15, 18, 215),
     );
-    painter.galley(rect.min, galley, colour(rgb, 255));
+    painter.galley(rect.min, galley, Color32::WHITE);
 }
 
 #[cfg(test)]

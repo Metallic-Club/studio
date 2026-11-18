@@ -7,7 +7,7 @@ use egui::{Color32, Painter, Pos2, Shape, Stroke, pos2};
 use metallic_engine::metallic_core::glam::{Vec2, Vec3};
 use metallic_engine::metallic_core::{CFrame, DataModel};
 
-use super::{AXIS_NAMES, AXIS_RGB, Frame, HIGHLIGHT_RGB, Handle, Start, axis_colour, label, place};
+use super::{AXIS_NAMES, AXIS_RGB, Frame, Handle, Start, axis_colour, label_parts, place};
 use crate::viewport::gizmo::{self, MoveHandle};
 use crate::viewport::view::{Ray, View};
 
@@ -173,17 +173,14 @@ pub(super) fn paint_measurement(painter: &Painter, view: &View, f: &Frame, drag:
     };
     let end = f.origin + axes.iter().map(|&axis| f.dirs[axis] * drag.moved[axis]).sum::<Vec3>();
     axis_trail(painter, view, f, &axes, drag);
-    let text: Vec<String> = axes
+    // Each axis's part in that axis's colour (#801), as the trail is.
+    let text: Vec<(String, [u8; 3])> = axes
         .iter()
-        .map(|&axis| format!("{} {:+.2}", AXIS_NAMES[axis], drag.moved[axis]))
+        .map(|&axis| (format!("{} {:+.2}", AXIS_NAMES[axis], drag.moved[axis]), AXIS_RGB[axis]))
         .collect();
     if let Some(at) = view.project(end) {
-        let rgb = if let [axis] = axes[..] {
-            AXIS_RGB[axis]
-        } else {
-            HIGHLIGHT_RGB
-        };
-        label(painter, at, &text.join("  "), rgb);
+        let parts: Vec<(&str, [u8; 3])> = text.iter().map(|(text, rgb)| (text.as_str(), *rgb)).collect();
+        label_parts(painter, at, &parts);
     }
 }
 
@@ -262,6 +259,24 @@ mod tests {
             "the plane's rectangle, no marks"
         );
         assert_eq!(count(|s| matches!(s, egui::Shape::Circle(_))), 1, "one dot");
+        // The label's two parts, each in its axis's colour (#801).
+        let colours: Vec<egui::Color32> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(
+                    text.galley
+                        .job
+                        .sections
+                        .iter()
+                        .map(|s| s.format.color)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(colours, [axis_colour(0, false, 255), axis_colour(2, false, 255)]);
     }
 
     #[test]
