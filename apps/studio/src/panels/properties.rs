@@ -40,7 +40,6 @@ use super::{class_icon, empty_note, ids};
 use crate::dock::{Panel, PanelContext, Zone};
 use crate::editor::Scene;
 use crate::keymap::Context;
-use crate::settings::window::section_label;
 use crate::theme::icons::{self, Icon};
 use crate::theme::tokens::{radius, size, space, text};
 use crate::theme::{current_colors, fonts};
@@ -478,18 +477,14 @@ fn attribute_menu(response: &egui::Response, name: &str, taken: &[String]) -> Op
 
 /// The Attributes section's header (#617): its label, as every group's, and a + at the right that opens the form to
 /// add one: a name, a type from a drop-down, and Add. Returns the attribute to add when one is asked for.
-fn attributes_header(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
+fn attributes_header(ui: &mut Ui, taken: &[String]) -> (bool, Option<AttributeAction>) {
     let id = egui::Id::unique("metallic.properties.add_attribute");
     let p = current_colors(ui.ctx()).palette;
     let mut action = None;
+    let mut expanded = true;
     let plus = ui
         .horizontal(|ui| {
-            ui.label(
-                RichText::new("ATTRIBUTES")
-                    .font(fonts::named(fonts::STRONG, text::LABEL))
-                    .extra_letter_spacing(text::LABEL_TRACKING)
-                    .color(p.subtle),
-            );
+            expanded = category_heading(ui, "Attributes", 22.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
                 response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Add attribute"));
@@ -586,7 +581,7 @@ fn attributes_header(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
         }
     }
     ui.data_mut(|data| data.insert_temp(menu, open));
-    action
+    (expanded, action)
 }
 
 fn visible(prop: &ResolvedProp) -> bool {
@@ -763,26 +758,31 @@ impl Panel for Properties {
                 let top = ui.cursor().top();
                 let mut open = open_rows(ui.ctx());
                 for group in cached_groups(ui.ctx(), dm, &ids, (!playing).then_some(revision)).iter() {
-                    section_label(ui, group.name);
-                    let drawn = rows_ui(ui, dm, &files, &group.rows, &mut open, share, &taken, picking.as_ref());
-                    edits.extend(drawn.edits);
-                    pick |= drawn.pick;
+                    if category_heading(ui, group.name, 0.0) {
+                        let drawn = rows_ui(ui, dm, &files, &group.rows, &mut open, share, &taken, picking.as_ref());
+                        edits.extend(drawn.edits);
+                        pick |= drawn.pick;
+                    }
                     ui.add_space(space::S5);
                 }
                 if let Some(rows) = &icon_rows {
-                    section_label(ui, "Appearance");
-                    let drawn = rows_ui(ui, dm, &files, rows, &mut open, share, &taken, None);
-                    edits.extend(drawn.edits);
-                    reset_icon |= drawn.reset;
+                    if category_heading(ui, "Appearance", 0.0) {
+                        let drawn = rows_ui(ui, dm, &files, rows, &mut open, share, &taken, None);
+                        edits.extend(drawn.edits);
+                        reset_icon |= drawn.reset;
+                    }
                     ui.add_space(space::S5);
                 }
                 let mut bottom = ui.cursor().top();
                 if let Some(rows) = &attributes {
                     // Like every group, with a + at the right of its label (#617).
-                    let added = attributes_header(ui, &taken);
-                    let drawn = rows_ui(ui, dm, &files, rows, &mut open, share, &taken, None);
-                    edits.extend(drawn.edits);
-                    attribute_action = drawn.action.or(added);
+                    let (shown, added) = attributes_header(ui, &taken);
+                    attribute_action = added;
+                    if shown {
+                        let drawn = rows_ui(ui, dm, &files, rows, &mut open, share, &taken, None);
+                        edits.extend(drawn.edits);
+                        attribute_action = drawn.action.or(attribute_action.take());
+                    }
                     bottom = ui.cursor().top();
                     ui.add_space(space::S5);
                 }
@@ -846,6 +846,62 @@ impl Panel for Properties {
             apply_attribute_action(&mut scene, id, action);
         }
     }
+}
+
+/// Which categories are collapsed (#778), by name, kept while Studio runs.
+fn collapsed_id() -> egui::Id {
+    egui::Id::unique("metallic.properties.collapsed")
+}
+
+/// A category's heading (#778): a caret and its name in capitals, as wide as the row leaves after `room` points for
+/// what follows it. A click on it collapses the category, or expands it again. Returns whether it is open.
+pub(crate) fn category_heading(ui: &mut Ui, name: &str, room: f32) -> bool {
+    let mut collapsed: HashSet<String> = ui.data(|data| data.get_temp(collapsed_id())).unwrap_or_default();
+    let p = current_colors(ui.ctx()).palette;
+    let caps = name.to_uppercase();
+    let galley = egui::WidgetText::from(
+        RichText::new(caps.as_str())
+            .font(fonts::named(fonts::STRONG, text::LABEL))
+            .extra_letter_spacing(text::LABEL_TRACKING)
+            .color(p.subtle),
+    )
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        f32::INFINITY,
+        egui::FontSelection::Default,
+    );
+    let width = (ui.available_width() - room).max(0.0);
+    let height = galley.size().y + space::S1;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    let mut open = !collapsed.contains(name);
+    if response.clicked() {
+        open = !open;
+        if open {
+            collapsed.remove(name);
+        } else {
+            collapsed.insert(name.to_owned());
+        }
+        ui.data_mut(|data| data.insert_temp(collapsed_id(), collapsed));
+    }
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, open, caps.as_str()));
+    let ink = if response.hovered() { p.text } else { p.subtle };
+    let caret = if open { Icon::UiCollapse } else { Icon::UiExpand };
+    icons::paint_at(
+        ui.painter(),
+        pos2(rect.left(), rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        caret,
+        text::SMALL,
+        ink,
+    );
+    let at = pos2(
+        rect.left() + text::SMALL + space::S1,
+        rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter().with_clip_rect(rect).galley(at, galley, ink);
+    ui.add_space(space::S2);
+    open
 }
 
 /// Which rows are open (#417), by key, kept while Studio runs.
