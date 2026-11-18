@@ -108,7 +108,11 @@ pub fn manifest_json() -> String {
 
 /// Files icons used by default before their default changed, each with its icon. An `icons.json` entry still on one
 /// was never the user's choice, so it is moved to the icon's current default ([`manifest_json_keeping`], #755).
-const FORMER_DEFAULTS: &[(Icon, &str)] = &[(Icon::UiApplyMaterial, "interface/paint-bucket.svg")];
+const FORMER_DEFAULTS: &[(Icon, &str)] = &[
+    (Icon::UiApplyMaterial, "interface/paint-bucket.svg"),
+    // The Explorer's sound icon since #829.
+    (Icon::AssetAudio, "assets/music.svg"),
+];
 
 /// Whether `file` is a file `icon` used by default before (#755).
 fn was_default(icon: Icon, file: &str) -> bool {
@@ -124,6 +128,7 @@ const FORMER_GROUPS: &[(Icon, &str)] = &[
     // Red since #828.
     (Icon::ExplorerSound, "object"),
     (Icon::ExplorerSoundService, "storage"),
+    (Icon::AssetAudio, "content"),
 ];
 
 /// Whether `group` is a colour group `icon` was drawn in by default before (#827).

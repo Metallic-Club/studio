@@ -95,8 +95,8 @@
   },
   "icons": {
     "asset.audio": {
-      "file": "assets/music.svg",
-      "color": "content"
+      "file": "assets/volume-2.svg",
+      "color": "sound"
     },
     "asset.file": {
       "file": "assets/file.svg",
