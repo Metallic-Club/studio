@@ -27,6 +27,40 @@ pub struct MeshAssetKey {
     pub texture: Arc<str>,
 }
 
+/// What ends a mesh key for the double-sided variant of the mesh before it (#850, `MeshPart.DoubleSided`): its
+/// triangles, and each again turned the other way with its normals reversed, so both sides draw and light from the
+/// side seen. Whoever loads meshes for the renderer makes it ([`double_sided_mesh`]).
+pub const DOUBLE_SIDED: &str = "|double";
+
+/// The mesh asset a mesh key names, and whether the key asks for its double-sided variant ([`DOUBLE_SIDED`]).
+pub fn mesh_of_key(key: &str) -> (&str, bool) {
+    match key.strip_suffix(DOUBLE_SIDED) {
+        Some(mesh) => (mesh, true),
+        None => (key, false),
+    }
+}
+
+/// Makes `vertices` and `indices` double-sided ([`DOUBLE_SIDED`]): every triangle again, its winding reversed, on
+/// copies of its vertices with their normals reversed.
+pub fn double_sided_mesh(vertices: &mut Vec<crate::parts::MeshVertex>, indices: &mut Vec<u32>) {
+    let count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    let backs: Vec<crate::parts::MeshVertex> = vertices
+        .iter()
+        .map(|v| crate::parts::MeshVertex {
+            normal: v.normal.map(|n| -n),
+            ..*v
+        })
+        .collect();
+    vertices.extend(backs);
+    let reversed: Vec<u32> = indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|[a, b, c]| [a + count, c + count, b + count])
+        .collect();
+    indices.extend(reversed);
+}
+
 /// A revision no other change, in any scene of the process, has had, so a renderer never mistakes one scene's kinds
 /// for another's.
 fn next_revision() -> u64 {
@@ -122,6 +156,24 @@ mod tests {
             kinds.revision(),
             "scenes never share one"
         );
+    }
+
+    /// #850: a double-sided key names its mesh, and the variant draws each triangle both ways.
+    #[test]
+    fn a_double_sided_mesh_has_every_triangle_both_ways() {
+        assert_eq!(mesh_of_key("abc|double"), ("abc", true));
+        assert_eq!(mesh_of_key("abc"), ("abc", false));
+        let vertex = |x: f32| crate::parts::MeshVertex {
+            position: [x, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            uv: [x, 0.0],
+        };
+        let mut vertices = vec![vertex(0.0), vertex(1.0), vertex(2.0)];
+        let mut indices = vec![0, 1, 2];
+        double_sided_mesh(&mut vertices, &mut indices);
+        assert_eq!(indices, [0, 1, 2, 3, 5, 4]);
+        assert_eq!(vertices[3].normal, [0.0, -1.0, 0.0]);
+        assert_eq!(vertices[4].uv, [1.0, 0.0], "the same coordinates on the back");
     }
 
     #[test]

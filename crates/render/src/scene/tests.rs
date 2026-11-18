@@ -1076,3 +1076,30 @@ fn a_wall_hides_the_parts_behind_it() {
     }
     assert_eq!(stats.visible as usize, seen.len());
 }
+
+/// #850: a double-sided MeshPart draws its mesh's double-sided variant, a kind of its own; one-sided again, the mesh.
+#[test]
+fn a_double_sided_mesh_part_draws_the_double_sided_variant() {
+    let mut game = Game::new();
+    let dm = &mut game.dm;
+    let part = dm.create(dm.registry().class_id("MeshPart").unwrap()).unwrap();
+    dm.set_by_name(part, "MeshId", Value::String("0000000000000000000000000000000c".into()))
+        .unwrap();
+    dm.set_by_name(part, "DoubleSided", Value::Bool(true)).unwrap();
+    dm.set_parent(part, Some(game.workspace)).unwrap();
+    let mut scene = game.scene();
+    frame(&mut scene, &mut game.dm);
+    let key = |scene: &InstanceScene| {
+        let kind = instance(scene, part).mesh();
+        scene.mesh_assets()[usize::from(kind.0 - MeshKind::BUILTIN_COUNT)]
+            .mesh
+            .to_string()
+    };
+    assert_eq!(
+        key(&scene),
+        format!("0000000000000000000000000000000c{}", super::DOUBLE_SIDED)
+    );
+    game.dm.set_by_name(part, "DoubleSided", Value::Bool(false)).unwrap();
+    frame(&mut scene, &mut game.dm);
+    assert_eq!(key(&scene), "0000000000000000000000000000000c");
+}

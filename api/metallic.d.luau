@@ -1154,6 +1154,8 @@ declare extern type MeshPart extends BasePart with
     MeshId: string
     --- The id of the project's image asset (PNG or JPEG) the mesh is coloured with, multiplied by Color. Empty uses Color alone.
     TextureId: string
+    --- Whether both sides of the mesh's faces are drawn, each lit from the side seen: for a flat or open model (a plane, a leaf, a sail) whose back must show. Off, faces seen from behind are not drawn.
+    DoubleSided: boolean
 end
 
 --- The basic building block: a block, ball, cylinder or wedge that you size, colour and place.

@@ -188,6 +188,8 @@ pub(crate) struct AssetProps {
     pub(crate) mesh: PropId,
     /// `TextureId` (none: untextured).
     pub(crate) texture: Option<PropId>,
+    /// `DoubleSided` (#850; none: one-sided).
+    pub(crate) double_sided: Option<PropId>,
 }
 
 impl AssetProps {
@@ -197,9 +199,15 @@ impl AssetProps {
                 .prop_id(name)
                 .filter(|&id| class.prop(id).is_some_and(|p| matches!(p.meta.ty, PropType::String)))
         };
+        let boolean = |name: &str| {
+            class
+                .prop_id(name)
+                .filter(|&id| class.prop(id).is_some_and(|p| matches!(p.meta.ty, PropType::Bool)))
+        };
         Some(Self {
             mesh: string("MeshId")?,
             texture: string("TextureId"),
+            double_sided: boolean("DoubleSided"),
         })
     }
 }

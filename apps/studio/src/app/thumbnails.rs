@@ -65,6 +65,8 @@ fn mesh_game(id: AssetId, size: [f32; 3]) -> Option<DataModel> {
     let part = dm.create(dm.registry().class_id("MeshPart")?).ok()?;
     dm.set_by_name(part, "MeshId", Value::String(id.to_string().into()))
         .ok()?;
+    // Both sides (#850): a flat model facing away from the camera still shows.
+    dm.set_by_name(part, "DoubleSided", Value::Bool(true)).ok()?;
     dm.set_by_name(part, "Size", Value::Vector3(fitted(size))).ok()?;
     dm.set_parent(part, Some(workspace)).ok()?;
     Some(dm)
