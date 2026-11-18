@@ -6353,6 +6353,21 @@ mod tests {
         harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
         harness.step();
         assert_eq!(text(&mut harness), "hello world");
+        // #855: a click only moves the cursor, which undo does not take back: it goes to the edit before; and redo,
+        // after another click, comes back.
+        let field = harness.get_by_role(Role::MultilineTextInput).rect();
+        let row = harness.state().studio.settings().code.size * harness.state().studio.settings().code.line_spacing;
+        let click = |harness: &mut Harness<'static, Test>, x: f32| {
+            let at = egui::pos2(field.left() + x, field.top() + row * 0.5);
+            left_click(harness, egui::Rect::from_center_size(at, egui::Vec2::ZERO));
+        };
+        click(&mut harness, 24.0);
+        undo(&mut harness);
+        assert_eq!(text(&mut harness), "hello", "not the click");
+        click(&mut harness, 16.0);
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        harness.step();
+        assert_eq!(text(&mut harness), "hello world", "redo, though the cursor moved");
     }
 
     /// #531: typing opens the list of what fits, Enter or a click takes a suggestion and Escape closes it; a name of
