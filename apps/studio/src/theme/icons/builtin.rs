@@ -119,7 +119,12 @@ fn was_default(icon: Icon, file: &str) -> bool {
 
 /// Colour groups icons were drawn in by default before their default changed, each with its icon. An `icons.json`
 /// entry still on one was never the user's choice, so it moves to the icon's current group (#827).
-const FORMER_GROUPS: &[(Icon, &str)] = &[(Icon::ExplorerStarterScripts, "local_script")];
+const FORMER_GROUPS: &[(Icon, &str)] = &[
+    (Icon::ExplorerStarterScripts, "local_script"),
+    // Red since #828.
+    (Icon::ExplorerSound, "object"),
+    (Icon::ExplorerSoundService, "storage"),
+];
 
 /// Whether `group` is a colour group `icon` was drawn in by default before (#827).
 fn was_default_group(icon: Icon, group: &str) -> bool {

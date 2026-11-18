@@ -309,6 +309,8 @@ pub enum Hue {
     Orange,
     /// The input and settings services.
     Cyan,
+    /// Sounds and the sound service (#828).
+    Red,
     /// The game's objects: parts, models, folders, cameras (white on dark, near-black on light).
     White,
     /// Values, and everything else: the palette's subtle grey.
@@ -320,7 +322,7 @@ const ICON_STRONG: f32 = 0.3;
 
 impl Hue {
     /// Every hue.
-    pub const ALL: [Hue; 9] = [
+    pub const ALL: [Hue; 10] = [
         Hue::Green,
         Hue::Blue,
         Hue::Purple,
@@ -328,6 +330,7 @@ impl Hue {
         Hue::Yellow,
         Hue::Orange,
         Hue::Cyan,
+        Hue::Red,
         Hue::White,
         Hue::Grey,
     ];
@@ -342,6 +345,7 @@ impl Hue {
             Hue::Yellow => (Color32::from_rgb(0xdc, 0xc2, 0x5a), Color32::from_rgb(0x80, 0x65, 0x12)),
             Hue::Orange => (Color32::from_rgb(0xe0, 0x99, 0x5a), Color32::from_rgb(0xa6, 0x56, 0x19)),
             Hue::Cyan => (Color32::from_rgb(0x5c, 0xbc, 0xc8), Color32::from_rgb(0x1d, 0x6f, 0x7a)),
+            Hue::Red => (Color32::from_rgb(0xe8, 0x6b, 0x6b), Color32::from_rgb(0xb0, 0x2e, 0x2e)),
             Hue::White => (Color32::from_rgb(0xdc, 0xdc, 0xdc), Color32::from_rgb(0x3f, 0x3f, 0x3f)),
             Hue::Grey => return None,
         })
