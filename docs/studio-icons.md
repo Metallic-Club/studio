@@ -21,6 +21,7 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | Explorer: bindable events and functions | `event` | pink | `#d987b0` | `#a33d6e` |
 | Explorer: lighting and lights | `light` | yellow | `#dcc25a` | `#806512` |
 | Explorer: StarterPlayer's folders | `starter_folder` | yellow | `#dcc25a` | `#806512` |
+| Explorer and Assets: sounds | `sound` | red | `#e86b6b` | `#b02e2e` |
 | Explorer and Assets: parts, models, folders, cameras | `object` | white | `#dcdcdc` | `#3f3f3f` |
 | Explorer: values | `value` | grey | `#adadad` | `#646464` |
 | Explorer and Assets: other | `other` | grey | `#adadad` | `#646464` |
@@ -43,8 +44,8 @@ Every icon in Metallic Studio has a stable id. By default it is a [Lucide](https
 | `explorer.starter_gui` | The user interface players start with (`StarterGui`). | Explorer: replicated storage | [`explorer/layout-grid.svg`](https://lucide.dev/icons/layout-grid) | `explorer.starter_gui.svg`, `explorer.starter_gui.png` |
 | `explorer.starter_player` | What players start with (`StarterPlayer`). | Explorer: replicated storage | [`explorer/user.svg`](https://lucide.dev/icons/user) | `explorer.starter_player.svg`, `explorer.starter_player.png` |
 | `explorer.starter_scripts` | `StarterPlayer`'s folders of player and character scripts. | Explorer: StarterPlayer's folders | [`explorer/folder.svg`](https://lucide.dev/icons/folder) | `explorer.starter_scripts.svg`, `explorer.starter_scripts.png` |
-| `explorer.sound_service` | The sound service. | Explorer: replicated storage | [`explorer/music.svg`](https://lucide.dev/icons/music) | `explorer.sound_service.svg`, `explorer.sound_service.png` |
-| `explorer.sound` | A sound. | Explorer and Assets: parts, models, folders, cameras | [`explorer/volume-2.svg`](https://lucide.dev/icons/volume-2) | `explorer.sound.svg`, `explorer.sound.png` |
+| `explorer.sound_service` | The sound service. | Explorer and Assets: sounds | [`explorer/music.svg`](https://lucide.dev/icons/music) | `explorer.sound_service.svg`, `explorer.sound_service.png` |
+| `explorer.sound` | A sound. | Explorer and Assets: sounds | [`explorer/volume-2.svg`](https://lucide.dev/icons/volume-2) | `explorer.sound.svg`, `explorer.sound.png` |
 | `explorer.script_service` | The server script service. | Explorer and Assets: server scripts and server storage | [`explorer/scroll.svg`](https://lucide.dev/icons/scroll) | `explorer.script_service.svg`, `explorer.script_service.png` |
 | `explorer.server_storage` | Server storage. | Explorer and Assets: server scripts and server storage | [`explorer/hard-drive.svg`](https://lucide.dev/icons/hard-drive) | `explorer.server_storage.svg`, `explorer.server_storage.png` |
 | `explorer.settings_service` | A settings or input service (user settings, input, run service). | Explorer: input and settings services | [`explorer/sliders-horizontal.svg`](https://lucide.dev/icons/sliders-horizontal) | `explorer.settings_service.svg`, `explorer.settings_service.png` |

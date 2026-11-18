@@ -36,6 +36,8 @@ pub enum Group {
     Light,
     /// Explorer: StarterPlayer's built-in folders, StarterCharacterScripts and StarterPlayerScripts (#827).
     StarterFolder,
+    /// Explorer and Assets: sounds, the sound service and sound files (#828).
+    Sound,
     /// Explorer and Assets: the game's objects: parts, models, folders, cameras, meshes and scenes.
     Object,
     /// Explorer: values (Int, String, ...).
@@ -59,7 +61,7 @@ pub enum Group {
 
 impl Group {
     /// Every group, in the order the docs list them.
-    pub const ALL: [Group; 18] = [
+    pub const ALL: [Group; 19] = [
         Group::Workspace,
         Group::Storage,
         Group::SettingsService,
@@ -69,6 +71,7 @@ impl Group {
         Group::Event,
         Group::Light,
         Group::StarterFolder,
+        Group::Sound,
         Group::Object,
         Group::Value,
         Group::Other,
@@ -92,6 +95,7 @@ impl Group {
             Group::Event => "event",
             Group::Light => "light",
             Group::StarterFolder => "starter_folder",
+            Group::Sound => "sound",
             Group::Object => "object",
             Group::Value => "value",
             Group::Other => "other",
@@ -123,6 +127,7 @@ impl Group {
             Group::ModuleScript | Group::Log => Hue::Purple,
             Group::Event | Group::Content => Hue::Pink,
             Group::Light | Group::StarterFolder => Hue::Yellow,
+            Group::Sound => Hue::Red,
             Group::Storage => Hue::Orange,
             Group::SettingsService => Hue::Cyan,
             Group::Object => Hue::White,
@@ -157,6 +162,7 @@ impl Group {
             Group::Event => "Explorer: bindable events and functions",
             Group::Light => "Explorer: lighting and lights",
             Group::StarterFolder => "Explorer: StarterPlayer's folders",
+            Group::Sound => "Explorer and Assets: sounds",
             Group::Object => "Explorer and Assets: parts, models, folders, cameras",
             Group::Value => "Explorer: values",
             Group::Other => "Explorer and Assets: other",
@@ -239,9 +245,9 @@ icons! {
     /// `StarterPlayer`'s folders of player and character scripts.
     ExplorerStarterScripts = "explorer.starter_scripts", StarterFolder, "folder";
     /// The sound service.
-    ExplorerSoundService = "explorer.sound_service", Storage, "music";
+    ExplorerSoundService = "explorer.sound_service", Sound, "music";
     /// A sound.
-    ExplorerSound = "explorer.sound", Object, "volume-2";
+    ExplorerSound = "explorer.sound", Sound, "volume-2";
     /// The server script service.
     ExplorerScriptService = "explorer.script_service", ServerScript, "scroll";
     /// Server storage.
