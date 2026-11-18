@@ -62,6 +62,7 @@ mod graph;
 pub mod lighting;
 pub mod lights;
 pub mod lod;
+mod occlusion;
 pub mod overlay;
 pub mod parts;
 // The one module with `unsafe` (`#![allow(unsafe_code)]` inside, for wgpu's `create_pipeline_cache`, whose data

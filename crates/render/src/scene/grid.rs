@@ -35,10 +35,11 @@ use std::collections::HashMap;
 use metallic_core::glam::{IVec3, Vec3};
 
 use super::Region;
-use super::instance::GpuInstance;
+use super::instance::{GpuInstance, MeshKind};
 use super::lists::{DYNAMIC_ENTRY, NOT_LISTED, TRANSPARENT_LIST, entry, entry_slot};
 use crate::cull::{Casters, Containment, CullStats, CullView, VisibleSet};
 use crate::lod::{self, NEW};
+use crate::occlusion::DepthTiles;
 
 /// The side of a grid cell, in metres. Parts are mostly a few metres across; a cell holds a few dozen of them in a
 /// dense scene, few enough to test one by one when the cell crosses the view's edge, and the cells of a 1.6 km city
@@ -140,6 +141,76 @@ pub(crate) struct Grid {
     places: [Vec<Place>; 2],
     /// Entries whose transform changed since the last cull ([`Grid::queue`]), moved at the next one.
     queued: Vec<u32>,
+    /// The camera's occluders, drawn small (#836): reused cull to cull.
+    tiles: DepthTiles,
+}
+
+/// How many grid cells, nearest first, a camera's cull looks in for occluders (#836), beside the large items.
+const OCCLUDER_CELLS: usize = 16;
+/// The most occluders a cull draws.
+const MAX_OCCLUDERS: usize = 48;
+/// The smallest an occluder is: its bounding radius, in metres.
+const OCCLUDER_RADIUS: f32 = 1.0;
+/// The smallest an occluder is on screen: its bounding sphere's projected radius over the target's height. A wall
+/// that hides anything worth the test covers a fair part of the view.
+const OCCLUDER_SCREEN: f32 = 0.08;
+
+/// Draws the nearest large opaque blocks `view` sees into `tiles` (#836): the large items and the items of the first
+/// [`OCCLUDER_CELLS`] cells of `order` (nearest first) that are [`MeshKind::BLOCK`] parts, wholly opaque and at least
+/// [`OCCLUDER_SCREEN`] of the view tall. Returns whether any was drawn.
+fn draw_occluders(
+    tiles: &mut DepthTiles,
+    (cells, large): (&[Cell], &[Large]),
+    order: &[(u32, u32)],
+    view: &CullView,
+    instances: [&[GpuInstance]; 2],
+) -> bool {
+    tiles.begin(view.clip, view.aspect);
+    let height = view.size_scale * OCCLUDER_SCREEN;
+    let try_item = |tiles: &mut DepthTiles, item: &Item| {
+        if item.radius < OCCLUDER_RADIUS || item.list == TRANSPARENT_LIST {
+            return;
+        }
+        let distance = (item.center - view.eye).length().max(1e-3);
+        if item.radius * view.size_scale < height * distance {
+            return;
+        }
+        let (region, slot) = entry_slot(item.entry);
+        let Some(instance) = instances[region.index()].get(slot as usize) else {
+            return;
+        };
+        let solid = instance.flags & (GpuInstance::TRANSLUCENT | GpuInstance::HIDDEN) == 0;
+        if solid && instance.mesh() == MeshKind::BLOCK {
+            tiles.add_box(&instance.rows, view.eye);
+        }
+    };
+    let mut cells_seen = 0;
+    for &(_, place) in order {
+        if tiles.drawn() >= MAX_OCCLUDERS {
+            break;
+        }
+        let index = (place & INDEX) as usize;
+        if place & LARGE != 0 {
+            if let Some(large) = large.get(index) {
+                try_item(tiles, &large.item);
+            }
+        } else if cells_seen < OCCLUDER_CELLS {
+            cells_seen += 1;
+            if let Some(cell) = cells.get(index) {
+                for item in &cell.items {
+                    if tiles.drawn() >= MAX_OCCLUDERS {
+                        break;
+                    }
+                    try_item(tiles, item);
+                }
+            }
+        }
+    }
+    if tiles.drawn() == 0 {
+        return false;
+    }
+    tiles.finish();
+    true
 }
 
 /// The bounding sphere of a packed instance: the centre of its unit mesh (the translation) and half the diagonal
@@ -416,8 +487,9 @@ impl Grid {
         capacities: impl ExactSizeIterator<Item = usize>,
         transparent: usize,
         out: &mut VisibleSet,
+        instances: [&[GpuInstance]; 2],
     ) -> CullStats {
-        self.cull_filtered::<VIEW>(view, capacities, transparent, out)
+        self.cull_filtered::<VIEW>(view, capacities, transparent, out, instances)
     }
 
     /// Like [`Grid::cull`], for a shadow view: only the instances that cast shadows, of both regions or of the
@@ -434,8 +506,8 @@ impl Grid {
     ) -> CullStats {
         let transparent = if view.see_through { transparent } else { 0 };
         match casters {
-            Casters::All => self.cull_filtered::<ALL_CASTERS>(view, capacities, transparent, out),
-            Casters::Static => self.cull_filtered::<STATIC_CASTERS>(view, capacities, transparent, out),
+            Casters::All => self.cull_filtered::<ALL_CASTERS>(view, capacities, transparent, out, [&[], &[]]),
+            Casters::Static => self.cull_filtered::<STATIC_CASTERS>(view, capacities, transparent, out, [&[], &[]]),
         }
     }
 
@@ -447,6 +519,7 @@ impl Grid {
         capacities: impl ExactSizeIterator<Item = usize>,
         transparent: usize,
         out: &mut VisibleSet,
+        instances: [&[GpuInstance]; 2],
     ) -> CullStats {
         let mut stats = CullStats::default();
         let levels = view.lod.enabled();
@@ -506,11 +579,22 @@ impl Grid {
         }
         // ...then nearest first, their items into the lists: front to back a cell at a time.
         out.order.sort_unstable();
+        // A camera's view first draws its occluders (#836), and then leaves out what they hide.
+        let occluding = MODE == VIEW
+            && view.occlusion
+            && draw_occluders(&mut self.tiles, (&self.cells, &self.large), &out.order, view, instances);
+        let tiles = occluding.then_some(&self.tiles);
         for i in 0..out.order.len() {
             let (_, place) = out.order[i];
             let index = (place & INDEX) as usize;
             if place & LARGE != 0 {
                 if let Some(large) = self.large.get_mut(index) {
+                    if let Some(tiles) = tiles
+                        && tiles.hides_box(large.item.center, large.half)
+                    {
+                        stats.occluded += 1;
+                        continue;
+                    }
                     let item = &mut large.item;
                     if place & WITH_LEVELS != 0 {
                         push_large_with_level(view, item, out);
@@ -524,6 +608,16 @@ impl Grid {
                 continue;
             };
             let (test_planes, test_size) = (place & TEST_PLANES != 0, place & TEST_SIZE != 0);
+            if let Some(tiles) = tiles {
+                // The whole cell first: hidden, its items are not read (#836).
+                let center = (cell.key.as_vec3() + 0.5) * CELL_SIZE;
+                if tiles.hides_box(center, half_cell + cell.reach) {
+                    stats.occluded += u32::try_from(cell.items.len()).unwrap_or(u32::MAX);
+                    continue;
+                }
+                cull_cell_occluded::<MODE>(cell, view, (test_planes, test_size), tiles, out, &mut stats);
+                continue;
+            }
             if place & WITH_LEVELS != 0 {
                 cull_cell_with_levels::<MODE>(cell, view, (test_planes, test_size), out, &mut stats);
                 continue;
@@ -544,6 +638,38 @@ impl Grid {
         }
         stats.visible = out.finish();
         stats
+    }
+}
+
+/// The second pass of [`Grid::cull_filtered`] over a cell some occluder may hide part of (#836): as for any cell, each
+/// item also tested against `tiles`, and round ones listed at their levels. Out of line, so the loop over the cells of
+/// a view with no occluder stays as it was.
+#[inline(never)]
+fn cull_cell_occluded<const MODE: u8>(
+    cell: &mut Cell,
+    view: &CullView,
+    (test_planes, test_size): (bool, bool),
+    tiles: &DepthTiles,
+    out: &mut VisibleSet,
+    stats: &mut CullStats,
+) {
+    let remember = remembers(view);
+    let levels = view.lod.enabled() && cell.levels;
+    for item in &mut cell.items {
+        if !keeps::<MODE>(item, view.see_through) {
+            continue;
+        }
+        if test_planes && !view.frustum.contains_sphere(item.center, item.radius) {
+            stats.outside_frustum += 1;
+        } else if test_size && !view.sphere_large_and_near(item.center, item.radius) {
+            stats.too_far_or_small += 1;
+        } else if tiles.hides_sphere(item.center, item.radius) {
+            stats.occluded += 1;
+        } else if !levels || item.class() == 0 {
+            out.push(item.entry, item.list);
+        } else {
+            push_with_level(view, item, remember, out);
+        }
     }
 }
 
@@ -659,7 +785,7 @@ mod tests {
 
     fn cull(grid: &mut Grid, view: &CullView) -> (VisibleSet, CullStats) {
         let mut set = VisibleSet::new();
-        let stats = grid.cull(view, [16usize].into_iter(), 16, &mut set);
+        let stats = grid.cull(view, [16usize].into_iter(), 16, &mut set, [&[], &[]]);
         (set, stats)
     }
 

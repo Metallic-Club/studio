@@ -210,6 +210,8 @@ impl Quality {
             enabled: true,
             max_distance: 512.0,
             min_screen_size: 2.0,
+            // Every preset hides what large blocks hide (#836).
+            occlusion: true,
         },
         shadows: ShadowSettings {
             enabled: true,
@@ -238,6 +240,8 @@ impl Quality {
             enabled: true,
             max_distance: 1024.0,
             min_screen_size: 1.5,
+            // Every preset hides what large blocks hide (#836).
+            occlusion: true,
         },
         shadows: ShadowSettings {
             enabled: true,
@@ -264,6 +268,8 @@ impl Quality {
             enabled: true,
             max_distance: 2048.0,
             min_screen_size: 1.0,
+            // Every preset hides what large blocks hide (#836).
+            occlusion: true,
         },
         shadows: ShadowSettings {
             enabled: true,
@@ -286,6 +292,8 @@ impl Quality {
             enabled: true,
             max_distance: f32::INFINITY,
             min_screen_size: 0.5,
+            // Every preset hides what large blocks hide (#836).
+            occlusion: true,
         },
         shadows: ShadowSettings {
             enabled: true,

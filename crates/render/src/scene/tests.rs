@@ -1007,3 +1007,72 @@ fn a_surface_appearance_gives_its_mesh_part_a_material() {
     frame(&mut scene, &mut game.dm);
     assert_eq!(key(&scene, &instance(&scene, part)), "Metal");
 }
+
+/// #836: with occlusion on, the parts wholly behind a large wall are not drawn, and nothing in view of the camera is
+/// lost: the parts beside the wall, the wall itself and a part in front of it stay.
+#[test]
+fn a_wall_hides_the_parts_behind_it() {
+    use crate::cull::{CullSettings, CullView, VisibleSet};
+    use crate::parts::Camera;
+    use crate::scene::lists::entry;
+
+    let mut game = Game::new();
+    let place = |game: &mut Game, id: Id, at: Vec3, size: Vec3| {
+        game.dm.set(id, game.cframe, Value::CFrame(CFrame::new(at))).unwrap();
+        game.dm.set_by_name(id, "Size", Value::Vector3(size)).unwrap();
+        game.dm.set_by_name(id, "Anchored", Value::Bool(true)).unwrap();
+    };
+    let wall = game.part();
+    place(&mut game, wall, Vec3::new(0.0, 0.0, -20.0), Vec3::new(40.0, 40.0, 1.0));
+    let behind: Vec<Id> = (0..5)
+        .map(|i| {
+            let id = game.part();
+            place(
+                &mut game,
+                id,
+                Vec3::new(i as f32 * 4.0 - 8.0, 0.0, -60.0),
+                Vec3::splat(2.0),
+            );
+            id
+        })
+        .collect();
+    let beside = game.part();
+    place(&mut game, beside, Vec3::new(120.0, 0.0, -100.0), Vec3::splat(2.0));
+    let front = game.part();
+    place(&mut game, front, Vec3::new(0.0, 0.0, -10.0), Vec3::splat(2.0));
+    let mut scene = game.scene();
+    frame(&mut scene, &mut game.dm);
+    let camera = Camera::from_cframe(CFrame::look_at(Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), Vec3::Y), 70.0);
+    let drawn = |scene: &mut InstanceScene, occlusion: bool| {
+        let settings = CullSettings {
+            occlusion,
+            ..CullSettings::default()
+        };
+        let view = CullView::for_camera(&camera, Vec3::ZERO, 1280, 720, &settings);
+        let mut set = VisibleSet::new();
+        let stats = scene.cull(&view, &mut set);
+        let entries: Vec<u32> = (0..scene.draw_list_count())
+            .flat_map(|kind| (0..crate::lod::MAX_LOD_LEVELS).map(move |level| (kind, level)))
+            .flat_map(|(kind, level)| set.opaque(MeshKind(kind as u16), level).to_vec())
+            .collect();
+        (entries, stats)
+    };
+    let entry_of = |scene: &InstanceScene, id: Id| {
+        let slot = scene.slot_of(id).unwrap();
+        entry(slot.region, slot.slot)
+    };
+    let (all, plain) = drawn(&mut scene, false);
+    assert_eq!(plain.occluded, 0);
+    for &id in behind.iter().chain([&wall, &beside, &front]) {
+        assert!(all.contains(&entry_of(&scene, id)), "drawn without occlusion");
+    }
+    let (seen, stats) = drawn(&mut scene, true);
+    assert_eq!(stats.occluded, behind.len() as u32, "{stats:?}");
+    for &id in &behind {
+        assert!(!seen.contains(&entry_of(&scene, id)));
+    }
+    for id in [wall, beside, front] {
+        assert!(seen.contains(&entry_of(&scene, id)), "a part in view is kept");
+    }
+    assert_eq!(stats.visible as usize, seen.len());
+}
