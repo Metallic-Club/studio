@@ -823,7 +823,17 @@ impl Studio {
                 let settings_open = self.settings_window.is_open();
                 let profile = &mut self.settings.settings_mut().profile;
                 let team = &mut self.team;
-                editor::top_bar(ui, editor, &self.dock, &self.keymap, settings_open, profile, team)
+                let exporting = self.export.as_ref().map(|export| &export.progress);
+                editor::top_bar(
+                    ui,
+                    editor,
+                    &self.dock,
+                    &self.keymap,
+                    settings_open,
+                    profile,
+                    team,
+                    exporting,
+                )
             })
             .inner;
         // The toolbar under the menu bar (#232).
@@ -1449,7 +1459,7 @@ impl Studio {
 
     /// Says how an export went, once it is done (#783); asks for frames meanwhile.
     fn poll_export(&mut self, ctx: &egui::Context) {
-        let Some(export) = &self.export else {
+        let Some(export) = &mut self.export else {
             return;
         };
         let Some(result) = export.poll() else {
