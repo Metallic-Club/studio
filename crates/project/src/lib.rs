@@ -22,7 +22,7 @@ pub use asset_index::{
 pub use assets::{AssetError, AssetReader, DecodeError, ImageAsset, MeshAsset, decode_image, decode_mesh};
 pub use game_files::GameFiles;
 pub use manifest::{LoadedManifest, Manifest, ManifestError, ManifestWarning, ProjectKind, ProjectMode};
-pub use pak::{PAK_FILE, PAK_FORMAT, PAK_MAGIC, Pak, PakError};
+pub use pak::{EXPORTED_SETTINGS_FILE, PAK_FILE, PAK_FORMAT, PAK_MAGIC, Pak, PakError};
 pub use project::{
     MATERIAL_PROPERTY, MaterialLinks, MemberMove, MoveReport, PROJECT_EXTENSION, Project, ProjectError, References,
     Template, check_member_path,

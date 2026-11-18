@@ -13,9 +13,10 @@
 //! (`pipelines/`, on Vulkan) so the next start compiles less.
 //!
 //! **A standalone game** (#783): started with no arguments and a `game.pak` beside it (an offline game Studio
-//! exported, the player renamed after the game), it runs that game in a window of its name. Its settings are the
-//! game's own, in a config folder of its name; the first time, they start from the `graphics.toml` the game ships
-//! beside its executable.
+//! exported, the player renamed after the game), it runs that game in a window of its name. Renamed, it is that game's
+//! client alone (#803): it never runs a built-in scene, and without its pak it says so and closes. Its settings are the
+//! game's own, in a config folder of its name, kept in `settings.cfg`; the first time, they start from the
+//! `settings.cfg` the game ships beside its executable.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -136,19 +137,29 @@ fn main() -> ExitCode {
     }
 
     let mut config = args.config();
-    // An exported game: no arguments, its build beside the executable (#783).
-    let standalone = if args == Args::default() {
+    // An exported game (#783, #803): the player renamed after it, which is its client alone. It runs the game.pak
+    // beside it, whatever it is given, and never a built-in scene: without its pak it says so and closes.
+    let exported = is_exported();
+    let standalone = if exported || args == Args::default() {
         standalone_game()
     } else {
         None
     };
     match &standalone {
-        Some(game) => {
+        Some(Ok(game)) => {
             config.project = Some(game.pak.clone());
             config.window.title = game.name.clone();
-            load_user_graphics(&mut config, &game.app_id, Some(&game.shipped_graphics));
+            load_user_graphics(&mut config, &game.app_id, Some(&game.shipped_settings));
         }
-        None => load_user_graphics(&mut config, PLAYER_APP_ID, None),
+        Some(Err(problem)) if exported => {
+            fatal(problem);
+            return ExitCode::FAILURE;
+        }
+        _ if exported => {
+            fatal("The game's files are missing: its game.pak should be beside it.");
+            return ExitCode::FAILURE;
+        }
+        _ => load_user_graphics(&mut config, PLAYER_APP_ID, None),
     }
     if let Some(address) = &args.connect {
         return connect(config, address, args.name.as_deref().unwrap_or("Player"));
@@ -189,16 +200,25 @@ fn main() -> ExitCode {
 }
 
 /// An exported game beside the executable (#783): its build, its name, the app id its settings are kept under, and
-/// the graphics settings it ships with.
+/// the settings it ships with (`settings.cfg`, #803).
 struct StandaloneGame {
     pak: PathBuf,
     name: String,
     app_id: String,
-    shipped_graphics: PathBuf,
+    shipped_settings: PathBuf,
 }
 
-/// The game whose `game.pak` is beside this executable, if there is one that opens.
-fn standalone_game() -> Option<StandaloneGame> {
+/// Whether this executable is an exported game (#803): the player renamed after it, so anything but
+/// `metallic_player`.
+fn is_exported() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_stem().map(|stem| stem.to_string_lossy().to_ascii_lowercase()))
+        .is_some_and(|stem| stem != "metallic_player")
+}
+
+/// The game whose `game.pak` is beside this executable: `None` without one, an error when it does not open.
+fn standalone_game() -> Option<Result<StandaloneGame, String>> {
     let exe = std::env::current_exe().ok()?;
     let folder = exe.parent()?;
     let pak = folder.join(metallic_engine::metallic_project::PAK_FILE);
@@ -212,15 +232,35 @@ fn standalone_game() -> Option<StandaloneGame> {
         }
         Err(error) => {
             log::warn!("{}: {error}", pak.display());
-            return None;
+            return Some(Err(format!("The game's files could not be read: {error}")));
         }
     };
-    Some(StandaloneGame {
+    Some(Ok(StandaloneGame {
         app_id: game_app_id(&name),
         name,
-        shipped_graphics: folder.join(metallic_engine::metallic_project::GAME_GRAPHICS_FILE),
+        shipped_settings: folder.join(metallic_engine::metallic_project::EXPORTED_SETTINGS_FILE),
         pak,
-    })
+    }))
+}
+
+/// Says why an exported game cannot start (#803): in a message box where the system has them (it has no console),
+/// and on stderr.
+fn fatal(problem: &str) {
+    eprintln!("error: {problem}");
+    // Tests (and tools) that start the game ask for no dialog: it would wait for a click.
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    if std::env::var_os("METALLIC_NO_DIALOGS").is_none() {
+        let title = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "Game".to_owned());
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title(title)
+            .set_description(problem)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
 }
 
 /// The app id a game named `name` keeps its settings under: `games.metallic.` and its name's letters and digits.
@@ -245,6 +285,8 @@ fn load_user_graphics(config: &mut PlayerConfig, app: &str, shipped: Option<&std
     // Compiled pipelines are kept beside the user's other caches (Vulkan only; nothing is written elsewhere).
     config.pipeline_cache = AppId::parse(app).and_then(|app| pipeline_cache_dir(&app)).ok();
     let path = match AppId::parse(app).and_then(|app| graphics_settings_path(&app)) {
+        // A game keeps its player's settings as it ships them, in `settings.cfg` (#803).
+        Ok(path) if shipped.is_some() => path.with_file_name(metallic_engine::metallic_project::EXPORTED_SETTINGS_FILE),
         Ok(path) => path,
         Err(error) => {
             log::warn!("graphics: no settings file ({error}); using the Auto preset");
