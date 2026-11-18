@@ -235,15 +235,16 @@ impl ZoomTarget {
         }
     }
 
-    /// The target named `name` in the settings file.
+    /// The target named `name` in the settings file (`center` reads as `centre`, #800).
     pub fn parse(name: &str) -> Option<Self> {
+        let name = if name == "center" { "centre" } else { name };
         Self::ALL.into_iter().find(|target| target.as_str() == name)
     }
 
     /// What the menus call it.
     pub fn label(self) -> &'static str {
         match self {
-            ZoomTarget::Centre => "Toward the centre",
+            ZoomTarget::Centre => "Toward the center",
             ZoomTarget::Pointer => "Toward the pointer",
         }
     }
