@@ -180,6 +180,73 @@ impl Scene<'_> {
             .collect()
     }
 
+    /// Group (#802): a new `class` (a Model, or a Folder) named after it holds the selection, in the active
+    /// instance's parent just before the first selected instance there, and is selected. Workspace's camera stays
+    /// where it is. Returns the group.
+    pub fn group(&mut self, class: &str) -> Option<Id> {
+        let mut chosen = self.removable_selection();
+        let active = self
+            .selection
+            .active()
+            .filter(|id| chosen.contains(id))
+            .or(chosen.last().copied())?;
+        let parent = self.dm.parent(active).ok().flatten()?;
+        let siblings: Vec<Id> = self.dm.children(parent).ok()?.collect();
+        // In the tree's order, so the group keeps them as they were.
+        chosen.sort_by_key(|id| siblings.iter().position(|sibling| sibling == id).unwrap_or(usize::MAX));
+        let before = siblings.iter().copied().find(|sibling| chosen.contains(sibling));
+        let class_id = self.dm.registry().class_id(class)?;
+        let made = self.dm.create(class_id).ok()?;
+        let named = self.dm.set_name(made, class.into());
+        if let Err(error) = named.and_then(|()| self.move_to(made, Some(parent), before)) {
+            log::warn!("edit: could not group: {error}");
+            return None;
+        }
+        for id in chosen {
+            if let Err(error) = self.move_to(id, Some(made), None) {
+                log::warn!("edit: could not group: {error}");
+            }
+        }
+        *self.selection = Selection::of([made]);
+        Some(made)
+    }
+
+    /// Ungroup (#802): each selected Model or Folder's children move to its parent, where it was, and it goes; the
+    /// children are selected. Returns how many were ungrouped.
+    pub fn ungroup(&mut self) -> usize {
+        let groups: Vec<Id> = self
+            .removable_selection()
+            .into_iter()
+            .filter(|&id| {
+                self.dm
+                    .class_of(id)
+                    .ok()
+                    .and_then(|class| self.dm.registry().class(class))
+                    .is_some_and(|info| matches!(info.name(), "Model" | "Folder"))
+            })
+            .collect();
+        let mut freed = Vec::new();
+        for &group in &groups {
+            let Some(parent) = self.dm.parent(group).ok().flatten() else {
+                continue;
+            };
+            let children: Vec<Id> = self.dm.children(group).map(Iterator::collect).unwrap_or_default();
+            for child in children {
+                match self.move_to(child, Some(parent), Some(group)) {
+                    Ok(()) => freed.push(child),
+                    Err(error) => log::warn!("edit: could not ungroup: {error}"),
+                }
+            }
+            if let Err(error) = self.move_to(group, None, None) {
+                log::warn!("edit: could not ungroup: {error}");
+            }
+        }
+        if !groups.is_empty() {
+            *self.selection = Selection::of(freed.iter().copied());
+        }
+        groups.len()
+    }
+
     /// Delete: takes the selection out of the tree (kept for undo) and selects nothing. Returns how many went.
     pub fn delete(&mut self) -> usize {
         let doomed = self.removable_selection();
@@ -432,6 +499,12 @@ pub enum TreeEdit {
     Rename,
     /// Delete the selection.
     Delete,
+    /// Group the selection into a Model (#802).
+    Group,
+    /// Group the selection into a Folder (#802).
+    Folder,
+    /// Ungroup the selected Models and Folders (#802).
+    Ungroup,
 }
 
 impl TreeEdit {
@@ -442,7 +515,10 @@ impl TreeEdit {
 
     /// Whether it takes the selection out of the tree, which Workspace's camera never leaves (#731).
     pub fn removes(self) -> bool {
-        matches!(self, TreeEdit::Cut | TreeEdit::Delete)
+        matches!(
+            self,
+            TreeEdit::Cut | TreeEdit::Delete | TreeEdit::Group | TreeEdit::Folder | TreeEdit::Ungroup
+        )
     }
 
     /// The keymap's command for it, whose shortcut menus show (#660).
@@ -456,6 +532,9 @@ impl TreeEdit {
             TreeEdit::Duplicate => ids::EDIT_DUPLICATE,
             TreeEdit::Rename => ids::EDIT_RENAME,
             TreeEdit::Delete => ids::EDIT_DELETE,
+            TreeEdit::Group => ids::EDIT_GROUP,
+            TreeEdit::Folder => ids::EDIT_GROUP_FOLDER,
+            TreeEdit::Ungroup => ids::EDIT_UNGROUP,
         }
     }
 }
@@ -513,6 +592,15 @@ impl Scene<'_> {
             }
             TreeEdit::Delete => {
                 self.delete();
+            }
+            TreeEdit::Group => {
+                self.group("Model");
+            }
+            TreeEdit::Folder => {
+                self.group("Folder");
+            }
+            TreeEdit::Ungroup => {
+                self.ungroup();
             }
         }
     }

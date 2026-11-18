@@ -238,6 +238,12 @@ pub mod ids {
     pub const EDIT_RENAME: &str = "edit.rename";
     /// Delete the selection.
     pub const EDIT_DELETE: &str = "edit.delete";
+    /// Group the selection into a Model (#802).
+    pub const EDIT_GROUP: &str = "edit.group";
+    /// Group the selection into a Folder (#802).
+    pub const EDIT_GROUP_FOLDER: &str = "edit.group_folder";
+    /// Ungroup the selected Models and Folders (#802).
+    pub const EDIT_UNGROUP: &str = "edit.ungroup";
     /// Open Insert Object for the selection (#411).
     pub const EDIT_INSERT: &str = "edit.insert";
     /// The Select tool (#355).
@@ -395,14 +401,15 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         ids::SCRIPT_FIND_NEXT,
         "Find next",
         "Selects the next match of the find bar's text in the script being edited.",
-        &["F3", "Primary+G"],
+        // Not Primary+G: that groups (#802).
+        &["F3"],
     ),
     script(
         ids::SCRIPT_FIND_PREVIOUS,
         "Find previous",
         "Selects the match before in the script being edited.",
-        // Not Shift+F3: that shows the Lighting stats.
-        &["Primary+Shift+G"],
+        // Not Shift+F3: that shows the Lighting stats. Not Primary+Shift+G: that groups into a folder (#802).
+        &["Primary+F3"],
     ),
     script(
         ids::SCRIPT_FIND_IN_SCRIPTS,
@@ -534,6 +541,31 @@ pub const STUDIO_COMMANDS: &[Command] = &[
         contexts: &[Context::Editor],
         defaults: &["Delete"],
         ..Command::new(ids::EDIT_DELETE, "Delete", "Edit", "Deletes the selection.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+G"],
+        ..Command::new(ids::EDIT_GROUP, "Group", "Edit", "Puts the selection in a new Model.")
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Primary+Shift+G"],
+        ..Command::new(
+            ids::EDIT_GROUP_FOLDER,
+            "Group as a folder",
+            "Edit",
+            "Puts the selection in a new Folder.",
+        )
+    },
+    Command {
+        contexts: &[Context::Editor],
+        defaults: &["Alt+G"],
+        ..Command::new(
+            ids::EDIT_UNGROUP,
+            "Ungroup",
+            "Edit",
+            "Takes what the selected Models and Folders hold out of them, and removes them.",
+        )
     },
     Command {
         contexts: &[Context::Editor],
