@@ -408,7 +408,12 @@ pub(super) fn asset_field(
     // and the click is the completion's).
     if focused && !offered.is_empty() {
         let field = row.inner.rect;
-        if let Some(clicked) = completion_list(ui, id.with("completions"), kind, field, &offered, typing.picked)
+        let look = RowLook {
+            role: Role::ListBoxOption,
+            icon: kind.icon(),
+            files,
+        };
+        if let Some(clicked) = completion_list(ui, id.with("completions"), &look, kind, field, &offered, typing.picked)
             && let Some(choice) = offered.get(clicked)
         {
             chosen = Some(choice.id.clone()).filter(|value| value != current || mixed);
@@ -499,7 +504,12 @@ fn window(ctx: &egui::Context, id: Id, kind: Kind, choices: &[Choice], files: &F
                         let response = if grid {
                             tile(ui, files, kind.icon(), name, path, on)
                         } else {
-                            row(ui, Role::Row, kind.icon(), index, name, path, on)
+                            let look = RowLook {
+                                role: Role::Row,
+                                icon: kind.icon(),
+                                files,
+                            };
+                            row(ui, &look, index, name, path, on)
                         };
                         if response.clicked() {
                             state.picked = Some(value.clone());
@@ -604,11 +614,12 @@ fn tile(ui: &mut Ui, files: &Files, icon: Icon, name: &str, path: Option<&str>, 
     response
 }
 
-/// The completions `offered` for the field at `field`, in a list under it, the `picked`th picked out. Returns the one
-/// clicked.
+/// The completions `offered` for the field at `field`, in a list under it whose rows look as `look` says, the
+/// `picked`th picked out. Returns the one clicked.
 fn completion_list(
     ui: &Ui,
     id: Id,
+    look: &RowLook<'_>,
     kind: Kind,
     field: Rect,
     offered: &[&Choice],
@@ -633,7 +644,7 @@ fn completion_list(
                     let name = kind.name(&choice.path);
                     let on = picked == Some(index);
                     let path = Some(choice.path.as_str());
-                    if row(ui, Role::ListBoxOption, kind.icon(), index, name, path, on).clicked() {
+                    if row(ui, look, index, name, path, on).clicked() {
                         clicked = Some(index);
                     }
                 }
@@ -642,20 +653,20 @@ fn completion_list(
     clicked
 }
 
-/// One row of a list, the `index`th, for screen readers a `role`: the file's `icon`, its name and its path, picked out
-/// when `on`.
-fn row(
-    ui: &mut Ui,
+/// How a list's rows look: what they are for screen readers, the files' icon, and the files' thumbnails.
+struct RowLook<'a> {
     role: Role,
-    file_icon: Icon,
-    index: usize,
-    name: &str,
-    path: Option<&str>,
-    on: bool,
-) -> egui::Response {
+    icon: Icon,
+    files: &'a Files,
+}
+
+/// One row of a list, the `index`th, as `look` says: the file's thumbnail (#777; its icon until the thumbnail is
+/// drawn), its name and its path, picked out when `on`.
+fn row(ui: &mut Ui, look: &RowLook<'_>, index: usize, name: &str, path: Option<&str>, on: bool) -> egui::Response {
     let colors = current_colors(ui.ctx());
     let p = colors.palette;
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size::ROW), Sense::click());
+    let role = look.role;
     response.widget_info(|| WidgetInfo::selected(role, true, on, name));
     if ui.is_rect_visible(rect) {
         let fill = if on {
@@ -670,8 +681,13 @@ fn row(
             pos2(rect.left() + space::S3, rect.center().y - text::BODY / 2.0),
             vec2(text::BODY, text::BODY),
         );
-        if path.is_some() {
-            icons::paint(ui.painter(), file_icon, icon, file_icon.color(&colors));
+        if let Some(path) = path {
+            // Only the rows on screen ask for their thumbnails (#771).
+            want_picture(ui.ctx(), path);
+            match look.files.picture(path) {
+                Some(thumbnail) => paint_thumbnail(ui.painter(), thumbnail, icon.expand(2.0)),
+                None => icons::paint(ui.painter(), look.icon, icon, look.icon.color(&colors)),
+            }
         }
         let name_x = icon.right() + space::S3;
         let ink = if on { p.text } else { p.muted };
