@@ -342,6 +342,58 @@
           },
           "description": "Returns every attribute of the instance as a table of names to values.",
           "invokes_callback": null
+        },
+        {
+          "name": "AddTag",
+          "params": [
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Gives the instance a tag, which CollectionService finds it by. Tags are saved with the instance; adding one it has does nothing.",
+          "invokes_callback": null
+        },
+        {
+          "name": "RemoveTag",
+          "params": [
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Takes a tag away from the instance. Removing one it lacks does nothing.",
+          "invokes_callback": null
+        },
+        {
+          "name": "HasTag",
+          "params": [
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": "Bool",
+          "description": "Returns whether the instance has the tag.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetTags",
+          "params": [],
+          "returns": {
+            "Array": "String"
+          },
+          "description": "Returns the instance's tags, in the order they were added.",
+          "invokes_callback": null
         }
       ],
       "signals": [
@@ -538,6 +590,213 @@
           "description": "The function Invoke calls. Assign a function to it (or nil to remove it); it receives Invoke's arguments, and what it returns is what Invoke returns. It cannot be read."
         }
       ]
+    },
+    {
+      "name": "CollectionService",
+      "parent": "Instance",
+      "description": "Finds instances by the tags they were given with AddTag, and says when tagged instances come and go.",
+      "category": "",
+      "creatable": false,
+      "service_order": 13,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": true,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [
+        {
+          "name": "AddTag",
+          "params": [
+            {
+              "name": "instance",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            },
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Gives the instance the tag. Adding one it has does nothing.",
+          "invokes_callback": null
+        },
+        {
+          "name": "RemoveTag",
+          "params": [
+            {
+              "name": "instance",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            },
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Takes the tag away from the instance. Removing one it lacks does nothing.",
+          "invokes_callback": null
+        },
+        {
+          "name": "HasTag",
+          "params": [
+            {
+              "name": "instance",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            },
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": "Bool",
+          "description": "Returns whether the instance has the tag.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetTags",
+          "params": [
+            {
+              "name": "instance",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Array": "String"
+          },
+          "description": "Returns the instance's tags, in the order they were added.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetTagged",
+          "params": [
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Array": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns every instance in the game with the tag, in tree order.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetAllTags",
+          "params": [],
+          "returns": {
+            "Array": "String"
+          },
+          "description": "Returns every tag an instance in the game has, each once.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetInstanceAddedSignal",
+          "params": [
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Signal": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns a signal that fires with each instance that gains the tag while in the game, or comes into the game with it.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetInstanceRemovedSignal",
+          "params": [
+            {
+              "name": "tag",
+              "type": "String",
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Signal": {
+              "Class": "Instance"
+            }
+          },
+          "description": "Returns a signal that fires with each instance that loses the tag, or leaves the game with it.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [],
+      "callbacks": []
+    },
+    {
+      "name": "CollectionTag",
+      "parent": "Instance",
+      "description": "The signals of one CollectionService tag, named after it.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": true,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [],
+      "signals": [
+        {
+          "name": "InstanceAdded",
+          "params": [
+            {
+              "name": "instance",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires with an instance that gained the tag, or came into the game with it."
+        },
+        {
+          "name": "InstanceRemoved",
+          "params": [
+            {
+              "name": "instance",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires with an instance that lost the tag, or left the game with it."
+        }
+      ],
+      "callbacks": []
     },
     {
       "name": "DataModel",

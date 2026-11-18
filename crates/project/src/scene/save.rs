@@ -28,6 +28,9 @@ struct InstanceOut<'a> {
     properties: BTreeMap<&'static str, Written>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     attributes: BTreeMap<&'a str, Attribute>,
+    /// Its `CollectionService` tags (#809), in the order they were added.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<&'a str>,
 }
 
 /// What saving needs to know about a class, looked up once per class.
@@ -142,6 +145,7 @@ pub fn save_scene(dm: &DataModel, ids: &mut SceneIds) -> Result<SavedScene, Scen
             name: (name != plan.name).then_some(name),
             properties,
             attributes,
+            tags: dm.tags(id)?.iter().map(|tag| &**tag).collect(),
         });
     }
 

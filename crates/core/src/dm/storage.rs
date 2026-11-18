@@ -71,6 +71,8 @@ pub(super) struct Extras {
     name: Option<Arc<str>>,
     /// In insertion order.
     attributes: Vec<Attribute>,
+    /// Its tags (`CollectionService`, #809), in the order they were added, each once.
+    tags: Vec<Arc<str>>,
 }
 
 /// The parts of a live instance that own memory.
@@ -113,6 +115,7 @@ impl Body {
                 *extras = Some(Box::new(Extras {
                     name: Some(name),
                     attributes: Vec::new(),
+                    tags: Vec::new(),
                 }));
             }
         }
@@ -129,6 +132,17 @@ impl Body {
         &mut self.extras.get_or_insert_with(Box::default).attributes
     }
 
+    /// Its tags, in the order they were added.
+    #[inline]
+    pub(super) fn tags(&self) -> &[Arc<str>] {
+        self.extras.as_deref().map_or(&[], |e| e.tags.as_slice())
+    }
+
+    /// The tags, to change them in place. Call [`Body::drop_empty_extras`] after removing any.
+    pub(super) fn tags_mut(&mut self) -> &mut Vec<Arc<str>> {
+        &mut self.extras.get_or_insert_with(Box::default).tags
+    }
+
     /// Whether the extras' box is allocated.
     #[cfg(test)]
     pub(super) fn has_extras(&self) -> bool {
@@ -140,7 +154,7 @@ impl Body {
         if self
             .extras
             .as_deref()
-            .is_some_and(|e| e.name.is_none() && e.attributes.is_empty())
+            .is_some_and(|e| e.name.is_none() && e.attributes.is_empty() && e.tags.is_empty())
         {
             self.extras = None;
         }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{CFrame, Color3, EnumItem, Id, PropType, Value, Vector2, Vector3};
+use crate::{CFrame, Color3, EnumItem, Id, PropType, SignalId, Value, Vector2, Vector3};
 
 /// A value passed into or out of a script, in any scripting language. Backends translate it to and from their own
 /// native values; the engine never sees a VM type.
@@ -37,6 +37,9 @@ pub enum ScriptValue {
     Map(Vec<(Arc<str>, ScriptValue)>),
     /// Several values at once, such as a method's multiple return values.
     Tuple(Vec<ScriptValue>),
+    /// A declared signal of a live instance (an `RBXScriptSignal`), which a method returns to be connected to: one
+    /// of `CollectionService:GetInstanceAddedSignal`'s (#809).
+    Signal(Id, SignalId),
 }
 
 impl ScriptValue {
@@ -56,6 +59,7 @@ impl ScriptValue {
             Self::List(_) => "list",
             Self::Map(_) => "map",
             Self::Tuple(_) => "tuple",
+            Self::Signal(..) => "RBXScriptSignal",
         }
     }
 

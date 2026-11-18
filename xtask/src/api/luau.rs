@@ -123,6 +123,7 @@ pub(crate) fn luau_type(ty: &ApiType) -> String {
         ApiType::Variadic(item) => format!("...{}", luau_type(item)),
         ApiType::Tuple(items) => format!("({})", list(items.iter().map(luau_type))),
         ApiType::Function => "(...any) -> ...any".to_owned(),
+        ApiType::Signal(item) => format!("ScriptSignal<{}>", luau_type(item)),
     }
 }
 

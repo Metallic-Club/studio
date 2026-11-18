@@ -134,7 +134,7 @@ fn attribute_value(value: Option<&ScriptValue>) -> Result<Option<Value>, ScriptE
         ScriptValue::Color3(c) => Value::Color3(*c),
         ScriptValue::Enum(item) => Value::Enum(item.clone()),
         ScriptValue::Instance(id) => Value::Ref(Some(*id)),
-        ScriptValue::List(_) | ScriptValue::Map(_) | ScriptValue::Tuple(_) => {
+        ScriptValue::List(_) | ScriptValue::Map(_) | ScriptValue::Tuple(_) | ScriptValue::Signal(..) => {
             return Err(ScriptError::bad_argument(
                 2,
                 "an attribute value (boolean, number, string, vector, CFrame, Color3 or EnumItem)",
@@ -159,6 +159,37 @@ fn get_attributes(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError>
         .map(|(name, value)| (Arc::clone(name), ScriptValue::from(value.clone())))
         .collect();
     Ok(ScriptValue::Map(entries))
+}
+
+/// `AddTag(tag)`: as `CollectionService:AddTag(instance, tag)`.
+fn add_tag(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    let tag = call.args.string(0)?;
+    call.dm.set_tag(call.this, &tag, true)?;
+    Ok(ScriptValue::Nil)
+}
+
+/// `RemoveTag(tag)`.
+fn remove_tag(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    let tag = call.args.string(0)?;
+    call.dm.set_tag(call.this, &tag, false)?;
+    Ok(ScriptValue::Nil)
+}
+
+/// `HasTag(tag)`.
+fn has_tag(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    let tag = call.args.string(0)?;
+    Ok(ScriptValue::Bool(call.dm.has_tag(call.this, &tag)?))
+}
+
+/// `GetTags()`: the instance's tags, in the order they were added.
+pub(crate) fn tag_list(dm: &metallic_core::DataModel, id: metallic_core::Id) -> Result<ScriptValue, ScriptError> {
+    Ok(ScriptValue::List(
+        dm.tags(id)?.iter().map(|tag| ScriptValue::String(Arc::clone(tag))).collect(),
+    ))
+}
+
+fn get_tags(call: &mut MethodCall<'_>) -> Result<ScriptValue, ScriptError> {
+    tag_list(call.dm, call.this)
 }
 
 static PROPS: &[PropMeta] = &[
@@ -278,6 +309,26 @@ static METHODS: &[MethodDesc] = &[
         .params(&[])
         .returns(Ty::Map(&Ty::String, &Ty::Any))
         .describe("Returns every attribute of the instance as a table of names to values."),
+    // #809: as CollectionService's, on the instance itself.
+    MethodDesc::new("AddTag", add_tag)
+        .params(&[Param::new("tag", Ty::String)])
+        .returns_nothing()
+        .describe(
+            "Gives the instance a tag, which CollectionService finds it by. Tags are saved with the instance; adding \
+             one it has does nothing.",
+        ),
+    MethodDesc::new("RemoveTag", remove_tag)
+        .params(&[Param::new("tag", Ty::String)])
+        .returns_nothing()
+        .describe("Takes a tag away from the instance. Removing one it lacks does nothing."),
+    MethodDesc::new("HasTag", has_tag)
+        .params(&[Param::new("tag", Ty::String)])
+        .returns(Ty::Bool)
+        .describe("Returns whether the instance has the tag."),
+    MethodDesc::new("GetTags", get_tags)
+        .params(&[])
+        .returns(Ty::Array(&Ty::String))
+        .describe("Returns the instance's tags, in the order they were added."),
 ];
 
 static SIGNALS: &[SignalDesc] = &[

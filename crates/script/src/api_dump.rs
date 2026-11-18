@@ -265,6 +265,8 @@ pub enum ApiType {
     Tuple(Vec<ApiType>),
     /// A function.
     Function,
+    /// A signal whose listeners receive a value of the type.
+    Signal(Box<ApiType>),
 }
 
 impl From<&Ty> for ApiType {
@@ -288,6 +290,7 @@ impl From<&Ty> for ApiType {
             Ty::Variadic(item) => Self::Variadic(Box::new(item.into())),
             Ty::Tuple(items) => Self::Tuple(items.iter().map(Self::from).collect()),
             Ty::Function => Self::Function,
+            Ty::Signal(item) => Self::Signal(Box::new(item.into())),
         }
     }
 }
