@@ -12,7 +12,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-metallic_engine = { workspace = true, features = ["render", "physics", "luau"] }
+# `audio`: play sessions are heard (#830).
+metallic_engine = { workspace = true, features = ["render", "physics", "luau", "audio"] }
 metallic_player.workspace = true
 # `experimental` makes egui's widget themes public: Studio styles the focused text field's outline (#588).
 egui = { workspace = true, features = ["experimental"] }

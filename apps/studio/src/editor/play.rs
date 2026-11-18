@@ -280,6 +280,13 @@ impl PlaySession {
     }
 }
 
+// #830: play sessions are heard. A build that leaves out metallic_engine's `audio` feature fails here (Linux has no
+// output yet).
+const _: () = assert!(
+    metallic_engine::metallic_platform::audio::AudioOutput::SUPPORTED || cfg!(target_os = "linux"),
+    "metallic_studio must turn on metallic_engine's `audio` feature"
+);
+
 /// Plays a play session's sounds on the system's default device (#811). Studio's own tests play none aloud, and a
 /// machine with no device plays them unheard, which is only logged.
 pub(crate) fn hear(player: &mut Player<ScriptOutput>) {

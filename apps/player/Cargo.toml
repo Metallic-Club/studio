@@ -14,7 +14,7 @@ workspace = true
 [features]
 default = ["full"]
 # Everything a client needs. A dedicated server will depend on `metallic_engine` with fewer features instead.
-full = ["metallic_engine/render", "metallic_engine/physics", "metallic_engine/luau"]
+full = ["metallic_engine/render", "metallic_engine/physics", "metallic_engine/luau", "metallic_engine/audio"]
 
 [dependencies]
 # A window and Luau scripts are what the Player is, so those two are on whatever the features say.
