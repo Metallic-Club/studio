@@ -93,8 +93,8 @@ optional keys, written only when set so older files read and write unchanged: `a
 such as `1.0.2`) and `icon` (the asset id of the picture an offline game's executable icon is made from).
 
 The graphics an offline game starts with live in `graphics.toml` at the project's root, in the renderer's settings
-format: a reserved member like `metallic.toml` and `assets.json`, never an asset, packed with the game and shipped
-beside its executable. Until games draw a settings screen of their own (through an API to come), players change that
+format: a reserved member like `metallic.toml` and `assets.json`, never an asset, packed with the game; an export ships it
+beside the executable as `settings.cfg` (#803). Until games draw a settings screen of their own (through an API to come), players change that
 file. Online (platform) games have neither yet.
 
 ### Export
@@ -104,10 +104,11 @@ file. Online (platform) games have neither yet.
 - **Standalone:** the `.mtproj` is packed into one binary file (`game.pak`, read-only, built by `xtask` or Studio) and shipped next to the player executable.
   Studio's **File > Export Game** (2026-11-17, #783) writes the build into a folder of the game's name: the Metallic
   Player renamed after the game (on Windows with the game's icon, version and author in its resources, and marked a
-  windowed program), `game.pak`, and `graphics.toml`. Studio takes the player from beside its own executable, building
+  windowed program), `game.pak`, and `settings.cfg` (#803: the project's `graphics.toml`). Studio takes the player from beside its own executable, building
   it first when it runs from the source tree. The player, started with no arguments and a `game.pak` beside it, runs
-  that game in a window of its name, its settings kept under the game's own name and seeded from the shipped
-  `graphics.toml`.
+  that game in a window of its name, its settings kept in `settings.cfg` under the game's own name, seeded from the shipped
+  one. Renamed, the player is the game's client alone: it never runs a built-in scene, and without its pak it says so
+  and closes (#803).
 - **Platform:** the project is uploaded to the platform and the player streams it. Designed in M10, but the pak format is shared.
 
 #### `game.pak` (#191)

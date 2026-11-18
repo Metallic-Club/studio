@@ -62,6 +62,10 @@ pub const PAK_FORMAT: u32 = 1;
 /// The usual file name of a built game, shipped next to the player.
 pub const PAK_FILE: &str = "game.pak";
 
+/// The settings file an exported game ships beside its executable and its pak (#803): its graphics, in the renderer's
+/// settings format. The game keeps its player's own under the same name in its config folder.
+pub const EXPORTED_SETTINGS_FILE: &str = "settings.cfg";
+
 /// The header's length in bytes; the first member starts here.
 const HEADER_LEN: u64 = 32;
 

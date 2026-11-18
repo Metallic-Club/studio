@@ -4,7 +4,7 @@
 //!   it; on Windows with the game's icon (a project picture, Game Settings > Icon), its version and author, and
 //!   marked a windowed program so no console opens with it;
 //! - `game.pak`: the project, packed ([`Pak::pack`]);
-//! - `graphics.toml`: the graphics the game starts with (Game Settings > Graphics), which its player can change.
+//! - `settings.cfg` (#803): the graphics the game starts with (Game Settings > Graphics), which its player can change.
 //!
 //! The player executable is the one beside Studio's own. A Studio run from the source tree may not have built it: then
 //! the export builds it (`cargo build -p metallic_player`, release when Studio is), and says how when it cannot.
@@ -13,7 +13,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use metallic_engine::metallic_project::{AssetId, GAME_GRAPHICS_FILE, Manifest, PAK_FILE, Pak, Project, ProjectMode};
+use metallic_engine::metallic_project::{
+    AssetId, EXPORTED_SETTINGS_FILE, GAME_GRAPHICS_FILE, Manifest, PAK_FILE, Pak, Project, ProjectMode,
+};
 use metallic_engine::metallic_render::settings::GraphicsSettings;
 
 /// The player executable's file name.
@@ -71,7 +73,7 @@ pub fn export(project: &Path, folder: &Path, studio: &Path) -> Result<PathBuf, S
         .ok()
         .filter(|text| GraphicsSettings::from_text(text).is_ok())
         .unwrap_or_else(|| GraphicsSettings::default().to_text());
-    std::fs::write(folder.join(GAME_GRAPHICS_FILE), graphics)
+    std::fs::write(folder.join(EXPORTED_SETTINGS_FILE), graphics)
         .map_err(|error| format!("Could not write the graphics settings: {error}."))?;
     let bytes = std::fs::read(&exe).map_err(|error| format!("Could not read {}: {error}.", exe.display()))?;
     if bytes.starts_with(b"MZ") {
@@ -398,7 +400,7 @@ mod tests {
             use metallic_engine::metallic_project::GameFiles as _;
             assert_eq!(pak.manifest().author, "Ada");
         }
-        let shipped = std::fs::read_to_string(out.join(GAME_GRAPHICS_FILE)).unwrap();
+        let shipped = std::fs::read_to_string(out.join(EXPORTED_SETTINGS_FILE)).unwrap();
         assert_eq!(GraphicsSettings::from_text(&shipped).unwrap().preset, low.preset);
     }
 

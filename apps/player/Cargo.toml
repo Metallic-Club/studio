@@ -22,3 +22,7 @@ metallic_engine = { workspace = true, features = ["render", "luau"] }
 lexopt.workspace = true
 log.workspace = true
 thiserror.workspace = true
+
+# An exported game says why it cannot start in a message box (#803). Desktop only, as rfd is.
+[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
+rfd.workspace = true

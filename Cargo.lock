@@ -1805,6 +1805,7 @@ dependencies = [
  "lexopt",
  "log",
  "metallic_engine",
+ "rfd",
  "thiserror 2.0.21",
 ]
 
