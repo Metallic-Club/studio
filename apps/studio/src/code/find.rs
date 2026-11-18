@@ -159,7 +159,7 @@ pub struct FindBar {
     pub open: HashSet<ScriptId>,
     /// A script whose bar was just asked for: its query takes the keyboard, filled with the selection.
     pub asked: Option<ScriptId>,
-    /// A script asked to go to its next match (`true`) or the one before (F3 and Ctrl+Shift+G).
+    /// A script asked to go to its next match (`true`) or the one before (F3 and Ctrl+F3).
     pub step: Option<(ScriptId, bool)>,
     /// Where each script's search is, as bytes: the match gone to, or the code's selection while it has the keyboard.
     /// Kept here because the code's own selection does not last while the bar has the keyboard.

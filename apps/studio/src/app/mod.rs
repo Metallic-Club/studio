@@ -1747,7 +1747,10 @@ impl Studio {
                 | ids::EDIT_PASTE_INTO
                 | ids::EDIT_DUPLICATE
                 | ids::EDIT_RENAME
-                | ids::EDIT_DELETE)
+                | ids::EDIT_DELETE
+                | ids::EDIT_GROUP
+                | ids::EDIT_GROUP_FOLDER
+                | ids::EDIT_UNGROUP)
                     if editing =>
                 {
                     let edit = match id {
@@ -1757,6 +1760,9 @@ impl Studio {
                         ids::EDIT_PASTE_INTO => TreeEdit::PasteInto,
                         ids::EDIT_DUPLICATE => TreeEdit::Duplicate,
                         ids::EDIT_RENAME => TreeEdit::Rename,
+                        ids::EDIT_GROUP => TreeEdit::Group,
+                        ids::EDIT_GROUP_FOLDER => TreeEdit::Folder,
+                        ids::EDIT_UNGROUP => TreeEdit::Ungroup,
                         _ => TreeEdit::Delete,
                     };
                     // The Assets panel's own: on its tiles, not the scene (#676).
@@ -6025,11 +6031,11 @@ mod tests {
             .get_by_role_and_label(Role::CheckBox, "Match whole word (Alt+W)")
             .click();
         settle(&mut harness);
-        // F3 and Ctrl+Shift+G step from anywhere in the script.
+        // F3 and Ctrl+F3 step from anywhere in the script (Ctrl+Shift+G groups into a folder, #802).
         harness.key_press(Key::F3);
         settle(&mut harness);
         let after_f3 = found_at(&harness, script);
-        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::G);
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::F3);
         settle(&mut harness);
         assert_ne!(found_at(&harness, script), after_f3);
         // Replace all, from Ctrl+H's row.
@@ -9956,6 +9962,7 @@ skip_sign_in = true
     mod assets_browser;
     mod file_pickers;
     mod game_settings;
+    mod grouping;
     mod material_editor;
     mod team_create;
     mod team_play;
