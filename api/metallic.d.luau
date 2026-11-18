@@ -1150,7 +1150,7 @@ end
 
 --- A part drawn as an imported mesh with a texture, which you size, colour and place like any part.
 declare extern type MeshPart extends BasePart with
-    --- The id of the project's mesh asset (a glTF or GLB model) the part is drawn as. Its bounds are stretched to the part's Size. Empty draws nothing.
+    --- The id of the project's mesh asset (a glTF, GLB or binary FBX model) the part is drawn as. Its bounds are stretched to the part's Size. Empty draws nothing.
     MeshId: string
     --- The id of the project's image asset (PNG or JPEG) the mesh is coloured with, multiplied by Color. Empty uses Color alone.
     TextureId: string

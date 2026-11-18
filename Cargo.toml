@@ -66,6 +66,8 @@ toml = "1.2"
 # Reads and writes `.mtproj` project archives (`metallic_project`, ADR 0006): deflate and stored members only, pure
 # Rust (zlib-rs), no C libraries and none of the other codecs or encryption.
 zip = { version = "9.4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# Inflates an FBX model's compressed arrays (`metallic_project`, #832): the zlib-rs back end zip uses already.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 # The CRC-32 of unsaved members, to match moved assets (`metallic_project`'s asset index, #188); saved members' CRCs
 # come from the zip archive. Already in the tree via zip. Pure Rust.
 crc32fast = "1.5"

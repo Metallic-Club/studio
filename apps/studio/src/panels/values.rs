@@ -394,7 +394,7 @@ fn thumbnail_of(ctx: &egui::Context, editor: &mut crate::editor::EditorState, pa
     use crate::editor::pictures::{Picture, Wanted};
     let id = editor.project.assets().id(path)?;
     let lower = path.to_ascii_lowercase();
-    let mesh = lower.ends_with(".glb") || lower.ends_with(".gltf");
+    let mesh = lower.ends_with(".glb") || lower.ends_with(".gltf") || lower.ends_with(".fbx");
     if path.ends_with(".material") || mesh {
         let fingerprint = editor.project.fingerprint(path).ok()?;
         let drawn = editor.pictures.get(id, fingerprint);

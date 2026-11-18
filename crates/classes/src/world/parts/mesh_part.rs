@@ -1,4 +1,4 @@
-//! `MeshPart`: a part drawn as an imported mesh (glTF or GLB) with a base-colour texture (PNG or JPEG).
+//! `MeshPart`: a part drawn as an imported mesh (glTF, GLB or FBX) with a base-colour texture (PNG or JPEG).
 //!
 //! Everything about where it is and how it looks comes from `BasePart`; `MeshPart` adds `MeshId` and `TextureId`, the
 //! ids of the project's assets to draw (32 hex digits, from the project's asset index, ADR 0006), and the
@@ -7,8 +7,8 @@
 
 use metallic_core::{ClassDesc, ComponentDesc, PropMeta, Widget};
 
-/// The files a `MeshId` names: glTF models.
-pub const MESH_EXTENSIONS: &[&str] = &["glb", "gltf"];
+/// The files a `MeshId` names: glTF models, and binary FBX ones (#832).
+pub const MESH_EXTENSIONS: &[&str] = &["glb", "gltf", "fbx"];
 
 /// The files a `TextureId` names: pictures.
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg"];
@@ -30,7 +30,7 @@ static PROPS: &[PropMeta] = &[
         .group("MeshPart")
         .order(0)
         .desc(
-            "The id of the project's mesh asset (a glTF or GLB model) the part is drawn as. Its bounds are \
+            "The id of the project's mesh asset (a glTF, GLB or binary FBX model) the part is drawn as. Its bounds are \
              stretched to the part's Size. Empty draws nothing.",
         ),
     PropMeta::string("TextureId", "")
