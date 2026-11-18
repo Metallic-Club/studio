@@ -105,6 +105,18 @@ impl Kind {
     }
 }
 
+/// Where a request to open the window of the field labelled `label` waits for the field ([`open_window`]).
+fn window_request(label: &str) -> Id {
+    Id::unique(("metallic.asset_field.open", label))
+}
+
+/// Opens the window of the field labelled `label` the next time it is drawn (#780): a texture row's preview opens its
+/// field's chooser.
+pub(crate) fn open_window(ctx: &egui::Context, label: &str) {
+    ctx.data_mut(|data| data.insert_temp(window_request(label), true));
+    ctx.request_repaint();
+}
+
 /// Where the window keeps whether it shows a grid (#761), for the next window of `kind`.
 fn grid_view(kind: Kind) -> Id {
     Id::unique(("metallic.asset_field.grid", kind == Kind::Picture))
@@ -281,25 +293,24 @@ pub(super) fn asset_field(
     let mut typed = typing.text.clone();
     let height = field_height(ui);
     let button_side = height;
-    // A picture's preview, at the field's left (#762).
-    let preview = kind == Kind::Picture;
-    let preview_room = if preview { height + space::S2 } else { 0.0 };
-    let field_width = (width - button_side - space::S1 - preview_room).max(0.0);
+    let field_width = (width - button_side - space::S1).max(0.0);
     let mut chosen = None;
+    // A request to open the window from outside the field: a texture row's preview (#780).
+    let asked = ui.data_mut(|data| data.remove_temp::<bool>(window_request(label)).is_some());
+    if asked {
+        let picked = (!mixed).then(|| current.to_owned());
+        ui.data_mut(|data| {
+            data.insert_temp(
+                window_id,
+                Window {
+                    query: String::new(),
+                    picked,
+                },
+            )
+        });
+    }
     let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = space::S1;
-        if preview {
-            let (rect, _) = ui.allocate_exact_size(vec2(height, height), Sense::hover());
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(radius::TILE), p.surface);
-            if let Some(choice) = choices.iter().find(|choice| choice.id == current) {
-                want_picture(ui.ctx(), &choice.path);
-                if let Some(thumbnail) = files.picture(&choice.path) {
-                    paint_thumbnail(ui.painter(), thumbnail, rect);
-                }
-            }
-            ui.add_space(space::S2 - space::S1);
-        }
         let hint = if mixed { "Mixed" } else { NO_FILE };
         let response = ui.add_sized(
             [field_width, height],

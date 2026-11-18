@@ -359,7 +359,7 @@ impl Files {
     }
 
     /// The path of the file whose asset id is `id`.
-    fn path_of(&self, id: &str) -> Option<&str> {
+    pub(crate) fn path_of(&self, id: &str) -> Option<&str> {
         self.members
             .iter()
             .find(|(_, own)| own.as_deref() == Some(id))
@@ -431,6 +431,11 @@ pub(crate) fn paint_thumbnail(painter: &egui::Painter, thumbnail: Thumbnail, are
 /// window to choose one. Returns the asset id chosen, or `""` for none.
 pub(crate) fn picture_field(ui: &mut Ui, files: &Files, label: &str, current: &str, width: f32) -> Option<String> {
     asset_field::asset_field(ui, files, asset_field::Kind::Picture, label, current, width, false)
+}
+
+/// Opens the chooser of the picture field labelled `label` the next time it is drawn (#780).
+pub(crate) fn open_picture_window(ctx: &egui::Context, label: &str) {
+    asset_field::open_window(ctx, label);
 }
 
 /// Whether a property with `widget` takes a material (#739).

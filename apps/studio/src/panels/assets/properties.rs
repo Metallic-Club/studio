@@ -15,7 +15,7 @@ use metallic_engine::metallic_project::AssetId;
 use super::{Act, AssetKind, file_size, grid};
 use crate::editor::EditorState;
 use crate::editor::assets::{Entry, EntryKind, parent_of, type_label};
-use crate::panels::properties::{category_heading, plain_row, plain_value};
+use crate::panels::properties::{Mark, category_heading, plain_row, plain_value};
 use crate::panels::values;
 use crate::theme::Tip as _;
 use crate::theme::icons::{self, Icon};
@@ -137,7 +137,7 @@ fn file_rows(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, acts: &mut Ve
         // What is typed is a folder's whole name, a file's without its type's extension, as on a tile.
         let name = if folder { entry.file_name() } else { entry.name() };
         let missing = matches!(entry.kind, EntryKind::Missing(_));
-        let (typed, _) = plain_row(ui, "Name", "", shades.fill(0), count == 1, None, |ui| {
+        let (typed, _) = plain_row(ui, "Name", "", shades.fill(0), count == 1, Mark::None, |ui| {
             if missing {
                 plain_value(ui, "Name", name);
                 return None;
@@ -152,7 +152,7 @@ fn file_rows(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, acts: &mut Ve
         }
         for (index, (label, value)) in rows.iter().enumerate() {
             let last = index + 2 == count;
-            plain_row(ui, label, "", shades.fill(index + 1), last, None, |ui| {
+            plain_row(ui, label, "", shades.fill(index + 1), last, Mark::None, |ui| {
                 plain_value(ui, label, value);
             });
         }
@@ -170,22 +170,30 @@ fn folder_color(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, fill: egui
     let own = editor.folder_color(&entry.path);
     let [r, g, b, _] = grid::folder_ink(editor, &entry.path, &colors).to_array();
     let current = Color3::from_rgb_u8(r, g, b);
-    let (reset, picked) = plain_row(ui, "Colour", "", fill, true, Some((current, "Folder colour")), |ui| {
-        let hex = if own.is_some() {
-            crate::panels::color_picker::hex([r, g, b])
-        } else {
-            "Usual".to_owned()
-        };
-        ui.label(RichText::new(hex).size(text::BODY).color(p.text));
-        if own.is_none() {
-            return false;
-        }
-        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-            icon_button(ui, Icon::UiClose, "Use the usual colour", true).clicked()
-        })
-        .inner
-    });
-    let chosen = match (picked, reset) {
+    let (reset, marked) = plain_row(
+        ui,
+        "Colour",
+        "",
+        fill,
+        true,
+        Mark::Color(current, "Folder colour"),
+        |ui| {
+            let hex = if own.is_some() {
+                crate::panels::color_picker::hex([r, g, b])
+            } else {
+                "Usual".to_owned()
+            };
+            ui.label(RichText::new(hex).size(text::BODY).color(p.text));
+            if own.is_none() {
+                return false;
+            }
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                icon_button(ui, Icon::UiClose, "Use the usual colour", true).clicked()
+            })
+            .inner
+        },
+    );
+    let chosen = match (marked.picked, reset) {
         (Some(values::Edit::Whole(Value::Color3(color))), _) => Some(Some(color.to_rgb_u8())),
         (_, Some(true)) => Some(None),
         _ => None,

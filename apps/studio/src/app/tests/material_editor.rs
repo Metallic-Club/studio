@@ -190,6 +190,23 @@ fn a_material_is_edited_in_the_properties_panel_and_its_edits_are_written_and_un
         "the scene's steps untouched"
     );
 
+    // Each map's row has a preview beside its name, as a colour's has its swatch (#780); a click opens its chooser.
+    let preview = scroll_to(&mut harness, Role::Button, "Emissive map preview");
+    let name = harness.get_by_role_and_label(Role::TextInput, "Emissive map").rect();
+    assert!(
+        preview.right() < name.left(),
+        "in the name's column: {preview:?} {name:?}"
+    );
+    harness
+        .get_by_role_and_label(Role::Button, "Emissive map preview")
+        .click();
+    settle(&mut harness);
+    settle(&mut harness);
+    harness.get_by_label("Search the pictures");
+    harness.key_press(egui::Key::Escape);
+    settle(&mut harness);
+    assert!(harness.query_by_label("Search the pictures").is_none());
+
     // A picture chosen in the window, for the normal map.
     scroll_to(&mut harness, Role::Button, "Choose Normal map");
     harness.get_by_role_and_label(Role::Button, "Choose Normal map").click();
