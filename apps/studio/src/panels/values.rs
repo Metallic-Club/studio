@@ -232,6 +232,12 @@ pub fn edit(
             asset_field::asset_field(ui, files, asset_field::Kind::Mesh, label, &s, width, mixed.whole)
                 .map(|s| Edit::Whole(Value::String(s.into())))
         }
+        // A picture (#852, MeshPart.TextureId, a SurfaceAppearance's maps): in the picture window, as a material's
+        // texture rows choose theirs.
+        Value::String(s) if is_picture(meta.widget) => {
+            asset_field::asset_field(ui, files, asset_field::Kind::Picture, label, &s, width, mixed.whole)
+                .map(|s| Edit::Whole(Value::String(s.into())))
+        }
         // A project file's path or asset id (#55): picked from the project's files.
         Value::String(s) if meta.widget.file_extensions().is_some() => {
             file_picker(ui, files, meta.widget, label, &s, width, mixed.whole)
@@ -449,6 +455,11 @@ pub(crate) fn open_picture_window(ctx: &egui::Context, label: &str) {
 /// Whether a property with `widget` takes a material (#739).
 fn is_material(widget: metallic_engine::metallic_core::Widget) -> bool {
     matches!(widget, metallic_engine::metallic_core::Widget::AssetId { extensions } if extensions.contains(&"material"))
+}
+
+/// Whether a property with `widget` takes a picture (#852): a PNG or JPEG.
+fn is_picture(widget: metallic_engine::metallic_core::Widget) -> bool {
+    matches!(widget, metallic_engine::metallic_core::Widget::AssetId { extensions } if extensions.contains(&"png"))
 }
 
 /// Whether a property with `widget` takes a mesh (#806), a glTF model.

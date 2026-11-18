@@ -66,25 +66,33 @@ fn a_mesh_part_s_ids_and_a_script_s_source_are_picked_from_the_project_s_files()
         Ok(Value::String(rock.as_str().into()))
     );
 
-    // The texture's picker offers the picture; its row then shows the file's name.
-    harness.get_by_role_and_label(Role::ComboBox, "TextureId").click();
-    settle(&mut harness);
-    harness.get_by_role_and_label(Role::Button, "Assets/bark.png").click();
-    settle(&mut harness);
+    // The texture's window (#852) offers the picture alone, as a material's texture rows' does; its row then shows
+    // the picture's name.
+    let choose = |harness: &mut Harness<'_, Test>, row: &str| {
+        harness.get_by_role_and_label(Role::Button, "Choose TextureId").click();
+        settle(harness);
+        harness.get_by_label("Search the pictures");
+        assert!(harness.query_by_role_and_label(Role::Row, "rock").is_none());
+        let time = harness.ctx.input(|input| input.time) + 1.0;
+        harness.input_mut().time = Some(time);
+        harness.get_by_role_and_label(Role::Row, row).click();
+        settle(harness);
+        harness.get_by_role_and_label(Role::Button, "Select").click();
+        settle(harness);
+        harness.input_mut().time = None;
+    };
+    choose(&mut harness, "bark");
     let editor = harness.state_mut().studio.editor_mut().unwrap();
     assert_eq!(
         editor.dm.get_by_name(part, "TextureId"),
         Ok(Value::String(bark.as_str().into()))
     );
-    let shown = harness.get_by_role_and_label(Role::ComboBox, "TextureId").value();
-    assert_eq!(shown.as_deref(), Some("bark.png"));
+    let shown = harness.get_by_role_and_label(Role::TextInput, "TextureId").value();
+    assert_eq!(shown.as_deref(), Some("bark"));
     // A separate step: edits of one property less than 600 ms apart are one.
     std::thread::sleep(std::time::Duration::from_millis(700));
     // None empties it, as one undo step.
-    harness.get_by_role_and_label(Role::ComboBox, "TextureId").click();
-    settle(&mut harness);
-    harness.get_by_role_and_label(Role::Button, "None").click();
-    settle(&mut harness);
+    choose(&mut harness, "None");
     let editor = harness.state_mut().studio.editor_mut().unwrap();
     assert_eq!(editor.dm.get_by_name(part, "TextureId"), Ok(Value::String("".into())));
     harness.state_mut().studio.menu_action(MenuAction::Undo);
