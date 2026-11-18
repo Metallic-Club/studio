@@ -521,6 +521,24 @@ fn fs_opaque(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(encode(finish(s.body + s.specular, length(in.position))), 1.0);
 }
 
+// A mesh whose texture has see-through pixels (#851): as `fs_opaque`, but where the texture covers less than half
+// of the pixel nothing is drawn.
+@fragment
+fn fs_cutout(in: VertexOut) -> @location(0) vec4<f32> {
+    // Sampled first, in uniform control flow.
+    let surface = surface_of(in);
+    let coverage = textureSample(base_texture, base_sampler, in.uv).a;
+    if coverage < 0.5 {
+        discard;
+    }
+    let view = u32(frame.view.x);
+    if view != 0u {
+        return vec4<f32>(encode(view_color(in, surface, view)), 1.0);
+    }
+    let s = shade(in, surface);
+    return vec4<f32>(encode(finish(s.body + s.specular, length(in.position))), 1.0);
+}
+
 // Premultiplied alpha. Glass keeps its reflections at full strength while its body fades.
 @fragment
 fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
