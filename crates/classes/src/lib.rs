@@ -211,6 +211,7 @@ mod tests {
                 "RunService",
                 "UserInputService",
                 "UserGameSettings",
+                "TweenService",
                 "CollectionService"
             ]
         );
@@ -303,7 +304,7 @@ mod tests {
                 .iter()
                 .any(|c| std::ptr::eq(*c, &crate::world::lights::spot_light::CLASS))
         );
-        assert_eq!(input().classes.len(), 44);
+        assert_eq!(input().classes.len(), 46);
         let mut components: Vec<&str> = input().components.iter().map(|c| c.name).collect();
         components.sort_unstable();
         assert_eq!(
@@ -318,9 +319,9 @@ mod tests {
         );
         assert_eq!(
             input().enums.concat().len(),
-            8,
-            "PartShape, KeyCode, UserInputType, UserInputState, MouseBehavior, GraphicsPreset, AntiAliasingMode and \
-             AlphaMode (materials are assets, #678)"
+            11,
+            "PartShape, KeyCode, UserInputType, UserInputState, MouseBehavior, GraphicsPreset, AntiAliasingMode, \
+             AlphaMode, EasingStyle, EasingDirection and PlaybackState (materials are assets, #678)"
         );
     }
 }

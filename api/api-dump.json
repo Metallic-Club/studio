@@ -1901,6 +1901,191 @@
       "callbacks": []
     },
     {
+      "name": "Tween",
+      "parent": "Instance",
+      "description": "Moves an instance's properties to goals over time. Made by TweenService:Create; started with Play.",
+      "category": "",
+      "creatable": false,
+      "service_order": null,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": false,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [
+        {
+          "name": "Instance",
+          "type": {
+            "Optional": {
+              "Class": "Instance"
+            }
+          },
+          "default": null,
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Tween",
+          "description": "The instance whose properties the tween moves.",
+          "aliases": [],
+          "derived_from": []
+        },
+        {
+          "name": "PlaybackState",
+          "type": {
+            "Enum": "PlaybackState"
+          },
+          "default": "Begin",
+          "flags": [
+            "RUNTIME",
+            "NO_SAVE",
+            "READ_ONLY"
+          ],
+          "read_only": true,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "Tween",
+          "description": "Where the tween is: Begin, Delayed, Playing, Paused, Completed or Cancelled.",
+          "aliases": [],
+          "derived_from": []
+        }
+      ],
+      "methods": [
+        {
+          "name": "Play",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Starts the tween from the properties' values now, or goes on from where Pause stopped it. A playing tween of the same properties is cancelled.",
+          "invokes_callback": null
+        },
+        {
+          "name": "Pause",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Stops the tween where it is; Play goes on from there.",
+          "invokes_callback": null
+        },
+        {
+          "name": "Cancel",
+          "params": [],
+          "returns": {
+            "Tuple": []
+          },
+          "description": "Stops the tween where it is and fires Completed with Cancelled; Play starts it over.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [
+        {
+          "name": "Completed",
+          "params": [
+            {
+              "name": "playbackState",
+              "type": {
+                "Enum": "PlaybackState"
+              },
+              "optional": false
+            }
+          ],
+          "description": "Fires when the tween reaches its end (Completed) or is cancelled (Cancelled)."
+        }
+      ],
+      "callbacks": []
+    },
+    {
+      "name": "TweenService",
+      "parent": "Instance",
+      "description": "Makes tweens: properties of an instance moved smoothly to goals over time, along an easing curve.",
+      "category": "",
+      "creatable": false,
+      "service_order": 12,
+      "persisted": false,
+      "runs_scripts": false,
+      "hidden_in_explorer": true,
+      "components": [],
+      "changed_passes_value": null,
+      "hides": [],
+      "defaults": [],
+      "properties": [],
+      "methods": [
+        {
+          "name": "Create",
+          "params": [
+            {
+              "name": "instance",
+              "type": {
+                "Class": "Instance"
+              },
+              "optional": false
+            },
+            {
+              "name": "tweenInfo",
+              "type": {
+                "Data": "TweenInfo"
+              },
+              "optional": false
+            },
+            {
+              "name": "propertyTable",
+              "type": {
+                "Map": [
+                  "String",
+                  "Any"
+                ]
+              },
+              "optional": false
+            }
+          ],
+          "returns": {
+            "Class": "Tween"
+          },
+          "description": "Makes a tween that moves the instance's properties to the values in propertyTable (property names to goals), as tweenInfo says. Call Play on it to start it.",
+          "invokes_callback": null
+        },
+        {
+          "name": "GetValue",
+          "params": [
+            {
+              "name": "alpha",
+              "type": "Number",
+              "optional": false
+            },
+            {
+              "name": "easingStyle",
+              "type": {
+                "Enum": "EasingStyle"
+              },
+              "optional": false
+            },
+            {
+              "name": "easingDirection",
+              "type": {
+                "Enum": "EasingDirection"
+              },
+              "optional": false
+            }
+          ],
+          "returns": "Number",
+          "description": "Returns where an eased tween is, from 0 to 1 (Back and Elastic go past), when it is alpha of the way.",
+          "invokes_callback": null
+        }
+      ],
+      "signals": [],
+      "callbacks": []
+    },
+    {
       "name": "UserGameSettings",
       "parent": "Instance",
       "description": "The player's graphics settings: the preset, the quality level it draws at and the values in effect. Scripts can read them, to adapt a game to the player's machine, but never change them: they are the player's. Get it with game:GetService(\"UserGameSettings\").",
@@ -4363,6 +4548,104 @@
         {
           "name": "VolumeUp",
           "value": 2038
+        }
+      ]
+    },
+    {
+      "name": "EasingStyle",
+      "description": "The curve a tween follows from its start to its goal.",
+      "items": [
+        {
+          "name": "Linear",
+          "value": 0
+        },
+        {
+          "name": "Sine",
+          "value": 1
+        },
+        {
+          "name": "Back",
+          "value": 2
+        },
+        {
+          "name": "Quad",
+          "value": 3
+        },
+        {
+          "name": "Quart",
+          "value": 4
+        },
+        {
+          "name": "Quint",
+          "value": 5
+        },
+        {
+          "name": "Bounce",
+          "value": 6
+        },
+        {
+          "name": "Elastic",
+          "value": 7
+        },
+        {
+          "name": "Exponential",
+          "value": 8
+        },
+        {
+          "name": "Circular",
+          "value": 9
+        },
+        {
+          "name": "Cubic",
+          "value": 10
+        }
+      ]
+    },
+    {
+      "name": "EasingDirection",
+      "description": "Which end of a tween's curve is eased: the start (In), the end (Out) or both (InOut).",
+      "items": [
+        {
+          "name": "In",
+          "value": 0
+        },
+        {
+          "name": "Out",
+          "value": 1
+        },
+        {
+          "name": "InOut",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "name": "PlaybackState",
+      "description": "Where a tween is: not yet played, waiting its delay, playing, paused, finished or cancelled.",
+      "items": [
+        {
+          "name": "Begin",
+          "value": 0
+        },
+        {
+          "name": "Delayed",
+          "value": 1
+        },
+        {
+          "name": "Playing",
+          "value": 2
+        },
+        {
+          "name": "Paused",
+          "value": 3
+        },
+        {
+          "name": "Completed",
+          "value": 4
+        },
+        {
+          "name": "Cancelled",
+          "value": 5
         }
       ]
     },

@@ -267,6 +267,8 @@ pub enum ApiType {
     Function,
     /// A signal whose listeners receive a value of the type.
     Signal(Box<ApiType>),
+    /// A data type by name, such as `TweenInfo`.
+    Data(String),
 }
 
 impl From<&Ty> for ApiType {
@@ -291,6 +293,7 @@ impl From<&Ty> for ApiType {
             Ty::Tuple(items) => Self::Tuple(items.iter().map(Self::from).collect()),
             Ty::Function => Self::Function,
             Ty::Signal(item) => Self::Signal(Box::new(item.into())),
+            Ty::Data(name) => Self::Data(name.to_owned()),
         }
     }
 }

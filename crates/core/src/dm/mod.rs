@@ -25,6 +25,7 @@ mod error;
 mod pins;
 mod props;
 mod signals;
+mod state;
 mod storage;
 mod tree;
 
@@ -131,6 +132,8 @@ pub struct DataModel {
     structure_revision: u64,
     /// Reused for subtree walks that must not hold a borrow while hooks run.
     scratch: Vec<Id>,
+    /// Class code's per-game state (`state.rs`, #810).
+    states: state::States,
     /// Every notice, for tests to check the seam is called right.
     #[cfg(test)]
     notices: Vec<Notice>,
@@ -173,6 +176,7 @@ impl DataModel {
             uid: pins::next_uid(),
             structure_revision: 0,
             scratch: Vec::new(),
+            states: state::States::default(),
             #[cfg(test)]
             notices: Vec::new(),
         }

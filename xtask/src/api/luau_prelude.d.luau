@@ -196,6 +196,27 @@ declare extern type Color3 with
     function ToHSV(self): (number, number, number)
 end
 
+--- How a tween plays (#810): for how long, along which curve, how often and after what delay.
+declare extern type TweenInfo with
+    read Time: number
+    read EasingStyle: EnumEasingStyle
+    read EasingDirection: EnumEasingDirection
+    read RepeatCount: number
+    read Reverses: boolean
+    read DelayTime: number
+end
+
+declare TweenInfo: {
+    new: (
+        time: number?,
+        easingStyle: EnumEasingStyle?,
+        easingDirection: EnumEasingDirection?,
+        repeatCount: number?,
+        reverses: boolean?,
+        delayTime: number?
+    ) -> TweenInfo,
+}
+
 declare Color3: {
     new: (r: number?, g: number?, b: number?) -> Color3,
     fromRGB: (r: number?, g: number?, b: number?) -> Color3,

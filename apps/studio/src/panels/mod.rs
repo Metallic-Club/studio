@@ -81,7 +81,7 @@ pub fn class_icon(registry: &Registry, class: ClassId) -> Icon {
             "ServerScriptService" => Icon::ExplorerScriptService,
             "ModuleScript" => Icon::ExplorerModuleScript,
             "ServerStorage" => Icon::ExplorerServerStorage,
-            "UserGameSettings" | "UserInputService" | "RunService" | "CollectionService" => {
+            "UserGameSettings" | "UserInputService" | "RunService" | "CollectionService" | "TweenService" => {
                 Icon::ExplorerSettingsService
             }
             "DataModel" => Icon::ExplorerGame,

@@ -61,6 +61,8 @@ pub enum Ty {
     /// A signal whose listeners receive a value of the type (`ScriptSignal<T>`, an `RBXScriptSignal`), returned by
     /// methods such as `CollectionService:GetInstanceAddedSignal` (#809).
     Signal(&'static Ty),
+    /// A data type the scripting languages define, by its name, such as `TweenInfo` (#810).
+    Data(&'static str),
 }
 
 impl Ty {
@@ -108,6 +110,7 @@ impl fmt::Display for Ty {
             }
             Self::Function => f.write_str("(...any) -> ...any"),
             Self::Signal(item) => write!(f, "ScriptSignal<{item}>"),
+            Self::Data(name) => f.write_str(name),
         }
     }
 }
