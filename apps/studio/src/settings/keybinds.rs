@@ -8,6 +8,7 @@
 //! is the one place besides a text field that reads keys itself, before anything is drawn; Esc or a click elsewhere
 //! cancels. Studio does not run the keymap meanwhile.
 
+use crate::theme::Tip as _;
 use std::path::PathBuf;
 
 use egui::{
@@ -428,7 +429,7 @@ fn section_header(ui: &mut Ui, section: &Section, keymap: &mut Keymap, open: boo
                     .layout(Layout::right_to_left(Align::Center)),
                 |ui| {
                     button(ui, ButtonKind::Quiet, "Reset")
-                        .on_hover_text(format!("Back to the defaults for everything in {}", section.name))
+                        .tip(format!("Back to the defaults for everything in {}", section.name))
                 },
             )
             .inner;
@@ -637,7 +638,7 @@ impl KeybindsPage {
                         ui.set_width(CONTROL_WIDTH);
                         ui.spacing_mut().item_spacing.x = space::S3;
                         if !keymap.is_default(command.id) {
-                            let reset = button(ui, ButtonKind::Quiet, "Reset").on_hover_text("Back to the default");
+                            let reset = button(ui, ButtonKind::Quiet, "Reset").tip("Back to the default");
                             if reset.clicked() {
                                 keymap.reset(command.id);
                             }
@@ -834,7 +835,7 @@ fn listening_chip(ui: &mut Ui, shown: &str) -> Response {
             .corner_radius(CornerRadius::same(radius::ITEM))
             .min_size(vec2(26.0, 26.0)),
     )
-    .on_hover_text("Press the keys, then let go. Click here for a mouse button. Esc cancels.")
+    .tip("Press the keys, then let go. Click here for a mouse button. Esc cancels.")
 }
 
 /// Whether every word of `query` is in the command's name, description, category or id, or one of its keys as shown.
@@ -890,7 +891,7 @@ fn add_button(ui: &mut Ui, title: &str) -> Response {
             if hovered { p.text } else { p.subtle },
         );
     }
-    response.on_hover_text("Add another shortcut")
+    response.tip("Add another shortcut")
 }
 
 /// A shortcut as a key cap: monospace on the input colour with a border; `bound` false for the muted "Unbound".
@@ -906,7 +907,7 @@ fn chip(ui: &mut Ui, label: &str, bound: bool) -> Response {
             .corner_radius(CornerRadius::same(radius::ITEM))
             .min_size(vec2(0.0, 26.0)),
     )
-    .on_hover_text("Click to change. Right-click to add or remove.")
+    .tip("Click to change. Right-click to add or remove.")
 }
 
 /// `keymap.toml` in Studio's config folder, or in the working folder when there is none.

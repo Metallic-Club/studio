@@ -7,6 +7,7 @@
 //!   be opened. The owner can always open their own file, and Open and host hosts it again on its port.
 //! - **Join by address** joins a project not in the list yet; joining adds it.
 
+use crate::theme::Tip as _;
 use egui::{
     CornerRadius, Frame, Id, Label, Layout, Modal, Rect, RichText, Role, Stroke, StrokeKind, TextEdit, Ui, WidgetInfo,
     pos2, vec2,
@@ -191,7 +192,7 @@ pub fn grid(ui: &mut Ui, team: &mut TeamCreate) {
             Reach::Available { .. } => "Double-click to join.".to_owned(),
             _ => "Checking whether it is hosted\u{2026}".to_owned(),
         };
-        response.on_hover_text(tip);
+        response.tip(tip);
     });
     team.page_actions.extend(actions);
 }

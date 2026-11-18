@@ -22,6 +22,7 @@
 //! 1 px lines between the rows and between the name and value columns ([`crate::theme::tokens::RowShades`]). The line
 //! between the columns can be dragged left and right (#324), and stays where it was left.
 
+use crate::theme::Tip as _;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -504,7 +505,7 @@ fn attributes_header(ui: &mut Ui, taken: &[String]) -> Option<AttributeAction> {
                     text::BODY,
                     if response.hovered() { p.text } else { p.subtle },
                 );
-                response.on_hover_text("Add an attribute")
+                response.tip("Add an attribute")
             })
             .inner
         })
@@ -1059,7 +1060,7 @@ fn row_ui(
                 .selectable(false),
         );
         if !row.description.is_empty() {
-            name.on_hover_text(row.description);
+            name.tip(row.description);
         }
     });
     if let (Source::Attribute(attribute), 0) = (&row.source, row.depth) {
@@ -1162,7 +1163,7 @@ fn parent_value(ui: &mut Ui, dm: &DataModel, row: &PropertyRow, picking: Option<
     } else {
         "Click, then click an instance in the Explorer or a part in the viewport to make it the parent."
     };
-    response.on_hover_text(tip).clicked()
+    response.tip(tip).clicked()
 }
 
 /// The strip over the line between the columns, down every row in `rows` (#324): dragging it moves the line, which

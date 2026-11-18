@@ -19,6 +19,7 @@ pub mod startup;
 pub mod thumbnails;
 pub mod viewport;
 
+use crate::theme::Tip as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -1478,7 +1479,7 @@ impl Studio {
             Some(keys) => format!("Settings ({keys})"),
             None => "Settings".to_owned(),
         };
-        if response.on_hover_text(tip).clicked() {
+        if response.tip(tip).clicked() {
             self.toggle_settings();
         }
     }

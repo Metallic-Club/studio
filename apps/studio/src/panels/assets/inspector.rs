@@ -5,6 +5,7 @@
 //! A material's is its editor (#742): its ball alone, drawn again only when it changes; its name, with buttons to give
 //! it to the selected parts and to make a copy; its path; and its settings ([`crate::panels::material`]).
 
+use crate::theme::Tip as _;
 use egui::{
     Align2, CornerRadius, FontId, Id, Key, Rect, Role, ScrollArea, Sense, TextEdit, Ui, WidgetInfo, pos2, vec2,
 };
@@ -156,7 +157,7 @@ fn icon_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> egui::Res
         text::BODY,
         ink,
     );
-    response.on_hover_text(label)
+    response.tip(label)
 }
 
 /// A folder's colour (#741): a swatch that opens Studio's colour picker, its hex, and a button back to the usual
@@ -224,7 +225,7 @@ fn folder_color(ui: &mut Ui, editor: &mut EditorState, entry: &Entry) {
             text::SMALL,
             ink,
         );
-        if response.on_hover_text("Use the usual colour").clicked() {
+        if response.tip("Use the usual colour").clicked() {
             chosen = Some(None);
         }
     }
@@ -258,7 +259,7 @@ fn close_button(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, rect: Rect
         text::BODY,
         ink,
     );
-    if response.on_hover_text("Close the inspector").clicked() {
+    if response.tip("Close the inspector").clicked() {
         editor.browser.inspector_closed = Some(entry.path.clone());
     }
 }

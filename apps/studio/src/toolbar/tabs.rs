@@ -2,6 +2,7 @@
 //! is shown, whether it loads a layout of its own, a grip to drag it to another place in the list (#667) and a button
 //! to delete it, a button for a new tab, and where the tabs sit in their row (left, center or right).
 
+use crate::theme::Tip as _;
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Role, Sense, TextEdit, Ui, WidgetInfo, vec2};
 
 use super::model::{TabAlign, ToolbarConfig};
@@ -201,7 +202,7 @@ fn icon_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response 
             ink,
         );
     }
-    response.on_hover_text(label)
+    response.tip(label)
 }
 
 /// A row's grip (#667): drag it to move the tab, or give it the focus and press the arrows. Labelled `label` for screen
@@ -226,5 +227,5 @@ fn grip(ui: &mut Ui, label: &str, held: bool) -> Response {
             ink,
         );
     }
-    response.on_hover_text(format!("{label}: drag it, or press \u{2191} and \u{2193}"))
+    response.tip(format!("{label}: drag it, or press \u{2191} and \u{2193}"))
 }

@@ -9,6 +9,7 @@
 //! Select tool's mode says (#467, [`crate::viewport::select`]). Not while a game runs: the viewport shows the
 //! editor's scene, and the panels the game's.
 
+use crate::theme::Tip as _;
 use std::time::Duration;
 
 use egui::emath::GuiRounding;
@@ -207,7 +208,7 @@ impl Panel for Viewport {
                     &mut cx.settings.viewport.light_lines_on_top,
                     "Light lines over everything",
                 )
-                .on_hover_text("Off, parts in front of a selected light's range lines hide them.");
+                .tip("Off, parts in front of a selected light's range lines hide them.");
             });
         });
         // How the parts are drawn (#478). The wireframe needs a device that draws lines.
@@ -222,7 +223,7 @@ impl Panel for Viewport {
                         cx.settings.viewport.shading = view;
                     }
                     if !enabled {
-                        response.on_hover_text("This graphics device cannot draw lines.");
+                        response.tip("This graphics device cannot draw lines.");
                     }
                 }
             });

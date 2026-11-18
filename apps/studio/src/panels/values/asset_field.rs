@@ -16,6 +16,7 @@
 //!   their balls instead, and back (#761); the next window opens the way the last was left.
 //! - A material dragged from the Assets panel and let go on the field is chosen, as on any file picker (#676).
 
+use crate::theme::Tip as _;
 use egui::{
     Align2, CornerRadius, FontId, Id, Key, Modal, Modifiers, Rect, Role, Sense, Stroke, TextEdit, Ui, WidgetInfo, pos2,
     vec2,
@@ -315,7 +316,7 @@ pub(super) fn asset_field(
             typing.picked = None;
         }
         if let Some(choice) = choices.iter().find(|choice| choice.id == current) {
-            response.clone().on_hover_text(choice.path.as_str());
+            response.clone().tip(choice.path.as_str());
         }
         if response.has_focus() && !focused {
             // Just focused: the whole path, all of it selected, from the next frame on.
@@ -389,7 +390,7 @@ pub(super) fn asset_field(
             text::SMALL,
             ink,
         );
-        if open.on_hover_text(kind.title()).clicked() {
+        if open.tip(kind.title()).clicked() {
             let picked = (!mixed).then(|| current.to_owned());
             ui.data_mut(|data| {
                 data.insert_temp(
@@ -558,7 +559,7 @@ fn icon_button(ui: &mut Ui, icon: Icon, label: &str, side: f32) -> egui::Respons
         text::BODY,
         ink,
     );
-    response.on_hover_text(label)
+    response.tip(label)
 }
 
 /// A tile of the window's grid (#761): the file's thumbnail (its `icon` until the thumbnail is drawn) over its name,

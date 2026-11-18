@@ -21,6 +21,8 @@ pub trait Tip: Sized {
     fn tip_ui(self, add: impl FnOnce(&mut Ui)) -> Self;
     /// Shows `text` while the widget is hovered and disabled, as `on_disabled_hover_text` does.
     fn disabled_tip(self, text: impl Into<WidgetText>) -> Self;
+    /// Shows `text` beside the pointer while the widget is hovered, as `on_hover_text_at_pointer` does.
+    fn tip_at_pointer(self, text: impl Into<WidgetText>) -> Self;
 }
 
 impl Tip for Response {
@@ -38,6 +40,18 @@ impl Tip for Response {
         let mut tooltip = Tooltip::for_enabled(&self);
         tooltip.popup = tooltip.popup.frame(frame(&self.ctx));
         tooltip.show(add);
+        self
+    }
+
+    fn tip_at_pointer(self, text: impl Into<WidgetText>) -> Self {
+        let text = text.into();
+        describe(&self, text.text());
+        let mut tooltip = Tooltip::for_enabled(&self).at_pointer().gap(12.0);
+        tooltip.popup = tooltip.popup.frame(frame(&self.ctx));
+        tooltip.show(|ui| {
+            ui.set_max_width(ui.spacing().tooltip_width);
+            ui.add(egui::Label::new(text));
+        });
         self
     }
 
@@ -82,6 +96,6 @@ mod tests {
         let ctx = egui::Context::default();
         let frame = frame(&ctx);
         assert_eq!(frame.corner_radius, CornerRadius::same(radius::TOOLTIP));
-        assert!(radius::TOOLTIP < radius::PANEL && radius::TOOLTIP > 0);
+        const { assert!(radius::TOOLTIP < radius::PANEL && radius::TOOLTIP > 0) };
     }
 }

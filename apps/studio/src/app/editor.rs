@@ -6,6 +6,7 @@
 //! show every binding of their command from the keymap. Items for features still to come are shown disabled
 //! ([`Entry::Planned`]); enabling one is changing its line in [`MENUS`].
 
+use crate::theme::Tip as _;
 use egui::{
     Align, Align2, Color32, CornerRadius, Frame, Id, Layout, Rect, Response, RichText, Role, Sense, Stroke, Ui,
     UiBuilder, WidgetInfo, vec2,
@@ -392,7 +393,7 @@ pub(crate) fn top_bar(
                     Some(keys) => format!("Settings ({keys})"),
                     None => "Settings".to_owned(),
                 };
-                if gear(ui, settings_open).on_hover_text(tip).clicked() {
+                if gear(ui, settings_open).tip(tip).clicked() {
                     action = Some(MenuAction::Settings);
                 }
                 // Beside the gear, the profile (#602).
@@ -446,8 +447,8 @@ pub(crate) fn top_bar(
                         _ => Control::Plain,
                     };
                     if play_button(ui, glyph, label, play.allows(kind), look)
-                        .on_hover_text(tip)
-                        .on_disabled_hover_text(label)
+                        .tip(tip)
+                        .disabled_tip(label)
                         .clicked()
                     {
                         action = Some(kind);
@@ -538,7 +539,7 @@ fn menu_entries(
                 }
             }
             Entry::Planned(label) => {
-                menu_item(ui, width, label, None, None, false).on_hover_text("Coming in a later version of Studio.");
+                menu_item(ui, width, label, None, None, false).tip("Coming in a later version of Studio.");
             }
             Entry::Panels => {
                 for panel in dock.panels().iter().filter(|panel| !panel.transient()) {

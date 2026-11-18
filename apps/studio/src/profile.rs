@@ -2,6 +2,7 @@
 //! rail. A click opens a popup about the account. There is no sign-in yet, so it says so and lets the user choose the
 //! name and colour the avatar shows ([`crate::settings::Profile`], saved in Studio's settings).
 
+use crate::theme::Tip as _;
 use egui::{
     Align2, Color32, CornerRadius, FontId, Popup, PopupCloseBehavior, Rect, Response, RichText, Sense, Stroke,
     TextEdit, Ui, WidgetInfo, pos2, vec2,
@@ -81,7 +82,7 @@ pub fn button(ui: &mut Ui, profile: &mut Profile, side: f32) -> Response {
     }
     paint_avatar(ui, rect.shrink(side * 0.15), profile);
     popup(ui, &response, profile);
-    response.on_hover_text(format!("{} (offline)", profile.shown_name()))
+    response.tip(format!("{} (offline)", profile.shown_name()))
 }
 
 /// The profile button at the foot of the projects page's rail: the avatar with the name and "Working offline" beside
@@ -264,7 +265,7 @@ fn custom(ui: &mut Ui, profile: &mut Profile, popup: egui::Id) {
                 profile.color = rgb;
             }
         });
-    let _ = response.on_hover_text("A colour of your own");
+    let _ = response.tip("A colour of your own");
 }
 
 #[cfg(test)]

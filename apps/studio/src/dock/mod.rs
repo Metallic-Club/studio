@@ -19,6 +19,7 @@
 pub(crate) mod guides;
 pub mod layout;
 
+use crate::theme::Tip as _;
 use std::path::{Path, PathBuf};
 
 use egui::{
@@ -837,7 +838,7 @@ fn panel_menu(ui: &mut Ui, panel: &dyn Panel, cx: &mut PanelContext<'_>) {
     egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| panel.menu(ui, cx));
-    response.on_hover_text(label);
+    response.tip(label);
 }
 
 impl egui_tiles::Behavior<PanelId> for DockBehavior<'_, '_> {

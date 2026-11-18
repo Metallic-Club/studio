@@ -20,6 +20,7 @@ pub mod model;
 pub mod tabs;
 pub mod tools;
 
+use crate::theme::Tip as _;
 use std::path::{Path, PathBuf};
 
 use egui::{
@@ -511,7 +512,7 @@ impl Toolbar {
             text::BODY,
             if response.hovered() { p.text } else { p.subtle },
         );
-        if response.on_hover_text("New tab").clicked() {
+        if response.tip("New tab").clicked() {
             changes.push(Change::AddTab);
         }
         if dragged.is_some() {
@@ -579,7 +580,7 @@ impl Toolbar {
                 );
             }
             if response
-                .on_hover_text("Choose tools for this tab. Right-click the toolbar to add more later.")
+                .tip("Choose tools for this tab. Right-click the toolbar to add more later.")
                 .clicked()
             {
                 changes.push(Change::OpenAdd(0));
@@ -725,9 +726,9 @@ impl Toolbar {
                     }
                 }
                 let response = match tool {
-                    Some(tool) if !tool.description.is_empty() => response.on_hover_text(&tool.description),
+                    Some(tool) if !tool.description.is_empty() => response.tip(&tool.description),
                     Some(_) => response,
-                    None => response.on_hover_text(format!("`{id}` is not available: its plugin is not loaded.")),
+                    None => response.tip(format!("`{id}` is not available: its plugin is not loaded.")),
                 };
                 if usable
                     && response.clicked()

@@ -5,6 +5,7 @@
 //! Enter goes to the next match and Shift+Enter to the one before; in the replace field Enter replaces, and
 //! Ctrl+Alt+Enter replaces all. Escape closes the bar, and Alt+C, Alt+W and Alt+R turn the toggles on and off.
 
+use crate::theme::Tip as _;
 use egui::text::{CCursor, CCursorRange};
 use egui::text_edit::TextEditState;
 use egui::{
@@ -227,19 +228,19 @@ pub fn show(ui: &mut Ui, id: Id, view: Rect, bar: &mut FindBar, count: &Count, f
         );
         let any = matches!(count, Count::Found { total, .. } if *total > 0);
         if icon_button(ui, id.with("previous"), Icon::UiMoveUp, "Previous match", any)
-            .on_hover_text("Previous match (Shift+Enter)")
+            .tip("Previous match (Shift+Enter)")
             .clicked()
         {
             actions.push(Action::Previous);
         }
         if icon_button(ui, id.with("next"), Icon::UiMoveDown, "Next match", any)
-            .on_hover_text("Next match (Enter)")
+            .tip("Next match (Enter)")
             .clicked()
         {
             actions.push(Action::Next);
         }
         if icon_button(ui, id.with("close"), Icon::UiClose, "Close find", true)
-            .on_hover_text("Close (Escape)")
+            .tip("Close (Escape)")
             .clicked()
         {
             actions.push(Action::Close);
@@ -259,13 +260,13 @@ pub fn show(ui: &mut Ui, id: Id, view: Rect, bar: &mut FindBar, count: &Count, f
             );
             let any = matches!(count, Count::Found { total, .. } if *total > 0);
             if text_button(ui, id.with("replace-one"), "Replace", "Replace", any)
-                .on_hover_text("Replace (Enter)")
+                .tip("Replace (Enter)")
                 .clicked()
             {
                 actions.push(Action::Replace);
             }
             if text_button(ui, id.with("replace-all"), "All", "Replace all", any)
-                .on_hover_text("Replace all (Ctrl+Alt+Enter)")
+                .tip("Replace all (Ctrl+Alt+Enter)")
                 .clicked()
             {
                 actions.push(Action::ReplaceAll);
@@ -393,7 +394,7 @@ pub(crate) fn toggle(ui: &mut Ui, id: Id, words: &str, label: &str, on: &mut boo
         FontId::new(text::SMALL, FontFamily::Monospace),
         if *on { p.text } else { p.muted },
     );
-    let clicked = response.on_hover_text(label).clicked();
+    let clicked = response.tip(label).clicked();
     if clicked {
         *on = !*on;
     }
