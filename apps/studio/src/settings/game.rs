@@ -55,11 +55,19 @@ impl Page {
     }
 }
 
-/// The Game Settings window.
+/// The window's size the first time it opens, in points.
+const SIZE: egui::Vec2 = vec2(760.0, 520.0);
+/// The smallest it may be made, in points.
+const MIN_SIZE: egui::Vec2 = vec2(560.0, 360.0);
+
+/// The Game Settings window: a window of its own where Studio can open one (#826), as the Settings window is, else
+/// floating over Studio's.
 #[derive(Debug, Default)]
 pub struct GameSettingsWindow {
     open: bool,
     page: Page,
+    /// How its window of its own was opened, kept while it is open: egui moves a window whose builder changes.
+    opened_as: Option<egui::ViewportBuilder>,
 }
 
 impl GameSettingsWindow {
@@ -71,6 +79,7 @@ impl GameSettingsWindow {
     /// Opens it, or closes it when it is open.
     pub fn toggle(&mut self) {
         self.open = !self.open;
+        self.opened_as = None;
     }
 
     /// The page shown.
@@ -78,9 +87,14 @@ impl GameSettingsWindow {
         self.page
     }
 
-    /// Draws the window, if open, over `ctx`, changing `editor`'s project as the user does.
+    /// Draws the window, if open, changing `editor`'s project as the user does: in a window of its own where Studio
+    /// can open one (#826), else floating over `ctx`.
     pub fn show(&mut self, ctx: &egui::Context, editor: &mut EditorState) {
         if !self.open {
+            return;
+        }
+        if !ctx.embed_viewports() {
+            self.show_own_window(ctx, editor);
             return;
         }
         let mut open = true;
@@ -91,15 +105,51 @@ impl GameSettingsWindow {
             .title_bar(false)
             .collapsible(false)
             .resizable(true)
-            .default_size(vec2(760.0, 520.0))
-            .min_width(560.0)
-            .min_height(360.0)
+            .default_size(SIZE)
+            .min_width(MIN_SIZE.x)
+            .min_height(MIN_SIZE.y)
             .show(ctx, |ui| {
                 crate::theme::window_header(ui, "Game Settings", &mut open);
                 self.contents(ui, editor);
             });
         if !open {
             self.open = false;
+        }
+    }
+
+    /// The window of its own (#826): its title bar the system's, centred over Studio's window when it opens, and
+    /// closed by its close button, as the Settings window's (#331).
+    fn show_own_window(&mut self, ctx: &egui::Context, editor: &mut EditorState) {
+        let builder = match &self.opened_as {
+            Some(builder) => builder.clone(),
+            None => {
+                let main = ctx.input(|input| input.viewport().outer_rect);
+                let mut builder = egui::ViewportBuilder::default()
+                    .with_title("Game Settings")
+                    .with_inner_size(SIZE)
+                    .with_min_inner_size(MIN_SIZE)
+                    .with_icon(super::window::window_icon());
+                if let Some(main) = main {
+                    builder = builder.with_position(main.center() - SIZE / 2.0);
+                }
+                self.opened_as = Some(builder.clone());
+                builder
+            }
+        };
+        let mut close = false;
+        ctx.show_viewport_immediate(viewport_id(), builder, |ui, _| {
+            let fill = ui.visuals().window_fill;
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, fill);
+            let inner = rect.shrink(space::S6);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                self.contents(ui, editor);
+            });
+            close = ui.input(|input| input.viewport().close_requested());
+        });
+        if close {
+            self.open = false;
+            self.opened_as = None;
         }
     }
 
@@ -138,6 +188,11 @@ impl GameSettingsWindow {
                 });
         });
     }
+}
+
+/// The Game Settings window's viewport (#826).
+pub fn viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("metallic.game_settings")
 }
 
 /// A page's title and lead line.
