@@ -590,7 +590,7 @@ fn viewport_id() -> egui::ViewportId {
 }
 
 /// The Metallic mark, as the window's icon.
-fn window_icon() -> std::sync::Arc<egui::IconData> {
+pub(crate) fn window_icon() -> std::sync::Arc<egui::IconData> {
     static ICON: std::sync::OnceLock<std::sync::Arc<egui::IconData>> = std::sync::OnceLock::new();
     ICON.get_or_init(|| {
         let mark = crate::emblem::render(64);
