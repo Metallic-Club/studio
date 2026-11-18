@@ -79,15 +79,16 @@ pub fn light_icons(dm: &DataModel, parts: &PartIndex, view: &View) -> Vec<LightI
 /// every light against the parts again.
 #[derive(Clone, Debug, Default)]
 pub struct IconCache {
-    /// The view and the part index's revision they were worked out for.
-    key: Option<(View, u64)>,
+    /// The view, the game ([`DataModel::uid`]: the editor's or a running one's, #835) and the part index's revision
+    /// they were worked out for.
+    key: Option<(View, u64, u64)>,
     icons: Vec<LightIcon>,
 }
 
 impl IconCache {
     /// The icons `view` shows of `dm`'s lights: those worked out last when neither the view nor the scene changed.
     pub fn icons(&mut self, dm: &DataModel, parts: &PartIndex, view: &View) -> &[LightIcon] {
-        let key = (*view, parts.revision());
+        let key = (*view, dm.uid(), parts.revision());
         if !parts.follows(dm) || self.key != Some(key) {
             self.icons = light_icons(dm, parts, view);
             self.key = parts.follows(dm).then_some(key);

@@ -38,10 +38,13 @@ impl Panel for Game {
         true
     }
 
-    /// The stats viewers over the running game (#492), as the Viewport's menu has them.
+    /// What is drawn over the running game, how it is shaded (#834) and the stats viewers (#492), as the Viewport's menu
+    /// has them.
     fn menu(&self, ui: &mut Ui, cx: &mut PanelContext<'_>) {
         ui.set_min_width(crate::theme::MENU_WIDTH);
         ui.spacing_mut().item_spacing.y = crate::theme::tokens::space::S2;
+        super::viewport::view_section(ui, cx);
+        super::viewport::shading_section(ui, cx);
         super::viewport::debug_section(ui, cx);
     }
 
@@ -97,6 +100,19 @@ impl Panel for Game {
                 FontId::proportional(text::BODY),
                 p.subtle,
             );
+        }
+        // Over the game (#834, #835): the selection, the lights' icons and the axes, from the game's own camera. Play Solo
+        // only: a networked game's client has a world of its own, which the selection is not in.
+        if let Some(session) = cx.editor.play.as_mut()
+            && session.net.is_none()
+            && session.view.texture.is_some()
+        {
+            let dm = session.player.engine_mut().data_model_mut();
+            session.parts.update(dm);
+            if let Some(view) = super::viewport::game_view(dm, rect) {
+                let settings = &cx.settings.viewport;
+                super::viewport::game_overlay(ui, &view, dm, &session.parts, &session.selection, settings);
+            }
         }
         ui.allocate_rect(rect, Sense::hover());
     }

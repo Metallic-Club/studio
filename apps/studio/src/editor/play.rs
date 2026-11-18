@@ -40,6 +40,8 @@ pub struct PlaySession {
     pub explorer: ExplorerState,
     /// The undo history of the panels' edits of the running game (#348), dropped at Stop.
     pub history: History,
+    /// The running game's parts and lights by where they are (#835): what the Viewport picks and outlines in it.
+    pub parts: crate::viewport::index::PartIndex,
     /// Multiplayer playtesting's side (ADR 0011 §8): the server and its clients; `None` for Play Solo.
     pub net: Option<super::multi::Net>,
 }
@@ -154,6 +156,7 @@ impl EditorState {
             history: History::new(selection.clone()),
             selection,
             explorer,
+            parts: Default::default(),
             net: None,
         });
         Ok(())
