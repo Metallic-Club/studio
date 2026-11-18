@@ -266,8 +266,15 @@ fn ball(ui: &mut Ui, editor: &mut EditorState, entry: &Entry, id: AssetId, heigh
     let side = preview_side(ui, height);
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), side), Sense::hover());
     let area = Rect::from_center_size(row.center(), vec2(side, side));
-    ui.interact(area, Id::unique("metallic.properties.asset.ball"), Sense::hover())
-        .widget_info(|| WidgetInfo::labeled(Role::Image, true, "Material preview"));
+    // A drag spins it (#805), its front following the pointer.
+    let spun = ui.interact(area, Id::unique("metallic.properties.asset.ball"), Sense::drag());
+    spun.widget_info(|| WidgetInfo::labeled(Role::Image, true, "Material preview"));
+    if spun.dragged() {
+        editor.materials.preview_turn = crate::app::thumbnails::spin(editor.materials.preview_turn, spun.drag_delta());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if spun.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
     let pixels = (side * ui.ctx().pixels_per_point()).round() as u32;
     editor.materials.preview = Some((id, (pixels, pixels)));
     match editor.materials.preview_texture {

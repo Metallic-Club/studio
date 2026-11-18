@@ -41,6 +41,22 @@ pub fn ball_camera() -> Camera {
     }
 }
 
+/// How far a drag of one point turns the preview's ball, in radians.
+const SPIN_PER_POINT: f32 = 0.012;
+
+/// `turn` (the ball's rotation) turned further by a drag of `drag` points across the preview (#805): as if the ball
+/// were spun by the pointer, its front following the drag, about the axis across the drag as the camera sees it.
+pub fn spin(turn: Quat, drag: egui::Vec2) -> Quat {
+    let camera = ball_camera().rotation;
+    let up = camera * Vec3::Y;
+    let right = camera * Vec3::X;
+    // A drag right turns the front right, about the camera's up; a drag down (screen y grows) turns it down, about
+    // its right.
+    let across =
+        Quat::from_axis_angle(up, drag.x * SPIN_PER_POINT) * Quat::from_axis_angle(right, drag.y * SPIN_PER_POINT);
+    (across * turn).normalize()
+}
+
 /// The thumbnails' renderer and the textures it made.
 #[derive(Default)]
 pub struct Thumbnails {
@@ -223,5 +239,26 @@ impl Thumbnails {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let _turn = context.descriptor_heap_turn();
         Some(painter.register_native_texture(device, &view, wgpu::FilterMode::Linear))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_drag_spins_the_ball_s_front_with_it() {
+        let camera = ball_camera();
+        // The ball's point facing the camera, in the camera's own axes after a turn.
+        let front = |turn: Quat| {
+            let towards_camera = camera.rotation * Vec3::Z;
+            camera.rotation.inverse() * (turn * towards_camera)
+        };
+        // Down and left on the screen: the front goes left (x below 0) and down (y below 0).
+        let turned = front(spin(Quat::IDENTITY, egui::vec2(-30.0, 30.0)));
+        assert!(turned.x < -0.1 && turned.y < -0.1, "{turned:?}");
+        // Up and right: the other way.
+        let turned = front(spin(Quat::IDENTITY, egui::vec2(30.0, -30.0)));
+        assert!(turned.x > 0.1 && turned.y > 0.1, "{turned:?}");
     }
 }
