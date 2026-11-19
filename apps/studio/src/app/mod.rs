@@ -6439,7 +6439,7 @@ mod tests {
         harness.get_by_label("Writes its arguments to the output, separated by spaces.");
     }
 
-    /// #652: typing a ModuleScript's name suggests it; taking it puts the name in and its `require` at the top.
+    /// #652: typing a ModuleScript's name suggests it; taking it puts its `require` at the top.
     #[test]
     fn taking_a_module_adds_its_require() {
         let mut harness = editing(settings_file("editor-script-module", None), "Script Module Game");
@@ -6473,12 +6473,13 @@ mod tests {
             .project
             .read_text("Scripts/Eat.server.luau")
             .unwrap();
+        // Alone on its line, it is the `require` alone (#858).
         assert_eq!(
             text,
-            "local cheese = require(game:GetService(\"ReplicatedStorage\").cheese)\n\ncheese"
+            "local cheese = require(game:GetService(\"ReplicatedStorage\").cheese)"
         );
-        // The cursor stayed after the name: typing goes on there.
-        harness.event(egui::Event::Text(".x".to_owned()));
+        // The cursor is at the line's end: typing goes on there.
+        harness.event(egui::Event::Text("\n\ncheese.x".to_owned()));
         settle(&mut harness);
         let text = harness
             .state_mut()

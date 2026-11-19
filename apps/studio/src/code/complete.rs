@@ -372,10 +372,30 @@ pub fn require_insertion(text: &str, line: &str) -> (usize, String) {
 
 /// What taking `item` in place of the bytes `replace` of `text` makes of it: the text, and the byte the cursor is then
 /// at. A function gets its brackets (#854), the cursor between them when it takes arguments and after them when not,
-/// unless a bracket follows already; a ModuleScript its `require` near the top (#652), unless the file has it already.
+/// unless a bracket follows already; a ModuleScript its `require` near the top (#652), a service its `GetService`
+/// (#857), unless the file has it already. Taken alone on its line, a module or a service is that line alone (#858):
+/// the line takes its place when that is where it goes, else its name is not put in.
 pub fn taken(text: &str, replace: Range<usize>, item: &Item) -> (String, usize) {
     let end = replace.end.min(text.len());
     let start = replace.start.min(end);
+    let line_start = text[..start].rfind('\n').map_or(0, |newline| newline + 1);
+    let line_end = text[end..].find('\n').map_or(text.len(), |newline| end + newline);
+    if let Some(line) = &item.require
+        && !text.lines().any(|row| row.trim() == line)
+        && text[line_start..start].trim().is_empty()
+        && text[end..line_end].trim().is_empty()
+    {
+        let emptied = format!("{}{}", &text[..start], &text[end..]);
+        let (at, insert) = require_insertion(&emptied, line);
+        if at == line_start {
+            let out = format!("{}{line}{}", &text[..line_start], &text[line_end..]);
+            return (out, line_start + line.len());
+        }
+        let mut out = emptied;
+        out.insert_str(at, &insert);
+        let cursor = if at <= start { start + insert.len() } else { start };
+        return (out, cursor);
+    }
     let mut with = item.label.clone();
     let mut cursor = start + with.len();
     if item.kind == ItemKind::Method && !text[end..].starts_with('(') {
@@ -920,12 +940,12 @@ mod tests {
             storage.require.as_deref(),
             Some(r#"local ReplicatedStorage = game:GetService("ReplicatedStorage")"#)
         );
-        let (text, at) = taken("ReplicatedSt", 0..12, storage);
+        let (text, at) = taken("print(ReplicatedSt)", 6..18, storage);
         assert_eq!(
             text,
-            "local ReplicatedStorage = game:GetService(\"ReplicatedStorage\")\n\nReplicatedStorage"
+            "local ReplicatedStorage = game:GetService(\"ReplicatedStorage\")\n\nprint(ReplicatedStorage)"
         );
-        assert_eq!(at, text.len());
+        assert_eq!(at, text.len() - 1);
         let shadowed = items(
             &dm,
             "local ReplicatedStorage = game:GetService(\"ReplicatedStorage\")\nReplicatedSt|",
@@ -934,6 +954,34 @@ mod tests {
         let local = shadowed.iter().find(|item| item.label == "ReplicatedStorage").unwrap();
         assert_eq!(local.kind, ItemKind::Local);
         assert!(shadowed.iter().all(|item| item.kind != ItemKind::Service));
+    }
+
+    /// #858: a module or a service taken alone on its line is its `require` line alone, in that line's place when
+    /// that is where it goes, else with the others at the top and the line left empty.
+    #[test]
+    fn a_module_alone_on_its_line_is_its_require_alone() {
+        let item = Item {
+            label: "cheese".to_owned(),
+            kind: ItemKind::Module,
+            detail: String::new(),
+            doc: String::new(),
+            require: Some("local cheese = require(x)".to_owned()),
+        };
+        let shown = |(text, at): (String, usize)| format!("{}|{}", &text[..at], &text[at..]);
+        assert_eq!(shown(taken("chee", 0..4, &item)), "local cheese = require(x)|");
+        assert_eq!(
+            shown(taken("local a = require(y)\nchee\nprint()", 21..25, &item)),
+            "local a = require(y)\nlocal cheese = require(x)|\nprint()"
+        );
+        assert_eq!(
+            shown(taken("x()\n  chee", 6..10, &item)),
+            "local cheese = require(x)\n\nx()\n  |"
+        );
+        // Not alone: the name too.
+        assert_eq!(
+            shown(taken("print(chee)", 6..10, &item)),
+            "local cheese = require(x)\n\nprint(cheese|)"
+        );
     }
 
     /// #693: a module beside the script is required from `script.Parent`, one inside it from `script`; one elsewhere
