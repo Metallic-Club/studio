@@ -804,6 +804,8 @@ impl Panel for Properties {
         // The running game's values while one runs, live (ADR 0010 §5).
         // The project's files, for the file pickers (#55), before the scene borrows the editor.
         let files = values::Files::with_pictures(ui.ctx(), cx.editor);
+        // The MeshParts whose MeshId changed here, sized to their meshes once the edits are made (#849).
+        let mut resized: Vec<Id> = Vec::new();
         let mut scene = cx.editor.scene();
         let playing = scene.playing;
         if playing {
@@ -929,6 +931,11 @@ impl Panel for Properties {
                         if let Err(error) = scene.set_by_name(target, name, value) {
                             log::warn!("properties: {error}");
                         }
+                        // A MeshPart takes its new mesh's own size (#849), as Roblox's does: stretched to the old Size
+                        // the model and its texture are squashed out of shape.
+                        if name == "MeshId" {
+                            resized.push(target);
+                        }
                     }
                 }
                 Source::Attribute(attribute) => {
@@ -976,6 +983,35 @@ impl Panel for Properties {
         if let Err(error) = tagged {
             log::warn!("properties: {error}");
         }
+        if !resized.is_empty() {
+            // Read now, not every frame: a reader copies the project's unsaved assets.
+            let mut reader = cx.editor.project.asset_reader();
+            let mut scene = cx.editor.scene();
+            for part in resized {
+                native_size(&mut scene, &mut reader, part);
+            }
+        }
+    }
+}
+
+/// Gives the MeshPart `part` the size of the mesh its `MeshId` names (#849), read with `reader`, as part of the
+/// action under way. A part whose mesh cannot be read keeps its size.
+fn native_size(scene: &mut Scene<'_>, reader: &mut metallic_engine::metallic_project::AssetReader, part: Id) {
+    let Ok(Value::String(id)) = scene.dm.get_by_name(part, "MeshId") else {
+        return;
+    };
+    if id.is_empty() {
+        return;
+    }
+    let Ok(mesh) = reader.load_mesh(&id) else {
+        return;
+    };
+    let size = Vector3::from(mesh.size);
+    if size.is_finite()
+        && size.max_element() > 0.0
+        && let Err(error) = scene.set_by_name(part, "Size", Value::Vector3(size))
+    {
+        log::warn!("properties: {error}");
     }
 }
 
