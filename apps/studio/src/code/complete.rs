@@ -35,6 +35,8 @@ pub enum ItemKind {
     Class,
     /// A ModuleScript of the game, required when taken (#652).
     Module,
+    /// A service, got with `GetService` when taken (#857).
+    Service,
 }
 
 impl ItemKind {
@@ -50,6 +52,7 @@ impl ItemKind {
             ItemKind::Keyword => "K",
             ItemKind::Class => "T",
             ItemKind::Module => "R",
+            ItemKind::Service => "S",
         }
     }
 }
@@ -65,7 +68,8 @@ pub struct Item {
     pub detail: String,
     /// What it does.
     pub doc: String,
-    /// For a ModuleScript (#652): the `local name = require(path)` line taking it adds near the top.
+    /// For a ModuleScript (#652), the `local name = require(path)` line taking it adds near the top; for a service
+    /// (#857), its `local Name = game:GetService("Name")`.
     pub require: Option<String>,
 }
 
@@ -220,7 +224,30 @@ fn everything(analysis: &Analysis, at: usize, env: &Env<'_>) -> Vec<Item> {
         .map(|item| item.label.clone())
         .collect();
     items.extend(module_items(env, &named));
+    items.extend(service_items(env, &named));
     items
+}
+
+/// The services as suggestions that get them when taken (#857), but for those whose name is in `named` already.
+fn service_items(env: &Env<'_>, named: &[String]) -> Vec<Item> {
+    env.dm
+        .registry()
+        .classes()
+        .iter()
+        .filter(|info| info.service_order().is_some())
+        .map(|info| info.name())
+        .filter(|name| is_identifier(name) && !named.iter().any(|taken| taken == name))
+        .map(|name| {
+            let line = format!("local {name} = game:GetService(\"{name}\")");
+            Item {
+                label: name.to_owned(),
+                kind: ItemKind::Service,
+                detail: "service".to_owned(),
+                doc: format!("Adds `{line}` near the top."),
+                require: Some(line),
+            }
+        })
+        .collect()
 }
 
 /// Whether `name` can be written as a name in Luau: not empty, not a keyword, no character a name cannot have.
@@ -877,6 +904,36 @@ mod tests {
             util.require.as_deref(),
             Some(r#"local Util = require(game:GetService("ReplicatedStorage"):WaitForChild("my folder").Util)"#)
         );
+    }
+
+    /// #857: a service is suggested by its name, with the `GetService` taking it adds; not where a local has the name.
+    #[test]
+    fn services_are_suggested_with_their_get_service() {
+        let dm = game();
+        let found = items(&dm, "ReplicatedSt|", None);
+        let storage = found
+            .iter()
+            .find(|item| item.label == "ReplicatedStorage")
+            .expect("ReplicatedStorage is suggested");
+        assert_eq!(storage.kind, ItemKind::Service);
+        assert_eq!(
+            storage.require.as_deref(),
+            Some(r#"local ReplicatedStorage = game:GetService("ReplicatedStorage")"#)
+        );
+        let (text, at) = taken("ReplicatedSt", 0..12, storage);
+        assert_eq!(
+            text,
+            "local ReplicatedStorage = game:GetService(\"ReplicatedStorage\")\n\nReplicatedStorage"
+        );
+        assert_eq!(at, text.len());
+        let shadowed = items(
+            &dm,
+            "local ReplicatedStorage = game:GetService(\"ReplicatedStorage\")\nReplicatedSt|",
+            None,
+        );
+        let local = shadowed.iter().find(|item| item.label == "ReplicatedStorage").unwrap();
+        assert_eq!(local.kind, ItemKind::Local);
+        assert!(shadowed.iter().all(|item| item.kind != ItemKind::Service));
     }
 
     /// #693: a module beside the script is required from `script.Parent`, one inside it from `script`; one elsewhere
