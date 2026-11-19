@@ -95,6 +95,11 @@ fn mesh_part(dm: &mut DataModel, name: &str, (mesh, texture): (&str, &str), size
 /// above and to the side. With `textured` false the textured cube names no texture. Saved, then opened again, so the
 /// game is what the file holds.
 fn project(test: &str, textured: bool) -> Project {
+    project_with(test, textured, fixture("quadrants.png"))
+}
+
+/// [`project`] with the big cube's texture `png` in place of the quadrants.
+fn project_with(test: &str, textured: bool, png: Vec<u8>) -> Project {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("mesh_assets").join(test);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mesh asset test setup");
@@ -105,9 +110,7 @@ fn project(test: &str, textured: bool) -> Project {
     project
         .write(MODEL, fixture("textured_cube.glb"))
         .expect("mesh asset test setup");
-    project
-        .write(TEXTURE, fixture("quadrants.png"))
-        .expect("mesh asset test setup");
+    project.write(TEXTURE, png).expect("mesh asset test setup");
     project.refresh_assets().expect("mesh asset test setup");
     let model = project.assets().id(MODEL).expect("mesh asset test setup").to_string();
     let texture = project.assets().id(TEXTURE).expect("mesh asset test setup").to_string();
@@ -198,10 +201,14 @@ fn draw(context: &RenderContext, project: &mut Project, (width, height): (u32, u
                 assets.wait(scene.scene(), &mut renderer, Duration::from_secs(60)),
                 "the assets load"
             );
+            // A texture with see-through pixels asks for the cut-out pipelines (#851).
+            renderer.wait_for_pipelines();
         } else {
             assets.update(scene.scene(), &mut renderer);
         }
         renderer.render_scene(target.view(), &mut scene, camera.as_ref());
+        // What the frame asked for (the cut-out pipelines, #851) is there for the next.
+        renderer.wait_for_pipelines();
         shadow_draws = shadow_draws.max(renderer.draw_stats().shadow_draws);
     }
     Drawn {
@@ -388,4 +395,42 @@ fn the_vertex_buffer_fallback_draws_the_same_image() {
     let (max, mean, _) = compare(&vertex.pixels, &storage.pixels);
     assert!(max <= 2 && mean <= 1.0, "the fallback differs: max {max}, mean {mean}");
     check_reference(&fallback, "mesh_asset-fallback", &vertex.pixels);
+}
+
+/// A `side` × `side` PNG, every pixel white with alpha `alpha`.
+fn white_png(side: u32, alpha: u8) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, side, side);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("png");
+    let texels: Vec<u8> = (0..side * side).flat_map(|_| [255, 255, 255, alpha]).collect();
+    writer.write_image_data(&texels).expect("png");
+    writer.finish().expect("png");
+    bytes
+}
+
+/// #851: a texture's see-through pixels leave the mesh out there. A white texture changes nothing; the same white
+/// texture wholly see-through leaves the big cube out, and what is behind it shows.
+#[test]
+fn a_texture_s_see_through_pixels_cut_the_mesh_out() {
+    let Some(context) = gpu() else { return };
+    let opaque = draw(
+        &context,
+        &mut project_with("white", true, white_png(8, 255)),
+        (SIZE, SIZE),
+    );
+    let clear = draw(
+        &context,
+        &mut project_with("clear", true, white_png(8, 0)),
+        (SIZE, SIZE),
+    );
+    let changed = opaque
+        .pixels
+        .iter()
+        .zip(&clear.pixels)
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 40))
+        .count();
+    let share = changed as f64 / opaque.pixels.len() as f64;
+    assert!(share > 0.015, "the cut-out changed {:.2}% of the image", share * 100.0);
 }

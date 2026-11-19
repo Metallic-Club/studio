@@ -1137,6 +1137,22 @@ impl Renderer {
         self.polygon_mode_line
     }
 
+    /// Queues the cut-out pipelines (#851) for the scene's target once a mesh texture has see-through pixels (nothing
+    /// when they are compiled or queued already).
+    fn queue_cutout(&mut self) {
+        if !self.parts.any_alpha_textures() {
+            return;
+        }
+        let (format, samples) = (self.scene_target_format(), self.plan.msaa_samples());
+        for pipeline in PartPipeline::CUTOUT {
+            self.queue(PipelineKey::Part {
+                format,
+                samples,
+                pipeline,
+            });
+        }
+    }
+
     /// Queues the wireframe's pipelines for the scene's target while the wireframe view is chosen (nothing when they
     /// are compiled or queued already).
     fn queue_wireframe(&mut self) {
@@ -1210,6 +1226,7 @@ impl Renderer {
     ) -> wgpu::SubmissionIndex {
         // A new MSAA count or format needs the wireframe's pipelines again.
         self.queue_wireframe();
+        self.queue_cutout();
         let (mut encoder, slot) = self.begin_frame(false);
         prepare(&mut encoder);
         self.prepare_overlay();
@@ -1286,6 +1303,8 @@ impl Renderer {
         };
         // Mesh assets and textures that arrived, before anything culls or draws the kinds they draw.
         self.parts.resolve_assets(scene, &self.maker);
+        // A texture with see-through pixels among them wants the cut-out pipelines (#851), compiled in the background.
+        self.queue_cutout();
         let cull = &self.settings.cull;
         // The part of the target drawn: its aspect is the camera's (#330).
         let size = self.drawn_size();

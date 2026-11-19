@@ -1110,6 +1110,11 @@ impl PartRenderer {
         self.materials.set_layers(key, layers);
     }
 
+    /// Whether a mesh asset's texture has see-through pixels, so the cut-out pipelines are wanted (#851).
+    pub(crate) fn any_alpha_textures(&self) -> bool {
+        self.textures.any_alpha()
+    }
+
     /// Whether the mesh asset `key` was added.
     pub(crate) fn has_mesh_asset(&self, key: &str) -> bool {
         self.meshes.asset(key).is_some()
@@ -1591,15 +1596,36 @@ impl PartRenderer {
                 };
                 render_pass.set_pipeline(pipeline);
                 self.bind(render_pass, variant, self.opaque_group.as_ref(), scene.list_buffer());
+                // Meshes whose texture has see-through pixels (#851) are drawn last, cut out, when the pipeline for
+                // them is here: never in the prepass (their holes would hide what is behind).
+                let cutout = if wireframe {
+                    None
+                } else {
+                    target.get(PartPipeline::Cutout(l))
+                };
+                let cut = |draw: &KindDraw| cutout.is_some() && self.textures.has_alpha(draw.texture);
                 // The primitives' draws come first and share the white texture; each mesh asset's binds its own.
                 let mut bound = u32::MAX;
-                for draw in &self.draws {
+                for draw in self.draws.iter().filter(|draw| !cut(draw)) {
                     if draw.texture != bound {
                         bound = draw.texture;
                         render_pass.set_bind_group(texture_group(self.binding), self.textures.group(bound), &[]);
                     }
                     let indices = draw.mesh.first_index..draw.mesh.first_index + draw.mesh.index_count;
                     render_pass.draw_indexed(indices, 0, draw.first..draw.first + draw.count);
+                }
+                if let Some(cutout) = cutout.filter(|_| pass == PassId::Opaque)
+                    && self.draws.iter().any(cut)
+                {
+                    render_pass.set_pipeline(cutout);
+                    for draw in self.draws.iter().filter(|draw| cut(draw)) {
+                        if draw.texture != bound {
+                            bound = draw.texture;
+                            render_pass.set_bind_group(texture_group(self.binding), self.textures.group(bound), &[]);
+                        }
+                        let indices = draw.mesh.first_index..draw.mesh.first_index + draw.mesh.index_count;
+                        render_pass.draw_indexed(indices, 0, draw.first..draw.first + draw.count);
+                    }
                 }
                 if pass == PassId::DepthPrepass {
                     self.stats.prepass_draws += self.draws.len() as u32;
@@ -2007,6 +2033,17 @@ fn create_pipeline(
             None,
             true,
         ),
+        PartPipeline::Cutout(lights) => {
+            let lights = Variant::from_number(lights);
+            variant(
+                &format!("metallic parts cut out ({})", lights.name()),
+                depth_stencil_state(true),
+                Some(("fs_cutout", None)),
+                lights,
+                None,
+                false,
+            )
+        }
         PartPipeline::WireframeTransparent => variant(
             "metallic parts wireframe, see-through",
             depth_stencil_state(true),

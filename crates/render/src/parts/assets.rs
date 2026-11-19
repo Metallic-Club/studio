@@ -42,6 +42,8 @@ struct Pending {
     rgba: Vec<u8>,
     /// Sampled nearest: a pixelated picture (#781).
     nearest: bool,
+    /// Some of its pixels are see-through (#851): its meshes draw cut out.
+    alpha: bool,
 }
 
 /// The textures of the mesh assets, by key, and the bind group of each.
@@ -57,6 +59,8 @@ pub(crate) struct AssetTextures {
     views: Vec<wgpu::TextureView>,
     /// Whether each group's texture is sampled nearest: the white one, and pixelated pictures (#781).
     nearest_views: Vec<bool>,
+    /// Whether each group's texture has see-through pixels (#851): its meshes draw cut out where they are.
+    alpha_views: Vec<bool>,
     by_key: HashMap<Arc<str>, u32>,
     pending: Vec<Pending>,
     /// The materials' textures (#679), in every group.
@@ -135,6 +139,7 @@ impl AssetTextures {
             groups: vec![white_group],
             views: vec![white],
             nearest_views: vec![true],
+            alpha_views: vec![false],
             by_key: HashMap::new(),
             pending: Vec::new(),
             materials,
@@ -191,6 +196,16 @@ impl AssetTextures {
         self.by_key.get(key).copied().unwrap_or(WHITE)
     }
 
+    /// Whether the texture of group `index` has see-through pixels (#851).
+    pub(crate) fn has_alpha(&self, index: u32) -> bool {
+        self.alpha_views.get(index as usize).copied().unwrap_or(false)
+    }
+
+    /// Whether any drawable texture has see-through pixels: the cut-out pipelines are wanted (#851).
+    pub(crate) fn any_alpha(&self) -> bool {
+        self.alpha_views.iter().any(|&alpha| alpha)
+    }
+
     /// Whether texture `key` was added (drawable or not yet).
     pub(crate) fn contains(&self, key: &str) -> bool {
         self.by_key.contains_key(key) || self.pending.iter().any(|p| &*p.key == key)
@@ -225,6 +240,7 @@ impl AssetTextures {
             arrived: false,
             width,
             height,
+            alpha: rgba.as_chunks::<4>().0.iter().any(|[_, _, _, a]| *a < 255),
             rgba,
             nearest,
         });
@@ -263,12 +279,14 @@ impl AssetTextures {
                     self.groups[index as usize] = group;
                     self.views[index as usize] = view;
                     self.nearest_views[index as usize] = pending.nearest;
+                    self.alpha_views[index as usize] = pending.alpha;
                 }
                 None => {
                     self.by_key.insert(pending.key, self.groups.len() as u32);
                     self.groups.push(group);
                     self.views.push(view);
                     self.nearest_views.push(pending.nearest);
+                    self.alpha_views.push(pending.alpha);
                 }
             }
             self.revision = self.revision.wrapping_add(1);

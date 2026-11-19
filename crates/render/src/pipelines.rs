@@ -86,11 +86,14 @@ pub(crate) enum PartPipeline {
     Wireframe,
     /// The wireframe view's see-through parts, likewise.
     WireframeTransparent,
+    /// Opaque mesh assets whose texture has see-through pixels (#851), with `lights` as [`PartPipeline::Opaque`]:
+    /// the pixels the texture leaves less than half covered are not drawn. Made when such a texture first arrives.
+    Cutout(u8),
 }
 
 impl PartPipeline {
     /// How many there are for one format and MSAA count.
-    pub(crate) const COUNT: usize = 13;
+    pub(crate) const COUNT: usize = 16;
 
     /// What a frame without local lights draws with, those with shader stages of their own first.
     pub(crate) const BASE: [PartPipeline; 5] = [
@@ -117,6 +120,13 @@ impl PartPipeline {
     /// The wireframe view's pipelines (#478), made when the view is first chosen.
     pub(crate) const WIREFRAME: [PartPipeline; 2] = [PartPipeline::Wireframe, PartPipeline::WireframeTransparent];
 
+    /// The cut-out pipelines (#851), made when a texture with see-through pixels first arrives.
+    pub(crate) const CUTOUT: [PartPipeline; 3] = [
+        PartPipeline::Cutout(0),
+        PartPipeline::Cutout(1),
+        PartPipeline::Cutout(2),
+    ];
+
     /// The pipeline of the same target whose shader stages this one reuses entirely: its compile waits for that
     /// one's (see the [module documentation](self)).
     pub(crate) fn shares_stages_of(self) -> Option<PartPipeline> {
@@ -127,7 +137,8 @@ impl PartPipeline {
             | PartPipeline::Opaque(_)
             | PartPipeline::Transparent(_)
             | PartPipeline::Wireframe
-            | PartPipeline::WireframeTransparent => None,
+            | PartPipeline::WireframeTransparent
+            | PartPipeline::Cutout(_) => None,
         }
     }
 
@@ -141,6 +152,7 @@ impl PartPipeline {
             PartPipeline::Transparent(lights) => 4 + 3 * usize::from(lights.min(2)),
             PartPipeline::Wireframe => 11,
             PartPipeline::WireframeTransparent => 12,
+            PartPipeline::Cutout(lights) => 13 + usize::from(lights.min(2)),
         }
     }
 }
@@ -616,6 +628,7 @@ mod tests {
             .iter()
             .chain(PartPipeline::ALL_LIT.iter())
             .chain(PartPipeline::WIREFRAME.iter())
+            .chain(PartPipeline::CUTOUT.iter())
             .map(|p| p.index())
             .collect();
         slots.sort_unstable();
