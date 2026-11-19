@@ -6403,9 +6403,12 @@ mod tests {
         // A click takes one.
         harness.get_by_role_and_label(Role::ListItem, "print").click();
         settle(&mut harness);
-        assert_eq!(text(&mut harness), "workspace.Baseplate:Destroy()\nprint");
+        // A function comes with its brackets, the cursor between them (#854).
+        assert_eq!(text(&mut harness), "workspace.Baseplate:Destroy()\nprint()");
         // print says what it does under the pointer.
-        harness.event(egui::Event::Text("(1)".to_owned()));
+        harness.event(egui::Event::Text("1".to_owned()));
+        settle(&mut harness);
+        assert_eq!(text(&mut harness), "workspace.Baseplate:Destroy()\nprint(1)");
         settle(&mut harness);
         let field = harness.get_by_role(Role::MultilineTextInput).rect();
         let _ = script;

@@ -1464,11 +1464,24 @@ pub fn replace_chars(
     range: std::ops::Range<usize>,
     with: &str,
 ) {
+    let at = range.start + with.chars().count();
+    edit_chars(ctx, id, state, text, range, with, at);
+}
+
+/// [`replace_chars`], with the cursor at the character `at` after.
+fn edit_chars(
+    ctx: &egui::Context,
+    id: Id,
+    state: &mut TextEditState,
+    text: &mut String,
+    range: std::ops::Range<usize>,
+    with: &str,
+    at: usize,
+) {
     // An edit made for the field is a step of its own (#654): undo takes it back alone, before what was typed.
     undo_point(state, text);
     let (start, end) = (byte_of(text, range.start), byte_of(text, range.end));
     text.replace_range(start..end, with);
-    let at = range.start + with.chars().count();
     state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at))));
     undo_point(state, text);
     state.clone().store(ctx, id);
@@ -1477,6 +1490,31 @@ pub fn replace_chars(
         data.insert_temp(id.with("undo-step"), true);
         data.remove::<EditKind>(id.with("undo-kind"));
     });
+}
+
+/// Makes `text` of the field `id` into `with`, the cursor at its byte `cursor`, as [`replace_chars`] does: only the
+/// part that differs is replaced, as one undo step.
+pub fn replace_text(
+    ctx: &egui::Context,
+    id: Id,
+    state: &mut TextEditState,
+    text: &mut String,
+    with: &str,
+    cursor: usize,
+) {
+    let (old, new) = (text.chars().count(), with.chars().count());
+    let same = text.chars().zip(with.chars()).take_while(|(a, b)| a == b).count();
+    let tail = text
+        .chars()
+        .rev()
+        .zip(with.chars().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(old - same)
+        .min(new - same);
+    let middle: String = with.chars().skip(same).take(new - same - tail).collect();
+    let at = with[..cursor.min(with.len())].chars().count();
+    edit_chars(ctx, id, state, text, same..old - tail, &middle, at);
 }
 
 /// What a frame's input does to a field's text, for where undo steps fall (#654).

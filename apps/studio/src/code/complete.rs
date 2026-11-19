@@ -343,6 +343,45 @@ pub fn require_insertion(text: &str, line: &str) -> (usize, String) {
     }
 }
 
+/// What taking `item` in place of the bytes `replace` of `text` makes of it: the text, and the byte the cursor is then
+/// at. A function gets its brackets (#854), the cursor between them when it takes arguments and after them when not,
+/// unless a bracket follows already; a ModuleScript its `require` near the top (#652), unless the file has it already.
+pub fn taken(text: &str, replace: Range<usize>, item: &Item) -> (String, usize) {
+    let end = replace.end.min(text.len());
+    let start = replace.start.min(end);
+    let mut with = item.label.clone();
+    let mut cursor = start + with.len();
+    if item.kind == ItemKind::Method && !text[end..].starts_with('(') {
+        with.push_str("()");
+        cursor += if takes_arguments(&item.detail) { 1 } else { 2 };
+    }
+    let mut out = format!("{}{with}{}", &text[..start], &text[end..]);
+    if let Some(line) = &item.require
+        && !out.lines().any(|row| row.trim() == line)
+    {
+        let (at, insert) = require_insertion(&out, line);
+        out.insert_str(at, &insert);
+        if at <= start {
+            cursor += insert.len();
+        }
+    }
+    (out, cursor)
+}
+
+/// Whether a function whose type or signature is `detail` takes arguments: anything in its first brackets but
+/// `self`; yes when that is not known.
+fn takes_arguments(detail: &str) -> bool {
+    let Some(open) = detail.find('(') else {
+        return true;
+    };
+    let inner = &detail[open + 1..];
+    let close = inner.find(')').unwrap_or(inner.len());
+    inner[..close]
+        .split(',')
+        .map(str::trim)
+        .any(|parameter| !parameter.is_empty() && parameter != "self" && !parameter.starts_with("self:"))
+}
+
 /// The members of a value of type `ty`, after `.` or with `methods` after `:`.
 pub fn members(analysis: &Analysis, ty: &Ty, methods: bool, env: &Env<'_>) -> Vec<Item> {
     let api = env.api();
@@ -664,6 +703,33 @@ mod tests {
             module: &no_modules,
         };
         complete(&analysis, at, &env).map(|completion| completion.items.into_iter().map(|item| item.label).collect())
+    }
+
+    /// #854: a function taken gets its brackets, the cursor between them when it takes arguments, after them when
+    /// not; not when a bracket follows, nor for what is not a function.
+    #[test]
+    fn a_function_is_taken_with_its_brackets() {
+        let item = |label: &str, kind: ItemKind, detail: &str| Item {
+            label: label.to_owned(),
+            kind,
+            detail: detail.to_owned(),
+            doc: String::new(),
+            require: None,
+        };
+        let find = item(
+            "FindFirstChild",
+            ItemKind::Method,
+            "function FindFirstChild(self, name: string): Instance?",
+        );
+        let shown = |(text, at): (String, usize)| format!("{}|{}", &text[..at], &text[at..]);
+        assert_eq!(shown(taken("part:Fi", 5..7, &find)), "part:FindFirstChild(|)");
+        let destroy = item("Destroy", ItemKind::Method, "function Destroy(self): ()");
+        assert_eq!(shown(taken("part:De", 5..7, &destroy)), "part:Destroy()|");
+        assert_eq!(shown(taken("part:Fi(x)", 5..7, &find)), "part:FindFirstChild|(x)");
+        let print = item("print", ItemKind::Method, "(...any) -> ()");
+        assert_eq!(shown(taken("pr", 0..2, &print)), "print(|)");
+        let anchored = item("Anchored", ItemKind::Property, "boolean");
+        assert_eq!(shown(taken("p.An", 2..4, &anchored)), "p.Anchored|");
     }
 
     #[test]

@@ -523,34 +523,15 @@ struct Popup {
 /// How many suggestions show at once.
 const ROWS: usize = 8;
 
-/// Puts the suggestion `chosen` of `completion` in `text`, in place of the word typed, the cursor after it.
+/// Puts the suggestion `chosen` of `completion` in `text`, in place of the word typed, as one undo step
+/// ([`complete::taken`]: a function with its brackets, a ModuleScript with its `require`).
 fn take(ctx: &egui::Context, id: Id, text: &mut String, completion: &Completion, chosen: usize) {
     let Some(item) = completion.items.get(chosen) else {
         return;
     };
     let mut state = TextEditState::load(ctx, id).unwrap_or_default();
-    let start = text[..completion.replace.start.min(text.len())].chars().count();
-    let end = text[..completion.replace.end.min(text.len())].chars().count();
-    code::view::replace_chars(ctx, id, &mut state, text, start..end, &item.label);
-    // A ModuleScript (#652): its `require` near the top, unless the file has it already; the cursor stays after the
-    // name.
-    if let Some(line) = &item.require
-        && !text.lines().any(|row| row.trim() == line)
-    {
-        let (at, with) = complete::require_insertion(text, line);
-        let before = text[..at].chars().count();
-        text.insert_str(at, &with);
-        let cursor = start + item.label.chars().count();
-        let moved = if before <= start {
-            cursor + with.chars().count()
-        } else {
-            cursor
-        };
-        state
-            .cursor
-            .set_char_range(Some(egui::text::CCursorRange::one(CCursor::new(moved))));
-        state.store(ctx, id);
-    }
+    let (after, cursor) = complete::taken(text, completion.replace.clone(), item);
+    code::view::replace_text(ctx, id, &mut state, text, &after, cursor);
 }
 
 /// Draws the suggestions with their top-left at `place`, `selected` lit and its description under them. Returns the
