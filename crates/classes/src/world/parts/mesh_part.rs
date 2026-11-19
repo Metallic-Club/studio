@@ -44,6 +44,14 @@ static PROPS: &[PropMeta] = &[
             "The id of the project's image asset (PNG or JPEG) the mesh is coloured with, multiplied by Color. \
              Empty uses Color alone.",
         ),
+    PropMeta::boolean("DoubleSided", false)
+        .visual()
+        .group("MeshPart")
+        .order(2)
+        .desc(
+            "Whether both sides of the mesh's faces are drawn, each lit from the side seen: for a flat or open model \
+             (a plane, a leaf, a sail) whose back must show. Off, faces seen from behind are not drawn.",
+        ),
 ];
 
 /// A part drawn as an imported mesh.

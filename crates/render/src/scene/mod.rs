@@ -78,7 +78,7 @@ mod sync;
 #[cfg(test)]
 mod tests;
 
-pub use assets::{MAX_MESH_ASSET_KINDS, MeshAssetKey};
+pub use assets::{DOUBLE_SIDED, MAX_MESH_ASSET_KINDS, MeshAssetKey, double_sided_mesh, mesh_of_key};
 pub use components::{LightComponent, MeshComponent, MeshFn, MeshInput, PartProps, RenderComponents};
 pub(crate) use gpu::TransparentEntries;
 pub use gpu::{GpuScene, InstanceBinding, ListSegment, SCATTER_MIN_RANGES, UploadStats};

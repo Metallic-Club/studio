@@ -408,7 +408,14 @@ fn load(reader: &mut AssetReader, job: Job) -> Option<Loaded> {
             return None;
         }
         Job::Mesh(key) => {
-            let mesh = reader.load_mesh(&key).map(mesh_data);
+            // A double-sided part's variant (#850): the model's triangles, and each again the other way.
+            let (asset, double) = metallic_render::scene::mesh_of_key(&key);
+            let mesh = reader.load_mesh(asset).map(mesh_data).map(|mut data| {
+                if double {
+                    metallic_render::scene::double_sided_mesh(&mut data.vertices, &mut data.indices);
+                }
+                data
+            });
             Loaded::Mesh(key, mesh)
         }
         Job::Texture(key, max) => {

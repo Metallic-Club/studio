@@ -5,7 +5,7 @@ use metallic_core::{CFrame, Color3, ConsumerId, DataModel, DirtyBits, DmError, I
 
 use crate::cull::{Casters, CullStats, CullView, VisibleSet};
 
-use super::assets::{AssetKinds, MeshAssetKey};
+use super::assets::{AssetKinds, DOUBLE_SIDED, MeshAssetKey};
 use super::components::{AssetProps, ClassBinding, ClassTable, MeshInput, RenderComponents};
 use super::grid::{Grid, bounding_sphere};
 use super::instance::{GpuInstance, MeshKind, affine_rows, pack_color, transparency_flags};
@@ -892,7 +892,13 @@ impl InstanceScene {
     fn asset_kind(&mut self, dm: &DataModel, id: Id, asset: AssetProps, instance: &mut GpuInstance) {
         let mesh = dm.string(id, asset.mesh).unwrap_or("");
         let texture = asset.texture.and_then(|p| dm.string(id, p).ok()).unwrap_or("");
-        let kind = self.asset_kinds.kind(mesh, texture);
+        // A double-sided part (#850) draws its mesh's double-sided variant, a kind of its own.
+        let double = asset.double_sided.is_some_and(|p| dm.bool(id, p).unwrap_or(false));
+        let kind = if double && !mesh.is_empty() {
+            self.asset_kinds.kind(&format!("{mesh}{DOUBLE_SIDED}"), texture)
+        } else {
+            self.asset_kinds.kind(mesh, texture)
+        };
         instance.mesh_material = (u32::from(kind.0) << 16) | (instance.mesh_material & 0xFFFF);
     }
 

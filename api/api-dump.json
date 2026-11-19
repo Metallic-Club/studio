@@ -4212,6 +4212,22 @@
           "description": "The id of the project's image asset (PNG or JPEG) the mesh is coloured with, multiplied by Color. Empty uses Color alone.",
           "aliases": [],
           "derived_from": []
+        },
+        {
+          "name": "DoubleSided",
+          "type": "Bool",
+          "default": false,
+          "flags": [
+            "VISUAL"
+          ],
+          "read_only": false,
+          "computed": false,
+          "range": null,
+          "wraps": false,
+          "group": "MeshPart",
+          "description": "Whether both sides of the mesh's faces are drawn, each lit from the side seen: for a flat or open model (a plane, a leaf, a sail) whose back must show. Off, faces seen from behind are not drawn.",
+          "aliases": [],
+          "derived_from": []
         }
       ],
       "methods": [],
