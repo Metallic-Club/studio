@@ -128,6 +128,7 @@ pub fn show(
     let digit = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0'));
     mark_undo_step(ui, id, text);
     let mut changed = keys(ui, id, text, settings);
+    changed |= undo_keys(ui, id, text);
     // Several cursors (#558): the field keeps Escape, which goes back to one.
     let several = !extras(ui.ctx(), id).is_empty();
     // The field's own cursor before it sees a click: Alt+click keeps it as another.
@@ -186,6 +187,11 @@ pub fn show(
         let extra_light = ui.painter().add(Shape::Noop);
         // The field is as tall as its lines; the view under them is `below_last_line`'s (#557).
         let rows = lines;
+        // The undo history before the field sees this frame's input (#855), to put back when all it does is move the
+        // cursor.
+        let kept = (ui.memory(|memory| memory.has_focus(id)) || ui.input(|input| input.pointer.any_pressed()))
+            .then(|| TextEditState::load(ui.ctx(), id).map(|state| state.undoer()))
+            .flatten();
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(field), |ui| {
                 TextEdit::multiline(text)
@@ -206,6 +212,23 @@ pub fn show(
                     .show(ui)
             })
             .inner;
+        // A click or an arrow moving the cursor is no undo step (#855), nor does it lose what redo has: egui's own
+        // undo would make a step of it, and take it back on its own. A selection made still is one.
+        let caret = output
+            .cursor_range
+            .is_some_and(|range| range.primary.index == range.secondary.index);
+        if !output.response.response.changed()
+            && caret
+            && let Some(undoer) = kept
+            && let Some(mut state) = TextEditState::load(ui.ctx(), id)
+        {
+            let ends = |range: &CCursorRange| (range.primary.index, range.secondary.index);
+            if output.cursor_range.as_ref().map(ends) != before.as_ref().map(ends) {
+                ui.ctx().data_mut(|data| data.insert_temp(id.with("moved"), true));
+            }
+            state.set_undoer(undoer);
+            state.store(ui.ctx(), id);
+        }
         below_last_line(ui, id, field, &output.galley, output.galley_pos, text);
         let response = output.response.response.clone();
         alt_click(ui, id, &response, &output.galley, output.galley_pos, before);
@@ -1571,11 +1594,17 @@ fn mark_undo_step(ui: &Ui, id: Id, text: &str) {
     }
     let last = ui.ctx().data(|data| data.get_temp::<EditKind>(id.with("undo-kind")));
     let new_line = ui.input(|input| input.key_pressed(Key::Enter));
-    let step = match kind {
-        EditKind::Word => last == Some(EditKind::Delete),
-        EditKind::Boundary => last != Some(EditKind::Boundary) || new_line,
-        EditKind::Delete => last != Some(EditKind::Delete),
-    };
+    // The first edit after the cursor was moved is a step of its own (#855): the move made none.
+    let moved = ui
+        .ctx()
+        .data_mut(|data| data.remove_temp::<bool>(id.with("moved")))
+        .unwrap_or(false);
+    let step = moved
+        || match kind {
+            EditKind::Word => last == Some(EditKind::Delete),
+            EditKind::Boundary => last != Some(EditKind::Boundary) || new_line,
+            EditKind::Delete => last != Some(EditKind::Delete),
+        };
     ui.ctx().data_mut(|data| data.insert_temp(id.with("undo-kind"), kind));
     if !step {
         return;
@@ -1585,6 +1614,77 @@ fn mark_undo_step(ui: &Ui, id: Id, text: &str) {
         state.store(ui.ctx(), id);
     }
     ui.ctx().data_mut(|data| data.insert_temp(id.with("undo-step"), true));
+}
+
+/// Undo and redo in the field `id` (#855), before the field sees them: past the steps that only put the cursor
+/// elsewhere, so undo always takes back an edit (or a selection made); redo goes on from where the last undo left
+/// off though a click moved the cursor since. Returns whether `text` changed.
+fn undo_keys(ui: &Ui, id: Id, text: &mut String) -> bool {
+    if !ui.memory(|memory| memory.has_focus(id)) {
+        return false;
+    }
+    let (undo, redo) = ui.input_mut(|input| {
+        let redo = input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
+            || input.consume_key(Modifiers::COMMAND, Key::Y);
+        (input.consume_key(Modifiers::COMMAND, Key::Z), redo)
+    });
+    if !undo && !redo {
+        return false;
+    }
+    let Some(mut state) = TextEditState::load(ui.ctx(), id) else {
+        return false;
+    };
+    let Some(range) = state.cursor.char_range() else {
+        return false;
+    };
+    let mut undoer = state.undoer();
+    let mut current = (range, text.clone());
+    if redo
+        && !undoer.has_redo(&current)
+        && let Some(left) = ui.ctx().data(|data| data.get_temp::<CCursorRange>(id.with("undone")))
+    {
+        let from = (left, text.clone());
+        if undoer.has_redo(&from) {
+            current = from;
+        }
+    }
+    let Some((range, reached)) = undo_step(&mut undoer, &current, redo) else {
+        return false;
+    };
+    let edited = reached != *text;
+    *text = reached;
+    state.cursor.set_char_range(Some(range));
+    state.set_undoer(undoer);
+    state.store(ui.ctx(), id);
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(id.with("undone"), range);
+        data.insert_temp(id.with("follow"), true);
+        data.remove::<EditKind>(id.with("undo-kind"));
+        data.remove_temp::<bool>(id.with("moved"));
+    });
+    edited
+}
+
+/// A state of a field's undo history: its selection and its text.
+type UndoState = (CCursorRange, String);
+
+/// Undoes (or with `redo` redoes) in `undoer` from `current` (#855): past the states with `current`'s text and just
+/// a cursor somewhere else, to the first with other text or a selection. `None` when there is nothing to undo.
+fn undo_step(undoer: &mut egui::util::undoer::Undoer<UndoState>, current: &UndoState, redo: bool) -> Option<UndoState> {
+    let mut at = current.clone();
+    let mut reached = None;
+    loop {
+        let next = if redo { undoer.redo(&at) } else { undoer.undo(&at) };
+        let Some(next) = next.cloned() else {
+            return reached;
+        };
+        let stop = next.1 != current.1 || next.0.primary.index != next.0.secondary.index;
+        at = next.clone();
+        reached = Some(next);
+        if stop {
+            return reached;
+        }
+    }
 }
 
 /// Makes `text`, with `state`'s cursor, an undo point of the field (if it is not the last one already).
@@ -1713,6 +1813,30 @@ mod tests {
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 1), ["one"]);
         assert_eq!(messages_on_line(text, &Lines::new(text), &diagnostics, 2), ["two"]);
         assert!(messages_on_line(text, &Lines::new(text), &diagnostics, 0).is_empty());
+    }
+
+    /// #855: undo goes past the states that only had the cursor elsewhere, to the last edit, and redo comes back to
+    /// it; a selection made is a step still.
+    #[test]
+    fn undo_skips_where_the_cursor_only_moved() {
+        let state = |text: &str, from: usize, to: usize| -> UndoState {
+            (CCursorRange::two(CCursor::new(from), CCursor::new(to)), text.to_owned())
+        };
+        let mut undoer = egui::util::undoer::Undoer::default();
+        undoer.add_undo(&state("", 0, 0));
+        undoer.add_undo(&state("ab", 2, 2));
+        undoer.add_undo(&state("ab", 0, 0));
+        let undone = undo_step(&mut undoer, &state("ab", 1, 1), false);
+        assert_eq!(undone, Some(state("", 0, 0)));
+        let redone = undo_step(&mut undoer, &state("", 0, 0), true);
+        assert_eq!(redone, Some(state("ab", 2, 2)));
+        // A selection is a step.
+        undoer.add_undo(&state("ab", 0, 2));
+        let undone = undo_step(&mut undoer, &state("ab", 1, 1), false);
+        assert_eq!(undone, Some(state("ab", 0, 2)));
+        // Nothing to undo.
+        let mut empty = egui::util::undoer::Undoer::default();
+        assert_eq!(undo_step(&mut empty, &state("x", 1, 1), false), None);
     }
 
     /// Tab (or Shift+Tab, `out`) in `code`, where `[` and `]` mark the selection (or `|` the cursor); the code after,
